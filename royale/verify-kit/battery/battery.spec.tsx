@@ -26,11 +26,15 @@ beforeEach(() => {
 
 afterEach(async () => {
 	await adapter.act(async () => {
-		for (const r of roots) r.unmount()
+		for (const r of roots) {
+			r.unmount()
+		}
 	})
 	// Snapshot before the scrub: reset must not be able to hide an error.
 	const errors = [...handle.errors]
-	for (const c of containers) c.remove()
+	for (const c of containers) {
+		c.remove()
+	}
 	roots = []
 	containers = []
 	adapter.resetForTest()
@@ -146,7 +150,9 @@ describe('scenario 2 — transition write: invisible until commit; useIsPending 
 		function Suspender() {
 			const v = adapter.useValue(a)
 			const h = adapter.useValue(holdFlag)
-			if (h && !gate.settled) throw gate.promise // holds the transition's render open
+			if (h && !gate.settled) {
+				throw gate.promise
+			} // holds the transition's render open
 			return <span>v:{v};</span>
 		}
 		return { a, holdFlag, gate, Suspender }
@@ -220,7 +226,9 @@ describe('scenario 3 — urgent write during a live transition: commits alone, t
 		function App() {
 			const v = adapter.useValue(a)
 			const h = adapter.useValue(holdFlag)
-			if (h && !gate.settled) throw gate.promise
+			if (h && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>v:{v}</span>
 		}
 		const { container } = await mount(
@@ -277,7 +285,9 @@ describe('scenario 4 — sibling readers never tear within any commit', () => {
 		})
 		await adapter.act(async () => {})
 		expect(text(container)).toBe('2,2;2,2;')
-		for (const [v1, v2] of observedPairs) expect(v1).toBe(v2)
+		for (const [v1, v2] of observedPairs) {
+			expect(v1).toBe(v2)
+		}
 	})
 })
 
@@ -289,7 +299,9 @@ describe('scenario 5 — mount mid-transition', () => {
 			const v = adapter.useValue(a)
 			// Reads pending transition state (1) inside the transition render
 			// and suspends — holding the transition without breaking it.
-			if ((v as number) > 0 && !gate.settled) throw gate.promise
+			if ((v as number) > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		function App({ extra }: { extra: boolean }) {
@@ -331,7 +343,9 @@ describe('scenario 6 — flushSync excludes pending deferred work', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = adapter.useValue(a)
-			if ((v as number) > 0 && !gate.settled) throw gate.promise
+			if ((v as number) > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await mount(
@@ -368,7 +382,9 @@ describe('scenario 7 — one transition batch spanning two roots: per-root consi
 			const v1 = adapter.useValue(a)
 			const v2 = adapter.useValue(a)
 			React.useLayoutEffect(() => {
-				if (boxes[i].el) frames[i].push(text(boxes[i].el!))
+				if (boxes[i].el) {
+					frames[i].push(text(boxes[i].el!))
+				}
 			})
 			return (
 				<span>
@@ -395,7 +411,9 @@ describe('scenario 7 — one transition batch spanning two roots: per-root consi
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = adapter.useValue(a)
-			if ((v as number) > 0 && !gate.settled) throw gate.promise
+			if ((v as number) > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const one = await mount(
@@ -540,7 +558,9 @@ describe('scenario 11 — Suspense: first load, refresh, settlement-in-transitio
 			},
 			async settle(key: string, v: string) {
 				const g = gates.get(key)
-				if (g === undefined) throw new Error(`no request for key ${key}: ${[...gates.keys()]}`)
+				if (g === undefined) {
+					throw new Error(`no request for key ${key}: ${[...gates.keys()]}`)
+				}
 				await adapter.act(async () => {
 					g.resolve(v)
 					await g.promise
@@ -593,7 +613,9 @@ describe('scenario 11 — Suspense: first load, refresh, settlement-in-transitio
 		expect(r.fetchCount()).toBe(2)
 		await r.settle('0:1', 'two')
 		expect(text(container)).toBe('i;d:two')
-		for (const f of pendingFrames) expect(f).not.toContain('loading')
+		for (const f of pendingFrames) {
+			expect(f).not.toContain('loading')
+		}
 	})
 
 	test('settlement inside a transition commits with the transition', async () => {
@@ -634,7 +656,9 @@ describe('scenario 12 — time slicing: urgent input stays responsive during a l
 		function List() {
 			const n = adapter.useValue(items) as number
 			const kids: any[] = []
-			for (let k = 0; k < n; k++) kids.push(<SlowItem key={k} k={k} />)
+			for (let k = 0; k < n; k++) {
+				kids.push(<SlowItem key={k} k={k} />)
+			}
 			return (
 				<div>
 					n:{n};{kids}
@@ -657,7 +681,9 @@ describe('scenario 12 — time slicing: urgent input stays responsive during a l
 			adapter.startTransitionWrite(() => adapter.set(items, 24))
 			// Wait until the transition render is demonstrably mid-flight.
 			const deadline = Date.now() + 5000
-			while (itemRenders < 3 && Date.now() < deadline) await tick(5)
+			while (itemRenders < 3 && Date.now() < deadline) {
+				await tick(5)
+			}
 			expect(itemRenders).toBeGreaterThanOrEqual(3)
 			expect(itemRenders).toBeLessThan(24) // work remains: interruption is real
 			adapter.flushSync(() => adapter.set(urgent, 1))
@@ -665,7 +691,9 @@ describe('scenario 12 — time slicing: urgent input stays responsive during a l
 			expect(text(container)).toContain('u:1;')
 			expect(text(container)).toContain('n:0;')
 			const done = Date.now() + 15000
-			while (!text(container).includes('n:24;') && Date.now() < done) await tick(10)
+			while (!text(container).includes('n:24;') && Date.now() < done) {
+				await tick(10)
+			}
 			expect(text(container)).toContain('n:24;') // the interrupted transition still lands
 			expect(text(container)).toContain('u:1;')
 		} finally {
@@ -689,7 +717,9 @@ describe('scenario 13 — branch state: urgent double over a pending transition'
 		}
 		function Holder() {
 			const h = adapter.useValue(holdFlag)
-			if (h && !gate.settled) throw gate.promise
+			if (h && !gate.settled) {
+				throw gate.promise
+			}
 			return null
 		}
 		const { container } = await mount(
@@ -794,7 +824,9 @@ describe('scenario 15 — causality: the trace explains re-renders after scenari
 		function App() {
 			const v = adapter.useValue(a)
 			const h = adapter.useValue(holdFlag)
-			if (h && !gate.settled) throw gate.promise
+			if (h && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>v:{v}</span>
 		}
 		const { container } = await mount(

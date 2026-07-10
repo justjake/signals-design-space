@@ -83,7 +83,9 @@ const renderDispatchers = new WeakSet<object>()
  * and hook render (they only execute inside component bodies). */
 function captureRenderDispatcher(): void {
 	const H = sharedInternals().H
-	if (H != null) renderDispatchers.add(H)
+	if (H != null) {
+		renderDispatchers.add(H)
+	}
 }
 
 /** True while React is executing a component render on this thread. */
@@ -133,7 +135,9 @@ let note: RenderWorldNote | null = null
 
 function expiryFor(mine: RenderWorldNote): () => void {
 	return () => {
-		if (note === mine) note = null
+		if (note === mine) {
+			note = null
+		}
 	}
 }
 
@@ -160,7 +164,9 @@ export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]):
 		note = null
 		return
 	}
-	if (note !== null && note.scope === scope && note.ids === ids) return // StrictMode re-render
+	if (note !== null && note.scope === scope && note.ids === ids) {
+		return
+	} // StrictMode re-render
 	note = { scope, ids }
 	armNoteExpiry(note)
 }
@@ -171,7 +177,9 @@ export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]):
  * queues for THIS pass, so they never run ahead of it. */
 export function noteHookRender(scope: ProviderRecord | null, ids: readonly DraftId[] | null): void {
 	captureRenderDispatcher()
-	if (note !== null && note.scope !== scope) note = null
+	if (note !== null && note.scope !== scope) {
+		note = null
+	}
 	if (note === null && ids !== null && ids.length > 0) {
 		note = { scope, ids }
 		armNoteExpiry(note)
@@ -186,7 +194,9 @@ export function renderPassIds(scope: ProviderRecord | null): readonly DraftId[] 
 }
 
 function renderWorldProvider(): readonly DraftId[] | 'base' | null {
-	if (!isRendering()) return null // ambient: newest intent
+	if (!isRendering()) {
+		return null
+	} // ambient: newest intent
 	return note === null ? 'base' : note.ids
 }
 
@@ -198,10 +208,14 @@ function rememberOwner(id: DraftId): void {
 	// Sweep first so the map stays bounded by live drafts even when a draft
 	// is discarded engine-side without host involvement.
 	for (const known of [...draftOwners.keys()]) {
-		if (!isLiveDraft(known)) draftOwners.delete(known)
+		if (!isLiveDraft(known)) {
+			draftOwners.delete(known)
+		}
 	}
 	const T = sharedInternals().T
-	if (T != null) draftOwners.set(id, T)
+	if (T != null) {
+		draftOwners.set(id, T)
+	}
 }
 
 /** Test-only counter of draft-lane dispatches that actually reached a
@@ -300,12 +314,18 @@ export function correctSubscription(
 	dispatch: (id: DraftId) => void,
 ): void {
 	for (const id of draftsAffecting(node)) {
-		if (rendered.ids.includes(id)) continue
+		if (rendered.ids.includes(id)) {
+			continue
+		}
 		const audience = draftAudience.get(id)
-		if (audience === undefined || !audience.has(scope)) continue
+		if (audience === undefined || !audience.has(scope)) {
+			continue
+		}
 		deliver(id)
 	}
-	if (resolutionDiffers(node, rendered)) dispatch(REPAIR_WAKE)
+	if (resolutionDiffers(node, rendered)) {
+		dispatch(REPAIR_WAKE)
+	}
 }
 
 /**
@@ -324,9 +344,13 @@ export function correctSubscription(
 export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResolution): boolean {
 	const st = resolveState(node, worldOf(rendered.ids))
 	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === Flag.AsyncError) return true
+	if (asyncBits === Flag.AsyncError) {
+		return true
+	}
 	if (asyncBits === Flag.AsyncSuspended) {
-		if (isUninitialized(st.value)) return true
+		if (isUninitialized(st.value)) {
+			return true
+		}
 		return !Object.is(st.value, rendered.value)
 	}
 	return !Object.is(st.value, rendered.value)
@@ -344,7 +368,9 @@ const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
 	const T = sharedInternals().T
-	if (T == null) return null
+	if (T == null) {
+		return null
+	}
 	let draft = draftsByTransition.get(T)
 	if (draft === undefined) {
 		draft = openDraft()
@@ -367,7 +393,9 @@ export function broadcastDraft(id: DraftId): void {
 	const recipients = new Set(providers)
 	draftRecipients.set(id, recipients)
 	draftAudience.set(id, new Set(recipients))
-	for (const p of recipients) p.dispatch(id)
+	for (const p of recipients) {
+		p.dispatch(id)
+	}
 	if (recipients.size === 0) {
 		// No mounted scope observes this draft; it retires as soon as the
 		// writing scope finishes (microtask keeps ops-append ordering).
@@ -402,13 +430,17 @@ export function registerProvider(p: ProviderRecord): () => void {
 
 /** A provider committed a render pass whose world contained these drafts. */
 export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void {
-	if (p.container !== null) setCommittedWorld(p.container, ids)
+	if (p.container !== null) {
+		setCommittedWorld(p.container, ids)
+	}
 	// Per-root committed views changed; poke the draft watchers of every cell
 	// the committed drafts touched (the useValue crowd bails via the notify
 	// predicate when its resolution is unchanged, so this is cheap). No
 	// engine event exists for a root commit, so the poke carries no cause.
 	for (const draft of worldOf(ids).drafts) {
-		for (const cell of draft.cells) pokeDraftWatchers(cell, NO_EVENT)
+		for (const cell of draft.cells) {
+			pokeDraftWatchers(cell, NO_EVENT)
+		}
 	}
 	for (const id of ids) {
 		const recipients = draftRecipients.get(id)
@@ -427,7 +459,9 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
 }
 
 export function reportError(e: unknown): void {
-	if (handle !== null) handle.errors.push(e)
+	if (handle !== null) {
+		handle.errors.push(e)
+	}
 }
 
 /**
@@ -436,14 +470,18 @@ export function reportError(e: unknown): void {
  * context primitives. Idempotent per process.
  */
 export function registerReactSignals(): ReactSignalsHandle {
-	if (handle !== null) return handle
+	if (handle !== null) {
+		return handle
+	}
 	setAmbientClassifier(ambientClassifier)
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
 	handle = {
 		errors: [],
 		dispose() {
-			if (handle === null) return
+			if (handle === null) {
+				return
+			}
 			setAmbientClassifier(null)
 			setRenderWriteGuard(null)
 			setRenderWorldProvider(null)

@@ -25,13 +25,17 @@ const altAReact: Contender = {
 	name: 'alt-a-react',
 	createCells(n) {
 		const atoms: InstanceType<typeof Atom<number>>[] = []
-		for (let i = 0; i < n; i++) atoms.push(new Atom({ state: 0 }))
+		for (let i = 0; i < n; i++) {
+			atoms.push(new Atom({ state: 0 }))
+		}
 		return {
 			useCell: (i) => useSignal<number>(atoms[i]),
 			writeCell: (i, v) => atoms[i].set(v),
 			writeMany(updates) {
 				batch(() => {
-					for (const [i, v] of updates) atoms[i].set(v)
+					for (const [i, v] of updates) {
+						atoms[i].set(v)
+					}
 				})
 			},
 			// Writes inside startSignalTransition classify into the transition
@@ -39,7 +43,9 @@ const altAReact: Contender = {
 			// corrective/broadcast re-renders land in the transition's own lanes.
 			writeManyInTransition(updates) {
 				startSignalTransition(() => {
-					for (const [i, v] of updates) atoms[i].set(v)
+					for (const [i, v] of updates) {
+						atoms[i].set(v)
+					}
 				})
 			},
 			dispose() {},

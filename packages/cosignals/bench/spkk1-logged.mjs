@@ -42,9 +42,13 @@ const eventsLen = hasEvents ? () => b.events.length : () => 0
 // backlog is hundreds of MB and drowns that signal. Bound the diagnostic
 // stream in the truncate config only; the retain config still measures the
 // unbounded-stream liability.
-if (hasEvents && EVENTS === 'truncate') b.setEventCapacity(65536)
+if (hasEvents && EVENTS === 'truncate') {
+	b.setEventCapacity(65536)
+}
 const atoms = []
-for (let i = 0; i < NA; i++) atoms.push(b.atom(`a${i}`, 0))
+for (let i = 0; i < NA; i++) {
+	atoms.push(b.atom(`a${i}`, 0))
+}
 let phase = 0
 const computeds = []
 for (let i = 0; i < NC; i++) {
@@ -59,7 +63,9 @@ for (let i = 0; i < NC; i++) {
 }
 const setup = b.renderStart('R', [])
 const watchers = []
-for (let i = 0; i < 4; i++) watchers.push(b.mountWatcher(setup.id, computeds[i], `w${i}`))
+for (let i = 0; i < 4; i++) {
+	watchers.push(b.mountWatcher(setup.id, computeds[i], `w${i}`))
+}
 b.renderEnd(setup.id, 'commit')
 
 let holderA = b.openBatch()
@@ -68,15 +74,18 @@ let holderB
 
 const k1EdgeCount = () => {
 	let n = 0
-	for (const s of b.dependencyEdges.values()) n += s.size
+	for (const s of b.dependencyEdges.values()) {
+		n += s.size
+	}
 	return n
 }
 const logTotal = () => {
 	let n = 0
 	for (const nd of b.idToNode !== undefined
 		? b.idToNode.values()
-		: (mod.__TEST__eachInternals ?? mod.__eachInternalsForTest)())
+		: (mod.__TEST__eachInternals ?? mod.__eachInternalsForTest)()) {
 		if (nd.kind === 'atom') n += nd.log.length
+	}
 	return n
 }
 
@@ -111,7 +120,9 @@ function takeSample(now) {
 	})
 	eventsSinceSample = 0
 	writeNsWindow = []
-	if (hasEvents && EVENTS === 'truncate') b.events.length = 0
+	if (hasEvents && EVENTS === 'truncate') {
+		b.events.length = 0
+	}
 }
 
 while (Date.now() - t0 < DURATION_MS) {
@@ -143,7 +154,9 @@ while (Date.now() - t0 < DURATION_MS) {
 			'R',
 			b.liveBatches().map((t) => t.id),
 		)
-		for (const w of watchers) b.renderWatcher(p.id, w.id)
+		for (const w of watchers) {
+			b.renderWatcher(p.id, w.id)
+		}
 		b.renderEnd(p.id, 'commit')
 	}
 	b.retire(batch.id)

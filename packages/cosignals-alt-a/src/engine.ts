@@ -2676,7 +2676,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		// §13.4: when a token retires everywhere, roots that had locked it in
 		// clear the slot bit and advance their pin past the retirement ticket —
 		// the view's CONTENTS are unchanged by this bookkeeping step.
-		if (rootViews.size !== 0)
+		if (rootViews.size !== 0) {
 			for (const view of rootViews.values()) {
 				if (((view.mask >> slot) & 1) !== 0) {
 					view.mask &= ~(1 << slot)
@@ -2685,6 +2685,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 					}
 				}
 			}
+		}
 		releaseSlotIfDone(slot)
 		sweepNeeded = true
 		// Post-retirement drain with full re-validation: a retirement that
@@ -3389,20 +3390,40 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// ---- verifyArena-lite (§16.6 subset) ----------------------------------------------
 	function verify(): void {
 		const problems: string[] = []
-		if (propSp !== 0) problems.push(`propSp=${propSp} (expected 0 at boundary)`)
-		if (checkSp !== 0) problems.push(`checkSp=${checkSp}`)
-		if (frameWorlds.length !== 0) problems.push(`frameWorlds=${frameWorlds.length}`)
-		if (certSp !== 0) problems.push(`certSp=${certSp}`)
-		if (eraFloor > walkCounter) problems.push(`eraFloor ${eraFloor} > walkCounter ${walkCounter}`)
+		if (propSp !== 0) {
+			problems.push(`propSp=${propSp} (expected 0 at boundary)`)
+		}
+		if (checkSp !== 0) {
+			problems.push(`checkSp=${checkSp}`)
+		}
+		if (frameWorlds.length !== 0) {
+			problems.push(`frameWorlds=${frameWorlds.length}`)
+		}
+		if (certSp !== 0) {
+			problems.push(`certSp=${certSp}`)
+		}
+		if (eraFloor > walkCounter) {
+			problems.push(`eraFloor ${eraFloor} > walkCounter ${walkCounter}`)
+		}
 		for (let i = 0; i < 8; ++i) {
-			if (M[i] !== 0) problems.push(`main-plane record 0 corrupted at +${i}`)
-			if (i < 4 && G[i] !== 0) problems.push(`log-plane record 0 corrupted at +${i}`)
-			if (W[i] !== 0) problems.push(`memo-plane record 0 corrupted at +${i}`)
+			if (M[i] !== 0) {
+				problems.push(`main-plane record 0 corrupted at +${i}`)
+			}
+			if (i < 4 && G[i] !== 0) {
+				problems.push(`log-plane record 0 corrupted at +${i}`)
+			}
+			if (W[i] !== 0) {
+				problems.push(`memo-plane record 0 corrupted at +${i}`)
+			}
 		}
 		let counted = 0
 		for (const a of loggedAtoms) {
-			if ((M[a + C.FLAGS] & C.LOGGED) === 0) problems.push(`loggedAtoms holds unlogged ${a}`)
-			if (M[a + C.LOG_HEAD] === 0) problems.push(`logged atom ${a} has no tape`)
+			if ((M[a + C.FLAGS] & C.LOGGED) === 0) {
+				problems.push(`loggedAtoms holds unlogged ${a}`)
+			}
+			if (M[a + C.LOG_HEAD] === 0) {
+				problems.push(`logged atom ${a} has no tape`)
+			}
 			// tape chain acyclic + tail coherent
 			let rec = M[a + C.LOG_HEAD]
 			let steps = 0
@@ -3412,27 +3433,40 @@ export function createCosignalEngine(options?: EngineOptions) {
 				rec = G[rec + C.L_NEXT]
 				++steps
 			}
-			if (rec !== 0) problems.push(`tape of ${a} appears cyclic`)
-			if (M[a + C.LOG_TAIL] !== last) problems.push(`LOG_TAIL of ${a} incoherent`)
+			if (rec !== 0) {
+				problems.push(`tape of ${a} appears cyclic`)
+			}
+			if (M[a + C.LOG_TAIL] !== last) {
+				problems.push(`LOG_TAIL of ${a} incoherent`)
+			}
 			++counted
 		}
-		if (counted !== loggedAtomCount)
+		if (counted !== loggedAtomCount) {
 			problems.push(`loggedAtomCount ${loggedAtomCount} != list ${counted}`)
+		}
 		for (let s = 0; s < 32; ++s) {
-			if (batchEntryCount[s] < 0) problems.push(`batchEntryCount[${s}] negative`)
-			if (batchToken[s] === 0 && ((liveSlotMask >> s) & 1) !== 0)
+			if (batchEntryCount[s] < 0) {
+				problems.push(`batchEntryCount[${s}] negative`)
+			}
+			if (batchToken[s] === 0 && ((liveSlotMask >> s) & 1) !== 0) {
 				problems.push(`liveSlotMask bit ${s} without token`)
-			if (batchToken[s] !== 0 && ((liveSlotMask >> s) & 1) === 0)
+			}
+			if (batchToken[s] !== 0 && ((liveSlotMask >> s) & 1) === 0) {
 				problems.push(`token in slot ${s} without mask bit`)
+			}
 			// slot memo chains acyclic + writer-key + slot-coherent
 			let rec = slotMemoHead[s]
 			let steps = 0
 			while (rec !== 0 && steps < 1_000_000) {
-				if ((W[rec + C.W_KEY] & 3) !== 2) problems.push(`slot ${s} chain holds non-writer key`)
+				if ((W[rec + C.W_KEY] & 3) !== 2) {
+					problems.push(`slot ${s} chain holds non-writer key`)
+				}
 				rec = W[rec + C.W_SLOT_NEXT]
 				++steps
 			}
-			if (rec !== 0) problems.push(`slot ${s} memo chain cyclic`)
+			if (rec !== 0) {
+				problems.push(`slot ${s} memo chain cyclic`)
+			}
 		}
 		// §8.6 refcount invariant: every node's liveCount equals the number of
 		// its subscriber links whose consumer is live (count > 0 or intrinsic).
@@ -3461,13 +3495,25 @@ export function createCosignalEngine(options?: EngineOptions) {
 			pendingWalks.length === 0
 		) {
 			// Quiescence postconditions (§8.8/§9.7/§14.3).
-			if (gNext !== 4) problems.push(`quiescent but gNext=${gNext}`)
-			if (wNext !== 8) problems.push(`quiescent but wNext=${wNext}`)
-			if (certNext !== 2) problems.push(`quiescent but certNext=${certNext}`)
-			if (memoVals.length !== 0) problems.push(`quiescent but memoVals=${memoVals.length}`)
-			if (seqCounter !== 1) problems.push(`quiescent but seqCounter=${seqCounter}`)
+			if (gNext !== 4) {
+				problems.push(`quiescent but gNext=${gNext}`)
+			}
+			if (wNext !== 8) {
+				problems.push(`quiescent but wNext=${wNext}`)
+			}
+			if (certNext !== 2) {
+				problems.push(`quiescent but certNext=${certNext}`)
+			}
+			if (memoVals.length !== 0) {
+				problems.push(`quiescent but memoVals=${memoVals.length}`)
+			}
+			if (seqCounter !== 1) {
+				problems.push(`quiescent but seqCounter=${seqCounter}`)
+			}
 			for (let s = 0; s < 32; ++s) {
-				if (slotMemoHead[s] !== 0) problems.push(`quiescent but slotMemoHead[${s}]!=0`)
+				if (slotMemoHead[s] !== 0) {
+					problems.push(`quiescent but slotMemoHead[${s}]!=0`)
+				}
 			}
 			for (const id of allNodes) {
 				const f = M[id + C.FLAGS]

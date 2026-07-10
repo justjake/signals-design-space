@@ -26,12 +26,17 @@ function freshEngine(arm = false): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	const b = engine
-	if (arm) armArenaCheck(b)
+	if (arm) {
+		armArenaCheck(b)
+	}
 	return b
 }
 
@@ -135,7 +140,9 @@ describe('world-arena link free list threads through a spare field (row 2 twin)'
 		})
 		const c0 = b.computed('c0', (read) => {
 			read(s)
-			if (!phase2) read(m1)
+			if (!phase2) {
+				read(m1)
+			}
 			return 7 // value-stable: memo and arena must agree in every phase
 		})
 		const c1 = b.computed('c1', (read) => read(c0))

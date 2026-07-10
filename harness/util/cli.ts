@@ -18,7 +18,9 @@ export function parseFlags(argv: string[]): Map<string, string> {
 	const flags = new Map<string, string>()
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i]
-		if (!arg.startsWith('--')) continue
+		if (!arg.startsWith('--')) {
+			continue
+		}
 		const eq = arg.indexOf('=')
 		if (eq >= 0) {
 			flags.set(arg.slice(2, eq), arg.slice(eq + 1))
@@ -36,7 +38,9 @@ export function parseFlags(argv: string[]): Map<string, string> {
 }
 
 export function parseList(value: string | undefined, fallback: readonly string[]): string[] {
-	if (!value) return [...fallback]
+	if (!value) {
+		return [...fallback]
+	}
 	return value
 		.split(',')
 		.map((s) => s.trim())

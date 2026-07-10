@@ -116,16 +116,19 @@ describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)',
 		const m = concurrent()
 		const a = m.atom('a', 0)
 		const retained = Array.from({ length: 5 }, () => m.openBatch())
-		for (const t of retained)
+		for (const t of retained) {
 			m.write(
 				t.id,
 				a,
 				update((x) => (x as number) + 1),
 			)
+		}
 		const held = openRender(m, 'B', retained) // mask names all five
 		m.renderYield(held.id)
 		expect(m.renderValue(a, held)).toBe(5)
-		for (const t of retained) m.retire(t.id) // all retire mid-render; releases defer
+		for (const t of retained) {
+			m.retire(t.id)
+		} // all retire mid-render; releases defer
 		const live: number[] = []
 		for (let i = 0; i < 27; i++) {
 			const u = m.openBatch()
@@ -143,7 +146,9 @@ describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)',
 		m.renderEnd(q.id, 'discard')
 		m.renderResume(held.id)
 		m.renderEnd(held.id, 'discard')
-		for (const id of live) m.retire(id)
+		for (const id of live) {
+			m.retire(id)
+		}
 		selfCheck(m)
 	})
 })

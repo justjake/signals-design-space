@@ -442,16 +442,19 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0)
 		// a yielded render whose mask names 5 batches that all retire mid-render
 		const retained = Array.from({ length: 5 }, () => m.openBatch())
-		for (const [i, t] of retained.entries())
+		for (const [i, t] of retained.entries()) {
 			m.write(
 				t.id,
 				a,
 				update((x) => (x as number) + 10 ** 0 * (i + 1)),
 			)
+		}
 		const held = openRender(m, 'B', retained)
 		m.renderYield(held.id)
 		const heldBefore = m.renderValue(a, held)
-		for (const t of retained) m.retire(t.id) // entangled lanes: work lived on other roots
+		for (const t of retained) {
+			m.retire(t.id)
+		} // entangled lanes: work lived on other roots
 		expect(m.slots.filter((s) => s.releasePending)).toHaveLength(5) // mask-retained
 		// fresh live batches demand slots: 26 free + 5 retained = table full at the 27th claim
 		const live: number[] = []
@@ -465,7 +468,9 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.renderValue(a, held)).toBe(heldBefore)
 		m.renderResume(held.id)
 		m.renderEnd(held.id, 'discard')
-		for (const id of live) m.retire(id)
+		for (const id of live) {
+			m.retire(id)
+		}
 		selfCheck(m)
 	})
 

@@ -28,10 +28,14 @@ export function dependencyGraphToDot(engine: CosignalEngine): string {
 		}
 	}
 	for (const [dep, outs] of engine.dependencyEdges) {
-		for (const out of outs) lines.push(`\tn${dep} -> n${out};`)
+		for (const out of outs) {
+			lines.push(`\tn${dep} -> n${out};`)
+		}
 	}
 	for (const w of engine.watchers.values()) {
-		if (!w.live) continue
+		if (!w.live) {
+			continue
+		}
 		lines.push(`\tw${w.id} [shape=house, label=${quoteDotString(`${w.name}@${w.root}`)}];`)
 		lines.push(`\tn${w.node} -> w${w.id} [style=dashed];`)
 	}
@@ -39,7 +43,9 @@ export function dependencyGraphToDot(engine: CosignalEngine): string {
 		lines.push(
 			`\te${effect.id} [shape=cds, label=${quoteDotString(`${effect.name}@${effect.root} runs:${effect.runs}`)}];`,
 		)
-		for (const dep of effect.deps) lines.push(`\tn${dep.node.id} -> e${effect.id} [style=dotted];`)
+		for (const dep of effect.deps) {
+			lines.push(`\tn${dep.node.id} -> e${effect.id} [style=dotted];`)
+		}
 	}
 	lines.push('}')
 	return lines.join('\n')
@@ -51,7 +57,9 @@ export function traceToDot(events: TraceRecord[], filter?: (e: TraceRecord) => b
 	const ids = new Set<number>()
 	for (const event of events) {
 		if (filter === undefined || filter(event)) {
-			if (filter !== undefined) kept.push(event)
+			if (filter !== undefined) {
+				kept.push(event)
+			}
 			ids.add(event.id)
 		}
 	}
@@ -75,7 +83,9 @@ export function traceToDot(events: TraceRecord[], filter?: (e: TraceRecord) => b
 		lines.push(`\tt${e.id} [label=${quoteDotString(label)}${style}];`)
 	}
 	for (const e of kept) {
-		if (e.cause !== undefined && ids.has(e.cause)) lines.push(`\tt${e.cause} -> t${e.id};`)
+		if (e.cause !== undefined && ids.has(e.cause)) {
+			lines.push(`\tt${e.cause} -> t${e.id};`)
+		}
 	}
 	lines.push('}')
 	return lines.join('\n')

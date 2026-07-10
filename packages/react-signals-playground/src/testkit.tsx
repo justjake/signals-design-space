@@ -178,14 +178,18 @@ const registry = new Map<string, ReadableSignal<unknown>>()
 
 function registerSignals(handles: Record<string, ReadableSignal<unknown>>): void {
 	for (const [label, signal] of Object.entries(handles)) {
-		if (registry.has(label)) throw new Error(`testkit: duplicate signal label "${label}"`)
+		if (registry.has(label)) {
+			throw new Error(`testkit: duplicate signal label "${label}"`)
+		}
 		registry.set(label, signal)
 	}
 }
 
 function signalOf(label: string): ReadableSignal<unknown> {
 	const signal = registry.get(label)
-	if (signal === undefined) throw new Error(`testkit: no signal labeled "${label}"`)
+	if (signal === undefined) {
+		throw new Error(`testkit: no signal labeled "${label}"`)
+	}
 	return signal
 }
 
@@ -233,7 +237,9 @@ function pushEffect(probe: string, value: unknown): void {
 		const li = document.createElement('li')
 		li.textContent = `${Math.round(entry.t)} ${probe}=${String(value)}`
 		effectLogEl.append(li)
-		while (effectLogEl.childElementCount > 50) effectLogEl.firstElementChild?.remove()
+		while (effectLogEl.childElementCount > 50) {
+			effectLogEl.firstElementChild?.remove()
+		}
 	}
 }
 
@@ -247,7 +253,9 @@ let foreignThenables = false
  * exactly what a userland cache or a non-native promise library hands React.
  */
 export function maybeWrapThenable<T>(promise: Promise<T>): PromiseLike<T> {
-	if (!foreignThenables) return promise
+	if (!foreignThenables) {
+		return promise
+	}
 	return {
 		then(onFulfilled, onRejected) {
 			void promise.then(onFulfilled, onRejected)
@@ -258,7 +266,9 @@ export function maybeWrapThenable<T>(promise: Promise<T>): PromiseLike<T> {
 
 /** App.tsx reports each navigation resource's lifecycle here (fetch counters). */
 export function recordFetch(epoch: number, route: string, event: 'create' | 'settle'): void {
-	if (!TEST_MODE) return
+	if (!TEST_MODE) {
+		return
+	}
 	fetchLog.push({ t: performance.now(), epoch, route, event, foreign: foreignThenables })
 }
 
@@ -340,9 +350,13 @@ function holdWith(
 	openGate(gate)
 	const scopeReads: Record<string, unknown> = {}
 	startSignalTransition(() => {
-		for (const [label, value] of Object.entries(writes)) atomOf(label).set(value)
+		for (const [label, value] of Object.entries(writes)) {
+			atomOf(label).set(value)
+		}
 		gateAtom.set(gate.epoch)
-		for (const label of Object.keys(writes)) scopeReads[label] = signalOf(label).state
+		for (const label of Object.keys(writes)) {
+			scopeReads[label] = signalOf(label).state
+		}
 	})
 	return { epoch: gate.epoch, scopeReads }
 }
@@ -399,8 +413,11 @@ function startAutoIncrement(everyMs: number, mode: 'urgent' | 'transition'): voi
 	stopAutoIncrement()
 	const tick = (): void => {
 		const bump = (): void => atomOf('count').update((n) => (n as number) + 1)
-		if (mode === 'transition') startSignalTransition(bump)
-		else bump()
+		if (mode === 'transition') {
+			startSignalTransition(bump)
+		} else {
+			bump()
+		}
 	}
 	autoIncrementTimer = window.setInterval(tick, everyMs)
 }
@@ -422,7 +439,9 @@ export const LATTICE_SIZE = 20
 let latticeWorkMs = 0
 
 function syncWork(): void {
-	if (latticeWorkMs <= 0) return
+	if (latticeWorkMs <= 0) {
+		return
+	}
 	const start = performance.now()
 	while (performance.now() - start < latticeWorkMs) {
 		// busy loop — daishi's syncBlock: deliberate synchronous render cost
@@ -463,7 +482,9 @@ function Lattice(): React.ReactElement | null {
 	// one mode, mirroring daishi's same-hook-everywhere grids.
 	const readLatticeDom = React.useCallback((): string[] | null => {
 		const container = containerRef.current
-		if (container === null) return null
+		if (container === null) {
+			return null
+		}
 		const values = [...container.querySelectorAll('[data-lat]')].map(
 			(el) => el.getAttribute('data-lat') ?? '',
 		)
@@ -471,9 +492,13 @@ function Lattice(): React.ReactElement | null {
 	}, [mode, main])
 	// Strict latch: layout effect — the committed DOM before paint.
 	React.useLayoutEffect(() => {
-		if (mode === 'off') return
+		if (mode === 'off') {
+			return
+		}
 		const all = readLatticeDom()
-		if (all === null) return
+		if (all === null) {
+			return
+		}
 		lattice.checks += 1
 		if (all.length > 1 && !all.every((v) => v === all[0])) {
 			lattice.torn.push({ t: performance.now(), values: all })
@@ -482,16 +507,22 @@ function Lattice(): React.ReactElement | null {
 	// daishi-faithful latch: passive effect — the frame survived to the
 	// passive flush (daishi's useCheckTearing ran here).
 	React.useEffect(() => {
-		if (mode === 'off') return
+		if (mode === 'off') {
+			return
+		}
 		const all = readLatticeDom()
-		if (all === null) return
+		if (all === null) {
+			return
+		}
 		lattice.passiveChecks += 1
 		if (all.length > 1 && !all.every((v) => v === all[0])) {
 			lattice.tornPassive.push({ t: performance.now(), values: all })
 		}
 	})
 
-	if (mode === 'off') return null
+	if (mode === 'off') {
+		return null
+	}
 	const Reader = mode === 'plain' ? LatticeReader : DeferredLatticeReader
 	return (
 		<div ref={containerRef} data-testid="lattice" data-mode={mode}>
@@ -536,7 +567,9 @@ function PairProbe(): React.ReactElement {
 	const a = useSignal(pairA)
 	const b = useSignal(pairB)
 	React.useLayoutEffect(() => {
-		if (a !== b) pairTorn.push({ t: performance.now(), a, b })
+		if (a !== b) {
+			pairTorn.push({ t: performance.now(), a, b })
+		}
 	})
 	return (
 		<span data-testid="pair" data-a={a} data-b={b}>
@@ -627,7 +660,9 @@ let useProbePromise: { promise: Promise<string>; resolve: (v: string) => void } 
 
 function UseProbe(): React.ReactElement {
 	const epoch = useSignal(useProbeEpoch)
-	if (epoch === 0 || useProbePromise === null) return <span data-testid="use-probe">idle</span>
+	if (epoch === 0 || useProbePromise === null) {
+		return <span data-testid="use-probe">idle</span>
+	}
 	const value = React.use(useProbePromise.promise)
 	return <span data-testid="use-probe">{value}</span>
 }
@@ -647,7 +682,9 @@ function SecondRootMirror(): React.ReactElement {
 let secondRoot: { root: Root; el: HTMLElement } | null = null
 
 function mountSecondRoot(): void {
-	if (secondRoot !== null) return
+	if (secondRoot !== null) {
+		return
+	}
 	const el = document.createElement('div')
 	el.id = 'second-root'
 	document.body.append(el)
@@ -657,7 +694,9 @@ function mountSecondRoot(): void {
 }
 
 function unmountSecondRoot(): void {
-	if (secondRoot === null) return
+	if (secondRoot === null) {
+		return
+	}
 	secondRoot.root.unmount()
 	secondRoot.el.remove()
 	secondRoot = null
@@ -677,13 +716,18 @@ function installStore(): void {
 		},
 		transitionWriteMany: (writes) => {
 			startSignalTransition(() => {
-				for (const [label, value] of Object.entries(writes)) atomOf(label).set(value)
+				for (const [label, value] of Object.entries(writes)) {
+					atomOf(label).set(value)
+				}
 			})
 		},
 		increment: (label, mode) => {
 			const bump = (): void => atomOf(label).update((n) => (n as number) + 1)
-			if (mode === 'transition') startSignalTransition(bump)
-			else bump()
+			if (mode === 'transition') {
+				startSignalTransition(bump)
+			} else {
+				bump()
+			}
 		},
 		transitionScopeProbe: (label, value) => {
 			let inScope: unknown
@@ -740,7 +784,9 @@ function installStore(): void {
 	window.__store = store
 }
 
-if (TEST_MODE) installStore()
+if (TEST_MODE) {
+	installStore()
+}
 
 // ---- the panel -------------------------------------------------------------------------------------
 

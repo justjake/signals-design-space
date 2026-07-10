@@ -282,8 +282,9 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				// illegal (a skip) once the output has a writer, identically
 				// on both sides.
 				for (const e of m.coreEffects.values()) {
-					if (e.writeTo === out)
+					if (e.writeTo === out) {
 						throw new ScheduleError(`output atom ${out.name} already has a writing effect`)
+					}
 				}
 				m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`, out)
 				break
@@ -303,7 +304,9 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				// per `sig` (order-freedom), identically to the out1/out2 rule.
 				const sig = atomNamed('sig')
 				for (const e of m.coreEffects.values()) {
-					if (e.writeTo === sig) throw new ScheduleError('sig already has a writing effect')
+					if (e.writeTo === sig) {
+						throw new ScheduleError('sig already has a writing effect')
+					}
 				}
 				m.mountCoreEffect(atomNamed('tap'), `CE${uniq}`, sig)
 				break
@@ -315,8 +318,9 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				// QUIET-ONLY (like writeTap): mounting while pending would run the
 				// body's sib write into a batch, taking the whole scenario off the
 				// quiet write path the converged terminal's drain lives on.
-				if (!m.isQuiet())
+				if (!m.isQuiet()) {
 					throw new ScheduleError('the writing terminal mounts only on the quiet path')
+				}
 				m.mountReactEffectWrite(
 					op.root,
 					atomNamed('tap'),
@@ -328,7 +332,9 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				// The trigger — QUIET-ONLY (the converged terminal's boundary
 				// drain is the quiet write path; legality decided by isQuiet on
 				// both sides). Distinct small values re-fire both families.
-				if (!m.isQuiet()) throw new ScheduleError('tap writes only on the quiet path')
+				if (!m.isQuiet()) {
+					throw new ScheduleError('tap writes only on the quiet path')
+				}
 				m.bareWrite(atomNamed('tap'), { kind: 'set', value: op.value })
 				break
 			}
@@ -341,7 +347,9 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 		}
 		return true
 	} catch (err) {
-		if (err instanceof ScheduleError) return false
+		if (err instanceof ScheduleError) {
+			return false
+		}
 		throw err
 	}
 }
@@ -356,7 +364,9 @@ export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
 		try {
 			if (applyOneOp(m, op)) {
 				applied.push(op)
-				if (check) checkInvariants(m)
+				if (check) {
+					checkInvariants(m)
+				}
 			}
 		} catch (err) {
 			return { model: m, applied, failure: { error: err as Error, step } }
@@ -369,7 +379,9 @@ export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
  * the skip signal — the one lookup shape every entity kind shares. */
 function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
 	const ids = [...map.keys()]
-	if (ids.length === 0) throw new ScheduleError(`no ${what} yet`)
+	if (ids.length === 0) {
+		throw new ScheduleError(`no ${what} yet`)
+	}
 	return ids[index % ids.length]!
 }
 
@@ -403,7 +415,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			})
 			// same-batch bursts exercise the per-(watcher, slot) dedup and the
 			// render-aware suppression rule far more often than uniform picks
-			while (bool(0.4))
+			while (bool(0.4)) {
 				ops.push({
 					t: 'write',
 					batch,
@@ -411,22 +423,26 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 					kind: kinds[pick(kinds.length)]!,
 					value: pick(10),
 				})
-		} else if (roll < 0.375)
+			}
+		} else if (roll < 0.375) {
 			ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) })
+		}
 		// R-2 corpus band: writes targeting the custom-equals member q — the
 		// asymmetric comparator's drop/accept decisions referee equality ORDER
 		// at every aligned site (added freely post-freeze: the named finding
 		// seeds are stored literal schedules now; generator changes cannot
 		// touch them).
 		else if (roll < 0.38) {
-			if (bool(0.6))
+			if (bool(0.6)) {
 				ops.push({
 					t: 'writeQ',
 					batch: pick(34),
 					kind: kinds[pick(kinds.length)]!,
 					value: pick(10),
 				})
-			else ops.push({ t: 'bareWriteQ', kind: kinds[pick(kinds.length)]!, value: pick(10) })
+			} else {
+				ops.push({ t: 'bareWriteQ', kind: kinds[pick(kinds.length)]!, value: pick(10) })
+			}
 		}
 		// This band emitted the deleted scope-write op (the action-scope write
 		// channel is gone: writes attributed to an action's batch are ordinary
@@ -436,9 +452,9 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		// historical schedule is unchanged. Replay legality widens by design:
 		// the old op skipped on non-action batches; a write applies to any live
 		// batch — both sides of the lockstep harness widen together.
-		else if (roll < 0.41)
+		else if (roll < 0.41) {
 			ops.push({ t: 'write', batch: pick(34), atom: pick(4), kind: 'set', value: pick(10) })
-		else if (roll < 0.45) {
+		} else if (roll < 0.45) {
 			const batch = pick(34)
 			bool(0.7) // discarded draw — preserves the historical seed stream byte-for-byte (it fed the deleted settle committed flag; the model never branched on it)
 			ops.push({ t: 'settle', batch })
@@ -449,7 +465,9 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		} else if (roll < 0.64) {
 			const include: number[] = []
 			const n = pick(3)
-			for (let k = 0; k < n; k++) include.push(pick(34))
+			for (let k = 0; k < n; k++) {
+				include.push(pick(34))
+			}
 			// the interleaved-delivery shape: arm the (watcher, slot) dedup bit
 			// pre-pin, open a render including that slot, then write post-pin —
 			// the started render cannot fold the write, so it must re-deliver
@@ -460,11 +478,15 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			} else {
 				ops.push({ t: 'renderStart', root: ROOTS[pick(2)]!, include })
 			}
-		} else if (roll < 0.68) ops.push({ t: 'yield', renderPass: pick(20) })
-		else if (roll < 0.72) ops.push({ t: 'resume', renderPass: pick(20) })
-		else if (roll < 0.82) {
+		} else if (roll < 0.68) {
+			ops.push({ t: 'yield', renderPass: pick(20) })
+		} else if (roll < 0.72) {
+			ops.push({ t: 'resume', renderPass: pick(20) })
+		} else if (roll < 0.82) {
 			const retireAtCommit: number[] = []
-			if (bool(0.3)) retireAtCommit.push(pick(34))
+			if (bool(0.3)) {
+				retireAtCommit.push(pick(34))
+			}
 			ops.push({
 				t: 'end',
 				renderPass: pick(20),
@@ -473,15 +495,19 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			})
 		} else if (roll < 0.88) {
 			ops.push({ t: 'mount', renderPass: pick(20), node: pick(8) })
-			if (bool(0.5)) ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) })
-		} else if (roll < 0.91) ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) })
-		else if (roll < 0.94) {
+			if (bool(0.5)) {
+				ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) })
+			}
+		} else if (roll < 0.91) {
+			ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) })
+		} else if (roll < 0.94) {
 			// Committed observers: single-node bodies and causally dep-choosing
 			// (pick) bodies, with occasional removal / StrictMode replay so the
 			// snapshot lifecycle (recapture, cleanup, OL2 no-run-after-removal)
 			// fuzzes under every interleaving.
-			if (bool(0.5)) ops.push({ t: 'reactEffect', root: ROOTS[pick(2)]!, node: pick(8) })
-			else
+			if (bool(0.5)) {
+				ops.push({ t: 'reactEffect', root: ROOTS[pick(2)]!, node: pick(8) })
+			} else {
 				ops.push({
 					t: 'reactEffectPick',
 					root: ROOTS[pick(2)]!,
@@ -489,12 +515,18 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 					a: pick(8),
 					b: pick(8),
 				})
-			if (bool(0.25))
+			}
+			if (bool(0.25)) {
 				ops.push({ t: bool(0.5) ? 'removeReactEffect' : 'replayReactEffect', effect: pick(10) })
-		} else if (roll < 0.95) ops.push({ t: 'coreEffect', node: pick(8) })
+			}
+		} else if (roll < 0.95) {
+			ops.push({ t: 'coreEffect', node: pick(8) })
+		}
 		// R-3 corpus band: writing core effects (effect writes classify
 		// normally — the fused-apply fix's referee vocabulary).
-		else if (roll < 0.96) ops.push({ t: 'coreEffectWrite', node: pick(8), out: pick(2) })
+		else if (roll < 0.96) {
+			ops.push({ t: 'coreEffectWrite', node: pick(8), out: pick(2) })
+		}
 		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
 		// The converged-terminal band, APPENDED after the historical bands (all
 		// thresholds below 0.96 keep their exact seed stream). Mount a terminal
@@ -504,19 +536,29 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		else if (roll < 0.972) {
 			const root = ROOTS[pick(2)]!
 			const which = pick(4)
-			if (which === 0)
-				ops.push({ t: 'mountTermReader', root, dep: 0 }) // reads sig (bug 1 downstream)
-			else if (which === 1)
-				ops.push({ t: 'mountTapCore' }) // core writes sig (bug 1 cause)
-			else if (which === 2)
-				ops.push({ t: 'mountTermReader', root, dep: 1 }) // reads sib (bug 2 downstream)
-			else ops.push({ t: 'mountSibWriter', root }) // terminal writes sib (bug 2 cause)
+			if (which === 0) {
+				ops.push({ t: 'mountTermReader', root, dep: 0 })
+			} // reads sig (bug 1 downstream)
+			else if (which === 1) {
+				ops.push({ t: 'mountTapCore' })
+			} // core writes sig (bug 1 cause)
+			else if (which === 2) {
+				ops.push({ t: 'mountTermReader', root, dep: 1 })
+			} // reads sib (bug 2 downstream)
+			else {
+				ops.push({ t: 'mountSibWriter', root })
+			} // terminal writes sib (bug 2 cause)
 			// Trigger burst: quiet-only tap writes with distinct small values, so
 			// the core's sig payload (min(runs,3)) and the writer's sib payload
 			// (min(tap,3)) actually change and re-fire the reading terminals.
-			while (bool(0.6)) ops.push({ t: 'writeTap', value: pick(4) })
-		} else if (roll < 0.985) ops.push({ t: 'discardAllWip' })
-		else ops.push({ t: 'quiesce' })
+			while (bool(0.6)) {
+				ops.push({ t: 'writeTap', value: pick(4) })
+			}
+		} else if (roll < 0.985) {
+			ops.push({ t: 'discardAllWip' })
+		} else {
+			ops.push({ t: 'quiesce' })
+		}
 	}
 	// Close out: retire everything then quiesce, so residue/epoch-reset rules run on most seeds.
 	for (let batchIdx = 0; batchIdx < 34; batchIdx++) {
@@ -535,8 +577,9 @@ export function fingerprint(result: RunResult): string {
 	const values: Record<string, Value> = {}
 	for (const n of m.idToNode.values()) {
 		values[`newest:${n.name}`] = m.newestValue(n)
-		for (const root of m.roots.keys())
+		for (const root of m.roots.keys()) {
 			values[`committed:${root}:${n.name}`] = m.committedValue(n, root)
+		}
 	}
 	return JSON.stringify({ events: m.events, values })
 }
@@ -550,7 +593,9 @@ export type FuzzOutcome = {
 export function fuzzSeed(seed: number, steps: number): FuzzOutcome {
 	const ops = generateSchedule(seed, steps)
 	const result = runSchedule(ops, true)
-	if (result.failure === undefined) return { seed, failure: undefined }
+	if (result.failure === undefined) {
+		return { seed, failure: undefined }
+	}
 	const shrunk = shrink(ops, (candidate) => runSchedule(candidate, true).failure !== undefined)
 	return { seed, failure: { ...result.failure, shrunk } }
 }
@@ -571,7 +616,9 @@ export function shrink(ops: ScheduleOp[], failing: (ops: ScheduleOp[]) => boolea
 					break
 				}
 			}
-			if (progress) break
+			if (progress) {
+				break
+			}
 		}
 	}
 	return current

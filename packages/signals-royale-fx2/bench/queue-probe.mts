@@ -18,7 +18,9 @@
 import { effect, nodeOf, signal } from '../src/index.ts'
 import { observeNode } from '../src/graph.ts'
 
-if (typeof gc !== 'function') throw new Error('run with --expose-gc')
+if (typeof gc !== 'function') {
+	throw new Error('run with --expose-gc')
+}
 
 const SUBS = 2000
 const WAVES = 50
@@ -30,7 +32,9 @@ const held: Array<() => void> = []
 
 function measure(label: string, setup: () => (i: number) => void): void {
 	const wave = setup()
-	for (let i = 0; i < WARMUP; i++) wave(i)
+	for (let i = 0; i < WARMUP; i++) {
+		wave(i)
+	}
 	const deltas: number[] = []
 	for (let i = 0; i < WAVES; i++) {
 		gc!()
@@ -52,22 +56,27 @@ function measure(label: string, setup: () => (i: number) => void): void {
 measure('render-notify burst', () => {
 	const cell = signal(0)
 	let hits = 0
-	for (let s = 0; s < SUBS; s++) held.push(observeNode(nodeOf(cell), () => void hits++))
+	for (let s = 0; s < SUBS; s++) {
+		held.push(observeNode(nodeOf(cell), () => void hits++))
+	}
 	return (i) => cell.set(i + 1)
 })
 
 measure('effect burst', () => {
 	const cell = signal(0)
 	let hits = 0
-	for (let s = 0; s < SUBS; s++)
+	for (let s = 0; s < SUBS; s++) {
 		held.push(
 			effect(() => {
 				cell.get()
 				hits++
 			}),
 		)
+	}
 	return (i) => cell.set(i + 1)
 })
 
 // Keep every subscription alive through the last GC of the last scenario.
-if (held.length !== SUBS * 2) throw new Error('subscription bookkeeping drifted')
+if (held.length !== SUBS * 2) {
+	throw new Error('subscription bookkeeping drifted')
+}

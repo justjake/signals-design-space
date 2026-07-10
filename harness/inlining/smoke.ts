@@ -68,9 +68,13 @@ export function runSmoke(adapter: FrameworkAdapter): void {
 		}
 	}
 
-	for (let i = 0; i < warmIters; i++) iteration(i)
+	for (let i = 0; i < warmIters; i++) {
+		iteration(i)
+	}
 	console.log(STEADY_MARKER)
-	for (let i = warmIters; i < warmIters + steadyIters; i++) iteration(i)
+	for (let i = warmIters; i < warmIters + steadyIters; i++) {
+		iteration(i)
+	}
 	// Teardown runs OUTSIDE the steady bracket: dispose executes unlink/
 	// boundary paths for the first time, and those first-execution deopts
 	// are normal, not a deopt-loop signal.

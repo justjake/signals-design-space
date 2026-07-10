@@ -35,7 +35,9 @@ export function commitAndRetire(
 	watchers: Watcher[] = [],
 ): void {
 	const p = m.renderStart(root, [batch.id])
-	for (const w of watchers) m.renderWatcher(p.id, w.id)
+	for (const w of watchers) {
+		m.renderWatcher(p.id, w.id)
+	}
 	m.renderEnd(p.id, 'commit', { retireAtCommit: [batch.id] })
 }
 

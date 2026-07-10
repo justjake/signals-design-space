@@ -152,27 +152,39 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 function sameRecords(a: ThenableRecord[], b: ThenableRecord[]): boolean {
-	if (a.length !== b.length) return false
+	if (a.length !== b.length) {
+		return false
+	}
 	for (let i = 0; i < a.length; i++) {
-		if (a[i] !== b[i]) return false
+		if (a[i] !== b[i]) {
+			return false
+		}
 	}
 	return true
 }
 
 function pendingThenable(records: ThenableRecord[]): PromiseLike<unknown> {
-	if (records.length === 1) return records[0]!.thenable
+	if (records.length === 1) {
+		return records[0]!.thenable
+	}
 	return new Promise<void>((resolve) => {
 		let remaining = records.length
 		const settled = () => {
-			if (--remaining === 0) resolve()
+			if (--remaining === 0) {
+				resolve()
+			}
 		}
-		for (let i = 0; i < records.length; i++) records[i]!.thenable.then(settled, settled)
+		for (let i = 0; i < records.length; i++) {
+			records[i]!.thenable.then(settled, settled)
+		}
 	})
 }
 
 function containsSource(list: Source[], source: Source): boolean {
 	for (let i = 0; i < list.length; i++) {
-		if (list[i] === source) return true
+		if (list[i] === source) {
+			return true
+		}
 	}
 	return false
 }
@@ -189,8 +201,11 @@ function addSubscriber(source: Source, consumer: Consumer): void {
 	const single = source._subscriber
 	if (single === undefined) {
 		const subscribers = source._subscribers
-		if (subscribers === undefined) source._subscriber = consumer
-		else subscribers.add(consumer)
+		if (subscribers === undefined) {
+			source._subscriber = consumer
+		} else {
+			subscribers.add(consumer)
+		}
 	} else if (single !== consumer) {
 		source._subscriber = undefined
 		const subscribers = new Set<Consumer>()
@@ -206,7 +221,9 @@ function removeSubscriber(source: Source, consumer: Consumer): void {
 		return
 	}
 	const subscribers = source._subscribers
-	if (subscribers === undefined) return
+	if (subscribers === undefined) {
+		return
+	}
 	subscribers.delete(consumer)
 	if (subscribers.size === 1) {
 		source._subscriber = subscribers.values().next().value
@@ -216,8 +233,12 @@ function removeSubscriber(source: Source, consumer: Consumer): void {
 
 function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 	if (consumer._state === DISPOSED) {
-		if (consumer._nextDeps !== undefined) consumer._nextDeps.length = 0
-		if (consumer._nextVersions !== undefined) consumer._nextVersions.length = 0
+		if (consumer._nextDeps !== undefined) {
+			consumer._nextDeps.length = 0
+		}
+		if (consumer._nextVersions !== undefined) {
+			consumer._nextVersions.length = 0
+		}
 		return
 	}
 	const oldDeps = consumer._deps
@@ -244,7 +265,9 @@ function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 			}
 		}
 		if (unchanged) {
-			for (let i = 0; i < oldVersions.length; i++) oldVersions[i] = nextVersions[i]!
+			for (let i = 0; i < oldVersions.length; i++) {
+				oldVersions[i] = nextVersions[i]!
+			}
 			nextDeps.length = 0
 			nextVersions.length = 0
 			return
@@ -336,14 +359,18 @@ export class Runtime {
 		}
 		this.host = host
 		return () => {
-			if (this.host === host) this.host = undefined
+			if (this.host === host) {
+				this.host = undefined
+			}
 		}
 	}
 
 	attachTrace(trace: TraceSink): () => void {
 		this.trace = trace
 		return () => {
-			if (this.trace === trace) this.trace = undefined
+			if (this.trace === trace) {
+				this.trace = undefined
+			}
 		}
 	}
 
@@ -380,7 +407,9 @@ export class Runtime {
 
 	effectScope(fn: () => void): () => void {
 		const scope = new Scope(this.activeOwner)
-		if (this.activeOwner !== undefined) this.activeOwner._children.push(scope)
+		if (this.activeOwner !== undefined) {
+			this.activeOwner._children.push(scope)
+		}
 		const previous = this.activeOwner
 		this.activeOwner = scope
 		try {
@@ -408,11 +437,15 @@ export class Runtime {
 	}
 
 	endBatch(): void {
-		if (this.batchDepth === 0) throw new Error('endBatch() without startBatch()')
+		if (this.batchDepth === 0) {
+			throw new Error('endBatch() without startBatch()')
+		}
 		if (--this.batchDepth === 0) {
 			for (let i = 0; i < this.batchAtoms.length; i++) {
 				const atom = this.batchAtoms[i]!
-				if (atom.equals(atom._batchValue, atom._value)) atom._version = atom._batchVersion
+				if (atom.equals(atom._batchValue, atom._value)) {
+					atom._version = atom._batchVersion
+				}
 				atom._batchValue = undefined
 			}
 			this.batchAtoms.length = 0
@@ -439,16 +472,22 @@ export class Runtime {
 				(value) => {
 					record!.status = 1
 					record!.value = value
-					for (const listener of record!.listeners) listener()
+					for (const listener of record!.listeners) {
+						listener()
+					}
 				},
 				(error) => {
 					record!.status = 2
 					record!.error = error
-					for (const listener of record!.listeners) listener()
+					for (const listener of record!.listeners) {
+						listener()
+					}
 				},
 			)
 		}
-		if (record.status === 1) return record.value as T
+		if (record.status === 1) {
+			return record.value as T
+		}
 		if (record.status === 2) {
 			const evaluation = this.evaluationFrames[this.evaluationDepth - 1]
 			if (evaluation !== undefined) {
@@ -478,7 +517,9 @@ export class Runtime {
 					break
 				}
 			}
-			if (!found) evaluation.pending.push(record as ThenableRecord)
+			if (!found) {
+				evaluation.pending.push(record as ThenableRecord)
+			}
 			return undefined as T
 		}
 		throw thenable
@@ -494,8 +535,11 @@ export class Runtime {
 		try {
 			value = computed._fn(computed._context)
 		} catch (caught) {
-			if (isThenable(caught)) this._useThenable(caught)
-			else error = caught
+			if (isThenable(caught)) {
+				this._useThenable(caught)
+			} else {
+				error = caught
+			}
 		} finally {
 			evaluationRuntime = previousRuntime
 			this.evaluationDepth--
@@ -503,14 +547,19 @@ export class Runtime {
 		const evaluation = this.evaluationFrames[depth] ?? this.syncEvaluation
 		this.evaluationFrames[depth] = undefined
 		evaluation.value = value
-		if (error !== undefined) evaluation.error = error
-		else if (evaluation === this.syncEvaluation) evaluation.error = undefined
+		if (error !== undefined) {
+			evaluation.error = error
+		} else if (evaluation === this.syncEvaluation) {
+			evaluation.error = undefined
+		}
 		return evaluation as AsyncEvaluation & { value?: T }
 	}
 
 	private _detachAsync(computed: Computed<any>): void {
 		const subscriptions = computed._asyncSubscriptions
-		if (subscriptions === undefined) return
+		if (subscriptions === undefined) {
+			return
+		}
 		for (let i = 0; i < subscriptions.length; i++) {
 			const subscription = subscriptions[i]!
 			subscription.record.listeners.delete(subscription.listener)
@@ -530,7 +579,9 @@ export class Runtime {
 		for (let i = 0; i < records.length; i++) {
 			const record = records[i]!
 			const listener = () => {
-				if (computed._asyncGeneration !== generation || computed._state === DISPOSED) return
+				if (computed._asyncGeneration !== generation || computed._state === DISPOSED) {
+					return
+				}
 				const previousCause = this.traceCause
 				this.traceCause = computed._cause
 				try {
@@ -550,17 +601,22 @@ export class Runtime {
 		world: RenderWorld,
 	): void {
 		const host = this.host
-		if (host === undefined || world.settlementLane === 0) return
+		if (host === undefined || world.settlementLane === 0) {
+			return
+		}
 		if (
 			!world.deferred &&
 			computed._pendingRecords !== undefined &&
 			sameRecords(computed._pendingRecords, records)
-		)
+		) {
 			return
+		}
 		for (let i = 0; i < records.length; i++) {
 			const record = records[i]!
 			const listener = () => {
-				if (world._released) return
+				if (world._released) {
+					return
+				}
 				const previousCause = this.traceCause
 				this.traceCause = computed._cause
 				try {
@@ -614,7 +670,9 @@ export class Runtime {
 		branch.lastCause = operation.cause
 		branch.signals.add(computed)
 		if (!deferred) {
-			if (refresh) computed._refreshEpoch = this._foldRefresh(computed, 0)
+			if (refresh) {
+				computed._refreshEpoch = this._foldRefresh(computed, 0)
+			}
 			computed._state = DIRTY
 			computed._cause = operation.cause
 			this._invalidate(computed, operation.cause)
@@ -628,22 +686,32 @@ export class Runtime {
 	}
 
 	_readAtom<T>(atom: Atom<T>): T {
-		if (this.activeWorld !== undefined) return this._readWorld(atom, this.activeWorld)
+		if (this.activeWorld !== undefined) {
+			return this._readWorld(atom, this.activeWorld)
+		}
 		this._track(atom)
 		return this._materialize(atom)
 	}
 
 	_readComputed<T>(computed: Computed<T>): T {
-		if (this.activeWorld !== undefined) return this._readWorld(computed, this.activeWorld)
+		if (this.activeWorld !== undefined) {
+			return this._readWorld(computed, this.activeWorld)
+		}
 		this._updateComputed(computed)
 		this._track(computed)
-		if (computed._error !== undefined) throw computed._error
-		if (computed._pending !== undefined) throw computed._pending
+		if (computed._error !== undefined) {
+			throw computed._error
+		}
+		if (computed._pending !== undefined) {
+			throw computed._pending
+		}
 		return computed._value as T
 	}
 
 	_write<T>(atom: Atom<T>, kind: 0 | 1, value: T | ((value: T) => T)): void {
-		if (this.writesForbidden !== 0) throw new Error('Signals cannot be written in this context.')
+		if (this.writesForbidden !== 0) {
+			throw new Error('Signals cannot be written in this context.')
+		}
 		if (this.host === undefined) {
 			this._writeCanonical(atom, kind, value)
 			return
@@ -657,7 +725,9 @@ export class Runtime {
 		const previous = this._materialize(atom)
 		this._snapshot(atom, previous)
 		const next = kind === 0 ? (value as T) : (value as (value: T) => T)(previous)
-		if (atom.equals(previous, next)) return
+		if (atom.equals(previous, next)) {
+			return
+		}
 		const cause = this.emitTrace('write', atom, this.traceCause)
 		atom._value = next
 		atom._latest = next
@@ -684,7 +754,9 @@ export class Runtime {
 		}
 		const writerValue = this._fold(atom, 2, branch)
 		const next = kind === 0 ? (value as T) : (value as (value: T) => T)(writerValue)
-		if (atom.equals(writerValue, next)) return
+		if (atom.equals(writerValue, next)) {
+			return
+		}
 		const operation: Operation<T> = {
 			seq: ++this.sequence,
 			branch,
@@ -716,7 +788,9 @@ export class Runtime {
 
 	private _branch(lane: number, deferred: boolean): Branch {
 		const existing = this.branchesByLane.get(lane)
-		if (existing !== undefined && existing.status === 0) return existing
+		if (existing !== undefined && existing.status === 0) {
+			return existing
+		}
 		const branch: Branch = {
 			id: this.nextBranchId++,
 			lane,
@@ -739,7 +813,9 @@ export class Runtime {
 	}
 
 	finishBranch(branch: Branch, committed: boolean): void {
-		if (branch.status !== 0) return
+		if (branch.status !== 0) {
+			return
+		}
 		this.mutationEpoch++
 		branch.status = committed ? 1 : 2
 		branch.retireCause = this.emitTrace('batch-retire', branch, branch.lastCause || branch.cause, {
@@ -790,7 +866,9 @@ export class Runtime {
 	private _fold<T>(atom: Atom<T>, mode: 0 | 1 | 2 | 3, context?: Branch | RenderWorld): T {
 		let value = atom._base as T
 		const tape = atom._tape
-		if (tape === undefined) return atom._value
+		if (tape === undefined) {
+			return atom._value
+		}
 		for (let i = 0; i < tape.length; i++) {
 			const operation = tape[i]!
 			let include: boolean
@@ -811,7 +889,9 @@ export class Runtime {
 					: operation.seq <= cutoff ||
 						(operation.seq <= world.pin && (operation.branch.lane & world.lanes) !== 0)
 			}
-			if (include) value = applyOperation(operation, value)
+			if (include) {
+				value = applyOperation(operation, value)
+			}
 		}
 		return value
 	}
@@ -819,10 +899,14 @@ export class Runtime {
 	private _foldRefresh(computed: Computed<any>, mode: 0 | 3, world?: RenderWorld): number {
 		let epoch = computed._refreshBase
 		const tape = computed._controlTape
-		if (tape === undefined) return computed._refreshEpoch
+		if (tape === undefined) {
+			return computed._refreshEpoch
+		}
 		for (let i = 0; i < tape.length; i++) {
 			const operation = tape[i]!
-			if (!operation.refresh) continue
+			if (!operation.refresh) {
+				continue
+			}
 			let include: boolean
 			if (mode === 0) {
 				include = !operation.branch.deferred || operation.branch.status === 1
@@ -833,7 +917,9 @@ export class Runtime {
 					: operation.seq <= cutoff ||
 						(operation.seq <= world!.pin && (operation.branch.lane & world!.lanes) !== 0)
 			}
-			if (include) epoch++
+			if (include) {
+				epoch++
+			}
 		}
 		return epoch
 	}
@@ -848,7 +934,9 @@ export class Runtime {
 	}
 
 	private _compact(): void {
-		if (!this.compactPending || this.openWorlds !== 0) return
+		if (!this.compactPending || this.openWorlds !== 0) {
+			return
+		}
 		this.compactPending = false
 		for (const atom of this.tapedAtoms) {
 			atom._base = atom._value
@@ -873,7 +961,9 @@ export class Runtime {
 		newest = false,
 	): RenderWorld {
 		const snapshot = new Map<Branch, number>()
-		for (const [branch, cutoff] of cutoffs) snapshot.set(branch, cutoff)
+		for (const [branch, cutoff] of cutoffs) {
+			snapshot.set(branch, cutoff)
+		}
 		this.openWorlds++
 		return {
 			runtime: this,
@@ -892,9 +982,13 @@ export class Runtime {
 	}
 
 	releaseWorld(world: RenderWorld): void {
-		if (world.runtime !== this || world._released) return
+		if (world.runtime !== this || world._released) {
+			return
+		}
 		world._released = true
-		for (let i = 0; i < world._cleanups.length; i++) world._cleanups[i]!()
+		for (let i = 0; i < world._cleanups.length; i++) {
+			world._cleanups[i]!()
+		}
 		world._cleanups.length = 0
 		world.memo.clear()
 		this.openWorlds--
@@ -902,16 +996,22 @@ export class Runtime {
 	}
 
 	commitWorld(world: RenderWorld): void {
-		if (world.runtime !== this || world._released) return
+		if (world.runtime !== this || world._released) {
+			return
+		}
 		for (const [computed, memo] of world.memo) {
-			if (memo.error !== undefined || memo.pending !== undefined) continue
+			if (memo.error !== undefined || memo.pending !== undefined) {
+				continue
+			}
 			computed._stableValue = memo.value
 			computed._hasStable = true
 		}
 	}
 
 	withWorld<T>(world: RenderWorld, leaves: Atom<any>[], fn: () => T): T {
-		if (world.runtime !== this) throw new Error('Render world belongs to another Strata runtime.')
+		if (world.runtime !== this) {
+			throw new Error('Render world belongs to another Strata runtime.')
+		}
 		const previousWorld = this.activeWorld
 		const previousConsumer = this.activeConsumer
 		this.activeWorld = world
@@ -931,7 +1031,9 @@ export class Runtime {
 		if (source instanceof Atom) {
 			this._recordLeaf(source)
 			this._materialize(source)
-			if (source._tape === undefined) return source._value
+			if (source._tape === undefined) {
+				return source._value
+			}
 			return this._fold(source, 3, world)
 		}
 		if (!world.speculative) {
@@ -940,9 +1042,13 @@ export class Runtime {
 			try {
 				this._updateComputed(source)
 				this._recordSourceLeaves(source)
-				if (source._error !== undefined) throw source._error
+				if (source._error !== undefined) {
+					throw source._error
+				}
 				if (source._pending !== undefined) {
-					if (source._hasStable && !world.deferred) return source._stableValue as T
+					if (source._hasStable && !world.deferred) {
+						return source._stableValue as T
+					}
 					throw source._pending
 				}
 				return source._value as T
@@ -954,8 +1060,12 @@ export class Runtime {
 		const cached = world.memo.get(source) as WorldMemo<T> | undefined
 		if (cached !== undefined) {
 			this._recordLeaves(cached.leaves)
-			if (cached.error !== undefined) throw cached.error
-			if (cached.pending !== undefined && !cached.servePending) throw cached.pending
+			if (cached.error !== undefined) {
+				throw cached.error
+			}
+			if (cached.pending !== undefined && !cached.servePending) {
+				throw cached.pending
+			}
 			return cached.value as T
 		}
 
@@ -981,13 +1091,19 @@ export class Runtime {
 		}
 		world.memo.set(source, memo)
 		this._recordLeaves(leaves)
-		if (memo.error !== undefined) throw memo.error
-		if (memo.pending !== undefined && !memo.servePending) throw memo.pending
+		if (memo.error !== undefined) {
+			throw memo.error
+		}
+		if (memo.pending !== undefined && !memo.servePending) {
+			throw memo.pending
+		}
 		return memo.value as T
 	}
 
 	pendingInWorld(source: Source, world: RenderWorld): boolean {
-		if (source instanceof Atom) return this.isPending(source)
+		if (source instanceof Atom) {
+			return this.isPending(source)
+		}
 		if (!world.speculative) {
 			this._updateComputed(source)
 			return source._pending !== undefined && source._hasStable
@@ -1021,7 +1137,9 @@ export class Runtime {
 		}
 		if (this.activeConsumer === undefined && this.branchesByLane.size !== 0) {
 			let lanes = 0
-			for (const branch of this.branchesByLane.values()) lanes |= branch.lane
+			for (const branch of this.branchesByLane.values()) {
+				lanes |= branch.lane
+			}
 			const world = this.createWorld(this, lanes, this.noCutoffs, true, true, 0, true)
 			try {
 				return this.withWorld(world, [], () => this.latest(source))
@@ -1030,7 +1148,9 @@ export class Runtime {
 			}
 		}
 		this._updateComputed(source)
-		if (source._error !== undefined) throw source._error
+		if (source._error !== undefined) {
+			throw source._error
+		}
 		return source._hasStable ? (source._stableValue as T) : undefined
 	}
 
@@ -1038,9 +1158,13 @@ export class Runtime {
 		const previousWorld = this.activeWorld
 		this.activeWorld = undefined
 		try {
-			if (source instanceof Atom) return this._materialize(source)
+			if (source instanceof Atom) {
+				return this._materialize(source)
+			}
 			this._updateComputed(source)
-			if (source._error !== undefined) throw source._error
+			if (source._error !== undefined) {
+				throw source._error
+			}
 			if (source._pending !== undefined) {
 				return source._hasStable ? (source._stableValue as T) : undefined
 			}
@@ -1053,10 +1177,14 @@ export class Runtime {
 	isPending(source: Source): boolean {
 		if (source instanceof Atom) {
 			const tape = source._tape
-			if (tape === undefined) return false
+			if (tape === undefined) {
+				return false
+			}
 			for (let i = 0; i < tape.length; i++) {
 				const branch = tape[i]!.branch
-				if (branch.deferred && branch.status === 0) return true
+				if (branch.deferred && branch.status === 0) {
+					return true
+				}
 			}
 			return false
 		}
@@ -1066,7 +1194,9 @@ export class Runtime {
 			this.branchesByLane.size !== 0
 		) {
 			let lanes = 0
-			for (const branch of this.branchesByLane.values()) lanes |= branch.lane
+			for (const branch of this.branchesByLane.values()) {
+				lanes |= branch.lane
+			}
 			const world = this.createWorld(this, lanes, this.noCutoffs, true, true, 0, true)
 			try {
 				return this.pendingInWorld(source, world)
@@ -1079,7 +1209,9 @@ export class Runtime {
 	}
 
 	refresh(source: Source): void {
-		if (source instanceof Atom) return
+		if (source instanceof Atom) {
+			return
+		}
 		if (this.host === undefined) {
 			const cause = this.emitTrace('refresh', source, this.traceCause)
 			this.mutationEpoch++
@@ -1089,14 +1221,18 @@ export class Runtime {
 			source._cause = cause
 			this._invalidate(source, cause)
 			this._flush()
-			if (source._state !== CLEAN) this._updateComputed(source)
+			if (source._state !== CLEAN) {
+				this._updateComputed(source)
+			}
 			return
 		}
 		const deferred = this.host.write((lane, isDeferred) => {
 			this._control(source, lane, isDeferred, true)
 			return isDeferred
 		})
-		if (!deferred && source._state !== CLEAN) this._updateComputed(source)
+		if (!deferred && source._state !== CLEAN) {
+			this._updateComputed(source)
+		}
 	}
 
 	_refreshValue(computed: Computed<any>): number {
@@ -1111,31 +1247,43 @@ export class Runtime {
 		sequence: number,
 		cause: number,
 	): void {
-		if (source._journalListeners === undefined) return
-		for (const listener of source._journalListeners) listener(branch, sequence, cause)
+		if (source._journalListeners === undefined) {
+			return
+		}
+		for (const listener of source._journalListeners) {
+			listener(branch, sequence, cause)
+		}
 	}
 
 	subscribeJournal(source: Signal<any>, listener: JournalListener): () => void {
 		;(source._journalListeners ??= new Set()).add(listener)
 		return () => {
 			const listeners = source._journalListeners
-			if (listeners === undefined) return
+			if (listeners === undefined) {
+				return
+			}
 			listeners.delete(listener)
-			if (listeners.size === 0) source._journalListeners = undefined
+			if (listeners.size === 0) {
+				source._journalListeners = undefined
+			}
 		}
 	}
 
 	scanJournal(source: Signal<any>, visit: JournalListener): void {
 		if (source instanceof Atom) {
 			const tape = source._tape
-			if (tape === undefined) return
+			if (tape === undefined) {
+				return
+			}
 			for (let i = 0; i < tape.length; i++) {
 				const operation = tape[i]!
 				visit(operation.branch, operation.seq, operation.cause)
 			}
 		} else {
 			const tape = source._controlTape
-			if (tape === undefined) return
+			if (tape === undefined) {
+				return
+			}
 			for (let i = 0; i < tape.length; i++) {
 				const operation = tape[i]!
 				visit(operation.branch, operation.seq, operation.cause)
@@ -1158,7 +1306,9 @@ export class Runtime {
 	): string {
 		const state: Record<string, unknown> = {}
 		for (const key in atoms) {
-			if (Object.prototype.hasOwnProperty.call(atoms, key)) state[key] = this.committed(atoms[key]!)
+			if (Object.prototype.hasOwnProperty.call(atoms, key)) {
+				state[key] = this.committed(atoms[key]!)
+			}
 		}
 		return JSON.stringify(state, replacer)
 	}
@@ -1173,13 +1323,16 @@ export class Runtime {
 			if (
 				Object.prototype.hasOwnProperty.call(atoms, key) &&
 				Object.prototype.hasOwnProperty.call(state, key)
-			)
+			) {
 				this.installState(atoms[key]!, state[key])
+			}
 		}
 	}
 
 	_retain(source: Source): void {
-		if (source._observers++ !== 0) return
+		if (source._observers++ !== 0) {
+			return
+		}
 		if (source instanceof Atom) {
 			this._materialize(source)
 			this._scheduleLifecycle(source)
@@ -1195,7 +1348,9 @@ export class Runtime {
 	}
 
 	_release(source: Source): void {
-		if (source._observers === 0 || --source._observers !== 0) return
+		if (source._observers === 0 || --source._observers !== 0) {
+			return
+		}
 		if (source instanceof Atom) {
 			this._scheduleLifecycle(source)
 			return
@@ -1209,7 +1364,9 @@ export class Runtime {
 	}
 
 	private _materialize<T>(atom: Atom<T>): T {
-		if (atom._ready) return atom._value
+		if (atom._ready) {
+			return atom._value
+		}
 		const initializer = atom._initializer!
 		const previousConsumer = this.activeConsumer
 		this.activeConsumer = undefined
@@ -1229,7 +1386,9 @@ export class Runtime {
 
 	private _track(source: Source): void {
 		const consumer = this.activeConsumer
-		if (consumer === undefined || consumer.runtime !== this || consumer._state === DISPOSED) return
+		if (consumer === undefined || consumer.runtime !== this || consumer._state === DISPOSED) {
+			return
+		}
 		const index = consumer._cursor++
 		if (!consumer._dynamic && consumer._deps[index] === source) {
 			consumer._depVersions[index] = sourceVersion(source)
@@ -1260,7 +1419,9 @@ export class Runtime {
 			}
 		}
 		const nextDeps = consumer._nextDeps!
-		if (containsSource(nextDeps, source)) return
+		if (containsSource(nextDeps, source)) {
+			return
+		}
 		nextDeps.push(source)
 		consumer._nextVersions!.push(sourceVersion(source))
 	}
@@ -1275,12 +1436,16 @@ export class Runtime {
 					break
 				}
 			}
-			if (!found) collector.push(atom)
+			if (!found) {
+				collector.push(atom)
+			}
 		}
 	}
 
 	private _recordLeaves(leaves: Atom<any>[]): void {
-		for (let i = 0; i < leaves.length; i++) this._recordLeaf(leaves[i]!)
+		for (let i = 0; i < leaves.length; i++) {
+			this._recordLeaf(leaves[i]!)
+		}
 	}
 
 	private _recordSourceLeaves(source: Source): void {
@@ -1288,40 +1453,61 @@ export class Runtime {
 			this._recordLeaf(source)
 			return
 		}
-		for (let i = 0; i < source._deps.length; i++) this._recordSourceLeaves(source._deps[i]!)
+		for (let i = 0; i < source._deps.length; i++) {
+			this._recordSourceLeaves(source._deps[i]!)
+		}
 	}
 
 	private _invalidate(source: Source, cause: number): void {
 		const subscriber = source._subscriber
-		if (subscriber !== undefined) this._invalidateConsumer(subscriber, cause)
+		if (subscriber !== undefined) {
+			this._invalidateConsumer(subscriber, cause)
+		}
 		const subscribers = source._subscribers
-		if (subscribers === undefined) return
-		for (const consumer of subscribers) this._invalidateConsumer(consumer, cause)
+		if (subscribers === undefined) {
+			return
+		}
+		for (const consumer of subscribers) {
+			this._invalidateConsumer(consumer, cause)
+		}
 	}
 
 	private _invalidateConsumer(consumer: Consumer, cause: number): void {
-		if (consumer._state !== CLEAN) return
+		if (consumer._state !== CLEAN) {
+			return
+		}
 		consumer._state = CHECK
 		consumer._cause = cause
-		if (consumer instanceof Reaction) this._enqueue(consumer)
-		else this._invalidate(consumer, cause)
+		if (consumer instanceof Reaction) {
+			this._enqueue(consumer)
+		} else {
+			this._invalidate(consumer, cause)
+		}
 	}
 
 	private _consumerChanged(consumer: ConsumerState & Consumer): boolean {
 		for (let i = 0; i < consumer._deps.length; i++) {
 			const source = consumer._deps[i]!
-			if (source instanceof Computed) this._updateComputed(source)
-			if (sourceVersion(source) !== consumer._depVersions[i]) return true
+			if (source instanceof Computed) {
+				this._updateComputed(source)
+			}
+			if (sourceVersion(source) !== consumer._depVersions[i]) {
+				return true
+			}
 		}
 		return false
 	}
 
 	_updateComputed<T>(computed: Computed<T>): void {
 		if (computed._state === CLEAN) {
-			if (computed._observing || computed._checkedEpoch === this.mutationEpoch) return
+			if (computed._observing || computed._checkedEpoch === this.mutationEpoch) {
+				return
+			}
 			computed._state = CHECK
 		}
-		if (computed._state === RUNNING) throw new Error('Reactive cycle detected.')
+		if (computed._state === RUNNING) {
+			throw new Error('Reactive cycle detected.')
+		}
 		if (computed._state === CHECK) {
 			this._checkComputed(computed)
 			return
@@ -1343,8 +1529,12 @@ export class Runtime {
 					(dependency._state !== CLEAN ||
 						(!dependency._observing && dependency._checkedEpoch !== this.mutationEpoch))
 				) {
-					if (dependency._state === CLEAN) dependency._state = CHECK
-					if (dependency._state === RUNNING) throw new Error('Reactive cycle detected.')
+					if (dependency._state === CLEAN) {
+						dependency._state = CHECK
+					}
+					if (dependency._state === RUNNING) {
+						throw new Error('Reactive cycle detected.')
+					}
 					if (dependency._state === CHECK) {
 						this.checkNodes[base + depth] = computed
 						this.checkIndices[base + depth] = index
@@ -1363,7 +1553,9 @@ export class Runtime {
 					break
 				}
 			}
-			if (changed) continue
+			if (changed) {
+				continue
+			}
 			if (computed._state === CHECK) {
 				computed._state = CLEAN
 				computed._checkedEpoch = this.mutationEpoch
@@ -1389,8 +1581,12 @@ export class Runtime {
 	private _recompute<T>(computed: Computed<T>): void {
 		computed._state = RUNNING
 		const mutationEpoch = this.mutationEpoch
-		if (computed._nextDeps !== undefined) computed._nextDeps.length = 0
-		if (computed._nextVersions !== undefined) computed._nextVersions.length = 0
+		if (computed._nextDeps !== undefined) {
+			computed._nextDeps.length = 0
+		}
+		if (computed._nextVersions !== undefined) {
+			computed._nextVersions.length = 0
+		}
 		computed._cursor = 0
 		computed._dynamic = false
 		const previousConsumer = this.activeConsumer
@@ -1404,8 +1600,11 @@ export class Runtime {
 		try {
 			value = computed._fn(computed._context)
 		} catch (caught) {
-			if (isThenable(caught)) this._useThenable(caught)
-			else error = caught
+			if (isThenable(caught)) {
+				this._useThenable(caught)
+			} else {
+				error = caught
+			}
 		} finally {
 			evaluationRuntime = previousRuntime
 			this.evaluationDepth--
@@ -1438,15 +1637,20 @@ export class Runtime {
 					}
 				}
 			}
-			if (computed._state === CLEAN) computed._checkedEpoch = this.mutationEpoch
+			if (computed._state === CLEAN) {
+				computed._checkedEpoch = this.mutationEpoch
+			}
 			return
 		}
 		const result = (this.evaluationFrames[evaluationDepth] ??
 			this.syncEvaluation) as AsyncEvaluation & { value?: T }
 		this.evaluationFrames[evaluationDepth] = undefined
 		result.value = value
-		if (error !== undefined) result.error = error
-		else if (result === this.syncEvaluation) result.error = undefined
+		if (error !== undefined) {
+			result.error = error
+		} else if (result === this.syncEvaluation) {
+			result.error = undefined
+		}
 		this._finishComputed(computed, result, mutationEpoch)
 	}
 
@@ -1470,8 +1674,12 @@ export class Runtime {
 				pendingRecords.push(result.pending[i]!)
 			}
 		} else {
-			if (computed._asyncSubscriptions?.length !== 0) this._detachAsync(computed)
-			if (computed._pendingRecords !== undefined) computed._pendingRecords.length = 0
+			if (computed._asyncSubscriptions?.length !== 0) {
+				this._detachAsync(computed)
+			}
+			if (computed._pendingRecords !== undefined) {
+				computed._pendingRecords.length = 0
+			}
 		}
 		let changed: boolean
 		if (result.error !== undefined || previousError !== undefined) {
@@ -1496,24 +1704,34 @@ export class Runtime {
 				break
 			}
 		}
-		if (computed._state === CLEAN) computed._checkedEpoch = this.mutationEpoch
-		if (changed) computed._version++
+		if (computed._state === CLEAN) {
+			computed._checkedEpoch = this.mutationEpoch
+		}
+		if (changed) {
+			computed._version++
+		}
 	}
 
 	_enqueue(reaction: Reaction): void {
-		if (reaction._queued || reaction._state === DISPOSED) return
+		if (reaction._queued || reaction._state === DISPOSED) {
+			return
+		}
 		reaction._queued = true
 		this.effectQueue.push(reaction)
 	}
 
 	_flush(): void {
-		if (this.batchDepth !== 0 || this.flushing) return
+		if (this.batchDepth !== 0 || this.flushing) {
+			return
+		}
 		this.flushing = true
 		try {
 			while (this.queueIndex < this.effectQueue.length) {
 				const reaction = this.effectQueue[this.queueIndex++]!
 				reaction._queued = false
-				if (reaction._state !== DISPOSED) this._runReaction(reaction)
+				if (reaction._state !== DISPOSED) {
+					this._runReaction(reaction)
+				}
 			}
 		} finally {
 			this.effectQueue.length = 0
@@ -1525,7 +1743,9 @@ export class Runtime {
 	private _runReaction(reaction: Reaction): void {
 		if (reaction._state === CHECK) {
 			const changed = this._consumerChanged(reaction)
-			if ((reaction._state as number) === DISPOSED) return
+			if ((reaction._state as number) === DISPOSED) {
+				return
+			}
 			if (!changed) {
 				reaction._state = CLEAN
 				return
@@ -1548,9 +1768,15 @@ export class Runtime {
 				this.activeConsumer = previousConsumer
 			}
 		}
-		if (reaction._state === DISPOSED) return
-		if (reaction._nextDeps !== undefined) reaction._nextDeps.length = 0
-		if (reaction._nextVersions !== undefined) reaction._nextVersions.length = 0
+		if (reaction._state === DISPOSED) {
+			return
+		}
+		if (reaction._nextDeps !== undefined) {
+			reaction._nextDeps.length = 0
+		}
+		if (reaction._nextVersions !== undefined) {
+			reaction._nextVersions.length = 0
+		}
 		reaction._cursor = 0
 		reaction._dynamic = false
 		reaction._state = CLEAN
@@ -1561,7 +1787,9 @@ export class Runtime {
 		this.activeOwner = reaction
 		try {
 			const cleanup = reaction._fn()
-			if (typeof cleanup === 'function') reaction._cleanup = cleanup
+			if (typeof cleanup === 'function') {
+				reaction._cleanup = cleanup
+			}
 		} catch (error) {
 			this._report(error)
 		} finally {
@@ -1574,7 +1802,9 @@ export class Runtime {
 	}
 
 	private _scheduleLifecycle(atom: Atom<any>): void {
-		if (atom._lifecycle === undefined || atom._lifecycleQueued) return
+		if (atom._lifecycle === undefined || atom._lifecycleQueued) {
+			return
+		}
 		atom._lifecycleQueued = true
 		queueMicrotask(() => {
 			atom._lifecycleQueued = false
@@ -1646,7 +1876,9 @@ export class Atom<T = unknown> {
 		} else {
 			initial = initialOrConfig as T | (() => T)
 			options = optionsOrRuntime instanceof Runtime ? {} : optionsOrRuntime
-			if (optionsOrRuntime instanceof Runtime) runtime = optionsOrRuntime
+			if (optionsOrRuntime instanceof Runtime) {
+				runtime = optionsOrRuntime
+			}
 		}
 		this.runtime = runtime
 		this.equals = options.equals ?? options.isEqual ?? Object.is
@@ -1765,7 +1997,9 @@ export class Computed<T = unknown> implements ConsumerState {
 		if (typeof fnOrConfig === 'function') {
 			this._fn = fnOrConfig
 			options = optionsOrRuntime instanceof Runtime ? {} : optionsOrRuntime
-			if (optionsOrRuntime instanceof Runtime) runtime = optionsOrRuntime
+			if (optionsOrRuntime instanceof Runtime) {
+				runtime = optionsOrRuntime
+			}
 		} else {
 			this._fn = fnOrConfig.fn
 			options = fnOrConfig
@@ -1782,7 +2016,9 @@ export class Computed<T = unknown> implements ConsumerState {
 	}
 
 	dispose(): void {
-		if (this._state === DISPOSED) return
+		if (this._state === DISPOSED) {
+			return
+		}
 		this._state = DISPOSED
 		this.runtime._disposeComputed(this)
 	}
@@ -1795,9 +2031,13 @@ class Scope {
 	constructor(readonly parent?: Owner) {}
 
 	dispose(): void {
-		if (this.disposed) return
+		if (this.disposed) {
+			return
+		}
 		this.disposed = true
-		for (let i = this._children.length - 1; i >= 0; i--) this._children[i]!.dispose()
+		for (let i = this._children.length - 1; i >= 0; i--) {
+			this._children[i]!.dispose()
+		}
 		this._children.length = 0
 	}
 }
@@ -1822,16 +2062,22 @@ class Reaction implements ConsumerState {
 		readonly _fn: () => void | (() => void),
 		readonly parent?: Owner,
 	) {
-		if (parent !== undefined) parent._children.push(this)
+		if (parent !== undefined) {
+			parent._children.push(this)
+		}
 	}
 
 	_disposeChildren(): void {
-		for (let i = this._children.length - 1; i >= 0; i--) this._children[i]!.dispose()
+		for (let i = this._children.length - 1; i >= 0; i--) {
+			this._children[i]!.dispose()
+		}
 		this._children.length = 0
 	}
 
 	dispose(): void {
-		if (this._state === DISPOSED) return
+		if (this._state === DISPOSED) {
+			return
+		}
 		this._state = DISPOSED
 		this._disposeChildren()
 		if (this._cleanup !== undefined) {

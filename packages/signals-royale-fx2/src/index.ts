@@ -168,7 +168,9 @@ export function computed<T>(
 /** @internal Resolve a handle to its engine node. */
 export function nodeOf(x: AnyReadable): ReactiveNode {
 	const node = (x as Signal<unknown>).node
-	if (node === undefined) throw new TypeError('expected a signal or computed handle')
+	if (node === undefined) {
+		throw new TypeError('expected a signal or computed handle')
+	}
 	return node
 }
 
@@ -180,14 +182,18 @@ export function nodeOf(x: AnyReadable): ReactiveNode {
  * park an evaluating consumer on the suspension, serve stale data when a
  * settled value exists, otherwise suspend (first load). */
 function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
-	if ((node.flags & Flag.AsyncError) !== 0) throw (node.throwable as ErrorBox).error
+	if ((node.flags & Flag.AsyncError) !== 0) {
+		throw (node.throwable as ErrorBox).error
+	}
 	const suspension = node.throwable as Suspension
 	const consumer = getActiveConsumer()
 	if (consumer !== null && (consumer.flags & Flag.KindDerived) !== 0) {
 		// Pending forwards: park the evaluating computed on this suspension.
 		useImpl(suspension.promise, consumer as DerivedNode<unknown>)
 	}
-	if (!isUninitialized(node.value)) return node.value // stale serves
+	if (!isUninitialized(node.value)) {
+		return node.value
+	} // stale serves
 	throw suspension.promise // never settled: suspend
 }
 
@@ -213,14 +219,19 @@ export function latest<T>(x: Readable<T>): T {
 			// a later change to x re-runs the consumer rather than leaving it
 			// permanently stale.
 			world = BASE_WORLD
-			if ((node.flags & Flag.KindCell) !== 0) readCell(node as CellNode<unknown>)
-			else readDerived(node as DerivedNode<unknown>)
+			if ((node.flags & Flag.KindCell) !== 0) {
+				readCell(node as CellNode<unknown>)
+			} else {
+				readDerived(node as DerivedNode<unknown>)
+			}
 		} else {
 			world = renderWorld() ?? latestWorld()
 		}
 	}
 	const st = resolveState(node, world)
-	if ((st.flags & Flag.AsyncError) !== 0) throw (st.throwable as ErrorBox).error
+	if ((st.flags & Flag.AsyncError) !== 0) {
+		throw (st.throwable as ErrorBox).error
+	}
 	return stateValue(st) as T
 }
 
@@ -228,7 +239,9 @@ export function latest<T>(x: Readable<T>): T {
 export function committed<T>(x: Readable<T>, container?: object): T {
 	const node = nodeOf(x)
 	const st = resolveState(node, committedWorldOf(container))
-	if ((st.flags & Flag.AsyncError) !== 0) throw (st.throwable as ErrorBox).error
+	if ((st.flags & Flag.AsyncError) !== 0) {
+		throw (st.throwable as ErrorBox).error
+	}
 	return stateValue(st) as T
 }
 
@@ -237,7 +250,9 @@ export function committed<T>(x: Readable<T>, container?: object): T {
  * error the caller rethrows. The React bindings' useCommitted snapshot. */
 export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
 	const st = resolveState(node, committedWorldOf(container))
-	if ((st.flags & Flag.AsyncError) !== 0) return st.throwable
+	if ((st.flags & Flag.AsyncError) !== 0) {
+		return st.throwable
+	}
 	return stateValue(st)
 }
 
@@ -253,8 +268,12 @@ export function isPending(x: AnyReadable): boolean {
  * (null = ambient). The React bindings' useIsPending snapshot. */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
 	assertSignalReadAllowed()
-	if ((node.flags & Flag.KindCell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>)
-	if ((node.flags & Flag.KindDerived) === 0) return false
+	if ((node.flags & Flag.KindCell) !== 0) {
+		return cellHasDraftIntents(node as CellNode<unknown>)
+	}
+	if ((node.flags & Flag.KindDerived) === 0) {
+		return false
+	}
 	// Pending means "stale data exists while newer data loads" (Solid 2.0's
 	// rule): a suspension with settled history is pending; a FIRST LOAD is
 	// not — it has no stale data to indicate over, and suspending is
@@ -301,7 +320,9 @@ function writeSignal<T>(x: Signal<T>, value: T): void {
 	const changed = writeCell(x.node, value)
 	// Equality cutoff with pending drafts: base state did not move (no wave
 	// ran) but the drafted replays did — their audiences must still hear it.
-	if (rebased && !changed) pokeRebasedCell(cell)
+	if (rebased && !changed) {
+		pokeRebasedCell(cell)
+	}
 }
 
 function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
@@ -319,7 +340,9 @@ function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
 	)
 	const rebased = appendUrgentIntent(cell, 'update', fn)
 	const changed = writeCell(x.node, next)
-	if (rebased && !changed) pokeRebasedCell(cell)
+	if (rebased && !changed) {
+		pokeRebasedCell(cell)
+	}
 }
 
 export function set<T>(x: Signal<T>, value: T): void {
@@ -422,10 +445,16 @@ export function setRenderWorldProvider(
 }
 
 function renderWorld(): World | null {
-	if (renderWorldProvider === null) return null
+	if (renderWorldProvider === null) {
+		return null
+	}
 	const ids = renderWorldProvider()
-	if (ids === null) return null
-	if (ids === 'base') return BASE_WORLD
+	if (ids === null) {
+		return null
+	}
+	if (ids === 'base') {
+		return BASE_WORLD
+	}
 	return worldOf(ids)
 }
 

@@ -19,7 +19,9 @@ export function deferUnobserved<T>(fn: () => T): T {
 	} finally {
 		deferredUnobserved = prev
 		for (const dep of set) {
-			if (dep._subs === null) reactToUnobserved(dep)
+			if (dep._subs === null) {
+				reactToUnobserved(dep)
+			}
 		}
 	}
 }
@@ -40,15 +42,22 @@ export function unlinkSubs(link: Link): Link | null {
 	const nextDep = link._nextDep
 	const nextSub = link._nextSub
 	const prevSub = link._prevSub
-	if (nextSub !== null) nextSub._prevSub = prevSub
-	else dep._subsTail = prevSub
+	if (nextSub !== null) {
+		nextSub._prevSub = prevSub
+	} else {
+		dep._subsTail = prevSub
+	}
 
-	if (prevSub !== null) prevSub._nextSub = nextSub
-	else {
+	if (prevSub !== null) {
+		prevSub._nextSub = nextSub
+	} else {
 		dep._subs = nextSub
 		if (nextSub === null) {
-			if (deferredUnobserved !== null) deferredUnobserved.add(dep)
-			else reactToUnobserved(dep)
+			if (deferredUnobserved !== null) {
+				deferredUnobserved.add(dep)
+			} else {
+				reactToUnobserved(dep)
+			}
 		}
 	}
 	return nextDep
@@ -61,8 +70,11 @@ export function trimStaleDeps(el: Computed<any>): void {
 		do {
 			toRemove = unlinkSubs(toRemove)
 		} while (toRemove !== null)
-		if (depsTail !== null) depsTail._nextDep = null
-		else el._deps = null
+		if (depsTail !== null) {
+			depsTail._nextDep = null
+		} else {
+			el._deps = null
+		}
 	}
 }
 
@@ -117,11 +129,17 @@ export function link(
 				_nextSub: null,
 				_pendingObserver: pendingObserver,
 			})
-	if (prevDep !== null) prevDep._nextDep = newLink
-	else sub._deps = newLink
+	if (prevDep !== null) {
+		prevDep._nextDep = newLink
+	} else {
+		sub._deps = newLink
+	}
 
-	if (prevSub !== null) prevSub._nextSub = newLink
-	else dep._subs = newLink
+	if (prevSub !== null) {
+		prevSub._nextSub = newLink
+	} else {
+		dep._subs = newLink
+	}
 }
 
 // https://github.com/stackblitz/alien-signals/blob/v2.0.3/src/system.ts#L284
@@ -130,8 +148,12 @@ function isValidLink(checkLink: Link, sub: Computed<unknown>): boolean {
 	if (depsTail !== null) {
 		let link = sub._deps!
 		do {
-			if (link === checkLink) return true
-			if (link === depsTail) break
+			if (link === checkLink) {
+				return true
+			}
+			if (link === depsTail) {
+				break
+			}
 			link = link._nextDep!
 		} while (link !== null)
 	}

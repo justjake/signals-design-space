@@ -46,8 +46,11 @@ function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine(options)
 	const b = engine
@@ -88,7 +91,9 @@ function suspendingUse(
 		try {
 			return __TEST__ctxUse(node.ix, 'k', thenable) // the id-keyed ctx.use request cache (per node)
 		} catch (err) {
-			if (err instanceof SuspendedRead) return err
+			if (err instanceof SuspendedRead) {
+				return err
+			}
 			throw err
 		}
 	})
@@ -172,7 +177,9 @@ describe('S-D pool shell reuse (§4.8)', () => {
 			watchers.push(mount(b, `R${i}`, c, `W${i}`))
 		}
 		expect(b.__TEST__arenaStats().committed).toBe(10)
-		for (const w of watchers) w.live = false
+		for (const w of watchers) {
+			w.live = false
+		}
 		b.quiesce() // ≥10 releases land on a pool that caps at 8
 		const stats = b.__TEST__arenaStats()
 		expect(stats.committed).toBe(0)
@@ -214,7 +221,9 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		const beforeCapture = shell.memory.length // buffer capacity once sum has shadowed its 24 deps
 		const e = b.mountSignalEffect('R', 'E')
 		e.body = () => {
-			for (const at of atoms) void b.readSignalEffectDep(at)
+			for (const at of atoms) {
+				void b.readSignalEffectDep(at)
+			}
 		}
 		b.captureSignalEffectRun(e.id, e.body)
 		// The capture close appends one arena link per dep, threaded through the
@@ -319,8 +328,9 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
 		for (let nid = 0; nid < shell.nodeToShadow.length; nid++) {
 			const sh = shell.nodeToShadow[nid]!
-			if (sh !== 0)
+			if (sh !== 0) {
 				expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock)
+			}
 		}
 	})
 

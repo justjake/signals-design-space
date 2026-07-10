@@ -103,7 +103,9 @@ export class ReactBatchRegistry {
 	}
 
 	subscribe(listener: RegistryListener): () => void {
-		if (this.disposed) throw new Error('React signals registry is disposed.')
+		if (this.disposed) {
+			throw new Error('React signals registry is disposed.')
+		}
 		this.listeners.add(listener)
 		return () => this.listeners.delete(listener)
 	}
@@ -111,10 +113,14 @@ export class ReactBatchRegistry {
 	getCurrentWriteBatch(): BatchToken {
 		const packed = this.taps.getCurrentWriteLane()
 		const lane = packed & 0x7fffffff
-		if (lane === 0) return 0
+		if (lane === 0) {
+			return 0
+		}
 		const index = 31 - Math.clz32(lane)
 		let slot = this.slots[index]
-		if (slot !== undefined && slot.token !== 0) return slot.token
+		if (slot !== undefined && slot.token !== 0) {
+			return slot.token
+		}
 		const deferred = (packed & SIGN_BIT) !== 0
 		const token = ++this.serial * 2 + (deferred ? 1 : 0)
 		if (slot === undefined) {
@@ -143,7 +149,9 @@ export class ReactBatchRegistry {
 
 	liveTokens(): BatchToken[] {
 		const tokens: BatchToken[] = []
-		for (const token of this.live.keys()) tokens.push(token)
+		for (const token of this.live.keys()) {
+			tokens.push(token)
+		}
 		return tokens
 	}
 
@@ -158,7 +166,9 @@ export class ReactBatchRegistry {
 	reset(): void {
 		for (let i = 0; i < this.slots.length; i++) {
 			const slot = this.slots[i]
-			if (slot === undefined) continue
+			if (slot === undefined) {
+				continue
+			}
 			slot.token = 0
 			slot.deferred = false
 			slot.roots = undefined
@@ -172,9 +182,13 @@ export class ReactBatchRegistry {
 	}
 
 	dispose(): void {
-		if (this.disposed) return
+		if (this.disposed) {
+			return
+		}
 		this.disposed = true
-		if (this.taps.consumer === this.consumer) this.taps.consumer = null
+		if (this.taps.consumer === this.consumer) {
+			this.taps.consumer = null
+		}
 		this.reset()
 		this.listeners.clear()
 	}
@@ -185,7 +199,9 @@ export class ReactBatchRegistry {
 			const index = 31 - Math.clz32(remaining)
 			remaining &= ~(1 << index)
 			const slot = this.slots[index]
-			if (slot === undefined || slot.token === 0) continue
+			if (slot === undefined || slot.token === 0) {
+				continue
+			}
 			;(slot.roots ??= new Set()).add(root)
 		}
 	}
@@ -196,7 +212,9 @@ export class ReactBatchRegistry {
 			const index = 31 - Math.clz32(remaining)
 			remaining &= ~(1 << index)
 			const slot = this.slots[index]
-			if (slot === undefined || slot.token === 0) continue
+			if (slot === undefined || slot.token === 0) {
+				continue
+			}
 			;(slot.roots ??= new Set()).add(root)
 		}
 	}
@@ -209,15 +227,20 @@ export class ReactBatchRegistry {
 				slot.token === 0 ||
 				slot.parked !== undefined ||
 				(slot.roots !== undefined && slot.roots.size !== 0)
-			)
+			) {
 				continue
+			}
 			if (slot.deferred && slot.lane === actionLane && actionThenable !== null) {
 				slot.parked = actionThenable
 				const token = slot.token
 				const settle = () => {
-					if (slot.parked !== actionThenable || slot.token !== token) return
+					if (slot.parked !== actionThenable || slot.token !== token) {
+						return
+					}
 					slot.parked = undefined
-					if (slot.roots === undefined || slot.roots.size === 0) this.retire(slot, false)
+					if (slot.roots === undefined || slot.roots.size === 0) {
+						this.retire(slot, false)
+					}
 				}
 				actionThenable.then(settle, settle)
 			} else {
@@ -244,7 +267,9 @@ export class ReactBatchRegistry {
 			const index = 31 - Math.clz32(remaining)
 			remaining &= ~(1 << index)
 			const slot = this.slots[index]
-			if (slot !== undefined && slot.token !== 0) included.push(slot.token)
+			if (slot !== undefined && slot.token !== 0) {
+				included.push(slot.token)
+			}
 		}
 		for (let i = 0; i < this.slots.length; i++) {
 			const slot = this.slots[i]
@@ -253,22 +278,27 @@ export class ReactBatchRegistry {
 				slot.token !== 0 &&
 				slot.committedRoots?.has(root) &&
 				(lanes & slot.lane) === 0
-			)
+			) {
 				included.push(slot.token)
+			}
 		}
 		this.emit('onRenderPassStart', container, included)
 	}
 
 	private onRenderPassYield(root: RootToken, container: unknown): void {
 		const frame = this.frames.get(root)
-		if (frame === undefined || frame.yielded) return
+		if (frame === undefined || frame.yielded) {
+			return
+		}
 		frame.yielded = true
 		this.emit('onRenderPassYield', container)
 	}
 
 	private onRenderPassResume(root: RootToken, container: unknown): void {
 		const frame = this.frames.get(root)
-		if (frame === undefined || !frame.yielded) return
+		if (frame === undefined || !frame.yielded) {
+			return
+		}
 		frame.yielded = false
 		this.emit('onRenderPassResume', container)
 	}
@@ -290,7 +320,9 @@ export class ReactBatchRegistry {
 		let retirements: Array<{ slot: Slot; committed: boolean }> | undefined
 		for (let i = 0; i < this.slots.length; i++) {
 			const slot = this.slots[i]
-			if (slot === undefined || slot.token === 0) continue
+			if (slot === undefined || slot.token === 0) {
+				continue
+			}
 			const roots = slot.roots
 			if ((remainingLanes & slot.lane) !== 0) {
 				if (
@@ -304,9 +336,13 @@ export class ReactBatchRegistry {
 				}
 				continue
 			}
-			if (!roots?.has(root)) continue
+			if (!roots?.has(root)) {
+				continue
+			}
 			const visible = (finishedLanes & slot.lane) !== 0
-			if (visible) committed.push(slot.token)
+			if (visible) {
+				committed.push(slot.token)
+			}
 			roots.delete(root)
 			if (roots.size === 0) {
 				;(retirements ??= []).push({
@@ -330,7 +366,9 @@ export class ReactBatchRegistry {
 
 	private retire(slot: Slot, committed: boolean): void {
 		const token = slot.token
-		if (token === 0) return
+		if (token === 0) {
+			return
+		}
 		slot.token = 0
 		slot.deferred = false
 		slot.roots = undefined
@@ -344,7 +382,9 @@ export class ReactBatchRegistry {
 	private emit(name: keyof RegistryListener, a?: unknown, b?: unknown): void {
 		for (const listener of this.listeners) {
 			const handler = listener[name] as ((a?: unknown, b?: unknown) => void) | undefined
-			if (handler === undefined) continue
+			if (handler === undefined) {
+				continue
+			}
 			try {
 				handler(a, b)
 			} catch (error) {

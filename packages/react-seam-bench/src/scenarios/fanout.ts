@@ -36,7 +36,9 @@ const fanout: Scenario = {
 			times.push(performance.now() - t0)
 			const delta = cellRenderCount() - before
 			renders += delta
-			if (delta > maxRenders) maxRenders = delta
+			if (delta > maxRenders) {
+				maxRenders = delta
+			}
 		}
 
 		report(median(times), {

@@ -835,7 +835,9 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 		const t = m.openBatch()
 		let misbehave = true
 		const evil = m.computed('evil', () => {
-			if (misbehave) m.write(t.id, a, set(1)) // a write during render
+			if (misbehave) {
+				m.write(t.id, a, set(1))
+			} // a write during render
 			return 0
 		})
 		expect(() => m.newestValue(evil)).toThrow(/write during a world evaluation/)

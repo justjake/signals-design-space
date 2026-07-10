@@ -614,7 +614,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	function updateComputed(c: number): boolean {
-		if (beforeRetrack !== null) beforeRetrack(c) // SPK-H hook site 1 (pre dep-set replacement)
+		if (beforeRetrack !== null) {
+			beforeRetrack(c)
+		} // SPK-H hook site 1 (pre dep-set replacement)
 		if (M[c + C.FLAGS] & C.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c)
 		}
@@ -635,7 +637,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 			activeSub = prevSub
 			M[c + C.FLAGS] &= ~C.RECURSED_CHECK
 			purgeDeps(c)
-			if (afterRetrack !== null) afterRetrack(c) // SPK-H hook site 2 (post re-track)
+			if (afterRetrack !== null) {
+				afterRetrack(c)
+			} // SPK-H hook site 2 (post re-track)
 		}
 	}
 
@@ -648,7 +652,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	function run(e: number): void {
 		const flags = M[e + C.FLAGS]
 		if (flags & C.DIRTY || (flags & C.PENDING && checkDirty(M[e + C.DEPS], e))) {
-			if (beforeRetrack !== null) beforeRetrack(e) // SPK-H hook site 1 (pre dep-set replacement)
+			if (beforeRetrack !== null) {
+				beforeRetrack(e)
+			} // SPK-H hook site 1 (pre dep-set replacement)
 			if (flags & C.HAS_CHILD_EFFECT) {
 				unlinkChildEffects(e)
 			}
@@ -674,7 +680,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				activeSub = prevSub
 				M[e + C.FLAGS] &= ~C.RECURSED_CHECK
 				purgeDeps(e)
-				if (afterRetrack !== null) afterRetrack(e) // SPK-H hook site 2 (post re-track)
+				if (afterRetrack !== null) {
+					afterRetrack(e)
+				} // SPK-H hook site 2 (post re-track)
 			}
 		} else if (M[e + C.DEPS] !== 0) {
 			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT)

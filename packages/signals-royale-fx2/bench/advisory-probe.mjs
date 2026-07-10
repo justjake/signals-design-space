@@ -37,7 +37,9 @@ const frame = () => new Promise((res) => setTimeout(res, 0))
 async function settle(pred) {
 	const deadline = Date.now() + 10000
 	while (!pred()) {
-		if (Date.now() > deadline) throw new Error('timeout')
+		if (Date.now() > deadline) {
+			throw new Error('timeout')
+		}
 		await frame()
 	}
 }
@@ -52,7 +54,9 @@ async function run(label, makeCase) {
 	await settle(() => el.textContent.length > 0)
 	// Passive effects attach the store subscriptions after paint; give them a
 	// beat so the write hits steady-state subscribers like in a real app.
-	for (let i = 0; i < 20; i++) await frame()
+	for (let i = 0; i < 20; i++) {
+		await frame()
+	}
 	startTransitionWrite(write)
 	await settle(() => done(el))
 	console.log(`${label}: advisory ${advisories.length > 0 ? 'FIRES' : 'silent'}`)
@@ -71,7 +75,9 @@ await run('same-cell burst (100 writes, 4 subs)', () => {
 			...Array.from({ length: 4 }, (_, i) => React.createElement(Sub, { key: i })),
 		),
 		write: () => {
-			for (let k = 1; k <= 100; k++) cell.set(k)
+			for (let k = 1; k <= 100; k++) {
+				cell.set(k)
+			}
 		},
 		done: (el) => el.textContent.includes('100;'),
 	}
@@ -89,7 +95,9 @@ await run('same-cell burst (100 writes, 15 subs)', () => {
 			...Array.from({ length: 15 }, (_, i) => React.createElement(Sub, { key: i })),
 		),
 		write: () => {
-			for (let k = 1; k <= 100; k++) cell.set(k)
+			for (let k = 1; k <= 100; k++) {
+				cell.set(k)
+			}
 		},
 		done: (el) => el.textContent.includes('100;'),
 	}
@@ -106,7 +114,9 @@ await run('many-distinct-cells rewrite (50 cells)', () => {
 			...cells.map((_, i) => React.createElement(Sub, { key: i, i })),
 		),
 		write: () => {
-			for (const c of cells) c.set(1)
+			for (const c of cells) {
+				c.set(1)
+			}
 		},
 		done: (el) => !el.textContent.includes('0;'),
 	}

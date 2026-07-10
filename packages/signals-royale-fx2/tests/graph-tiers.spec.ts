@@ -32,7 +32,9 @@ import { appendDraftIntent, discardDraft, openDraft } from '../src/worlds.ts'
 function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
 	let n = 0
 	for (let l: Link | undefined = dep.subs; l !== undefined; l = l.nextSub) {
-		if (sub === undefined || l.sub === sub) n++
+		if (sub === undefined || l.sub === sub) {
+			n++
+		}
 	}
 	return n
 }
@@ -41,7 +43,9 @@ function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
 function depEdgeCount(sub: ReactiveNode, dep: ReactiveNode): number {
 	let n = 0
 	for (let l: Link | undefined = sub.deps; l !== undefined; l = l.nextDep) {
-		if (l.dep === dep) n++
+		if (l.dep === dep) {
+			n++
+		}
 	}
 	return n
 }
@@ -56,7 +60,9 @@ function isWatched(n: ReactiveNode): boolean {
  * resurrect the stale-Clean serve that promote exists to prevent. */
 function expectTierInvariant(nodes: ReactiveNode[]): void {
 	for (const n of nodes) {
-		if ((n.flags & Flag.Watching) !== 0) continue
+		if ((n.flags & Flag.Watching) !== 0) {
+			continue
+		}
 		expect(isWatched(n)).toBe(n.observerCount > 0)
 	}
 }
@@ -201,7 +207,9 @@ describe('two-tier graph: promote/demote structure', () => {
 		const wide = makeDerived(() => {
 			evals++
 			let sum = 0
-			for (const c of cells) sum += readCell(c)
+			for (const c of cells) {
+				sum += readCell(c)
+			}
 			return sum
 		})
 		expect(readDerived(wide)).toBe(1225)
@@ -209,7 +217,9 @@ describe('two-tier graph: promote/demote structure', () => {
 		// Precondition of the O(1) return: Clean plus a current validAtGraphChange reading.
 		expect(wide.validAtGraphChange).toBe(currentGraphChange())
 		expect((wide.flags & (Flag.StaleCheck | Flag.StaleDirty)) === 0).toBe(true)
-		for (let i = 0; i < 100; i++) readDerived(wide)
+		for (let i = 0; i < 100; i++) {
+			readDerived(wide)
+		}
 		expect(evals).toBe(1)
 	})
 
@@ -338,7 +348,9 @@ describe('two-tier graph: tracking and waves', () => {
 		expect(wakes).toEqual([draft.id]) // and so did the draft-lane wake
 		discardDraft(draft.id) // rollback pokes the same closure again
 		expect(topNotified).toBe(2)
-		for (let i = disposers.length - 1; i >= 0; i--) disposers[i]()
+		for (let i = disposers.length - 1; i >= 0; i--) {
+			disposers[i]()
+		}
 		expect(subEdgeCount(base)).toBe(0)
 	})
 
@@ -370,7 +382,9 @@ describe('two-tier graph: tracking and waves', () => {
 		writeCell(base, 1)
 		expect(topNotified).toBe(1)
 		// Reverse order keeps demote cascades depth-1 as well.
-		for (let i = disposers.length - 1; i >= 0; i--) disposers[i]()
+		for (let i = disposers.length - 1; i >= 0; i--) {
+			disposers[i]()
+		}
 		expect(subEdgeCount(base)).toBe(0)
 	})
 })
@@ -431,7 +445,9 @@ describe('two-tier graph: render-notify delivery re-entrancy', () => {
 		stops.push(observeNode(x, () => events.push('L5')))
 		writeCell(x, 1)
 		expect(events).toEqual(['L1:begin', 'L2:begin', 'L4a', 'L4b', 'L2:end', 'L1:end', 'L5'])
-		for (const stop of stops) stop()
+		for (const stop of stops) {
+			stop()
+		}
 	})
 })
 
@@ -505,7 +521,9 @@ describe('deps-from-eval invariant (test-side check, was a shipped dev assertion
 	const depsOf = (node: { deps?: unknown }) => {
 		const out: unknown[] = []
 		type L = { dep: { label?: string }; nextDep?: L }
-		for (let l = (node as { deps?: L }).deps; l !== undefined; l = l.nextDep) out.push(l.dep)
+		for (let l = (node as { deps?: L }).deps; l !== undefined; l = l.nextDep) {
+			out.push(l.dep)
+		}
 		return out
 	}
 

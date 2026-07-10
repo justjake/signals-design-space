@@ -17,31 +17,38 @@ const WARMUP = envInt('WARMUP', 2)
 
 let sink = 0
 const atoms = []
-for (let i = 0; i < 4; i++) atoms.push(new Atom(0))
+for (let i = 0; i < 4; i++) {
+	atoms.push(new Atom(0))
+}
 const computeds = []
 for (let j = 0; j < 4; j++) {
 	const x = atoms[j]
 	const y = atoms[(j + 1) % 4]
 	computeds.push(new Computed(() => x.state + y.state))
 }
-for (const c of computeds)
+for (const c of computeds) {
 	effect(() => {
 		sink += c.state
 	})
+}
 
 let v = 0
 function repOnce() {
 	const t0 = process.hrtime.bigint()
 	for (let k = 0; k < K; k++) {
 		batch(() => {
-			for (let m = 0; m < M; m++) atoms[m % 4].set(++v)
+			for (let m = 0; m < M; m++) {
+				atoms[m % 4].set(++v)
+			}
 		})
 	}
 	const t1 = process.hrtime.bigint()
 	return Number(t1 - t0) / K // ns per batch (writes + flush)
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const acc = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

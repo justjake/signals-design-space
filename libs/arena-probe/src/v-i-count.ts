@@ -106,7 +106,9 @@ export const ctr = {
 	notifies: 0,
 }
 export function resetCtr(): void {
-	for (const k in ctr) (ctr as Record<string, number>)[k] = 0
+	for (const k in ctr) {
+		;(ctr as Record<string, number>)[k] = 0
+	}
 }
 const pendingFree: number[] = [] // disposed effect/scope records awaiting sweep
 
@@ -537,9 +539,13 @@ function createEngine(
 			const subs = N[e + SUBS]
 			ctr.nodeLoads++
 			e = subs !== 0 ? L[subs + SUB] : 0
-			if (subs !== 0) ctr.linkLoads++
+			if (subs !== 0) {
+				ctr.linkLoads++
+			}
 			if (e === 0 || !(N[e + FLAGS] & WATCHING)) {
-				if (e !== 0) ctr.flagLoads++
+				if (e !== 0) {
+					ctr.flagLoads++
+				}
 				break
 			}
 			ctr.flagLoads++

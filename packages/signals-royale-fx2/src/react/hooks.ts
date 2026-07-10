@@ -101,11 +101,19 @@ function traceDelivery(node: ReactiveNode, value: unknown): void {
  */
 function unwrapState(st: DerivedState, world: World): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === 0) return st.value
-	if (asyncBits === Flag.AsyncError) throw (st.throwable as ErrorBox).error
+	if (asyncBits === 0) {
+		return st.value
+	}
+	if (asyncBits === Flag.AsyncError) {
+		throw (st.throwable as ErrorBox).error
+	}
 	const suspension = st.throwable as Suspension
-	if (world.drafts.length > 0) throw suspension.promise
-	if (!isUninitialized(st.value)) return st.value // settled history: stale serves
+	if (world.drafts.length > 0) {
+		throw suspension.promise
+	}
+	if (!isUninitialized(st.value)) {
+		return st.value
+	} // settled history: stale serves
 	throw suspension.promise
 }
 
@@ -143,7 +151,9 @@ export function useValue<T>(x: Readable<T>): T {
 	delivered.current.clear()
 	const deliver = React.useCallback(
 		(id: DraftId) => {
-			if (delivered.current.has(id)) return
+			if (delivered.current.has(id)) {
+				return
+			}
 			delivered.current.add(id)
 			dispatchDraftWake(id, wake)
 		},
@@ -181,8 +191,12 @@ export function useValue<T>(x: Readable<T>): T {
 	// the write that caused it.
 	const onNotify = React.useCallback(() => {
 		const stash = committedStash.current
-		if (!stash.live || repairPending.current) return
-		if (!resolutionDiffers(node, stash)) return
+		if (!stash.live || repairPending.current) {
+			return
+		}
+		if (!resolutionDiffers(node, stash)) {
+			return
+		}
 		repairPending.current = true
 		wake(REPAIR_WAKE)
 	}, [node, wake])
@@ -246,7 +260,9 @@ export function useIsPending(x: AnyReadable): boolean {
 		// The flip escapes any ambient transition: an indicator scheduled
 		// inside the transition it indicates would be held by it (React's own
 		// useTransition schedules isPending before the scope for this reason).
-		if (isPendingPassive(node, null) !== shown.current) dispatchUrgent(force)
+		if (isPendingPassive(node, null) !== shown.current) {
+			dispatchUrgent(force)
+		}
 	}, [node])
 	React.useEffect(() => observeNode(node, onNotify), [node, onNotify])
 	return pending
@@ -265,10 +281,14 @@ export function useCommitted<T>(x: Readable<T>): T {
 	// Predicate wake: the committed snapshot has stable identity (values, or
 	// a stable error box), so Object.is is the whole compare.
 	const onNotify = React.useCallback(() => {
-		if (!Object.is(committedSnapshot(node, container), shown.current)) force()
+		if (!Object.is(committedSnapshot(node, container), shown.current)) {
+			force()
+		}
 	}, [node, container])
 	React.useEffect(() => observeNode(node, onNotify), [node, onNotify])
-	if (isErrorBox(snap)) throw snap.error
+	if (isErrorBox(snap)) {
+		throw snap.error
+	}
 	return snap as T
 }
 

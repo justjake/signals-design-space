@@ -317,7 +317,9 @@ describe('useSignalEffect (§5.11)', () => {
 			useSignalEffect(() => {
 				const value = a.state
 				observed.push(value)
-				if (value < 2) a.set(value + 1)
+				if (value < 2) {
+					a.set(value + 1)
+				}
 			}, [])
 			return null
 		}
@@ -383,7 +385,9 @@ describe('useSignalEffect (§5.11)', () => {
 			useSignalEffect(() => {
 				observed.push(a.state)
 			}, [dep])
-			if (value === 1 && !rerendered) setRerendered(true)
+			if (value === 1 && !rerendered) {
+				setRerendered(true)
+			}
 			return null
 		}
 		await h.mount(<View />)
@@ -402,7 +406,9 @@ describe('useSignalEffect (§5.11)', () => {
 			useSignalEffect(() => {
 				observed.push({ prop: value, signal: a.state })
 			}, [value])
-			if (value > 0 && !gate.settled) throw gate.promise
+			if (value > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return null
 		}
 		function Parent() {

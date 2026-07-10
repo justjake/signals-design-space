@@ -22,7 +22,9 @@ const WARMUP = envInt('WARMUP', 3)
 const OPS = envInt('OPS', SHAPE_OPS[SHAPE])
 
 const shape = makeShape(SHAPE, { Atom, Computed, effect })
-for (let r = 0; r < WARMUP; r++) shape.run(OPS)
+for (let r = 0; r < WARMUP; r++) {
+	shape.run(OPS)
+}
 const times = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

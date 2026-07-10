@@ -17,7 +17,9 @@ const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt'
 // this bench drives A/B across generations, so try the fused module first
 // and fall back to the old path on pre-fusion trees.
 let mod = await import(`${ROOT}/packages/cosignals/src/CosignalEngine.ts`)
-if (mod.engine === undefined) mod = await import(`${ROOT}/packages/cosignals/src/concurrent.ts`)
+if (mod.engine === undefined) {
+	mod = await import(`${ROOT}/packages/cosignals/src/concurrent.ts`)
+}
 
 /**
  * A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree constructs one
@@ -42,7 +44,9 @@ function acquireEngine() {
 	}
 	const e = mod.engine
 	e.discardAllWip()
-	for (const t of e.liveBatches()) t.parked ? e.settleAction(t.id) : e.retire(t.id)
+	for (const t of e.liveBatches()) {
+		t.parked ? e.settleAction(t.id) : e.retire(t.id)
+	}
 	;(mod.__TEST__resetEngine ?? mod.__resetEngineForTest)()
 	return e
 }
@@ -74,10 +78,14 @@ function coldRender() {
 		globalThis.gc?.()
 		const t0 = process.hrtime.bigint()
 		const p = b.renderStart('R', [])
-		for (let i = 0; i < N; i++) checksum += Number(b.renderValue(comps[i], p))
+		for (let i = 0; i < N; i++) {
+			checksum += Number(b.renderValue(comps[i], p))
+		}
 		b.renderEnd(p.id, 'discard')
 		const t1 = process.hrtime.bigint()
-		if (r >= 3) times.push(Number(t1 - t0) / N) // per-computed cold read ns
+		if (r >= 3) {
+			times.push(Number(t1 - t0) / N)
+		} // per-computed cold read ns
 	}
 	return { ns: median(times), checksum }
 }
@@ -87,7 +95,9 @@ function wideMask() {
 	const atoms = Array.from({ length: N }, (_, i) => b.atom(`a${i}`, i))
 	const c = b.computed('wide', (read) => {
 		let s = 0
-		for (let i = 0; i < N; i++) s += Number(read(atoms[i]))
+		for (let i = 0; i < N; i++) {
+			s += Number(read(atoms[i]))
+		}
 		return s
 	})
 	const p0 = b.renderStart('R', [])
@@ -97,7 +107,9 @@ function wideMask() {
 	const times = []
 	for (let r = 0; r < REPS + 3; r++) {
 		const t = b.openBatch()
-		for (let i = 0; i < N; i++) b.write(t.id, atoms[i], 0, i + r)
+		for (let i = 0; i < N; i++) {
+			b.write(t.id, atoms[i], 0, i + r)
+		}
 		const p = b.renderStart('R', [t.id])
 		b.renderWatcher(p.id, w.id)
 		globalThis.gc?.()
@@ -105,7 +117,9 @@ function wideMask() {
 		b.renderEnd(p.id, 'commit', { retireAtCommit: [t.id] }) // lock-in fan + drain refold burst
 		const t1 = process.hrtime.bigint()
 		checksum += Number(b.committedValue(c, 'R'))
-		if (r >= 3) times.push(Number(t1 - t0) / 1000) // µs per commit+drain
+		if (r >= 3) {
+			times.push(Number(t1 - t0) / 1000)
+		} // µs per commit+drain
 	}
 	return { us: median(times), checksum }
 }

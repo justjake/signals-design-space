@@ -99,8 +99,9 @@ export async function rafHealth(page: Page, windowMs = 1000): Promise<RafHealth 
 				)
 				function frame(): void {
 					frames += 1
-					if (performance.now() - start < ms) requestAnimationFrame(frame)
-					else {
+					if (performance.now() - start < ms) {
+						requestAnimationFrame(frame)
+					} else {
 						resolve({
 							framesPerSec: Math.round(frames / (ms / 1000)),
 							rendersDelta:
@@ -127,9 +128,13 @@ export async function armTornWatch(page: Page): Promise<void> {
 	await page.evaluate(() => {
 		window.__torn = []
 		const el = document.querySelector('[data-testid="consistency"]')
-		if (el === null) throw new Error('armTornWatch: no consistency tile')
+		if (el === null) {
+			throw new Error('armTornWatch: no consistency tile')
+		}
 		new MutationObserver(() => {
-			if (el.textContent === 'TORN') window.__torn.push(performance.now())
+			if (el.textContent === 'TORN') {
+				window.__torn.push(performance.now())
+			}
 		}).observe(el, { characterData: true, subtree: true, childList: true })
 	})
 }
@@ -144,7 +149,9 @@ export async function armTextTrace(page: Page, testid: string): Promise<void> {
 	await page.evaluate((tid) => {
 		window.__trace ??= {}
 		const el = document.querySelector(`[data-testid="${tid}"]`)
-		if (el === null) throw new Error(`armTextTrace: no element for testid ${tid}`)
+		if (el === null) {
+			throw new Error(`armTextTrace: no element for testid ${tid}`)
+		}
 		const log: string[] = []
 		window.__trace[tid] = log
 		log.push(el.textContent ?? '')
@@ -267,7 +274,9 @@ export async function withWatchdog<T>(
 		})
 		const raced = await Promise.race([action().then((value) => ({ value })), timedOut])
 		clearTimeout(timer)
-		if (raced !== 'timeout') return { wedged: false, value: raced.value }
+		if (raced !== 'timeout') {
+			return { wedged: false, value: raced.value }
+		}
 
 		await cdp.send('Debugger.pause').catch(() => {})
 		const stack = await Promise.race([
@@ -309,7 +318,9 @@ export async function mainThreadResponsive(page: Page, timeoutMs = 3000): Promis
 export function dispatchFilterInput(page: Page, value: string): Promise<void> {
 	return page.evaluate((v) => {
 		const input = document.querySelector<HTMLInputElement>('[data-testid="filter-input"]')
-		if (input === null) throw new Error('dispatchFilterInput: no filter input')
+		if (input === null) {
+			throw new Error('dispatchFilterInput: no filter input')
+		}
 		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
 		setter.call(input, v)
 		input.dispatchEvent(new Event('input', { bubbles: true }))

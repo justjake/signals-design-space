@@ -37,8 +37,11 @@ function tick(): () => number {
 function freshEngine(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	return engine
@@ -293,7 +296,9 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 	it('mount fixup: corrected (urgent pre-paint fix) when committed truth moved under the open render', () => {
 		// retire the straggler batches (ambient, t2): live written batches would
 		// (correctly) draw mount correctives on every mount below
-		for (const t of b.liveBatches()) b.retire(t.id)
+		for (const t of b.liveBatches()) {
+			b.retire(t.id)
+		}
 		const p5 = b.renderStart('A', [])
 		b.mountWatcher(p5.id, c, 'W2') // renders committed-at-pin: c = 42
 		const t6 = b.openBatch()
@@ -361,7 +366,9 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 
 	it('quiescence: epoch-reset recorded; the trace remains a chronicle of the dead episode', () => {
 		// retire everything still live (batches t2 and the ambient batch)
-		for (const t of b.liveBatches()) b.retire(t.id)
+		for (const t of b.liveBatches()) {
+			b.retire(t.id)
+		}
 		b.quiesce()
 		expect(last(tr, 'epoch-reset').data).toEqual({ epoch: 1 })
 		// SESSION capture of the whole narrative is provably complete
@@ -410,7 +417,9 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 			const b = freshEngine() // drains the previous seed's leftovers, then resets
 			buildEngineTopology(b)
 			const tr = attachTracer(b, { mode: 'session', refCapacity: 0 })
-			for (const op of generateSchedule(seed, 60)) applyEngineOp(b, op)
+			for (const op of generateSchedule(seed, 60)) {
+				applyEngineOp(b, op)
+			}
 
 			expect(tr.verifyComplete().complete, `seed ${seed}: session must be lossless`).toBe(true)
 			const decoded = tr.events()
@@ -463,7 +472,9 @@ describe('R11 slot backstop (fresh engine: 31 live tenants, keep-the-dirt table)
 			'A',
 			batches.map((t) => t.id),
 		) // masks all 31 slots
-		for (const t of batches) b.retire(t.id) // all releases defer
+		for (const t of batches) {
+			b.retire(t.id)
+		} // all releases defer
 		expect(all(tr, 'slot-release-deferred')).toHaveLength(31)
 
 		const t32 = b.openBatch()

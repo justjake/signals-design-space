@@ -41,7 +41,9 @@ function Cell() {
 }
 function App() {
 	const cells = []
-	for (let i = 0; i < N; i++) cells.push(React.createElement(Cell, { key: i }))
+	for (let i = 0; i < N; i++) {
+		cells.push(React.createElement(Cell, { key: i }))
+	}
 	return React.createElement('div', null, cells)
 }
 
@@ -57,15 +59,21 @@ async function round() {
 	const t0 = process.hrtime.bigint()
 	await act(async () => {
 		++v
-		for (const s of setters) s(v)
+		for (const s of setters) {
+			s(v)
+		}
 	})
 	const t1 = process.hrtime.bigint()
 	return Number(t1 - t0) / 1e6
 }
 
-for (let r = 0; r < WARMUP; r++) await round()
+for (let r = 0; r < WARMUP; r++) {
+	await round()
+}
 const times = []
-for (let r = 0; r < ROUNDS; r++) times.push(await round())
+for (let r = 0; r < ROUNDS; r++) {
+	times.push(await round())
+}
 times.sort((x, y) => x - y)
 row({
 	gate: 'SPK-R',

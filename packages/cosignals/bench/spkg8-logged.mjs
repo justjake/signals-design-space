@@ -84,7 +84,9 @@ function repBurst() {
 		clearEvents()
 		const tok = b.openBatch()
 		const t0 = process.hrtime.bigint()
-		for (let k = 0; k < W; k++) b.write(tok.id, query, 0, ++v)
+		for (let k = 0; k < W; k++) {
+			b.write(tok.id, query, 0, ++v)
+		}
 		const t1 = process.hrtime.bigint()
 		writeNs += Number(t1 - t0)
 		b.retire(tok.id)
@@ -95,7 +97,9 @@ function repBurst() {
 		b.renderResume(heldRender.id)
 		b.renderEnd(heldRender.id, 'commit')
 	}
-	if (held !== undefined) b.settleAction(held.id)
+	if (held !== undefined) {
+		b.settleAction(held.id)
+	}
 	return { writeNs: writeNs / (FRAMES * W), evalsPerWrite, logLen }
 }
 
@@ -108,7 +112,9 @@ function repTypeahead() {
 	for (let k = 0; k < KEYS; k++) {
 		const t0 = process.hrtime.bigint()
 		b.write(T.id, query, 0, ++v)
-		if (open !== undefined) b.renderEnd(open.id, 'discard') // interruption: restart
+		if (open !== undefined) {
+			b.renderEnd(open.id, 'discard')
+		} // interruption: restart
 		open = b.renderStart('R', [T.id])
 		b.renderWatcher(open.id, watcher.id)
 		b.renderYield(open.id)
@@ -126,7 +132,9 @@ function repTypeahead() {
 }
 
 const rep = MODE === 'burst' ? repBurst : repTypeahead
-for (let r = 0; r < WARMUP; r++) rep()
+for (let r = 0; r < WARMUP; r++) {
+	rep()
+}
 const acc = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

@@ -16,7 +16,9 @@ export default {
 	createCells(size: number): CellStore {
 		const runtime = new Runtime()
 		const cells = new Array(size)
-		for (let i = 0; i < size; i++) cells[i] = runtime.atom(0)
+		for (let i = 0; i < size; i++) {
+			cells[i] = runtime.atom(0)
+		}
 		const unregister = registerStrata(runtime)
 		return {
 			useCell(i) {

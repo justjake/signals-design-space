@@ -38,9 +38,13 @@ test('RCC-CR1.no-lost-writes: interleaved urgent bursts and a transition write l
 	await gotoApp(page, entry)
 
 	await page.evaluate(() => {
-		for (let i = 0; i < 10; i++) window.__store.increment('count', 'urgent')
+		for (let i = 0; i < 10; i++) {
+			window.__store.increment('count', 'urgent')
+		}
 		window.__store.increment('count', 'transition')
-		for (let i = 0; i < 10; i++) window.__store.increment('count', 'urgent')
+		for (let i = 0; i < 10; i++) {
+			window.__store.increment('count', 'urgent')
+		}
 	})
 	// 21 pure +1 updaters dispatched; every one must fold exactly once.
 	await expect(page.getByTestId('count')).toHaveText('21')

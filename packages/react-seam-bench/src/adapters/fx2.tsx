@@ -25,18 +25,24 @@ const fx2React: Contender = {
 	name: 'fx2-react',
 	createCells(n) {
 		const cells: Array<Signal<number>> = []
-		for (let i = 0; i < n; i++) cells.push(signal(0))
+		for (let i = 0; i < n; i++) {
+			cells.push(signal(0))
+		}
 		return {
 			useCell: (i) => useValue(cells[i]),
 			writeCell: (i, v) => cells[i].set(v),
 			writeMany: (updates) => {
 				batch(() => {
-					for (const [i, v] of updates) cells[i].set(v)
+					for (const [i, v] of updates) {
+						cells[i].set(v)
+					}
 				})
 			},
 			writeManyInTransition: (updates) => {
 				startTransitionWrite(() => {
-					for (const [i, v] of updates) cells[i].set(v)
+					for (const [i, v] of updates) {
+						cells[i].set(v)
+					}
 				})
 			},
 			dispose() {},

@@ -33,8 +33,11 @@ import {
 function quietBridge(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	return engine

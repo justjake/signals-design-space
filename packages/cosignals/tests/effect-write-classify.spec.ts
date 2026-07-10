@@ -20,8 +20,11 @@ import { Atom, effect, engine, __TEST__resetEngine } from '../src/index.js'
 function freshEngine(): void {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 }
@@ -34,7 +37,9 @@ describe('R-3: effect writes during the fused apply classify normally', () => {
 		let runs = 0
 		const dispose = effect(() => {
 			const v = src.handle.state as number
-			if (runs++ === 0) return // mount baseline
+			if (runs++ === 0) {
+				return // mount baseline
+			}
 			;(out.handle as Atom<number>).set(v * 10) // the effect's write, mid-fused-apply
 		})
 		const t = engine.openBatch()
@@ -62,7 +67,9 @@ describe('R-3: effect writes during the fused apply classify normally', () => {
 		let runs = 0
 		const dispose = effect(() => {
 			const v = src2read()
-			if (runs++ === 0) return
+			if (runs++ === 0) {
+				return
+			}
 			;(out.handle as Atom<number>).set(v * 10)
 		})
 		function src2read(): number {

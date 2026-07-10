@@ -56,7 +56,9 @@ describe('bug 1: SignalEffect runner does not fire inside a kernel effect frame'
 		// records ZERO links, dropping the dep to nothing.
 		const dispose = effect(() => {
 			const t = trigger.state
-			if (t > 0) b.set(100 + t)
+			if (t > 0) {
+				b.set(100 + t)
+			}
 		})
 
 		trigger.set(1) // core effect writes b=101; SignalEffect must re-fire, links intact
@@ -161,7 +163,9 @@ describe('bug 5: createCosignals() does not eagerly reserve a large arena', () =
 	it('keeps N instances cheap (no ~120MB per instance)', () => {
 		const before = process.memoryUsage().arrayBuffers
 		const instances = []
-		for (let i = 0; i < 50; i++) instances.push(createCosignals())
+		for (let i = 0; i < 50; i++) {
+			instances.push(createCosignals())
+		}
 		const afterMB = (process.memoryUsage().arrayBuffers - before) / (1024 * 1024)
 		// 50 instances at the old ~120MB floor would reserve ~6GB (and likely throw
 		// on allocation); the small default keeps the whole batch well under 100MB.

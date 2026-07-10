@@ -94,16 +94,26 @@ function buildDirect(n) {
 	}
 	const off = CHAIN === 2 ? n : n - 1
 	const iter = () => {
-		if (BATCH) startBatch()
+		if (BATCH) {
+			startBatch()
+		}
 		head(1)
-		if (BATCH) endBatch()
+		if (BATCH) {
+			endBatch()
+		}
 		counter.count = 0
 		let bad = 0
 		for (let i = 0; i < W; i++) {
-			if (BATCH) startBatch()
+			if (BATCH) {
+				startBatch()
+			}
 			head(i)
-			if (BATCH) endBatch()
-			if (READLAST && last() !== i + off) bad++
+			if (BATCH) {
+				endBatch()
+			}
+			if (READLAST && last() !== i + off) {
+				bad++
+			}
 		}
 		if (bad !== 0 || counter.count !== W * n) {
 			throw new Error(`checksum: bad=${bad} count=${counter.count} want=${W * n}`)
@@ -118,7 +128,9 @@ function buildDirect(n) {
 function polluteProcess() {
 	const busy = () => {
 		let a = 0
-		for (let i = 0; i < 100; i++) a++
+		for (let i = 0; i < 100; i++) {
+			a++
+		}
 		return a
 	}
 	const cases = []
@@ -192,7 +204,9 @@ function polluteProcess() {
 		const disposeScope = effectScope(() => {
 			it = mk()
 		})
-		for (let i = 0; i < 30; i++) it()
+		for (let i = 0; i < 30; i++) {
+			it()
+		}
 		disposeScope()
 	}
 }
@@ -221,7 +235,9 @@ function buildBridged(n) {
 				bridge.withBatch(() => {
 					head.write(i)
 				})
-				if (last.read() !== i + n) bad++
+				if (last.read() !== i + n) {
+					bad++
+				}
 			}
 			if (bad !== 0 || counter.count !== W * n) {
 				throw new Error(`checksum: bad=${bad} count=${counter.count} want=${W * n}`)
@@ -246,7 +262,9 @@ const obs = new PerformanceObserver((list) => {
 
 // ---- modes -------------------------------------------------------------------
 
-if (POLLUTE) polluteProcess()
+if (POLLUTE) {
+	polluteProcess()
+}
 
 const { iter, dispose } = build(N)
 // kairoBench warmup: run a few iters, let JIT tier up.
@@ -257,7 +275,9 @@ iter()
 await new Promise((r) => setTimeout(r, 0))
 
 if (mode === 'bench' || mode === 'gc') {
-	if (mode === 'gc') obs.observe({ type: 'gc', buffered: false })
+	if (mode === 'gc') {
+		obs.observe({ type: 'gc', buffered: false })
+	}
 	let best = Infinity
 	let bestGcMs = 0
 	let bestGcCount = 0
@@ -265,9 +285,13 @@ if (mode === 'bench' || mode === 'gc') {
 		gcMs = 0
 		gcCount = 0
 		const t0 = performance.now()
-		for (let i = 0; i < ITERS; i++) iter()
+		for (let i = 0; i < ITERS; i++) {
+			iter()
+		}
 		const ms = performance.now() - t0
-		if (mode === 'gc') await new Promise((r2) => setTimeout(r2, 0)) // deliver gc entries
+		if (mode === 'gc') {
+			await new Promise((r2) => setTimeout(r2, 0))
+		} // deliver gc entries
 		if (ms < best) {
 			best = ms
 			bestGcMs = gcMs
@@ -282,7 +306,9 @@ if (mode === 'bench' || mode === 'gc') {
 	console.log(`@@ROW ${JSON.stringify(row)}`)
 } else if (mode === 'prof') {
 	const t0 = performance.now()
-	for (let i = 0; i < ITERS; i++) iter()
+	for (let i = 0; i < ITERS; i++) {
+		iter()
+	}
 	const ms = performance.now() - t0
 	console.log(`@@PROF ${JSON.stringify({ lib: libName, N, W, iters: ITERS, ms: +ms.toFixed(1) })}`)
 } else {

@@ -44,8 +44,11 @@ function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	return engine
@@ -171,7 +174,9 @@ describe('transitive observation through derived nodes', () => {
 		const nb = b.internalsForAtom(atomB as Atom<unknown>)
 		const oc = b.computed('oc', (read) => {
 			const bv = read(nb) as number // read FIRST — stays retained through the throw
-			if (bv > 0) throw new Error('boom')
+			if (bv > 0) {
+				throw new Error('boom')
+			}
 			return read(na)
 		})
 		const p = b.renderStart('A', [])

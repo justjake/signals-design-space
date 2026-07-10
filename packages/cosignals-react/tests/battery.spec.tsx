@@ -49,7 +49,9 @@ describe('battery (spec §6) at React level', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 1 && gate.settled !== true) throw gate.promise
+			if (v > 1 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		function App() {
@@ -145,8 +147,12 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('a:2;')
 		const retired = h.events.eventsOfType('retired')
 		const byBatch = new Map<number, number>()
-		for (const e of retired) byBatch.set(e.batch, (byBatch.get(e.batch) ?? 0) + 1)
-		for (const [, count] of byBatch) expect(count).toBe(1) // exactly once per batch
+		for (const e of retired) {
+			byBatch.set(e.batch, (byBatch.get(e.batch) ?? 0) + 1)
+		}
+		for (const [, count] of byBatch) {
+			expect(count).toBe(1)
+		} // exactly once per batch
 		// React's committed/abandoned report is recorded AT ITS SOURCE (the
 		// shim's protocol handler) as a batch-disposition trace record — the
 		// engine's retirement is disposition-blind. Both transitions here
@@ -207,7 +213,9 @@ describe('battery (spec §6) at React level', () => {
 		// machinery anywhere: two write events, each with a batch.
 		const writes = h.events.eventsOfType('write')
 		expect(writes.length).toBe(2)
-		for (const w of writes) expect(w.batch).toBeGreaterThan(0)
+		for (const w of writes) {
+			expect(w.batch).toBeGreaterThan(0)
+		}
 	})
 
 	test('case 8 — equality drops never lose log entries once history exists', async () => {
@@ -551,7 +559,9 @@ describe('battery (spec §6) at React level', () => {
 		const newestSeen: number[] = []
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 0 && gate.settled !== true) throw gate.promise
+			if (v > 0 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		function App() {

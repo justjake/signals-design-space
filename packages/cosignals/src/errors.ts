@@ -19,6 +19,8 @@ export class InvariantViolation extends Error {}
 /** Look up an id, or throw {@link ScheduleError} for an unknown one. */
 export function getOrThrow<K, V>(map: Map<K, V>, id: K, what: string): V {
 	const v = map.get(id)
-	if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`)
+	if (v === undefined) {
+		throw new ScheduleError(`unknown ${what} ${id}`)
+	}
 	return v
 }

@@ -29,7 +29,9 @@ export function sleep(ms: number): Promise<void> {
  * must drain between each other or teardown bleeds into the next timing.
  */
 export async function drain(hops = 5): Promise<void> {
-	for (let i = 0; i < hops; i++) await sleep(0)
+	for (let i = 0; i < hops; i++) {
+		await sleep(0)
+	}
 }
 
 export async function until(pred: () => boolean, what: string, timeoutMs = 30_000): Promise<void> {
@@ -87,7 +89,9 @@ export function renderCells(store: CellStore, n: number, extra?: ReactNode): Tre
 
 	function CellList() {
 		const items: ReactNode[] = []
-		for (let i = 0; i < n; i++) items.push(<Cell key={i} i={i} />)
+		for (let i = 0; i < n; i++) {
+			items.push(<Cell key={i} i={i} />)
+		}
 		return <div>{items}</div>
 	}
 
@@ -98,7 +102,9 @@ export function renderCells(store: CellStore, n: number, extra?: ReactNode): Tre
 		</>
 	)
 	const Provider = store.Provider
-	if (Provider !== undefined) tree = <Provider>{tree}</Provider>
+	if (Provider !== undefined) {
+		tree = <Provider>{tree}</Provider>
+	}
 
 	const root = createRoot(container)
 	root.render(

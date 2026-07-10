@@ -25,7 +25,9 @@ function reduce(state: number[], action: Action): number[] {
 	if (action.type === 'write') {
 		next[action.i] = action.v
 	} else {
-		for (const [i, v] of action.updates) next[i] = v
+		for (const [i, v] of action.updates) {
+			next[i] = v
+		}
 	}
 	return next
 }
@@ -44,15 +46,18 @@ const baselineContext: Contender = {
 			useEffect(() => {
 				dispatchRef = dispatch
 				return () => {
-					if (dispatchRef === dispatch) dispatchRef = null
+					if (dispatchRef === dispatch) {
+						dispatchRef = null
+					}
 				}
 			}, [dispatch])
 			return <CellsContext.Provider value={state}>{children}</CellsContext.Provider>
 		}
 
 		function requireDispatch(): (action: Action) => void {
-			if (dispatchRef === null)
+			if (dispatchRef === null) {
 				throw new Error('baseline-context: write before the Provider mounted')
+			}
 			return dispatchRef
 		}
 
@@ -60,7 +65,9 @@ const baselineContext: Contender = {
 			Provider,
 			useCell(i: number): number {
 				const cells = useContext(CellsContext)
-				if (cells === null) throw new Error('baseline-context: useCell outside its Provider')
+				if (cells === null) {
+					throw new Error('baseline-context: useCell outside its Provider')
+				}
 				return cells[i]
 			},
 			writeCell: (i, v) => requireDispatch()({ type: 'write', i, v }),

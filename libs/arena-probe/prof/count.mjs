@@ -6,7 +6,9 @@ const { signal, computed, effect, ctr, resetCtr } = lib
 function run(name, build) {
 	const { src, waves, dispose } = build()
 	resetCtr()
-	for (let i = 0; i < waves; i++) src(i)
+	for (let i = 0; i < waves; i++) {
+		src(i)
+	}
 	const v = ctr.visits
 	const per = (x) => (x / v).toFixed(3)
 	console.log(

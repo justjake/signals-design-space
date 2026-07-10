@@ -12,7 +12,9 @@ async function fetchCreations(page: import('@playwright/test').Page): Promise<Ma
 	const log = await page.evaluate(() => window.__store.fetchLog)
 	const creations = new Map<number, number>()
 	for (const entry of log) {
-		if (entry.event === 'create') creations.set(entry.epoch, (creations.get(entry.epoch) ?? 0) + 1)
+		if (entry.event === 'create') {
+			creations.set(entry.epoch, (creations.get(entry.epoch) ?? 0) + 1)
+		}
 	}
 	return creations
 }
@@ -108,7 +110,9 @@ test('RCC-SU5.settle-replay: a timed navigation holds without a fallback flash a
 	await page.evaluate(() => {
 		;(window as unknown as { __fallbacks: number }).__fallbacks = 0
 		const target = document.querySelector('.browser-page')
-		if (target === null) throw new Error('no .browser-page')
+		if (target === null) {
+			throw new Error('no .browser-page')
+		}
 		new MutationObserver(() => {
 			if (document.querySelector('.browser-page .pageload') !== null) {
 				;(window as unknown as { __fallbacks: number }).__fallbacks += 1

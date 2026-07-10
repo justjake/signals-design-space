@@ -19,10 +19,11 @@ const WARMUP = envInt('WARMUP', 1)
 let sink = 0
 const a = new Atom(0)
 const c = new Computed(() => a.state + 1)
-for (let i = 0; i < F; i++)
+for (let i = 0; i < F; i++) {
 	effect(() => {
 		sink += c.state
 	})
+}
 
 let v = 0
 function repOnce() {
@@ -44,7 +45,9 @@ function repOnce() {
 	return { writeNsPerWrite: writeNs / (FRAMES * W), frameNs: frameNsTot / FRAMES }
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const acc = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

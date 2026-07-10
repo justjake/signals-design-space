@@ -21,8 +21,11 @@ function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine(options)
 	const b = engine
@@ -51,8 +54,12 @@ describe('S-A mixed-mode link modes (§4.4.1)', () => {
 		const a = b.atom('a', 1)
 		const c = b.computed('c', (read, untracked) => {
 			const m = read(mode) as number
-			if (m === 0) return read(a)
-			if (m === 1) return untracked(a)
+			if (m === 0) {
+				return read(a)
+			}
+			if (m === 1) {
+				return untracked(a)
+			}
 			if (m === 2) {
 				const v = read(a)
 				untracked(a) // duplicate occurrence may not downgrade
@@ -151,7 +158,9 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 		const w = mount(b, 'R', c, 'W')
 		commitWrite(b, a, 1)
 		w.live = false // the cone is now unwatched (arena persists until quiesce)
-		for (let i = 2; i <= 8; i++) commitWrite(b, a, i) // write-storm
+		for (let i = 2; i <= 8; i++) {
+			commitWrite(b, a, i)
+		} // write-storm
 		// Each boundary's decay dropped the unconsumed marks to cold: the
 		// dirty lists stay CONE-bounded instead of growing with the storm.
 		// (Since S-B the armed epilogue's own serves consume the final

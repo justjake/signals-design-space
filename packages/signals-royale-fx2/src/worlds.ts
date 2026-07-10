@@ -134,7 +134,9 @@ export function openDraft(): Draft {
 	const drafts: Draft[] = []
 	const alone = liveDrafts.size === 0
 	if (!alone) {
-		for (const live of liveDrafts.values()) live.cutoffAtGraphChange = 0
+		for (const live of liveDrafts.values()) {
+			live.cutoffAtGraphChange = 0
+		}
 	}
 	const draft: Draft = {
 		id,
@@ -153,7 +155,9 @@ export function openDraft(): Draft {
 }
 
 export function sealDraft(draft: Draft): void {
-	if (draft.state === 'open') draft.state = 'sealed'
+	if (draft.state === 'open') {
+		draft.state = 'sealed'
+	}
 }
 
 function logFor(cell: CellNode<unknown>): RebaseLog {
@@ -215,7 +219,9 @@ export function appendUrgentIntent(
 	payload: unknown,
 ): boolean {
 	const log = rebaseLogs.get(cell)
-	if (log === undefined) return false
+	if (log === undefined) {
+		return false
+	}
 	// Array order is dispatch order; retirement flips visibility, never
 	// position.
 	log.intents.push({ kind, payload, draft: null })
@@ -235,13 +241,20 @@ export function appendUrgentIntent(
  * interleaved urgent commit, so those passes re-resolve their worlds live. */
 export function pokeRebasedCell(cell: CellNode<unknown>): void {
 	const log = rebaseLogs.get(cell)
-	if (log === undefined) return
+	if (log === undefined) {
+		return
+	}
 	let woken: Set<Draft> | null = null
 	for (const intent of log.intents) {
 		const d = intent.draft
-		if (d === null || (d.state !== 'open' && d.state !== 'sealed')) continue
-		if (woken === null) woken = new Set()
-		else if (woken.has(d)) continue
+		if (d === null || (d.state !== 'open' && d.state !== 'sealed')) {
+			continue
+		}
+		if (woken === null) {
+			woken = new Set()
+		} else if (woken.has(d)) {
+			continue
+		}
 		woken.add(d)
 		pokeDraftWatchers(cell, NO_EVENT, d.id)
 	}
@@ -252,13 +265,17 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
  * only when the world includes their draft. */
 function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 	const log = rebaseLogs.get(cell)
-	if (log === undefined) return untracked(() => peekCell(cell))
+	if (log === undefined) {
+		return untracked(() => peekCell(cell))
+	}
 	let value = log.valueBeforeDrafts
 	for (const intent of log.intents) {
 		const d = intent.draft
 		const included =
 			d === null || d.state === 'retired' || (world !== null && world.drafts.includes(d))
-		if (!included) continue
+		if (!included) {
+			continue
+		}
 		value = applyIntent(cell, value, intent)
 	}
 	return value
@@ -284,7 +301,9 @@ function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): u
  * folded values as new and re-renders. */
 export function retireDraft(id: DraftId): void {
 	const draft = liveDrafts.get(id)
-	if (draft === undefined) return
+	if (draft === undefined) {
+		return
+	}
 	liveDrafts.delete(id)
 	draft.state = 'retired'
 	draftChangeClock++
@@ -328,7 +347,9 @@ export function retireDraft(id: DraftId): void {
  * and re-render — the rollback is new information no render pass shows. */
 export function discardDraft(id: DraftId): void {
 	const draft = liveDrafts.get(id)
-	if (draft === undefined) return
+	if (draft === undefined) {
+		return
+	}
 	liveDrafts.delete(id)
 	draft.state = 'discarded'
 	draftChangeClock++
@@ -347,15 +368,21 @@ export function discardDraft(id: DraftId): void {
 function releaseLogs(dead: Draft): void {
 	for (const cell of dead.cells) {
 		const log = rebaseLogs.get(cell)
-		if (log === undefined) continue
+		if (log === undefined) {
+			continue
+		}
 		const intents = log.intents
 		let value = log.valueBeforeDrafts
 		let prefix = 0
 		for (; prefix < intents.length; prefix++) {
 			const intent = intents[prefix] as Intent
 			const draft = intent.draft
-			if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') break
-			if (draft === null || draft.state === 'retired') value = applyIntent(cell, value, intent)
+			if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') {
+				break
+			}
+			if (draft === null || draft.state === 'retired') {
+				value = applyIntent(cell, value, intent)
+			}
 		}
 		if (prefix === intents.length) {
 			rebaseLogs.delete(cell)
@@ -374,9 +401,13 @@ export function rebaseLogIntentCount<T>(cell: CellNode<T>): number {
 
 /** Quiescence: with no live drafts, every per-suspension structure empties. */
 function maybeQuiesce(): void {
-	if (liveDrafts.size > 0) return
+	if (liveDrafts.size > 0) {
+		return
+	}
 	rebaseLogs.clear()
-	for (const node of memoNodes) node.worldMemos = null
+	for (const node of memoNodes) {
+		node.worldMemos = null
+	}
 	memoNodes.clear()
 }
 
@@ -393,17 +424,23 @@ const NO_IDS: readonly DraftId[] = []
  * Serves late-subscription repair: a subscriber that mounted after the
  * write-time wakes asks which transitions it missed. */
 export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
-	if (liveDrafts.size === 0) return NO_IDS
+	if (liveDrafts.size === 0) {
+		return NO_IDS
+	}
 	const sources = new Set<CellNode<unknown>>()
 	const visited = new Set<ReactiveNode>()
 	const collect = (n: ReactiveNode): void => {
-		if (visited.has(n)) return
+		if (visited.has(n)) {
+			return
+		}
 		visited.add(n)
 		if ((n.flags & Flag.KindCell) !== 0) {
 			sources.add(n as CellNode<unknown>)
 			return
 		}
-		for (let l = n.deps; l !== undefined; l = l.nextDep) collect(l.dep)
+		for (let l = n.deps; l !== undefined; l = l.nextDep) {
+			collect(l.dep)
+		}
 	}
 	collect(node)
 	const out: DraftId[] = []
@@ -421,17 +458,23 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 /** True while some live draft holds intents against this cell. */
 export function cellHasDraftIntents(cell: CellNode<unknown>): boolean {
 	const log = rebaseLogs.get(cell)
-	if (log === undefined) return false
+	if (log === undefined) {
+		return false
+	}
 	for (const intent of log.intents) {
 		const d = intent.draft
-		if (d !== null && d.state !== 'retired' && d.state !== 'discarded') return true
+		if (d !== null && d.state !== 'retired' && d.state !== 'discarded') {
+			return true
+		}
 	}
 	return false
 }
 
 /** Test/reset seam: discard every live draft and clear per-suspension state. */
 export function discardAllDrafts(): void {
-	for (const id of [...liveDrafts.keys()]) discardDraft(id)
+	for (const id of [...liveDrafts.keys()]) {
+		discardDraft(id)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -459,8 +502,12 @@ export function runInDraft<T>(draft: Draft, fn: () => T): T {
 }
 
 export function classifyWrite(): Draft | null {
-	if (currentDraft !== null) return currentDraft
-	if (ambientClassifier !== null) return ambientClassifier()
+	if (currentDraft !== null) {
+		return currentDraft
+	}
+	if (ambientClassifier !== null) {
+		return ambientClassifier()
+	}
 	return null
 }
 
@@ -480,12 +527,18 @@ export const BASE_WORLD: World = { drafts: [], sig: '' }
  * out (their effects are already in base state / rolled back), order is
  * creation order regardless of arrival order. */
 export function makeWorld(ids: readonly DraftId[]): World {
-	if (ids.length === 0) return BASE_WORLD
+	if (ids.length === 0) {
+		return BASE_WORLD
+	}
 	const drafts: Draft[] = []
 	for (const [id, draft] of liveDrafts) {
-		if (ids.includes(id)) drafts.push(draft)
+		if (ids.includes(id)) {
+			drafts.push(draft)
+		}
 	}
-	if (drafts.length === 0) return BASE_WORLD
+	if (drafts.length === 0) {
+		return BASE_WORLD
+	}
 	return { drafts, sig: drafts.map((d) => d.id).join(',') }
 }
 
@@ -514,9 +567,13 @@ const worldCache = new WeakMap<
 >()
 
 export function worldOf(ids: readonly DraftId[]): World {
-	if (ids.length === 0) return BASE_WORLD
+	if (ids.length === 0) {
+		return BASE_WORLD
+	}
 	const hit = worldCache.get(ids)
-	if (hit !== undefined && hit.validAtDraftChange === draftChangeClock) return hit.world
+	if (hit !== undefined && hit.validAtDraftChange === draftChangeClock) {
+		return hit.world
+	}
 	const world = makeWorld(ids)
 	worldCache.set(ids, { validAtDraftChange: draftChangeClock, world })
 	return world
@@ -551,7 +608,9 @@ function appendCertificate(
 	draftRevision: DraftChangeClock,
 ): void {
 	const certificate = activeCertificate
-	if (certificate === null) return
+	if (certificate === null) {
+		return
+	}
 	const count = certificate.count
 	if (count !== 0 && certificate.entries[count - 1]?.node === node) {
 		return
@@ -612,7 +671,9 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 	if (memo.validAtGraphChange === graphChange && memo.validAtDraftChange === draftChangeClock) {
 		return true
 	}
-	if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) return false
+	if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) {
+		return false
+	}
 	if (
 		(memo.state.flags & Flag.AsyncSuspended) !== 0 &&
 		(memo.state.throwable as Suspension).settled
@@ -622,7 +683,9 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 	for (let i = 0; i < memo.certificate.count; i++) {
 		const entry = memo.certificate.entries[i] as CertificateEntry
 		const source = entry.node as ReactiveNode
-		if (source.changedAtGraphChange !== entry.changedAtGraphChange) return false
+		if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
+			return false
+		}
 		if (
 			(source.flags & Flag.KindCell) !== 0 &&
 			(draftRevisionByCell.get(source as CellNode<unknown>) ?? 0) !== entry.draftRevision
@@ -638,7 +701,9 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 /** Whether two resolutions are indistinguishable under the node's policy. */
 function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState): boolean {
 	const asyncBits = right.flags & Flag.AsyncMask
-	if ((left.flags & Flag.AsyncMask) !== asyncBits) return false
+	if ((left.flags & Flag.AsyncMask) !== asyncBits) {
+		return false
+	}
 	if (asyncBits === 0) {
 		const equals = (node as DerivedNode<unknown>).equals ?? Object.is
 		return equals(left.value, right.value)
@@ -653,7 +718,9 @@ function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState
  * write path resolved for the draft; before the first touch, the draft world
  * is identical to base. The graph calls this once per reached node. */
 function changedInCutoffWorld(node: ReactiveNode): boolean {
-	if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.WorldAware) === 0) return true
+	if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.WorldAware) === 0) {
+		return true
+	}
 	const world = cutoffWorld!
 	try {
 		const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD)
@@ -687,8 +754,11 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	assertSignalReadAllowed()
 	if (world.drafts.length === 0) {
 		untracked(() => {
-			if ((node.flags & Flag.KindCell) !== 0) peekCell(node as CellNode<unknown>)
-			else ensureFresh(node as DerivedNode<unknown>)
+			if ((node.flags & Flag.KindCell) !== 0) {
+				peekCell(node as CellNode<unknown>)
+			} else {
+				ensureFresh(node as DerivedNode<unknown>)
+			}
 		})
 		recordSource(node)
 		return node as CellNode<unknown> | DerivedNode<unknown>
@@ -757,7 +827,9 @@ function draftEvaluate(
 	if (sigs?.has(world.sig)) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
-	if (sigs === undefined) draftEvalStack.set(node, (sigs = new Set()))
+	if (sigs === undefined) {
+		draftEvalStack.set(node, (sigs = new Set()))
+	}
 	sigs.add(world.sig)
 	// Suspense retries must observe one stable thenable per pending span.
 	const suspension =
@@ -768,8 +840,12 @@ function draftEvaluate(
 			: makeSuspension()
 	const worldUse = (t: PromiseLike<unknown>): unknown => {
 		const box = trackThenable(t)
-		if (box.status === 'fulfilled') return box.value
-		if (box.status === 'rejected') throw box.reason
+		if (box.status === 'fulfilled') {
+			return box.value
+		}
+		if (box.status === 'rejected') {
+			throw box.reason
+		}
 		box.parkedSuspensions.add(suspension)
 		throw WORLD_PARKED
 	}
@@ -803,9 +879,13 @@ function draftEvaluate(
 		clearInactiveCertificateEntries(certificate, previousCertificateCount)
 		activeCertificate = prevCertificate
 		currentPark = prevPark
-		if (FORBID_WRITE_FROM_COMPUTED) setWritesForbidden(prevWritesForbidden)
+		if (FORBID_WRITE_FROM_COMPUTED) {
+			setWritesForbidden(prevWritesForbidden)
+		}
 		sigs.delete(world.sig)
-		if (sigs.size === 0) draftEvalStack.delete(node)
+		if (sigs.size === 0) {
+			draftEvalStack.delete(node)
+		}
 	}
 }
 
@@ -828,8 +908,12 @@ export function unwrapForEval(
 	park: (t: PromiseLike<unknown>) => unknown,
 ): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === 0) return st.value
-	if (asyncBits === Flag.AsyncError) throw (st.throwable as ErrorBox).error
+	if (asyncBits === 0) {
+		return st.value
+	}
+	if (asyncBits === Flag.AsyncError) {
+		throw (st.throwable as ErrorBox).error
+	}
 	return park((st.throwable as Suspension).promise)
 }
 
@@ -839,7 +923,9 @@ export function unwrapForEval(
 
 /** Newest intent: base state plus every live draft, in creation order. */
 export function latestWorld(): World {
-	if (liveDrafts.size === 0) return BASE_WORLD
+	if (liveDrafts.size === 0) {
+		return BASE_WORLD
+	}
 	const drafts = [...liveDrafts.values()]
 	return { drafts, sig: drafts.map((d) => d.id).join(',') }
 }
@@ -849,7 +935,9 @@ export function setCommittedWorld(container: object, ids: readonly DraftId[]): v
 }
 
 export function committedWorldOf(container: object | undefined): World {
-	if (container === undefined) return BASE_WORLD
+	if (container === undefined) {
+		return BASE_WORLD
+	}
 	const ids = committedWorlds.get(container)
 	return ids === undefined ? BASE_WORLD : worldOf(ids)
 }

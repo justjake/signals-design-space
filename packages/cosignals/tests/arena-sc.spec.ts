@@ -40,8 +40,11 @@ function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	const b = engine
@@ -275,7 +278,9 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 			'cBoom',
 			(read) => {
 				const g = read(gate) as number
-				if (g === 1) throw new Error('boom')
+				if (g === 1) {
+					throw new Error('boom')
+				}
 				return 100 + g
 			},
 			() => true,

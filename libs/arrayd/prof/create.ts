@@ -12,9 +12,13 @@ const holder: unknown[] = new Array(N)
 // warmup + measure signals
 for (let round = 0; round < 6; round++) {
 	const t0 = performance.now()
-	for (let i = 0; i < N; i++) holder[i] = signal(i)
+	for (let i = 0; i < N; i++) {
+		holder[i] = signal(i)
+	}
 	const t1 = performance.now()
-	if (round >= 4) console.log(`signals x${N}: ${(t1 - t0).toFixed(2)} ms`)
+	if (round >= 4) {
+		console.log(`signals x${N}: ${(t1 - t0).toFixed(2)} ms`)
+	}
 }
 
 // effects reading 1 signal each, inside a scope

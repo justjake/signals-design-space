@@ -110,7 +110,9 @@ describe('lazy initializers', () => {
 		let runs = 0
 		const a = signal(() => {
 			runs++
-			if (runs === 1) throw new Error('flaky')
+			if (runs === 1) {
+				throw new Error('flaky')
+			}
 			return 5
 		})
 		expect(() => read(a)).toThrow('flaky')
@@ -248,7 +250,9 @@ describe('causality tracer', () => {
 		const writeU = t.events().find((e) => e.kind === 'write' && e.label === 'u')!
 		expect(writeU.cause).toBe(0)
 		// Overflow is counted, never silent.
-		for (let i = 0; i < 100; i++) a.set(i + 10)
+		for (let i = 0; i < 100; i++) {
+			a.set(i + 10)
+		}
 		expect(t.dropped).toBeGreaterThan(0)
 		expect(t.events().length).toBeLessThanOrEqual(16)
 		t.stop()

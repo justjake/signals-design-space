@@ -58,7 +58,9 @@ test('urgent work commits through a suspended transition and the transition reba
 
 	function App() {
 		const current = useSignal(value)
-		if (useSignal(suspend) && !settled) throw gate
+		if (useSignal(suspend) && !settled) {
+			throw gate
+		}
 		return <span>{current}</span>
 	}
 

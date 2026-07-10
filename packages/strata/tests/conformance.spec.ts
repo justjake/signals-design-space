@@ -35,7 +35,9 @@ for (const { section, cases } of testSuite) {
 				try {
 					framework.run(() => fn(framework))
 				} catch (error) {
-					if (error instanceof SkipTest) return
+					if (error instanceof SkipTest) {
+						return
+					}
 					throw error
 				}
 			})

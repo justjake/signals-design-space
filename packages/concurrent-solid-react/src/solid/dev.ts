@@ -108,15 +108,21 @@ export function emitDiagnostic(event: Omit<DiagnosticEvent, 'sequence'>): Diagno
 		sequence: ++diagnosticSequence,
 		...event,
 	}
-	for (const listener of diagnosticListeners) listener(entry)
-	for (const capture of diagnosticCaptures) capture.push(entry)
+	for (const listener of diagnosticListeners) {
+		listener(entry)
+	}
+	for (const capture of diagnosticCaptures) {
+		capture.push(entry)
+	}
 	return entry
 }
 
 export function registerGraph(value: any, owner: Owner | null): void {
 	;(value as any)._owner = owner
 	if (owner) {
-		if (!(owner as any)._signals) (owner as any)._signals = []
+		if (!(owner as any)._signals) {
+			;(owner as any)._signals = []
+		}
 		;(owner as any)._signals.push(value)
 	}
 	DEV.hooks.onGraph?.(value, owner)

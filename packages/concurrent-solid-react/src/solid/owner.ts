@@ -35,8 +35,11 @@ export function markDisposal(el: Owner): void {
 		// livelocking the next `runHeap` that reaches it (#2759)
 		if (flags & (REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT)) {
 			deleteFromHeap(child as Computed<unknown>, flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue)
-			if (flags & REACTIVE_IN_HEAP) insertIntoHeap(child as Computed<unknown>, zombieQueue)
-			else insertIntoHeapHeight(child as Computed<unknown>, zombieQueue)
+			if (flags & REACTIVE_IN_HEAP) {
+				insertIntoHeap(child as Computed<unknown>, zombieQueue)
+			} else {
+				insertIntoHeapHeight(child as Computed<unknown>, zombieQueue)
+			}
 		}
 		markDisposal(child)
 		child = child._nextSibling
@@ -55,10 +58,18 @@ export function dispose(node: Computed<unknown>): void {
 
 export function disposeChildren(node: Owner, self: boolean = false, zombie?: boolean): void {
 	const flags = (node as any)._flags
-	if (flags & REACTIVE_DISPOSED) return
-	if (self) (node as any)._flags = flags | REACTIVE_DISPOSED
-	if (self && __DEV__) clearSignals(node)
-	if (self && (node as any)._fn) (node as Computed<unknown>)._inFlight = null
+	if (flags & REACTIVE_DISPOSED) {
+		return
+	}
+	if (self) {
+		;(node as any)._flags = flags | REACTIVE_DISPOSED
+	}
+	if (self && __DEV__) {
+		clearSignals(node)
+	}
+	if (self && (node as any)._fn) {
+		;(node as Computed<unknown>)._inFlight = null
+	}
 	let child = zombie ? (node._pendingFirstChild as Owner) : node._firstChild
 	while (child) {
 		const nextChild = child._nextSibling
@@ -94,9 +105,14 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
 	) {
 		const prev = node._prevSibling
 		const next = node._nextSibling
-		if (prev !== null) prev._nextSibling = next
-		else node._parent._firstChild = next
-		if (next !== null) next._prevSibling = prev
+		if (prev !== null) {
+			prev._nextSibling = next
+		} else {
+			node._parent._firstChild = next
+		}
+		if (next !== null) {
+			next._prevSibling = prev
+		}
 		node._prevSibling = null
 	}
 	runDisposal(node, zombie)
@@ -104,7 +120,9 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
 
 function runDisposal(node: Owner, zombie?: boolean): void {
 	let disposal = zombie ? node._pendingDisposal : node._disposal
-	if (!disposal) return
+	if (!disposal) {
+		return
+	}
 
 	if (Array.isArray(disposal)) {
 		for (let i = 0; i < disposal.length; i++) {
@@ -119,9 +137,12 @@ function runDisposal(node: Owner, zombie?: boolean): void {
 
 function childId(owner: Owner, consume: boolean): string {
 	let counter: Owner = owner
-	while (counter._config & CONFIG_TRANSPARENT && counter._parent) counter = counter._parent
-	if (counter.id != null)
+	while (counter._config & CONFIG_TRANSPARENT && counter._parent) {
+		counter = counter._parent
+	}
+	if (counter.id != null) {
 		return formatId(counter.id, consume ? counter._childCount++ : counter._childCount)
+	}
 	throw new Error('Cannot get child id from owner without an id')
 }
 
@@ -168,7 +189,9 @@ function formatId(prefix: string, id: number) {
  * ```
  */
 export function getObserver(): Owner | null {
-	if (pendingCheckActive || latestReadActive) return PENDING_OWNER
+	if (pendingCheckActive || latestReadActive) {
+		return PENDING_OWNER
+	}
 	return tracking ? context : null
 }
 
@@ -199,10 +222,16 @@ export function getOwner(): Owner | null {
  * checks. `cleanup()` is the unchecked primitive used by internals.
  */
 export function cleanup(fn: Disposable): Disposable {
-	if (!context) return fn
-	if (!context._disposal) context._disposal = fn
-	else if (Array.isArray(context._disposal)) context._disposal.push(fn)
-	else context._disposal = [context._disposal, fn]
+	if (!context) {
+		return fn
+	}
+	if (!context._disposal) {
+		context._disposal = fn
+	} else if (Array.isArray(context._disposal)) {
+		context._disposal.push(fn)
+	} else {
+		context._disposal = [context._disposal, fn]
+	}
 	return fn
 }
 
@@ -282,7 +311,9 @@ export function createOwner(options?: { id?: string; transparent?: boolean }) {
 			parent._firstChild = owner
 		}
 	}
-	if (__DEV__) DEV.hooks.onOwner?.(owner)
+	if (__DEV__) {
+		DEV.hooks.onOwner?.(owner)
+	}
 	return owner
 }
 

@@ -88,8 +88,11 @@ function commitEntry(entry: SelectorEntry): void {
 	// Fixup 1: the rendered world moved between render and subscribe.
 	const now = probeValueInWorld(entry.selector, entry.world)
 	if (!Object.is(now, entry.rendered) && now !== PENDING) {
-		if (bridge) bridge.deliver(entry.bump, entry.world)
-		else entry.bump()
+		if (bridge) {
+			bridge.deliver(entry.bump, entry.world)
+		} else {
+			entry.bump()
+		}
 	}
 	// Fixup 2: a live deferred world (not the one we rendered) disagrees with
 	// what this commit shows — e.g. this component mounted urgently while a
@@ -100,10 +103,14 @@ function commitEntry(entry: SelectorEntry): void {
 		const seen = new Set<Transition>()
 		for (const rec of bridge.worlds.values()) {
 			const root = currentTransition(rec.transition)
-			if (root === renderedRoot || seen.has(root)) continue
+			if (root === renderedRoot || seen.has(root)) {
+				continue
+			}
 			seen.add(root)
 			const val = probeValueInWorld(entry.selector, root)
-			if (!Object.is(val, entry.rendered) && val !== PENDING) bridge.deliver(entry.bump, root)
+			if (!Object.is(val, entry.rendered) && val !== PENDING) {
+				bridge.deliver(entry.bump, root)
+			}
 		}
 	}
 }
@@ -111,7 +118,9 @@ function commitEntry(entry: SelectorEntry): void {
 function scheduleRelease(entry: SelectorEntry): void {
 	entry.releaseQueued = true
 	queueMicrotask(() => {
-		if (!entry.releaseQueued || entry.disposed) return
+		if (!entry.releaseQueued || entry.disposed) {
+			return
+		}
 		entry.disposed = true
 		disposeReader(entry.reader)
 	})
@@ -140,8 +149,11 @@ export function useSelector<T>(selector: () => T): T {
 		}
 		entry.reader = createReader('useSelector', (urgent) => {
 			const bridge = activeBridge()
-			if (bridge) bridge.deliver(entry.bump, urgent ? null : undefined, urgent)
-			else entry.bump()
+			if (bridge) {
+				bridge.deliver(entry.bump, urgent ? null : undefined, urgent)
+			} else {
+				entry.bump()
+			}
 		})
 		ref.current = entry
 	}
@@ -158,7 +170,9 @@ export function useSelector<T>(selector: () => T): T {
 	})
 	React.useLayoutEffect(() => () => scheduleRelease(entry), [])
 
-	if (r.errored) throw r.error
+	if (r.errored) {
+		throw r.error
+	}
 	// Pending: hand the node-held thenable to React. `use()` (conditional call
 	// is legal) suspends on an unsettled thenable and returns when it has
 	// already settled — in which case the engine's settlement write has landed
@@ -167,15 +181,21 @@ export function useSelector<T>(selector: () => T): T {
 	// new wait.
 	const reactUse = (React as { use?: (t: PromiseLike<unknown>) => unknown }).use
 	for (let attempt = 0; r.value === PENDING && attempt < 2; attempt++) {
-		if (typeof reactUse !== 'function') throw r.thenable
+		if (typeof reactUse !== 'function') {
+			throw r.thenable
+		}
 		reactUse(r.thenable!)
 		r = renderRead(selector)
 		entry.deps = r.deps
 		entry.world = r.world
 		entry.rendered = r.errored ? r.error : r.value
-		if (r.errored) throw r.error
+		if (r.errored) {
+			throw r.error
+		}
 	}
-	if (r.value === PENDING) throw r.thenable
+	if (r.value === PENDING) {
+		throw r.thenable
+	}
 	return r.value as T
 }
 

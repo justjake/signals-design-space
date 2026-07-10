@@ -32,10 +32,14 @@ const altBReact: Contender = {
 	name: 'alt-b-react',
 	createCells(n) {
 		const atoms: NumAtom[] = []
-		for (let i = 0; i < n; i++) atoms.push(new Atom({ state: 0 }))
+		for (let i = 0; i < n; i++) {
+			atoms.push(new Atom({ state: 0 }))
+		}
 		const writeMany = (updates: Array<[number, number]>): void => {
 			batch(() => {
-				for (const [i, v] of updates) atoms[i].set(v)
+				for (const [i, v] of updates) {
+					atoms[i].set(v)
+				}
 			})
 		}
 		return {

@@ -46,8 +46,11 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// episode out instead, so the reset's idle preconditions hold).
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
@@ -88,10 +91,14 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 			// Assert the shim never swallowed a listener error mid-test.
 			const errors = handle.shim.takeErrors()
 			await act(async () => {
-				for (const root of roots) root.unmount()
+				for (const root of roots) {
+					root.unmount()
+				}
 			})
 			await act(async () => {}) // drain debounced unsubscribes
-			for (const c of containers) c.remove()
+			for (const c of containers) {
+				c.remove()
+			}
 			handle.dispose()
 			if (errors.length > 0) {
 				throw new Error(`shim recorded errors: ${errors.map((e) => String(e)).join(' | ')}`)

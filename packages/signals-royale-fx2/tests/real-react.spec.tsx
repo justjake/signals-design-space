@@ -82,7 +82,9 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		function Suspender() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>v:{v};</b>
 		}
 		function Probe() {
@@ -125,7 +127,9 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 		function App() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>v:{v}</span>
 		}
 		const { container } = await h.mount(
@@ -166,7 +170,9 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 		}
 		function Holder() {
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return null
 		}
 		const { container } = await h.mount(
@@ -221,13 +227,17 @@ describe('the latest() context rule', () => {
 		function UrgentProbe() {
 			const n = useValue(b)
 			const v = useValue(a)
-			if (held) samples.push({ v, l: latest(a) })
+			if (held) {
+				samples.push({ v, l: latest(a) })
+			}
 			return <b>u:{n};</b>
 		}
 		function TransitionReader() {
 			const v = useValue(a)
 			const holding = useValue(hold)
-			if (holding && !gate.settled) throw gate.promise
+			if (holding && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>t:{v};</span>
 		}
 		const { container } = await h.mount(
@@ -300,7 +310,9 @@ describe('scenario 4 — sibling consistency', () => {
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('2,2;2,2;')
-		for (const [v1, v2] of pairs) expect(v1).toBe(v2)
+		for (const [v1, v2] of pairs) {
+			expect(v1).toBe(v2)
+		}
 	})
 })
 
@@ -310,7 +322,9 @@ describe('scenario 5 — mount mid-transition', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
-			if (v > 0 && !gate.settled) throw gate.promise
+			if (v > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		function App({ extra }: { extra: boolean }) {
@@ -349,7 +363,9 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
-			if (v > 0 && !gate.settled) throw gate.promise
+			if (v > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await h.mount(
@@ -382,7 +398,9 @@ describe('scenario 7 — one transition across two roots', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
-			if (v > 0 && !gate.settled) throw gate.promise
+			if (v > 0 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const one = await h.mount(
@@ -420,7 +438,9 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
-			if (v === 2 && !gate.settled) throw gate.promise
+			if (v === 2 && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const first = await h.mount(
@@ -552,7 +572,9 @@ describe('scenario 12 — time slicing stays real', () => {
 		function List() {
 			const n = useValue(items)
 			const kids = []
-			for (let k = 0; k < n; k++) kids.push(<SlowItem key={k} k={k} />)
+			for (let k = 0; k < n; k++) {
+				kids.push(<SlowItem key={k} k={k} />)
+			}
 			return (
 				<div>
 					n:{n};{kids}
@@ -572,14 +594,18 @@ describe('scenario 12 — time slicing stays real', () => {
 		try {
 			startTransitionWrite(() => items.set(24))
 			const deadline = Date.now() + 5000
-			while (itemRenders < 3 && Date.now() < deadline) await tick(5)
+			while (itemRenders < 3 && Date.now() < deadline) {
+				await tick(5)
+			}
 			expect(itemRenders).toBeGreaterThanOrEqual(3)
 			expect(itemRenders).toBeLessThan(24)
 			flushSync(() => urgent.set(1))
 			expect(text(container)).toContain('u:1;')
 			expect(text(container)).toContain('n:0;')
 			const done = Date.now() + 15000
-			while (!text(container).includes('n:24;') && Date.now() < done) await tick(10)
+			while (!text(container).includes('n:24;') && Date.now() < done) {
+				await tick(10)
+			}
 			expect(text(container)).toContain('n:24;')
 		} finally {
 			;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

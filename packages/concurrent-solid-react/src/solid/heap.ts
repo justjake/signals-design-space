@@ -28,32 +28,45 @@ function actualInsertIntoHeap(n: Computed<unknown>, heap: Heap) {
 		((n._parent as Root)?._root
 			? (n._parent as Root)._parentComputed?._height
 			: (n._parent as Computed<any> | null)?._height) ?? -1
-	if (parentHeight >= n._height) n._height = parentHeight + 1
+	if (parentHeight >= n._height) {
+		n._height = parentHeight + 1
+	}
 	const height = n._height
 	const heapAtHeight = heap._heap[height]
-	if (heapAtHeight === undefined) heap._heap[height] = n
-	else {
+	if (heapAtHeight === undefined) {
+		heap._heap[height] = n
+	} else {
 		const tail = heapAtHeight._prevHeap
 		tail._nextHeap = n
 		n._prevHeap = tail
 		heapAtHeight._prevHeap = n
 	}
-	if (height > heap._max) heap._max = height
+	if (height > heap._max) {
+		heap._max = height
+	}
 }
 export function insertIntoHeap(n: Computed<any>, heap: Heap) {
 	let flags = n._flags
-	if (flags & (REACTIVE_IN_HEAP | REACTIVE_RECOMPUTING_DEPS | REACTIVE_MANUAL_WRITE)) return
+	if (flags & (REACTIVE_IN_HEAP | REACTIVE_RECOMPUTING_DEPS | REACTIVE_MANUAL_WRITE)) {
+		return
+	}
 	if (flags & REACTIVE_CHECK) {
 		n._flags = (flags & ~(REACTIVE_CHECK | REACTIVE_DIRTY)) | REACTIVE_DIRTY | REACTIVE_IN_HEAP
-	} else n._flags = flags | REACTIVE_IN_HEAP
-	if (!(flags & REACTIVE_IN_HEAP_HEIGHT)) actualInsertIntoHeap(n, heap)
+	} else {
+		n._flags = flags | REACTIVE_IN_HEAP
+	}
+	if (!(flags & REACTIVE_IN_HEAP_HEIGHT)) {
+		actualInsertIntoHeap(n, heap)
+	}
 	// [react-adapt E13] Maintain the mark invariant. markHeap latches once per
 	// drain cycle; a node inserted after that pass would sit in the heap
 	// unmarked, and a render-time pull (updateIfNecessary reached through a
 	// React render read) would skip it — serving a stale memo beside a fresh
 	// signal in one evaluation (a torn read). Stock Solid never pulls between
 	// flushes, so the latch was harmless there.
-	if (heap._marked) markNode(n)
+	if (heap._marked) {
+		markNode(n)
+	}
 }
 
 export function insertIntoHeapHeight(n: Computed<unknown>, heap: Heap) {
@@ -61,24 +74,31 @@ export function insertIntoHeapHeight(n: Computed<unknown>, heap: Heap) {
 	if (
 		flags &
 		(REACTIVE_IN_HEAP | REACTIVE_RECOMPUTING_DEPS | REACTIVE_IN_HEAP_HEIGHT | REACTIVE_MANUAL_WRITE)
-	)
+	) {
 		return
+	}
 	n._flags = flags | REACTIVE_IN_HEAP_HEIGHT
 	actualInsertIntoHeap(n, heap)
 }
 
 export function deleteFromHeap(n: Computed<unknown>, heap: Heap) {
 	const flags = n._flags
-	if (!(flags & (REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT))) return
+	if (!(flags & (REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT))) {
+		return
+	}
 	n._flags = flags & ~(REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT)
 	const height = n._height
-	if (n._prevHeap === n) heap._heap[height] = undefined
-	else {
+	if (n._prevHeap === n) {
+		heap._heap[height] = undefined
+	} else {
 		const next = n._nextHeap
 		const dhh = heap._heap[height]!
 		const end = next ?? dhh
-		if (n === dhh) heap._heap[height] = next
-		else n._prevHeap._nextHeap = next
+		if (n === dhh) {
+			heap._heap[height] = next
+		} else {
+			n._prevHeap._nextHeap = next
+		}
 		end._prevHeap = n._prevHeap
 	}
 	n._prevHeap = n
@@ -86,18 +106,24 @@ export function deleteFromHeap(n: Computed<unknown>, heap: Heap) {
 }
 
 export function markHeap(heap: Heap) {
-	if (heap._marked) return
+	if (heap._marked) {
+		return
+	}
 	heap._marked = true
 	for (let i = 0; i <= heap._max; i++) {
 		for (let el = heap._heap[i]; el !== undefined; el = el._nextHeap) {
-			if (el._flags & REACTIVE_IN_HEAP) markNode(el)
+			if (el._flags & REACTIVE_IN_HEAP) {
+				markNode(el)
+			}
 		}
 	}
 }
 
 export function markNode(el: Computed<unknown>, newState = REACTIVE_DIRTY) {
 	const flags = el._flags
-	if ((flags & (REACTIVE_CHECK | REACTIVE_DIRTY)) >= newState) return
+	if ((flags & (REACTIVE_CHECK | REACTIVE_DIRTY)) >= newState) {
+		return
+	}
 	el._flags = (flags & ~(REACTIVE_CHECK | REACTIVE_DIRTY)) | newState
 	for (let link = el._subs; link !== null; link = link._nextSub) {
 		markNode(link._sub, REACTIVE_CHECK)
@@ -120,8 +146,11 @@ export function runHeap(heap: Heap, recompute: (el: Computed<unknown>) => void):
 	for (heap._min = 0; heap._min <= heap._max; heap._min++) {
 		let el = heap._heap[heap._min]
 		while (el !== undefined) {
-			if (el._flags & REACTIVE_IN_HEAP) recompute(el)
-			else adjustHeight(el, heap)
+			if (el._flags & REACTIVE_IN_HEAP) {
+				recompute(el)
+			} else {
+				adjustHeight(el, heap)
+			}
 			el = heap._heap[heap._min]
 		}
 	}
@@ -134,7 +163,9 @@ function adjustHeight(el: Computed<unknown>, heap: Heap) {
 	for (let d = el._deps; d; d = d._nextDep) {
 		const dep1 = d._dep
 		const dep = (dep1 as FirewallSignal<unknown>)._firewall || dep1
-		if ((dep as Computed<unknown>)._fn && dep._height >= newHeight) newHeight = dep._height + 1
+		if ((dep as Computed<unknown>)._fn && dep._height >= newHeight) {
+			newHeight = dep._height + 1
+		}
 	}
 	if (el._height !== newHeight) {
 		el._height = newHeight

@@ -55,25 +55,35 @@ export function attachReactBridge(
 			}
 			return registry.subscribe({
 				onRenderPassStart: (container, included) => {
-					if (passOpen) listener.onRenderPassEnd?.(openContainer)
+					if (passOpen) {
+						listener.onRenderPassEnd?.(openContainer)
+					}
 					passOpen = true
 					openContainer = container
 					listener.onRenderPassStart?.(container, included, 0)
 				},
 				onRenderPassYield: (container) => {
-					if (passOpen && openContainer === container) listener.onRenderPassYield?.(container)
+					if (passOpen && openContainer === container) {
+						listener.onRenderPassYield?.(container)
+					}
 				},
 				onRenderPassResume: (container) => {
-					if (passOpen && openContainer === container) listener.onRenderPassResume?.(container)
+					if (passOpen && openContainer === container) {
+						listener.onRenderPassResume?.(container)
+					}
 				},
 				onRenderPassEnd: (container) => {
-					if (!passOpen || openContainer !== container) return
+					if (!passOpen || openContainer !== container) {
+						return
+					}
 					passOpen = false
 					listener.onRenderPassEnd?.(container)
 				},
 				onBatchRetired: (token, committed) => listener.onBatchRetired?.(token, committed),
 				onRootCommitted: (container, tokens) => {
-					for (const token of tokens) listener.onBatchCommitted?.(container, token)
+					for (const token of tokens) {
+						listener.onBatchCommitted?.(container, token)
+					}
 				},
 			})
 		},

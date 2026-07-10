@@ -78,14 +78,20 @@ function canUseSimpleSyncFlush(queue: GlobalQueue): boolean {
 }
 
 function sweepTransientStoreNodes(): void {
-	if (transientStoreNodes.size === 0) return
+	if (transientStoreNodes.size === 0) {
+		return
+	}
 	for (const node of transientStoreNodes) {
 		if (node._subs !== null) {
 			transientStoreNodes.delete(node)
 			continue
 		}
-		if (node._pendingValue !== NOT_PENDING) continue
-		if (node._overrideValue !== undefined && node._overrideValue !== NOT_PENDING) continue
+		if (node._pendingValue !== NOT_PENDING) {
+			continue
+		}
+		if (node._overrideValue !== undefined && node._overrideValue !== NOT_PENDING) {
+			continue
+		}
 		transientStoreNodes.delete(node)
 		node._unobserved?.()
 	}
@@ -114,7 +120,9 @@ export function shouldReadStashedOptimisticValue(node: Signal<any>): boolean {
  */
 function runLaneEffects(type: number): void {
 	for (const lane of activeLanes) {
-		if (lane._mergedInto || lane._pendingAsync.size > 0) continue
+		if (lane._mergedInto || lane._pendingAsync.size > 0) {
+			continue
+		}
 		const effects = lane._effectQueues[type - 1]
 		if (effects.length) {
 			lane._effectQueues[type - 1] = []
@@ -126,7 +134,9 @@ function runLaneEffects(type: number): void {
 function queueStashedOptimisticEffects(node: Signal<any>): void {
 	for (let s = node._subs; s !== null; s = s._nextSub) {
 		const sub = s._sub as any
-		if (!sub._type) continue
+		if (!sub._type) {
+			continue
+		}
 		if (sub._type === EFFECT_TRACKED) {
 			if (!sub._modified) {
 				sub._modified = true
@@ -135,7 +145,9 @@ function queueStashedOptimisticEffects(node: Signal<any>): void {
 			continue
 		}
 		const queue = sub._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue
-		if (queue._min > sub._height) queue._min = sub._height
+		if (queue._min > sub._height) {
+			queue._min = sub._height
+		}
 		insertIntoHeap(sub, queue)
 	}
 }
@@ -145,7 +157,9 @@ export function setProjectionWriteActive(value: boolean) {
 }
 
 export function setTrackedQueueCallback(value: boolean) {
-	if (__DEV__) inTrackedQueueCallback = value
+	if (__DEV__) {
+		inTrackedQueueCallback = value
+	}
 }
 
 export type QueueCallback = (type: number) => void
@@ -206,17 +220,23 @@ export function retainTransition(transition: Transition, retainer: unknown): voi
 export function releaseTransition(transition: Transition, retainer: unknown): void {
 	const root = currentTransition(transition)
 	const i = root._actions.indexOf(retainer)
-	if (i >= 0) root._actions.splice(i, 1)
+	if (i >= 0) {
+		root._actions.splice(i, 1)
+	}
 }
 
 /** [react-adapt E9] Entangle two transitions (merge their worlds). */
 export function entangleTransitions(a: Transition, b: Transition): Transition {
 	const rootA = currentTransition(a)
 	const rootB = currentTransition(b)
-	if (rootA === rootB) return rootA
+	if (rootA === rootB) {
+		return rootA
+	}
 	mergeTransitionState(rootA, rootB)
 	transitions.delete(rootB)
-	if (activeTransition === rootB) activeTransition = rootA
+	if (activeTransition === rootB) {
+		activeTransition = rootA
+	}
 	return rootA
 }
 
@@ -254,19 +274,26 @@ export function refreshCommittedCone(sources: Array<Signal<any> | Computed<any>>
 	const visit = (node: Signal<any> | Computed<any>) => {
 		for (let s = node._subs; s !== null; s = s._nextSub) {
 			const sub = s._sub as any
-			if (seen.has(sub)) continue
+			if (seen.has(sub)) {
+				continue
+			}
 			seen.add(sub)
-			if (sub._type === EFFECT_TRACKED) wake.add(sub)
-			else if (typeof sub._fn === 'function' && !sub._type) {
+			if (sub._type === EFFECT_TRACKED) {
+				wake.add(sub)
+			} else if (typeof sub._fn === 'function' && !sub._type) {
 				cone.push(sub)
 				visit(sub)
 			}
 		}
 	}
-	for (const source of sources) visit(source)
+	for (const source of sources) {
+		visit(source)
+	}
 	cone.sort((a, b) => a._height - b._height)
 	for (const memo of cone) {
-		if (memo._flags & REACTIVE_DISPOSED) continue
+		if (memo._flags & REACTIVE_DISPOSED) {
+			continue
+		}
 		const prev = memo._value
 		let next: any
 		try {
@@ -281,14 +308,20 @@ export function refreshCommittedCone(sources: Array<Signal<any> | Computed<any>>
 		) {
 			continue // async compute: committed copy stays stale (residual gap)
 		}
-		if (memo._equals && memo._equals(prev, next)) continue
+		if (memo._equals && memo._equals(prev, next)) {
+			continue
+		}
 		memo._value = next
 		for (let s = memo._subs; s !== null; s = s._nextSub) {
 			const sub = s._sub as any
-			if (sub._type === EFFECT_TRACKED) wake.add(sub)
+			if (sub._type === EFFECT_TRACKED) {
+				wake.add(sub)
+			}
 		}
 	}
-	for (const sub of wake) enqueueTrackedRun(sub)
+	for (const sub of wake) {
+		enqueueTrackedRun(sub)
+	}
 }
 
 /**
@@ -303,10 +336,14 @@ export function refreshCommittedCone(sources: Array<Signal<any> | Computed<any>>
 export function enqueueTrackedRun(sub: any): void {
 	if (activeTransition && !currentOptimisticLane && !sub._isReactReader) {
 		const holder = currentTransition(activeTransition)
-		if (sub._heldBy && currentTransition(sub._heldBy) === holder) return
+		if (sub._heldBy && currentTransition(sub._heldBy) === holder) {
+			return
+		}
 		sub._heldBy = holder
 		holder._queueStash._queues[EFFECT_USER - 1].push(() => {
-			if (sub._heldBy && currentTransition(sub._heldBy) === holder) sub._heldBy = undefined
+			if (sub._heldBy && currentTransition(sub._heldBy) === holder) {
+				sub._heldBy = undefined
+			}
 			// Forced: the transition's commit just changed committed values this
 			// effect depends on, whether or not an urgent run fired in between.
 			sub._modified = true
@@ -324,7 +361,9 @@ export function enqueueTrackedRun(sub: any): void {
 function mergeTransitionState(target: Transition, outgoing: Transition): void {
 	outgoing._done = target
 	target._actions.push(...outgoing._actions)
-	for (const lane of activeLanes) if (lane._transition === outgoing) lane._transition = target
+	for (const lane of activeLanes) {
+		if (lane._transition === outgoing) lane._transition = target
+	}
 	// [react-adapt E8] pending nodes are per-transition lists now (no global
 	// aliasing), so a merge must carry them over and re-stamp their owner.
 	for (let i = 0; i < outgoing._pendingNodes.length; i++) {
@@ -340,13 +379,21 @@ function mergeTransitionState(target: Transition, outgoing: Transition): void {
 	target._queueStash._queues[1].push(...outgoing._queueStash._queues[1])
 	outgoing._queueStash._queues = [[], []]
 	target._optimisticNodes.push(...outgoing._optimisticNodes)
-	for (const store of outgoing._optimisticStores) target._optimisticStores.add(store)
+	for (const store of outgoing._optimisticStores) {
+		target._optimisticStores.add(store)
+	}
 	for (const [source, reporters] of outgoing._asyncReporters) {
 		let targetReporters = target._asyncReporters.get(source)
-		if (!targetReporters) target._asyncReporters.set(source, (targetReporters = new Set()))
-		for (const reporter of reporters) targetReporters.add(reporter)
+		if (!targetReporters) {
+			target._asyncReporters.set(source, (targetReporters = new Set()))
+		}
+		for (const reporter of reporters) {
+			targetReporters.add(reporter)
+		}
 	}
-	for (const sub of outgoing._gatedSubs) target._gatedSubs.add(sub)
+	for (const sub of outgoing._gatedSubs) {
+		target._gatedSubs.add(sub)
+	}
 }
 
 function resolveOptimisticNodes(nodes: OptimisticNode[]): void {
@@ -359,11 +406,15 @@ function resolveOptimisticNodes(nodes: OptimisticNode[]): void {
 		}
 		const prevOverride = node._overrideValue
 		node._overrideValue = NOT_PENDING
-		if (prevOverride !== NOT_PENDING && node._value !== prevOverride) insertSubs(node, true)
+		if (prevOverride !== NOT_PENDING && node._value !== prevOverride) {
+			insertSubs(node, true)
+		}
 		node._transition = null
 		// [react-adapt E1] pending signals are plain now (see getPendingSignal);
 		// re-derive them when the override they may have reflected reverts.
-		if (node._pendingSignal) updatePendingSignal(node)
+		if (node._pendingSignal) {
+			updatePendingSignal(node)
+		}
 	}
 	nodes.length = 0
 }
@@ -373,12 +424,20 @@ function cleanupCompletedLanes(completingTransition: Transition | null): void {
 		const owned = completingTransition
 			? lane._transition === completingTransition
 			: !lane._transition
-		if (!owned) continue
-		if (!lane._mergedInto) {
-			if (lane._effectQueues[0].length) runQueue(lane._effectQueues[0], EFFECT_RENDER)
-			if (lane._effectQueues[1].length) runQueue(lane._effectQueues[1], EFFECT_USER)
+		if (!owned) {
+			continue
 		}
-		if (lane._source._optimisticLane === lane) lane._source._optimisticLane = undefined
+		if (!lane._mergedInto) {
+			if (lane._effectQueues[0].length) {
+				runQueue(lane._effectQueues[0], EFFECT_RENDER)
+			}
+			if (lane._effectQueues[1].length) {
+				runQueue(lane._effectQueues[1], EFFECT_USER)
+			}
+		}
+		if (lane._source._optimisticLane === lane) {
+			lane._source._optimisticLane = undefined
+		}
 		lane._pendingAsync.clear()
 		lane._effectQueues[0].length = 0
 		lane._effectQueues[1].length = 0
@@ -388,9 +447,13 @@ function cleanupCompletedLanes(completingTransition: Transition | null): void {
 }
 
 export function schedule() {
-	if (scheduled) return
+	if (scheduled) {
+		return
+	}
 	scheduled = true
-	if (!syncDepth && !globalQueue._running && !projectionWriteActive) queueMicrotask(flush)
+	if (!syncDepth && !globalQueue._running && !projectionWriteActive) {
+		queueMicrotask(flush)
+	}
 }
 
 export interface IQueue {
@@ -422,7 +485,9 @@ export class Queue implements IQueue {
 		}
 	}
 	notify(node: Computed<any>, mask: number, flags: number, error?: any): boolean {
-		if (this._parent) return this._parent.notify(node, mask, flags, error)
+		if (this._parent) {
+			return this._parent.notify(node, mask, flags, error)
+		}
 		return false
 	}
 	run(type: number) {
@@ -431,7 +496,9 @@ export class Queue implements IQueue {
 			this._queues[type - 1] = []
 			runQueue(effects, type)
 		}
-		for (let i = 0; i < this._children.length; i++) (this._children[i] as any).run?.(type)
+		for (let i = 0; i < this._children.length; i++) {
+			;(this._children[i] as any).run?.(type)
+		}
 	}
 	enqueue(type: number, fn: QueueCallback): void {
 		if (type) {
@@ -474,7 +541,9 @@ export class Queue implements IQueue {
 		for (let i = 0; i < stub._children.length; i++) {
 			const childStub = stub._children[i]
 			let child = this._children[i]
-			if (child) child.restoreQueues(childStub)
+			if (child) {
+				child.restoreQueues(childStub)
+			}
 		}
 	}
 }
@@ -490,7 +559,9 @@ export class GlobalQueue extends Queue {
 	static _runEffect: (el: Computed<unknown>) => void
 	static _clearOptimisticStore: ((store: any) => void) | null = null
 	flush() {
-		if (this._running) return
+		if (this._running) {
+			return
+		}
 		this._running = true
 		try {
 			runHeap(dirtyQueue, GlobalQueue._update)
@@ -528,7 +599,9 @@ export class GlobalQueue extends Queue {
 						commitPendingNodes()
 					}
 				} else {
-					if (transitions.size) runHeap(zombieQueue, GlobalQueue._update)
+					if (transitions.size) {
+						runHeap(zombieQueue, GlobalQueue._update)
+					}
 					finalizePureQueue()
 				}
 			}
@@ -540,7 +613,9 @@ export class GlobalQueue extends Queue {
 			this.run(EFFECT_RENDER)
 			activeLanes.size && runLaneEffects(EFFECT_USER)
 			this.run(EFFECT_USER)
-			if (__DEV__) DEV.hooks.onUpdate?.()
+			if (__DEV__) {
+				DEV.hooks.onUpdate?.()
+			}
 		} finally {
 			this._running = false
 		}
@@ -553,12 +628,18 @@ export class GlobalQueue extends Queue {
 				if (activeTransition && actualError) {
 					const source = (actualError as NotReadyError).source
 					let reporters = activeTransition._asyncReporters.get(source)
-					if (!reporters) activeTransition._asyncReporters.set(source, (reporters = new Set()))
+					if (!reporters) {
+						activeTransition._asyncReporters.set(source, (reporters = new Set()))
+					}
 					const prevSize = reporters.size
 					reporters.add(node)
-					if (reporters.size !== prevSize) schedule()
+					if (reporters.size !== prevSize) {
+						schedule()
+					}
 				}
-				if (__DEV__ && _enforceLoadingBoundary) _hitUnhandledAsync = true
+				if (__DEV__ && _enforceLoadingBoundary) {
+					_hitUnhandledAsync = true
+				}
 			}
 			return true
 		}
@@ -572,9 +653,13 @@ export class GlobalQueue extends Queue {
 		// when the bridge created one for a React deferred batch. An async memo
 		// that suspends outside any batch just carries pending status and commits
 		// through the normal pending queue when it settles.
-		if (!transition) return
+		if (!transition) {
+			return
+		}
 		transition = currentTransition(transition)
-		if (transition === activeTransition) return
+		if (transition === activeTransition) {
+			return
+		}
 		if (!activeTransition) {
 			activeTransition = transition
 		} else {
@@ -591,7 +676,9 @@ export class GlobalQueue extends Queue {
 		// transition is active route into it directly via queuePendingNode /
 		// registerOptimisticNode.
 		for (const lane of activeLanes) {
-			if (!lane._transition) lane._transition = activeTransition
+			if (!lane._transition) {
+				lane._transition = activeTransition
+			}
 		}
 	}
 }
@@ -687,7 +774,9 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
 		}
 
 		const queue = s._sub._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue
-		if (queue._min > s._sub._height) queue._min = s._sub._height
+		if (queue._min > s._sub._height) {
+			queue._min = s._sub._height
+		}
 		insertIntoHeap(s._sub, queue)
 	}
 }
@@ -703,20 +792,29 @@ function commitPendingNode(n: Signal<any>): void {
 		// (this is what the stock optimistic override's auto-revert provided);
 		// a refresh staged here is committed later in the same drain because
 		// commitPendingNodes re-reads the queue length.
-		if (n._pendingSignal) updatePendingSignal(n)
+		if (n._pendingSignal) {
+			updatePendingSignal(n)
+		}
 		return
 	}
 	if (n._pendingValue !== NOT_PENDING) {
 		n._value = n._pendingValue as any
 		n._pendingValue = NOT_PENDING
 		// Set _modified for effects, but not for tracked effects (they handle their own scheduling)
-		if ((n as any)._type && (n as any)._type !== EFFECT_TRACKED) (n as any)._modified = true
+		if ((n as any)._type && (n as any)._type !== EFFECT_TRACKED) {
+			;(n as any)._modified = true
+		}
 	}
 	c._flags! &= ~REACTIVE_MANUAL_WRITE
-	if (!(c._statusFlags! & STATUS_PENDING)) c._statusFlags! &= ~STATUS_UNINITIALIZED
-	if (n._pendingSignal) updatePendingSignal(n)
-	if (c._pendingFirstChild !== null || c._pendingDisposal !== null)
+	if (!(c._statusFlags! & STATUS_PENDING)) {
+		c._statusFlags! &= ~STATUS_UNINITIALIZED
+	}
+	if (n._pendingSignal) {
+		updatePendingSignal(n)
+	}
+	if (c._pendingFirstChild !== null || c._pendingDisposal !== null) {
 		GlobalQueue._dispose(c as Computed<unknown>, false, true)
+	}
 }
 
 function commitPendingNodes() {
@@ -738,12 +836,20 @@ export function finalizePureQueue(
 	// For incomplete transitions, skip pending resolution and optimistic reversion
 	// For completing transitions or no-transition, resolve pending and revert optimistic
 	const resolvePending = !incomplete
-	if (resolvePending) commitPendingNodes()
-	if (!incomplete && globalQueue._children.length) checkBoundaryChildren(globalQueue)
-	const ranHeap = dirtyQueue._max >= dirtyQueue._min
-	if (ranHeap) runHeap(dirtyQueue, GlobalQueue._update)
 	if (resolvePending) {
-		if (ranHeap) commitPendingNodes()
+		commitPendingNodes()
+	}
+	if (!incomplete && globalQueue._children.length) {
+		checkBoundaryChildren(globalQueue)
+	}
+	const ranHeap = dirtyQueue._max >= dirtyQueue._min
+	if (ranHeap) {
+		runHeap(dirtyQueue, GlobalQueue._update)
+	}
+	if (resolvePending) {
+		if (ranHeap) {
+			commitPendingNodes()
+		}
 		resolveOptimisticNodes(
 			completingTransition ? completingTransition._optimisticNodes : globalQueue._optimisticNodes,
 		)
@@ -751,7 +857,9 @@ export function finalizePureQueue(
 		// so they re-run with the now-committed values visible.
 		if (completingTransition && completingTransition._gatedSubs.size) {
 			for (const sub of completingTransition._gatedSubs) {
-				if (sub._flags & REACTIVE_DISPOSED) continue
+				if (sub._flags & REACTIVE_DISPOSED) {
+					continue
+				}
 				if ((sub as any)._type === EFFECT_TRACKED) {
 					if (!(sub as any)._modified) {
 						;(sub as any)._modified = true
@@ -760,7 +868,9 @@ export function finalizePureQueue(
 					continue
 				}
 				const queue = sub._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue
-				if (queue._min > sub._height) queue._min = sub._height
+				if (queue._min > sub._height) {
+					queue._min = sub._height
+				}
 				insertIntoHeap(sub, queue)
 			}
 			completingTransition._gatedSubs.clear()
@@ -861,22 +971,32 @@ export function flush<T>(fn?: () => T): T | void {
 	// `flush()` is an explicit drain point, so it must also process an active
 	// transition even if no microtask was scheduled for it yet.
 	while (scheduled || activeTransition) {
-		if (__DEV__ && ++count === 1e5) throw new Error('Potential Infinite Loop Detected.')
+		if (__DEV__ && ++count === 1e5) {
+			throw new Error('Potential Infinite Loop Detected.')
+		}
 		globalQueue.flush()
 	}
 }
 
 function runQueue(queue: QueueCallback[], type: number): void {
-	for (let i = 0; i < queue.length; i++) queue[i](type)
+	for (let i = 0; i < queue.length; i++) {
+		queue[i](type)
+	}
 }
 
 function reporterBlocksSource(reporter: Computed<any>, source: Computed<any>): boolean {
-	if (reporter._flags & (REACTIVE_ZOMBIE | REACTIVE_DISPOSED)) return false
-	if (reporter._pendingSource === source || reporter._pendingSources?.has(source)) return true
+	if (reporter._flags & (REACTIVE_ZOMBIE | REACTIVE_DISPOSED)) {
+		return false
+	}
+	if (reporter._pendingSource === source || reporter._pendingSources?.has(source)) {
+		return true
+	}
 	for (let dep = reporter._deps; dep; dep = dep._nextDep) {
 		let current = dep._dep as Signal<any> | Computed<any> | undefined
 		while (current) {
-			if (current === source || (current as any)._firewall === source) return true
+			if (current === source || (current as any)._firewall === source) {
+				return true
+			}
 			current = current._parentSource
 		}
 	}
@@ -888,8 +1008,12 @@ function reporterBlocksSource(reporter: Computed<any>, source: Computed<any>): b
 }
 
 function transitionComplete(transition: Transition): boolean {
-	if (transition._done) return true
-	if (transition._actions.length) return false
+	if (transition._done) {
+		return true
+	}
+	if (transition._actions.length) {
+		return false
+	}
 	let done = true
 	for (const [source, reporters] of transition._asyncReporters) {
 		let hasLive = false
@@ -900,8 +1024,9 @@ function transitionComplete(transition: Transition): boolean {
 			}
 			reporters.delete(reporter)
 		}
-		if (!hasLive) transition._asyncReporters.delete(source)
-		else if (
+		if (!hasLive) {
+			transition._asyncReporters.delete(source)
+		} else if (
 			source._statusFlags & STATUS_PENDING &&
 			(source._error as NotReadyError)?.source === source
 		) {
@@ -928,7 +1053,9 @@ function transitionComplete(transition: Transition): boolean {
 	return done
 }
 export function currentTransition(transition: Transition) {
-	while (transition._done && typeof transition._done === 'object') transition = transition._done
+	while (transition._done && typeof transition._done === 'object') {
+		transition = transition._done
+	}
 	return transition
 }
 

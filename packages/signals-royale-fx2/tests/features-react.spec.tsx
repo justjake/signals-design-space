@@ -154,7 +154,9 @@ describe('scenario 15 — causality traces', () => {
 		function App() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <span>v:{v}</span>
 		}
 		const { container } = await h.mount(
@@ -183,7 +185,9 @@ describe('scenario 15 — causality traces', () => {
 		expect(retiredChain.join(' ')).toMatch(/retire|write/i)
 		// Structure: causes always reference earlier events.
 		for (const e of t.events()) {
-			if (e.cause !== 0) expect(e.cause).toBeLessThan(e.id)
+			if (e.cause !== 0) {
+				expect(e.cause).toBeLessThan(e.id)
+			}
 		}
 		t.stop()
 	})
@@ -305,7 +309,9 @@ describe('fx2 extras', () => {
 		function Suspender() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>v:{v};</b>
 		}
 		const { container } = await h.mount(
@@ -344,7 +350,9 @@ describe('fx2 extras', () => {
 		function Suspender() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>v:{v};</b>
 		}
 		const { container } = await h.mount(

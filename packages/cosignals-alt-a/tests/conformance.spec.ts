@@ -125,7 +125,9 @@ for (const episode of episodes) {
 						try {
 							framework.run(() => fn(framework))
 						} catch (e) {
-							if (e instanceof SkipTest) return
+							if (e instanceof SkipTest) {
+								return
+							}
 							throw e
 						}
 					})

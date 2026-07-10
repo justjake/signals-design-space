@@ -55,7 +55,9 @@ function medianOf(times: number[]): number {
 
 // (contender, test) -> per-round times; test order preserved per contender.
 const samples = new Map<string, Map<string, number[]>>()
-for (const name of selected) samples.set(name, new Map())
+for (const name of selected) {
+	samples.set(name, new Map())
+}
 
 for (let round = 0; round < rounds; round++) {
 	for (const name of selected) {
@@ -75,9 +77,13 @@ for (let round = 0; round < rounds; round++) {
 		const perTest = samples.get(name)!
 		for (const line of (result.stdout ?? '').split('\n')) {
 			const parts = line.split(',').map((p) => p.trim())
-			if (parts.length < 3 || parts[0] !== name) continue
+			if (parts.length < 3 || parts[0] !== name) {
+				continue
+			}
 			const time = Number(parts[2])
-			if (!Number.isFinite(time)) continue
+			if (!Number.isFinite(time)) {
+				continue
+			}
 			let arr = perTest.get(parts[1])
 			if (arr === undefined) {
 				arr = []

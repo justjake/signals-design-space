@@ -50,7 +50,9 @@ const ALL = [
 ]
 const pick = (env, dflt) => {
 	const v = process.env[env]
-	if (!v) return dflt
+	if (!v) {
+		return dflt
+	}
 	const names = v.split(',').map((s) => s.trim())
 	return ALL.filter((c) => names.includes(c.name) || names.some((n) => c.name.startsWith(n)))
 }
@@ -111,7 +113,9 @@ for (const c of WARM) {
 	framework.cleanup()
 }
 
-if (globalThis.gc) (globalThis.gc(), globalThis.gc())
+if (globalThis.gc) {
+	;(globalThis.gc(), globalThis.gc())
+}
 await nextTick()
 
 // actual benchmark
@@ -135,7 +139,9 @@ for (const c of BENCH) {
 	})
 
 	framework.cleanup()
-	if (globalThis.gc) (gc(), gc())
+	if (globalThis.gc) {
+		;(gc(), gc())
+	}
 
 	if (REPORT.includes(c)) {
 		console.log(`@@ROW ${JSON.stringify({ lib: libName, test: c.name, ms: +time.toFixed(2) })}`)

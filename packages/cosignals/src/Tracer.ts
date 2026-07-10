@@ -369,7 +369,9 @@ const POW2_CAPACITY_FLOOR = 8
 
 function roundUpToPowerOfTwo(n: number, min: number): number {
 	let c = min
-	while (c < n) c *= 2
+	while (c < n) {
+		c *= 2
+	}
 	return c
 }
 
@@ -435,7 +437,9 @@ export class Tracer implements TraceHooks {
 
 	/** Detach from the engine: recording stops, the capture stays decodable. */
 	stop(): void {
-		if (this.engine.trace === this) this.engine.trace = undefined
+		if (this.engine.trace === this) {
+			this.engine.trace = undefined
+		}
 	}
 
 	get attached(): boolean {
@@ -446,7 +450,9 @@ export class Tracer implements TraceHooks {
 
 	private label(s: string): LabelId {
 		const got = this.labelIds.get(s)
-		if (got !== undefined) return got
+		if (got !== undefined) {
+			return got
+		}
 		const id = this.labels.length
 		this.labels.push(s)
 		this.labelIds.set(s, id)
@@ -454,7 +460,9 @@ export class Tracer implements TraceHooks {
 	}
 
 	private ref(v: unknown): RefId {
-		if (this.refCap === 0) return -1
+		if (this.refCap === 0) {
+			return -1
+		}
 		const idx = this.refHead & (this.refCap - 1)
 		this.refs[idx] = v
 		return this.refHead++
@@ -466,7 +474,9 @@ export class Tracer implements TraceHooks {
 	 * path allocates nothing.
 	 */
 	private bufFor(id: TraceEventId): Int32Array {
-		if (this.mode === 'ring') return this.chunks[0]!
+		if (this.mode === 'ring') {
+			return this.chunks[0]!
+		}
 		const chunkIndex = id >> this.capLog
 		if (this.truncatedFlag || chunkIndex < this.chunks.length) {
 			return this.chunks[this.truncatedFlag ? this.chunks.length - 1 : chunkIndex]!
@@ -538,7 +548,9 @@ export class Tracer implements TraceHooks {
 		buf[at + TraceField.ARG0] = a0 | 0
 		buf[at + TraceField.ARG1] = a1 | 0
 		buf[at + TraceField.ARG2] = a2 | 0
-		if (CAUSE_SETTING.has(kindFlags & KindBits.KIND_MASK)) this.causeReg = id + 1
+		if (CAUSE_SETTING.has(kindFlags & KindBits.KIND_MASK)) {
+			this.causeReg = id + 1
+		}
 		return id
 	}
 
@@ -746,7 +758,9 @@ export class Tracer implements TraceHooks {
 			this.evalOverflow--
 			return
 		}
-		if (this.evalSp === 0) return // attached mid-evaluation: nothing to pair
+		if (this.evalSp === 0) {
+			return
+		} // attached mid-evaluation: nothing to pair
 		this.evalSp--
 		const packed: PackedWorld = this.evalWorld[this.evalSp]!
 		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]!), MAX_I32)
@@ -787,14 +801,22 @@ export class Tracer implements TraceHooks {
 
 	/** Lowest id still decodable. */
 	private firstRetained(): TraceEventId {
-		if (this.mode === 'ring') return Math.max(0, this.head - this.cap)
+		if (this.mode === 'ring') {
+			return Math.max(0, this.head - this.cap)
+		}
 		return 0 // session: the sealed prefix is never dropped
 	}
 
 	private isRetained(id: TraceEventId): boolean {
-		if (id < 0 || id >= this.head) return false
-		if (this.mode === 'ring') return id >= this.head - this.cap
-		if (!this.truncatedFlag) return true
+		if (id < 0 || id >= this.head) {
+			return false
+		}
+		if (this.mode === 'ring') {
+			return id >= this.head - this.cap
+		}
+		if (!this.truncatedFlag) {
+			return true
+		}
 		const sealedEnd = (this.chunks.length - 1) * this.cap
 		return id < sealedEnd || id >= this.head - this.cap
 	}
@@ -813,7 +835,9 @@ export class Tracer implements TraceHooks {
 	}
 
 	private refValue(refId: RefId): unknown {
-		if (refId < 0 || this.refHead - refId > this.refCap) return REF_DROPPED
+		if (refId < 0 || this.refHead - refId > this.refCap) {
+			return REF_DROPPED
+		}
 		return this.refs[refId & (this.refCap - 1)]
 	}
 
@@ -822,15 +846,21 @@ export class Tracer implements TraceHooks {
 	}
 
 	private worldName(code: number, mountFix: boolean): string {
-		if (code === 0) return 'newest'
-		if (code > 0) return `render:${code}`
+		if (code === 0) {
+			return 'newest'
+		}
+		if (code > 0) {
+			return `render:${code}`
+		}
 		const root = this.labelOf(-code - 1)
 		return mountFix ? `mount-fix:${root}` : `committed:${root}`
 	}
 
 	/** Decode one event; undefined once overwritten (RING) or never recorded. */
 	decode(id: TraceEventId): TraceRecord | undefined {
-		if (!this.isRetained(id)) return undefined
+		if (!this.isRetained(id)) {
+			return undefined
+		}
 		const kf = this.peek(id, TraceField.KIND)
 		const kind: TraceKindCode = kf & KindBits.KIND_MASK
 		const a = (kf & KindBits.FLAG_A) !== 0
@@ -947,7 +977,9 @@ export class Tracer implements TraceHooks {
 					root: this.labelOf(world),
 					value: this.refValue(a0),
 				}
-				if (a1 !== 0) data['values'] = this.refValue(a1 - 1) // 0 = recorded before dep-value capture
+				if (a1 !== 0) {
+					data['values'] = this.refValue(a1 - 1)
+				} // 0 = recorded before dep-value capture
 				break
 			case K.reactEffectCleanup:
 				data = { effect: this.labelOf(subject), root: this.labelOf(world) }
@@ -981,14 +1013,19 @@ export class Tracer implements TraceHooks {
 	events(kind?: TraceKind): TraceRecord[] {
 		const out: TraceRecord[] = []
 		for (let id = this.firstRetained(); id < this.head; id++) {
-			if (!this.isRetained(id)) continue
+			if (!this.isRetained(id)) {
+				continue
+			}
 			if (
 				kind !== undefined &&
 				KIND_NAMES[this.peek(id, TraceField.KIND) & KindBits.KIND_MASK] !== kind
-			)
+			) {
 				continue
+			}
 			const e = this.decode(id)
-			if (e !== undefined) out.push(e)
+			if (e !== undefined) {
+				out.push(e)
+			}
 		}
 		return out
 	}
@@ -1001,7 +1038,9 @@ export class Tracer implements TraceHooks {
 		let cur: number | undefined = id
 		while (cur !== undefined) {
 			const e = this.decode(cur)
-			if (e === undefined) break // fell off the retained window
+			if (e === undefined) {
+				break
+			} // fell off the retained window
 			out.push(e)
 			cur = e.cause
 		}
@@ -1011,14 +1050,19 @@ export class Tracer implements TraceHooks {
 	/** Newest retained event of `kind` whose subject label is `name` (packed scan). */
 	private lastBySubject(kinds: TraceKindCode[], name: string): TraceEventId | undefined {
 		const label = this.labelIds.get(name)
-		if (label === undefined) return undefined
+		if (label === undefined) {
+			return undefined
+		}
 		for (let id = this.head - 1; id >= this.firstRetained(); id--) {
-			if (!this.isRetained(id)) continue
+			if (!this.isRetained(id)) {
+				continue
+			}
 			if (
 				kinds.includes(this.peek(id, TraceField.KIND) & KindBits.KIND_MASK) &&
 				this.peek(id, TraceField.SUBJECT) === label
-			)
+			) {
 				return id
+			}
 		}
 		return undefined
 	}
@@ -1041,16 +1085,21 @@ export class Tracer implements TraceHooks {
 	/** Retained run count for an effect label (packed scan; decodes nothing). */
 	effectRunCount(effect: string): number {
 		const label = this.labelIds.get(effect)
-		if (label === undefined) return 0
+		if (label === undefined) {
+			return 0
+		}
 		let n = 0
 		for (let id = this.firstRetained(); id < this.head; id++) {
-			if (!this.isRetained(id)) continue
+			if (!this.isRetained(id)) {
+				continue
+			}
 			const k = this.peek(id, TraceField.KIND) & KindBits.KIND_MASK
 			if (
 				(k === K.coreEffectRun || k === K.reactEffectRun) &&
 				this.peek(id, TraceField.SUBJECT) === label
-			)
+			) {
 				n++
+			}
 		}
 		return n
 	}
@@ -1110,8 +1159,12 @@ export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Trac
 /** One value formatter, two faces: subjects render unquoted (they are
  * labels); data values quote strings that would not scan as one word. */
 function formatValue(v: unknown, subject = false): string {
-	if (v === REF_DROPPED) return '«dropped»'
-	if (typeof v === 'string') return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v)
+	if (v === REF_DROPPED) {
+		return '«dropped»'
+	}
+	if (typeof v === 'string') {
+		return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v)
+	}
 	return String(v)
 }
 

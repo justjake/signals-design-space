@@ -803,7 +803,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// signalOper read path.
 	function read(s: number): unknown {
-		if (currentWorld !== 0) return worldRead(s) // SPK-Q routing branch (atom read)
+		if (currentWorld !== 0) {
+			return worldRead(s)
+		} // SPK-Q routing branch (atom read)
 		if (M[s + C.FLAGS] & C.DIRTY) {
 			if (updateSignal(s)) {
 				const subs = M[s + C.SUBS]
@@ -836,7 +838,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// computedOper.
 	function computedRead(c: number): unknown {
-		if (currentWorld !== 0) return worldRead(c) // SPK-Q routing branch (computed read)
+		if (currentWorld !== 0) {
+			return worldRead(c)
+		} // SPK-Q routing branch (computed read)
 		const flags = M[c + C.FLAGS]
 		if (
 			flags & C.DIRTY ||

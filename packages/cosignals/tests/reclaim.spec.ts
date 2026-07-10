@@ -51,8 +51,11 @@ const stats = __TEST__reclaimStats
 function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine(options)
 	return engine
@@ -446,10 +449,14 @@ describe.runIf(hasGC)('P-L1b: unwatch-then-drop computeds reclaim', () => {
 			}) // watched
 			stop() // unwatched
 		}
-		for (let i = 0; i < 50; ++i) cycle()
+		for (let i = 0; i < 50; ++i) {
+			cycle()
+		}
 		await gcSettle()
 		const base = stats().recNext
-		for (let i = 0; i < 50; ++i) cycle()
+		for (let i = 0; i < 50; ++i) {
+			cycle()
+		}
 		await gcSettle()
 		expect(stats().recNext - base).toBeLessThanOrEqual(16 * 8)
 		expect(E.buffer()[idOf(src) + NodeField.SUBS]).toBe(0) // every dep link disposed

@@ -10,7 +10,9 @@ import { makeHarness, text } from './helpers.tsx'
 
 function subCount(x: Signal<number>): number {
 	let n = 0
-	for (let l = nodeOf(x).subs; l !== undefined; l = l.nextSub) n++
+	for (let l = nodeOf(x).subs; l !== undefined; l = l.nextSub) {
+		n++
+	}
 	return n
 }
 
@@ -33,7 +35,9 @@ describe('unmount reclamation', () => {
 		const a = signal(0)
 		function Many() {
 			const kids = []
-			for (let i = 0; i < 50; i++) kids.push(<Item key={i} />)
+			for (let i = 0; i < 50; i++) {
+				kids.push(<Item key={i} />)
+			}
 			return <>{kids}</>
 		}
 		function Item() {

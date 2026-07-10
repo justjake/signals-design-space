@@ -21,8 +21,12 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-	for (let i = 0; i < roots.length; i++) await act(() => roots[i]!.unmount())
-	for (let i = 0; i < containers.length; i++) containers[i]!.remove()
+	for (let i = 0; i < roots.length; i++) {
+		await act(() => roots[i]!.unmount())
+	}
+	for (let i = 0; i < containers.length; i++) {
+		containers[i]!.remove()
+	}
 	resetForTest()
 })
 
@@ -118,7 +122,9 @@ test('an urgent mount sees committed state and joins the held transition later',
 		const [show, setShow] = React.useState(false)
 		showLate = setShow
 		const current = useSignal(value)
-		if (useSignal(shouldSuspend) && !settled) throw gate.promise
+		if (useSignal(shouldSuspend) && !settled) {
+			throw gate.promise
+		}
 		return (
 			<span>
 				main={current};{show ? <Late /> : null}
@@ -164,7 +170,9 @@ test('one transition can commit independently across two roots', async () => {
 
 	function Left() {
 		const current = useSignal(value)
-		if (useSignal(shouldSuspend) && !settled) throw gate.promise
+		if (useSignal(shouldSuspend) && !settled) {
+			throw gate.promise
+		}
 		return <span>{current}</span>
 	}
 	function Right() {
@@ -249,10 +257,15 @@ test('mutation events bracket React mutations and can filter them from an observ
 	const observer = new MutationObserver((next) => records.push(...next))
 	observer.observe(container, { childList: true, characterData: true, subtree: true })
 	const stop = onDomMutation((phase, changedContainer) => {
-		if (changedContainer !== container) return
+		if (changedContainer !== container) {
+			return
+		}
 		phases.push(phase)
-		if (phase === 'start') observer.disconnect()
-		else observer.observe(container, { childList: true, characterData: true, subtree: true })
+		if (phase === 'start') {
+			observer.disconnect()
+		} else {
+			observer.observe(container, { childList: true, characterData: true, subtree: true })
+		}
 	})
 
 	await act(() => root.render(<span>React</span>))

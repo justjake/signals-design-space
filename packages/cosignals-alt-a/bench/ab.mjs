@@ -8,7 +8,9 @@ function fastestOf(fn, iters, reps = 7) {
 	let best = Infinity
 	for (let r = 0; r < reps; ++r) {
 		const t0 = performance.now()
-		for (let i = 0; i < iters; ++i) fn()
+		for (let i = 0; i < iters; ++i) {
+			fn()
+		}
 		best = Math.min(best, (performance.now() - t0) / iters)
 	}
 	return best * 1e6

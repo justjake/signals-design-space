@@ -60,7 +60,9 @@ export class RefereeMirror {
 	/** The quiescence episode reset sets origin to base (matching the model's episode reset). */
 	originsFromBase(engine: CosignalEngine): void {
 		for (const n of engine.idToInternals.values()) {
-			if (n.kind === 'atom') this.origins.set(n, n.base)
+			if (n.kind === 'atom') {
+				this.origins.set(n, n.base)
+			}
 		}
 	}
 
@@ -117,7 +119,9 @@ function unwrap<T>(n: unknown): T {
 function slotsOf(bits: BatchSlotSet): Set<BatchSlot> {
 	const out = new Set<BatchSlot>()
 	for (let s = 0; bits !== 0; s++, bits >>>= 1) {
-		if ((bits & 1) === 1) out.add(s)
+		if ((bits & 1) === 1) {
+			out.add(s)
+		}
 	}
 	return out
 }
@@ -148,7 +152,9 @@ function applyOp(atom: AtomInternals, op: WriteLogEntry['op'], prev: Value): Val
  */
 export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record<string, unknown> {
 	const viewNode = (n: EInternals): ViewNode => {
-		if (n.kind !== 'atom') return { kind: 'computed', name: n.name, __engine: n }
+		if (n.kind !== 'atom') {
+			return { kind: 'computed', name: n.name, __engine: n }
+		}
 		return {
 			kind: 'atom',
 			name: n.name,
@@ -185,12 +191,16 @@ export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record
 	return {
 		get idToNode(): Map<number, ViewNode> {
 			const out = new Map<number, ViewNode>()
-			for (const [id, n] of engine.idToInternals) out.set(id, viewNode(n))
+			for (const [id, n] of engine.idToInternals) {
+				out.set(id, viewNode(n))
+			}
 			return out
 		},
 		get idToRenderPass(): Map<RenderPassId, ViewRenderPass> {
 			const out = new Map<RenderPassId, ViewRenderPass>()
-			for (const [id, p] of engine.idToRenderPass) out.set(id, viewRenderPass(p))
+			for (const [id, p] of engine.idToRenderPass) {
+				out.set(id, viewRenderPass(p))
+			}
 			return out
 		},
 		get roots() {
@@ -230,9 +240,13 @@ export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record
 					: (world as unknown as ModelWorld)
 			let value = mirror.originOf(atom)
 			for (const e of [...mirror.archiveOf(atom), ...atom.log.materialize()]) {
-				if (!visible(host, e, w)) continue
+				if (!visible(host, e, w)) {
+					continue
+				}
 				const next = applyOp(atom, e.op, value)
-				if (!atom.equals(next, value)) value = next
+				if (!atom.equals(next, value)) {
+					value = next
+				}
 			}
 			return value
 		},

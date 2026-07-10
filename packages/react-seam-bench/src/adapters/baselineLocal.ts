@@ -18,7 +18,9 @@ const baselineLocal: Contender = {
 
 		function requireSetter(i: number): (v: number) => void {
 			const set = setters[i]
-			if (set === undefined) throw new Error(`baseline-local: cell ${i} is not mounted`)
+			if (set === undefined) {
+				throw new Error(`baseline-local: cell ${i} is not mounted`)
+			}
 			return set
 		}
 
@@ -30,18 +32,24 @@ const baselineLocal: Contender = {
 				useEffect(() => {
 					setters[i] = setV
 					return () => {
-						if (setters[i] === setV) setters[i] = undefined
+						if (setters[i] === setV) {
+							setters[i] = undefined
+						}
 					}
 				}, [i, setV])
 				return v
 			},
 			writeCell: (i, v) => requireSetter(i)(v),
 			writeMany(updates) {
-				for (const [i, v] of updates) requireSetter(i)(v)
+				for (const [i, v] of updates) {
+					requireSetter(i)(v)
+				}
 			},
 			writeManyInTransition(updates) {
 				startTransition(() => {
-					for (const [i, v] of updates) requireSetter(i)(v)
+					for (const [i, v] of updates) {
+						requireSetter(i)(v)
+					}
 				})
 			},
 			dispose() {

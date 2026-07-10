@@ -52,7 +52,9 @@ function expectSeedDiffClean(seed: number, steps: number): void {
 /** Diff a concrete (frozen or generated) op list; shrink on failure. */
 function expectOpsDiffClean(ops: ScheduleOp[], seed?: number): void {
 	const diff = diffAgainstModelTolerant(engineAsAdapter(), ops, seed)
-	if (diff === undefined) return
+	if (diff === undefined) {
+		return
+	}
 	const failing = (candidate: ScheduleOp[]): boolean =>
 		diffAgainstModelTolerant(engineAsAdapter(), candidate) !== undefined
 	const shrunk = shrink(ops, failing)
@@ -66,16 +68,21 @@ function expectOpsDiffClean(ops: ScheduleOp[], seed?: number): void {
 
 describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 	it('smoke: seeds 1..5 diff clean', () => {
-		for (let seed = 1; seed <= 5; seed++) expectSeedDiffClean(seed, CI_STEPS)
+		for (let seed = 1; seed <= 5; seed++) {
+			expectSeedDiffClean(seed, CI_STEPS)
+		}
 	})
 
 	it(`${CI_SEEDS} seeds × ${CI_STEPS} steps diff clean`, () => {
-		for (let seed = 1; seed <= CI_SEEDS; seed++) expectSeedDiffClean(seed, CI_STEPS)
+		for (let seed = 1; seed <= CI_SEEDS; seed++) {
+			expectSeedDiffClean(seed, CI_STEPS)
+		}
 	})
 
 	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop) — FROZEN literals`, () => {
-		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++)
+		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) {
 			expectOpsDiffClean(FROZEN[`s${seed}x400`]!, seed)
+		}
 	})
 
 	it('the flag-5 finding seeds (29, 97, 173) diff clean — FROZEN literals', () => {
@@ -83,7 +90,9 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		// by the "flag 5" tests (concurrent-flags.spec.ts) — stored as literal op
 		// lists (tests/frozen-schedules.json) so no generator change can ever
 		// silently rewrite them.
-		for (const seed of [29, 97, 173]) expectOpsDiffClean(FROZEN[`s${seed}x80`]!, seed)
+		for (const seed of [29, 97, 173]) {
+			expectOpsDiffClean(FROZEN[`s${seed}x80`]!, seed)
+		}
 	})
 
 	// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]

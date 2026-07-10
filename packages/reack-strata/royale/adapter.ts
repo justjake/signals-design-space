@@ -114,13 +114,17 @@ const adapter: RoyaleAdapter = {
 
 	serialize(values: unknown[]): string {
 		const atoms: Record<string, Atom<any>> = {}
-		for (let i = 0; i < values.length; i++) atoms[String(i)] = values[i] as Atom<any>
+		for (let i = 0; i < values.length; i++) {
+			atoms[String(i)] = values[i] as Atom<any>
+		}
 		return serializeAtomState(atoms)
 	},
 
 	initialize(json: string, values: unknown[]): void {
 		const atoms: Record<string, Atom<any>> = {}
-		for (let i = 0; i < values.length; i++) atoms[String(i)] = values[i] as Atom<any>
+		for (let i = 0; i < values.length; i++) {
+			atoms[String(i)] = values[i] as Atom<any>
+		}
 		initializeAtomState(json, atoms)
 	},
 
@@ -181,7 +185,9 @@ const adapter: RoyaleAdapter = {
 			},
 			stop(): void {
 				log.stop()
-				if (activeTrace === log) activeTrace = undefined
+				if (activeTrace === log) {
+					activeTrace = undefined
+				}
 			},
 		}
 	},

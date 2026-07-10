@@ -36,9 +36,13 @@ function fail(msg: string): never {
 export function relevantWorlds(m: CosignalModel): World[] {
 	const worlds: World[] = [{ kind: 'newest' }]
 	for (const p of m.idToRenderPass.values()) {
-		if (p.state !== 'ended') worlds.push({ kind: 'render', render: p })
+		if (p.state !== 'ended') {
+			worlds.push({ kind: 'render', render: p })
+		}
 	}
-	for (const root of m.roots.keys()) worlds.push({ kind: 'committed', root })
+	for (const root of m.roots.keys()) {
+		worlds.push({ kind: 'committed', root })
+	}
 	return worlds
 }
 
@@ -87,7 +91,9 @@ function checkTenancy(m: CosignalModel): void {
 		const tenant = slot.tenant
 		for (const atom of atoms(m)) {
 			for (const e of atom.log) {
-				if (e.slot !== slot.id) continue
+				if (e.slot !== slot.id) {
+					continue
+				}
 				if (e.retiredSeq === undefined) {
 					// Stamp-before-release: un-retired entries bearing slot s belong to exactly its current tenant.
 					if (tenant !== e.batch) {
@@ -114,7 +120,9 @@ function checkTenancy(m: CosignalModel): void {
 		// Pin-after-claim: any open render whose mask means the CURRENT tenant pinned after the claim.
 		if (tenant !== undefined) {
 			for (const p of m.idToRenderPass.values()) {
-				if (p.state === 'ended' || !p.maskBatches.has(tenant) || !p.maskSlots.has(slot.id)) continue
+				if (p.state === 'ended' || !p.maskBatches.has(tenant) || !p.maskSlots.has(slot.id)) {
+					continue
+				}
 				if (p.pin < slot.claimSeq) {
 					fail(
 						`tenancy: render pass ${p.id} pinned at ${p.pin} but masks slot ${slot.id} claimed at ${slot.claimSeq}`,
@@ -130,15 +138,20 @@ function checkMonotone(m: CosignalModel): void {
 	for (const atom of atoms(m)) {
 		let prev = atom.baseSeq
 		for (const e of atom.log) {
-			if (e.seq <= prev)
+			if (e.seq <= prev) {
 				fail(`monotone: write log of ${atom.name} not strictly increasing at seq ${e.seq}`)
+			}
 			prev = e.seq
-			if (e.seq > m.seq) fail(`monotone: log entry seq ${e.seq} above the global counter ${m.seq}`)
+			if (e.seq > m.seq) {
+				fail(`monotone: log entry seq ${e.seq} above the global counter ${m.seq}`)
+			}
 			if (e.retiredSeq !== undefined && e.retiredSeq <= e.seq) {
 				fail(`monotone: retiredSeq ${e.retiredSeq} ≤ write seq ${e.seq} on ${atom.name}`)
 			}
 			const batch = m.idToBatch.get(e.batch)
-			if (batch === undefined) fail(`log entry names unknown batch ${e.batch}`)
+			if (batch === undefined) {
+				fail(`log entry names unknown batch ${e.batch}`)
+			}
 			if (batch.state === 'retired') {
 				if (e.retiredSeq !== batch.retiredSeq) {
 					fail(
@@ -151,13 +164,16 @@ function checkMonotone(m: CosignalModel): void {
 		}
 	}
 	for (const p of m.idToRenderPass.values()) {
-		if (p.pin > m.seq) fail(`render pass ${p.id} pin ${p.pin} above global counter ${m.seq}`)
+		if (p.pin > m.seq) {
+			fail(`render pass ${p.id} pin ${p.pin} above global counter ${m.seq}`)
+		}
 	}
 	for (const t of m.idToBatch.values()) {
-		if (t.parked && t.state === 'retired')
+		if (t.parked && t.state === 'retired') {
 			fail(
 				`batch ${t.id} both parked and retired — parked batches may not retire before settlement`,
 			)
+		}
 	}
 }
 
@@ -178,7 +194,9 @@ function checkRetention(m: CosignalModel): void {
 
 /** Invariant 5 — with no live pins and no live batches, every write log has compacted to base. */
 function checkResidue(m: CosignalModel): void {
-	if (!m.quiescent()) return
+	if (!m.quiescent()) {
+		return
+	}
 	for (const atom of atoms(m)) {
 		if (atom.log.length > 0) {
 			fail(`residue: quiescent but ${atom.name} retains ${atom.log.length} log entries`)
@@ -190,7 +208,9 @@ function checkResidue(m: CosignalModel): void {
 function checkStructure(m: CosignalModel): void {
 	let liveCount = 0
 	for (const t of m.idToBatch.values()) {
-		if (t.state === 'live') liveCount++
+		if (t.state === 'live') {
+			liveCount++
+		}
 		if (t.slot !== undefined) {
 			const s = m.slots[t.slot]
 			if (s === undefined || s.tenant !== t.id) {
@@ -198,7 +218,9 @@ function checkStructure(m: CosignalModel): void {
 			}
 		}
 	}
-	if (liveCount > 31) fail(`more than 31 live batches (${liveCount})`)
+	if (liveCount > 31) {
+		fail(`more than 31 live batches (${liveCount})`)
+	}
 	for (const root of m.roots.values()) {
 		for (const tid of root.committedBatches) {
 			const t = m.idToBatch.get(tid)
@@ -211,8 +233,12 @@ function checkStructure(m: CosignalModel): void {
 	}
 	const openByRoot = new Set<string>()
 	for (const p of m.idToRenderPass.values()) {
-		if (p.state === 'ended') continue
-		if (openByRoot.has(p.root)) fail(`two open renders on root ${p.root}`)
+		if (p.state === 'ended') {
+			continue
+		}
+		if (openByRoot.has(p.root)) {
+			fail(`two open renders on root ${p.root}`)
+		}
 		openByRoot.add(p.root)
 	}
 }

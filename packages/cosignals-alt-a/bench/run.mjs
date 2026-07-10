@@ -24,7 +24,9 @@ function fastestOf(fn, iters, reps = 7) {
 			fn()
 		}
 		const dt = (performance.now() - t0) / iters
-		if (dt < best) best = dt
+		if (dt < best) {
+			best = dt
+		}
 	}
 	return best * 1e6 // ns/op
 }
@@ -120,7 +122,9 @@ const workloads = {
 		})
 		let x = 0
 		const ns = fastestOf(() => a.set(++x), iters)
-		if (effectRuns < iters) throw new Error('deep: effect did not run')
+		if (effectRuns < iters) {
+			throw new Error('deep: effect did not run')
+		}
 		return ns
 	},
 }
@@ -240,9 +244,13 @@ workloads.kdeep = (iters) => {
 	let x = 0
 	const ns = fastestOf(() => {
 		batch(() => head.set(++x))
-		if (current.state !== 50 + x) throw new Error('bad value')
+		if (current.state !== 50 + x) {
+			throw new Error('bad value')
+		}
 	}, iters)
-	if (calls < iters) throw new Error('effect did not run')
+	if (calls < iters) {
+		throw new Error('effect did not run')
+	}
 	return ns
 }
 workloads.kbroad = (iters) => {

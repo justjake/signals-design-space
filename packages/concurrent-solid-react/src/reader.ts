@@ -85,7 +85,9 @@ function bareNode(name: string): Computed<any> {
 		_transition: null,
 	} as unknown as Computed<any>
 	node._prevHeap = node
-	if (__DEV__) (node as any)._name = name
+	if (__DEV__) {
+		;(node as any)._name = name
+	}
 	return node
 }
 
@@ -136,17 +138,25 @@ export function probeRead<T>(fn: () => T): { value: T; deps: DepNode[] } {
 
 function harvestProbe(): DepNode[] {
 	const deps: DepNode[] = []
-	for (let l = PROBE._deps; l !== null; l = l._nextDep) deps.push(l._dep)
+	for (let l = PROBE._deps; l !== null; l = l._nextDep) {
+		deps.push(l._dep)
+	}
 	// Unlink dep-side only; the probe's own list is reset on next use. No
 	// teardown reaction: render reads must never dispose graph nodes.
 	for (let l = PROBE._deps; l !== null; l = l._nextDep) {
 		const dep = l._dep
 		const nextSub = l._nextSub
 		const prevSub = l._prevSub
-		if (nextSub !== null) nextSub._prevSub = prevSub
-		else dep._subsTail = prevSub
-		if (prevSub !== null) prevSub._nextSub = nextSub
-		else dep._subs = nextSub
+		if (nextSub !== null) {
+			nextSub._prevSub = prevSub
+		} else {
+			dep._subsTail = prevSub
+		}
+		if (prevSub !== null) {
+			prevSub._nextSub = nextSub
+		} else {
+			dep._subs = nextSub
+		}
 	}
 	PROBE._deps = null
 	PROBE._depsTail = null
@@ -175,7 +185,9 @@ export function pokeReadersInCone(
 ): void {
 	for (let s = el._subs; s !== null; s = s._nextSub) {
 		const sub = s._sub as Computed<any> & Partial<ReaderNode>
-		if (visited.has(sub)) continue
+		if (visited.has(sub)) {
+			continue
+		}
 		visited.add(sub)
 		if (sub._isReactReader) {
 			if (!sub._modified) {
@@ -219,10 +231,14 @@ export function createReader(name: string, wake: (urgent: boolean) => void): Rea
 export function syncReaderDeps(reader: ReaderNode, deps: DepNode[]): void {
 	deferUnobserved(() => {
 		let toRemove = reader._deps
-		while (toRemove !== null) toRemove = unlinkSubs(toRemove as Link)
+		while (toRemove !== null) {
+			toRemove = unlinkSubs(toRemove as Link)
+		}
 		reader._deps = null
 		reader._depsTail = null
-		for (let i = 0; i < deps.length; i++) link(deps[i], reader)
+		for (let i = 0; i < deps.length; i++) {
+			link(deps[i], reader)
+		}
 	})
 }
 

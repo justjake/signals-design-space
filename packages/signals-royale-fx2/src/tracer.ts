@@ -52,7 +52,9 @@ export class Tracer {
 	}
 
 	emit(kind: string, node: ReactiveNode | null, cause: TraceEventId, data?: unknown): TraceEventId {
-		if (this.stopped) return NO_EVENT
+		if (this.stopped) {
+			return NO_EVENT
+		}
 		const id = this.nextId++
 		const evt: TraceEvent = { id, kind, cause, label: node?.label, data }
 		if (this.size === this.ring.length) {
@@ -63,7 +65,9 @@ export class Tracer {
 		}
 		this.ring[(this.head + this.size - 1) % this.ring.length] = evt
 		if (kind === 'deliver' || kind === 'effect-run') {
-			if (node !== null) this.lastDelivery.set(node, id)
+			if (node !== null) {
+				this.lastDelivery.set(node, id)
+			}
 		}
 		return id
 	}
@@ -73,7 +77,9 @@ export class Tracer {
 		const out: TraceEvent[] = []
 		for (let i = 0; i < this.size; i++) {
 			const evt = this.ring[(this.head + i) % this.ring.length]
-			if (evt !== undefined) out.push(evt)
+			if (evt !== undefined) {
+				out.push(evt)
+			}
 		}
 		return out
 	}
@@ -81,8 +87,12 @@ export class Tracer {
 	find(id: TraceEventId): TraceEvent | undefined {
 		for (let i = this.size - 1; i >= 0; i--) {
 			const evt = this.ring[(this.head + i) % this.ring.length]
-			if (evt !== undefined && evt.id === id) return evt
-			if (evt !== undefined && evt.id < id) break
+			if (evt !== undefined && evt.id === id) {
+				return evt
+			}
+			if (evt !== undefined && evt.id < id) {
+				break
+			}
 		}
 		return undefined
 	}
@@ -99,7 +109,9 @@ export class Tracer {
 	 */
 	whyLastDelivery(node: ReactiveNode | object): string[] {
 		const start = this.lastDelivery.get(node)
-		if (start === undefined) return ['(no delivery recorded for this node)']
+		if (start === undefined) {
+			return ['(no delivery recorded for this node)']
+		}
 		const chain: string[] = []
 		let id: TraceEventId = start
 		let guard = 0

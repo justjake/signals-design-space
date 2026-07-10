@@ -34,7 +34,9 @@ const decoy = bridge.atom('decoy', 0)
 bridge.computed('decoyC', (read) => Number(read(decoy)) + 1)
 
 const shape = makeShape(SHAPE, { Atom, Computed, effect })
-for (let r = 0; r < WARMUP; r++) shape.run(OPS)
+for (let r = 0; r < WARMUP; r++) {
+	shape.run(OPS)
+}
 const times = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

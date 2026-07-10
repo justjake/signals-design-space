@@ -290,7 +290,9 @@ export function createSignal<T>(
 		return [accessor<T | undefined>(node), setMemo.bind(null, node as any) as Setter<T | undefined>]
 	}
 	const node = signal<T>(first as any, second as SignalOptions<T>)
-	if (__DEV__) registerGraph(node, getOwner())
+	if (__DEV__) {
+		registerGraph(node, getOwner())
+	}
 	return [accessor<T>(node), setSignal.bind(null, node as any) as Setter<T | undefined>]
 }
 
@@ -593,7 +595,9 @@ export function resolve<T>(fn: () => T): Promise<T> {
 				try {
 					res(fn())
 				} catch (err) {
-					if (err instanceof NotReadyError) throw err
+					if (err instanceof NotReadyError) {
+						throw err
+					}
 					rej(err)
 				}
 				dispose()
@@ -656,7 +660,9 @@ export function createOptimistic<T>(
 		]
 	}
 	const node = optimisticSignal<T>(first as any, second as SignalOptions<T>)
-	if (__DEV__) registerGraph(node, getOwner())
+	if (__DEV__) {
+		registerGraph(node, getOwner())
+	}
 	return [accessor<T | undefined>(node), setSignal.bind(null, node as any) as Setter<T | undefined>]
 }
 

@@ -70,7 +70,9 @@ const frame = () => new Promise((res) => setTimeout(res, 0))
 async function waitFor(predicate, timeoutMs = 30000) {
 	const deadline = Date.now() + timeoutMs
 	while (!predicate()) {
-		if (Date.now() > deadline) throw new Error('timeout waiting for commit')
+		if (Date.now() > deadline) {
+			throw new Error('timeout waiting for commit')
+		}
 		await frame()
 	}
 }
@@ -86,7 +88,9 @@ if (contender === 'royale-fx2') {
 	impl = {
 		createCells(n) {
 			const cells = []
-			for (let i = 0; i < n; i++) cells.push(engine.signal(0))
+			for (let i = 0; i < n; i++) {
+				cells.push(engine.signal(0))
+			}
 			return cells
 		},
 		useCell(cell) {
@@ -97,7 +101,9 @@ if (contender === 'royale-fx2') {
 		},
 		writeManyInTransition(cells, v) {
 			bindings.startTransitionWrite(() => {
-				for (const c of cells) c.set(v)
+				for (const c of cells) {
+					c.set(v)
+				}
 			})
 		},
 		createRoot: (el) => wrappedCreateRoot(el),
@@ -112,7 +118,9 @@ if (contender === 'royale-fx2') {
 			read: (i) => values[i],
 			write(i, v) {
 				values[i] = v
-				for (const l of listeners[i]) l()
+				for (const l of listeners[i]) {
+					l()
+				}
 			},
 			subscribe: (i) => (cb) => {
 				listeners[i].add(cb)
@@ -138,7 +146,9 @@ if (contender === 'royale-fx2') {
 		},
 		writeManyInTransition(cells, v) {
 			React.startTransition(() => {
-				for (const i of cells) store.write(i, v)
+				for (const i of cells) {
+					store.write(i, v)
+				}
 			})
 		},
 		createRoot: (el) => ReactDOMClient.createRoot(el),

@@ -191,7 +191,9 @@ commitWrite(atK as AnyInternals, 2)
 // and sees the unchanged constant above it (unwind arm), leaving flags
 // clean and every value as it was.
 eng.__TEST__eachArena((a: WorldArena) => {
-	if (a.root !== 'R5' || a.kind !== 'committed') return
+	if (a.root !== 'R5' || a.kind !== 'committed') {
+		return
+	}
 	eng.__TEST__fanAtomsToArena(a, [atK], false)
 	eng.__TEST__arenaServe(a, topK as AnyInternals)
 })

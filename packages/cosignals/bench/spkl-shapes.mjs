@@ -10,7 +10,9 @@ export function makeShape(name, { Atom, Computed, effect }) {
 		return {
 			run(n) {
 				let s = 0
-				for (let i = 0; i < n; i++) s += a.state
+				for (let i = 0; i < n; i++) {
+					s += a.state
+				}
 				sink += s
 				return s
 			},
@@ -32,7 +34,9 @@ export function makeShape(name, { Atom, Computed, effect }) {
 		let v = 0
 		return {
 			run(n) {
-				for (let i = 0; i < n; i++) a.set(++v)
+				for (let i = 0; i < n; i++) {
+					a.set(++v)
+				}
 				return sink
 			},
 			checksum: () => sink + top.state,
@@ -54,7 +58,9 @@ export function makeShape(name, { Atom, Computed, effect }) {
 		let v = 0
 		return {
 			run(n) {
-				for (let i = 0; i < n; i++) atoms[i % 100].set(++v)
+				for (let i = 0; i < n; i++) {
+					atoms[i % 100].set(++v)
+				}
 				return sink
 			},
 			checksum: () => sink + tops[0].state,
@@ -63,7 +69,9 @@ export function makeShape(name, { Atom, Computed, effect }) {
 	if (name === 'diamond') {
 		const a = new Atom(0)
 		const mids = []
-		for (let i = 0; i < 4; i++) mids.push(new Computed(() => a.state + i))
+		for (let i = 0; i < 4; i++) {
+			mids.push(new Computed(() => a.state + i))
+		}
 		const join = new Computed(() => mids[0].state + mids[1].state + mids[2].state + mids[3].state)
 		let sink = 0
 		effect(() => {
@@ -72,7 +80,9 @@ export function makeShape(name, { Atom, Computed, effect }) {
 		let v = 0
 		return {
 			run(n) {
-				for (let i = 0; i < n; i++) a.set(++v)
+				for (let i = 0; i < n; i++) {
+					a.set(++v)
+				}
 				return sink
 			},
 			checksum: () => sink + join.state,

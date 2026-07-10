@@ -29,8 +29,11 @@ function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	const b = engine
@@ -50,7 +53,9 @@ function suspending(
 		try {
 			return fn(read, untracked)
 		} catch (err) {
-			if (err instanceof SuspendedRead) return err
+			if (err instanceof SuspendedRead) {
+				return err
+			}
 			throw err
 		}
 	})
@@ -70,14 +75,18 @@ function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 	const cbs: ((v: T) => void)[] = []
 	const t: PromiseLike<T> = {
 		then(onF): PromiseLike<never> {
-			if (onF) cbs.push(onF as (v: T) => void)
+			if (onF) {
+				cbs.push(onF as (v: T) => void)
+			}
 			return undefined as never
 		},
 	} as PromiseLike<T>
 	return {
 		t,
 		settle: (v: T) => {
-			for (const cb of cbs) cb(v)
+			for (const cb of cbs) {
+				cb(v)
+			}
 		},
 	}
 }
@@ -251,7 +260,9 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		expect(b.__TEST__arenaStats().suspended).toBe(K)
 		let chain = 0
 		b.onCorrection = () => {
-			if (++chain < K) gates[chain]!.settle(`v${chain}`) // each iteration creates the next settlement
+			if (++chain < K) {
+				gates[chain]!.settle(`v${chain}`)
+			} // each iteration creates the next settlement
 		}
 		expect(() => gates[0]!.settle('v0')).toThrow(InvariantViolation)
 		expect(chain).toBeGreaterThanOrEqual(8) // the loop made real progress up to the cap
@@ -270,7 +281,9 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 				)
 			}),
 		)
-		for (let i = 0; i < 3; i++) mount(b, 'R', cs[i]!, `W${i}`)
+		for (let i = 0; i < 3; i++) {
+			mount(b, 'R', cs[i]!, `W${i}`)
+		}
 		expect(b.__TEST__arenaStats().suspended).toBe(3)
 		gs[1]!.resolve('MID') // clear the MIDDLE entry: swap-remove moves the tail into its slot
 		await tick()

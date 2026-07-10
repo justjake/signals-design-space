@@ -26,8 +26,11 @@ export function runChild(script, env, timeoutMs = 300_000) {
 			while ((nl = out.indexOf('\n')) >= 0) {
 				const line = out.slice(0, nl)
 				out = out.slice(nl + 1)
-				if (line.startsWith('@@ROW ')) rows.push(JSON.parse(line.slice(6)))
-				else if (line.trim()) console.log(`  [child] ${line}`)
+				if (line.startsWith('@@ROW ')) {
+					rows.push(JSON.parse(line.slice(6)))
+				} else if (line.trim()) {
+					console.log(`  [child] ${line}`)
+				}
 			}
 		})
 		child.stderr.on('data', (c) => {
@@ -76,7 +79,9 @@ export async function medianOfProcesses(script, env, procs = 5, timeoutMs = 300_
 			raw.push(row)
 			if (typeof row.value === 'number') {
 				const key = row.metric
-				if (!byMetric.has(key)) byMetric.set(key, [])
+				if (!byMetric.has(key)) {
+					byMetric.set(key, [])
+				}
 				byMetric.get(key).push(row.value)
 			}
 		}
@@ -104,7 +109,9 @@ export function timeNs(fn) {
  * returns per-rep ns array. Calls global.gc() between reps when exposed.
  */
 export function repsNs(fn, { warmup = 2, reps = 7 } = {}) {
-	for (let i = 0; i < warmup; i++) fn()
+	for (let i = 0; i < warmup; i++) {
+		fn()
+	}
 	const out = []
 	for (let i = 0; i < reps; i++) {
 		globalThis.gc?.()

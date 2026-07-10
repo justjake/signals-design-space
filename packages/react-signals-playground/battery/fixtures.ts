@@ -42,7 +42,9 @@ export const test = base.extend<BatteryFixtures & BatteryOptions>({
 			const pageErrors: string[] = []
 			const allowances: { pattern: RegExp; why: string }[] = []
 			page.on('console', (message) => {
-				if (message.type() === 'error') consoleErrors.push(message.text())
+				if (message.type() === 'error') {
+					consoleErrors.push(message.text())
+				}
 			})
 			page.on('pageerror', (error) => pageErrors.push(String(error)))
 

@@ -61,14 +61,18 @@ const eachDeliverySince =
 		? (mark, fn) => {
 				for (let e = mark; e < b.events.length; e++) {
 					const ev = b.events[e]
-					if (ev.type === 'delivery') fn(ev.watcher, ev.slot)
+					if (ev.type === 'delivery') {
+						fn(ev.watcher, ev.slot)
+					}
 				}
 			}
 		: (mark, fn) => {
 				const head = tracer.stats().recorded
 				for (let id = mark; id < head; id++) {
 					const ev = tracer.decode(id)
-					if (ev !== undefined && ev.kind === 'delivery') fn(ev.data.watcher, ev.data.slot)
+					if (ev !== undefined && ev.kind === 'delivery') {
+						fn(ev.data.watcher, ev.data.slot)
+					}
 				}
 			}
 // Session records are immutable (marks scope every scan); only the anchor's
@@ -84,7 +88,9 @@ const a = b.atom('a', 0)
 const c = b.computed('c', (read) => read(a) + 1)
 const setup = b.renderStart('R', [])
 const watchers = []
-for (let i = 0; i < F; i++) watchers.push(b.mountWatcher(setup.id, c, `w${i}`))
+for (let i = 0; i < F; i++) {
+	watchers.push(b.mountWatcher(setup.id, c, `w${i}`))
+}
 b.renderEnd(setup.id, 'commit')
 
 let v = 0
@@ -99,8 +105,12 @@ function repOnce() {
 		frameEventsReset()
 		const f0 = process.hrtime.bigint()
 		const batches = []
-		for (let i = 0; i < B; i++) batches.push(b.openBatch())
-		if (held !== undefined) b.write(held.id, a, 0, ++v)
+		for (let i = 0; i < B; i++) {
+			batches.push(b.openBatch())
+		}
+		if (held !== undefined) {
+			b.write(held.id, a, 0, ++v)
+		}
 		// per-(watcher,slot) delivery/spurious accounting keyed on event slices
 		const perWB = new Map() // `${watcher}:${slot}` -> {d, s}
 		let frameWriteNs = 0
@@ -108,12 +118,16 @@ function repOnce() {
 		if (INTERLEAVE) {
 			// Slot intern happens at first write: seed one changing write per
 			// batch so the render mask captures their slots, then open+yield.
-			for (const batch of batches) b.write(batch.id, a, 0, ++v)
+			for (const batch of batches) {
+				b.write(batch.id, a, 0, ++v)
+			}
 			interRender = b.renderStart(
 				'R',
 				b.liveBatches().map((t) => t.id),
 			)
-			for (const w of watchers) b.renderWatcher(interRender.id, w.id)
+			for (const w of watchers) {
+				b.renderWatcher(interRender.id, w.id)
+			}
 			b.renderYield(interRender.id)
 		}
 		for (let k = 0; k < W; k++) {
@@ -133,7 +147,9 @@ function repOnce() {
 					perWB.set(key, rec)
 				}
 				rec.d++
-				if (!changed) rec.s++
+				if (!changed) {
+					rec.s++
+				}
 			})
 		}
 		writeNs += frameWriteNs
@@ -145,19 +161,29 @@ function repOnce() {
 			// render cycle: a render pass over all live batches, render every watcher, commit.
 			const live = b.liveBatches().map((t) => t.id)
 			const p = b.renderStart('R', live)
-			for (const w of watchers) b.renderWatcher(p.id, w.id)
+			for (const w of watchers) {
+				b.renderWatcher(p.id, w.id)
+			}
 			b.renderEnd(p.id, 'commit')
 		}
-		for (const t of batches) b.retire(t.id)
+		for (const t of batches) {
+			b.retire(t.id)
+		}
 		const f1 = process.hrtime.bigint()
 		frameNsTot += Number(f1 - f0)
 		for (const rec of perWB.values()) {
-			if (rec.d > maxDeliv) maxDeliv = rec.d
-			if (rec.s > maxSpurious) maxSpurious = rec.s
+			if (rec.d > maxDeliv) {
+				maxDeliv = rec.d
+			}
+			if (rec.s > maxSpurious) {
+				maxSpurious = rec.s
+			}
 		}
 	}
 	const logLen = a.log.length
-	if (held !== undefined) b.retire(held.id)
+	if (held !== undefined) {
+		b.retire(held.id)
+	}
 	const n = firstLast.length
 	const head = firstLast.slice(0, 5).reduce((x, y) => x + y, 0) / Math.min(5, n)
 	const tail = firstLast.slice(-5).reduce((x, y) => x + y, 0) / Math.min(5, n)
@@ -171,7 +197,9 @@ function repOnce() {
 	}
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const acc = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

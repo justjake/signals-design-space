@@ -68,7 +68,9 @@ function commitWorld(t: Transition, retainer: unknown): void {
 	try {
 		flush()
 	} finally {
-		if (activeTransition !== null) setActiveTransition(null)
+		if (activeTransition !== null) {
+			setActiveTransition(null)
+		}
 	}
 }
 

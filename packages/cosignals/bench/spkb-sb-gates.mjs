@@ -17,7 +17,9 @@ const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt'
 // this bench drives A/B across generations, so try the fused module first
 // and fall back to the old path on pre-fusion trees.
 let mod = await import(`${ROOT}/packages/cosignals/src/CosignalEngine.ts`)
-if (mod.engine === undefined) mod = await import(`${ROOT}/packages/cosignals/src/concurrent.ts`)
+if (mod.engine === undefined) {
+	mod = await import(`${ROOT}/packages/cosignals/src/concurrent.ts`)
+}
 
 /**
  * A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree constructs one
@@ -42,7 +44,9 @@ function acquireEngine() {
 	}
 	const e = mod.engine
 	e.discardAllWip()
-	for (const t of e.liveBatches()) t.parked ? e.settleAction(t.id) : e.retire(t.id)
+	for (const t of e.liveBatches()) {
+		t.parked ? e.settleAction(t.id) : e.retire(t.id)
+	}
 	;(mod.__TEST__resetEngine ?? mod.__resetEngineForTest)()
 	return e
 }
@@ -76,7 +80,9 @@ function untrackedFan() {
 		)
 		const agg = b.computed(`agg${r}`, (read) => {
 			let s = 0
-			for (let i = 0; i < K; i++) s += Number(read(fans[i]))
+			for (let i = 0; i < K; i++) {
+				s += Number(read(fans[i]))
+			}
 			return s
 		})
 		const p = b.renderStart(`R${r}`, [])
@@ -94,8 +100,12 @@ function untrackedFan() {
 		}
 		const t1 = process.hrtime.bigint()
 		b.retire(t.id)
-		for (let r = 0; r < R; r++) checksum += Number(b.committedValue(aggs[r], `R${r}`))
-		if (rep >= 3) times.push(Number(t1 - t0) / WRITES) // per-write ns (delivery walk incl. weak bit-tests)
+		for (let r = 0; r < R; r++) {
+			checksum += Number(b.committedValue(aggs[r], `R${r}`))
+		}
+		if (rep >= 3) {
+			times.push(Number(t1 - t0) / WRITES)
+		} // per-write ns (delivery walk incl. weak bit-tests)
 	}
 	return { ns: median(times), checksum }
 }

@@ -67,7 +67,9 @@ export class CausalityLog implements TraceSink {
 		const start = this.size === this.capacity ? this.cursor : 0
 		for (let i = 0; i < this.size; i++) {
 			const event = this.ring[(start + i) % this.capacity]
-			if (event !== undefined) result.push(event)
+			if (event !== undefined) {
+				result.push(event)
+			}
 		}
 		return result
 	}
@@ -84,7 +86,9 @@ export class CausalityLog implements TraceSink {
 		const result: CausalityEvent[] = []
 		while (id !== 0) {
 			const event = this.byId.get(id)
-			if (event === undefined) break
+			if (event === undefined) {
+				break
+			}
 			result.push(event)
 			id = event.cause
 		}

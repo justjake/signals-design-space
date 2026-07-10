@@ -82,8 +82,11 @@ function probeComparator(): { eq: Equals; calls: Pair[]; reset(): void } {
 function freshEngine(): void {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 }
@@ -212,8 +215,12 @@ describe('R-2 order: isEqual(current, incoming), everywhere', () => {
 		const u = engine.openBatch()
 		const THRESHOLD = 1024 // WriteLog.ts FOLD_VALVE_THRESHOLD
 		const N = THRESHOLD + 200 // a threshold's worth in t + a 200-entry tail in u
-		for (let i = 1; i <= THRESHOLD; i++) engine.write(t.id, node, 0, i)
-		for (let i = THRESHOLD + 1; i <= N; i++) engine.write(u.id, node, 0, i)
+		for (let i = 1; i <= THRESHOLD; i++) {
+			engine.write(t.id, node, 0, i)
+		}
+		for (let i = THRESHOLD + 1; i <= N; i++) {
+			engine.write(u.id, node, 0, i)
+		}
 		p.reset()
 		// Retiring t stamps its entries, but the parked action keeps the
 		// episode open — the valve folds the retired THRESHOLD-long prefix

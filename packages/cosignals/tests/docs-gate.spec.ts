@@ -186,7 +186,9 @@ describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
 		for (const m of text.matchAll(/export \{([^}]*)\}/g)) {
 			for (const entry of m[1]!.split(',')) {
 				const name = (entry.includes(' as ') ? entry.split(' as ')[1]! : entry).trim()
-				if (name.length > 0) out.push(name)
+				if (name.length > 0) {
+					out.push(name)
+				}
 			}
 		}
 		return out
@@ -243,8 +245,9 @@ describe('docs gate: source comments are self-contained', () => {
 				const hits: string[] = []
 				for (let i = 0; i < comments.length; i++) {
 					for (const p of COMMENT_STAGE_CODES) {
-						if (p.test(comments[i]!))
+						if (p.test(comments[i]!)) {
 							hits.push(`line ${i + 1} [${String(p)}]: ${comments[i]!.trim()}`)
+						}
 					}
 				}
 				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([])

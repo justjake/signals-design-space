@@ -115,7 +115,9 @@ export function makeSuspension(): Suspension {
 		promise,
 		settled: false,
 		resolve: () => {
-			if (ep.settled) return
+			if (ep.settled) {
+				return
+			}
 			ep.settled = true
 			resolveRaw()
 		},
@@ -125,7 +127,9 @@ export function makeSuspension(): Suspension {
 
 export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	let box = boxes.get(t)
-	if (box !== undefined) return box
+	if (box !== undefined) {
+		return box
+	}
 	const fresh: ThenableBox = {
 		status: 'pending',
 		value: undefined,
@@ -176,15 +180,21 @@ function settle(box: ThenableBox): void {
 	} finally {
 		endBatch()
 		setCurrentCause(prevCause)
-		for (const ep of suspensions) ep.resolve()
+		for (const ep of suspensions) {
+			ep.resolve()
+		}
 	}
 }
 
 /** use(t) inside a base-state evaluation. */
 function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
 	const box = trackThenable(t)
-	if (box.status === 'fulfilled') return box.value
-	if (box.status === 'rejected') throw box.reason
+	if (box.status === 'fulfilled') {
+		return box.value
+	}
+	if (box.status === 'rejected') {
+		throw box.reason
+	}
 	box.parkedNodes.add(consumer)
 	const flags = consumer.flags
 	// Reuse the span's suspension so Suspense retries see one stable thenable —
@@ -213,14 +223,20 @@ function finishCompute(
 		return true
 	}
 	if (hasError) {
-		if ((flags & Flag.AsyncSuspended) !== 0) (node.throwable as Suspension).resolve()
+		if ((flags & Flag.AsyncSuspended) !== 0) {
+			;(node.throwable as Suspension).resolve()
+		}
 		const sameError =
 			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
-		if (!sameError) node.throwable = makeErrorBox(error)
+		if (!sameError) {
+			node.throwable = makeErrorBox(error)
+		}
 		node.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncError
 		return !sameError
 	}
-	if ((flags & Flag.AsyncSuspended) !== 0) (node.throwable as Suspension).resolve()
+	if ((flags & Flag.AsyncSuspended) !== 0) {
+		;(node.throwable as Suspension).resolve()
+	}
 	node.flags = flags & ~Flag.AsyncMask
 	node.throwable = null
 	const prev = node.value

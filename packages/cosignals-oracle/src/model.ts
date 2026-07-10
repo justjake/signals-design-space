@@ -368,16 +368,24 @@ export function visible(host: VisibilityHost, e: WriteLogEntry, world: World): b
 			return true
 		case 'render': {
 			const w = world.render
-			if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true // clause 1: retired by my pin
+			if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) {
+				return true
+			} // clause 1: retired by my pin
 			return host.includedSet(w).has(e.slot) && e.seq <= w.pin // clause 2: included, up to my pin
 		}
 		case 'committed': {
-			if (e.retiredSeq !== undefined) return true // committed truth at now
+			if (e.retiredSeq !== undefined) {
+				return true
+			} // committed truth at now
 			return host.committedSlotsNow(world.root).has(e.slot) // membership
 		}
 		case 'mountFix': {
-			if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true // the render's own inclusions, at its pin
-			if (e.retiredSeq !== undefined) return true // committed truth at NOW
+			if (world.maskSlots.has(e.slot) && e.seq <= world.pin) {
+				return true
+			} // the render's own inclusions, at its pin
+			if (e.retiredSeq !== undefined) {
+				return true
+			} // committed truth at NOW
 			return host.committedSlotsNow(world.root).has(e.slot) // the root's CURRENT committed set
 		}
 	}
@@ -595,7 +603,9 @@ export class CosignalModel {
 		const out = new Set<BatchSlot>()
 		for (const t of this.root(rootId).committedBatches) {
 			const batch = this.idToBatch.get(t)
-			if (batch !== undefined && batch.slot !== undefined) out.add(batch.slot)
+			if (batch !== undefined && batch.slot !== undefined) {
+				out.add(batch.slot)
+			}
 		}
 		return out
 	}
@@ -640,11 +650,15 @@ export class CosignalModel {
 		let value = atom.base
 		for (const e of atom.log) {
 			// write log is in seq order by construction
-			if (!this.visible(e, world)) continue
+			if (!this.visible(e, world)) {
+				continue
+			}
 			const next = this.applyOp(atom, e.op, value)
 			// R-2 order: isEqual(current, incoming) — per replayed entry (folds
 			// re-invoke per entry BY DESIGN; "once" is the acceptance decision).
-			if (!this.inCallback(() => atom.equals(value, next))) value = next
+			if (!this.inCallback(() => atom.equals(value, next))) {
+				value = next
+			}
 		}
 		return value
 	}
@@ -653,14 +667,20 @@ export class CosignalModel {
 	shadowFoldAtom(atom: AtomNode, world: World): Value {
 		let value = atom.origin
 		for (const e of [...atom.archive, ...atom.log]) {
-			if (e.retiredSeq === undefined && !this.visible(e, world)) continue
+			if (e.retiredSeq === undefined && !this.visible(e, world)) {
+				continue
+			}
 			// Archived (compacted) entries are visible to every live world by the
 			// compaction rule (they retired at or below every live pin) — assert via visible() too.
-			if (!this.visible(e, world)) continue
+			if (!this.visible(e, world)) {
+				continue
+			}
 			const next = this.applyOp(atom, e.op, value)
 			// R-2 order: (current, incoming) — the shadow fold aligns in the same
 			// commit as foldAtom (a lag breaks retention for asymmetric comparators).
-			if (!this.inCallback(() => atom.equals(value, next))) value = next
+			if (!this.inCallback(() => atom.equals(value, next))) {
+				value = next
+			}
 		}
 		return value
 	}
@@ -675,16 +695,20 @@ export class CosignalModel {
 	 * a cycle within one world throws rather than looping.
 	 */
 	evaluate(node: AnyNode, world: World, stack?: Set<NodeId>): Value {
-		if (this.inFoldCallback)
+		if (this.inFoldCallback) {
 			throw new ScheduleError(
 				'signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching',
 			)
-		if (node.kind === 'atom') return this.foldAtom(node, world)
+		}
+		if (node.kind === 'atom') {
+			return this.foldAtom(node, world)
+		}
 		const seen = stack ?? new Set<NodeId>()
-		if (seen.has(node.id))
+		if (seen.has(node.id)) {
 			throw new ScheduleError(
 				`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`,
 			)
+		}
 		seen.add(node.id)
 		this.evalDepth++
 		try {
@@ -723,12 +747,20 @@ export class CosignalModel {
 	private refreshEdgesAllWorlds(): void {
 		const worlds: World[] = [{ kind: 'newest' }]
 		for (const p of this.idToRenderPass.values()) {
-			if (p.state !== 'ended') worlds.push({ kind: 'render', render: p })
+			if (p.state !== 'ended') {
+				worlds.push({ kind: 'render', render: p })
+			}
 		}
-		for (const r of this.roots.keys()) worlds.push({ kind: 'committed', root: r })
+		for (const r of this.roots.keys()) {
+			worlds.push({ kind: 'committed', root: r })
+		}
 		for (const n of this.idToNode.values()) {
-			if (n.kind !== 'computed') continue
-			for (const w of worlds) this.evaluate(n, w)
+			if (n.kind !== 'computed') {
+				continue
+			}
+			for (const w of worlds) {
+				this.evaluate(n, w)
+			}
 		}
 	}
 
@@ -756,7 +788,9 @@ export class CosignalModel {
 
 	livePins(): number[] {
 		const pins: number[] = []
-		for (const p of this.idToRenderPass.values()) if (p.state !== 'ended') pins.push(p.pin)
+		for (const p of this.idToRenderPass.values()) {
+			if (p.state !== 'ended') pins.push(p.pin)
+		}
 		return pins
 	}
 
@@ -791,7 +825,9 @@ export class CosignalModel {
 	 * two implementations stay unshared by design). */
 	private mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
 		const v = map.get(id)
-		if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`)
+		if (v === undefined) {
+			throw new ScheduleError(`unknown ${what} ${id}`)
+		}
 		return v
 	}
 
@@ -813,7 +849,9 @@ export class CosignalModel {
 	 * episode reset.
 	 */
 	private internSlot(batch: Batch): BatchSlotMeta {
-		if (batch.slot !== undefined) return this.slots[batch.slot]!
+		if (batch.slot !== undefined) {
+			return this.slots[batch.slot]!
+		}
 		let free = this.slots.find((s) => s.tenant === undefined)
 		if (free === undefined) {
 			// Backstop: all 31 slots held ⇒ release the oldest retired-but-mask-retained slot anyway, loudly.
@@ -839,7 +877,9 @@ export class CosignalModel {
 		free.writeClock = 0
 		free.releasePending = false
 		batch.slot = free.id
-		for (const w of this.watchers.values()) w.dedup.delete(free.id) // dedup bits clear at re-intern (stale bits must not suppress the new tenant)
+		for (const w of this.watchers.values()) {
+			w.dedup.delete(free.id)
+		} // dedup bits clear at re-intern (stale bits must not suppress the new tenant)
 		this.log({ type: 'slot-claimed', slot: free.id, batch: batch.id })
 		return free
 	}
@@ -863,10 +903,16 @@ export class CosignalModel {
 	 * While quiet, a bare write is one direct fold — see quietWrite.
 	 */
 	private quietNow(): boolean {
-		if (this.liveBatches().length > 0) return false
-		if (this.livePins().length > 0) return false
+		if (this.liveBatches().length > 0) {
+			return false
+		}
+		if (this.livePins().length > 0) {
+			return false
+		}
 		for (const n of this.idToNode.values()) {
-			if (n.kind === 'atom' && n.log.length > 0) return false
+			if (n.kind === 'atom' && n.log.length > 0) {
+				return false
+			}
 		}
 		return true
 	}
@@ -890,14 +936,16 @@ export class CosignalModel {
 	 * archived retired history resolves visibility through retiredSeq alone.
 	 */
 	private quietWrite(node: AtomNode, op: Op): void {
-		if (this.evalDepth > 0)
+		if (this.evalDepth > 0) {
 			throw new ScheduleError(
 				'signal write during a world evaluation / render — write from an event handler or effect instead',
 			)
-		if (this.inFoldCallback)
+		}
+		if (this.inFoldCallback) {
 			throw new ScheduleError(
 				'signal write inside an updater/reducer fold — updaters and reducers must be pure',
 			)
+		}
 		const prev = node.base
 		const next = this.applyOp(node, op, prev)
 		if (this.inCallback(() => node.equals(prev, next))) {
@@ -931,7 +979,9 @@ export class CosignalModel {
 	 */
 	private reconcileWatchersToCommitted(): void {
 		for (const w of this.watchers.values()) {
-			if (!w.live) continue
+			if (!w.live) {
+				continue
+			}
 			const rec = this.refreshCommitted(w.root, this.nodeById(w.node))
 			if (rec.counter !== w.lastSeen) {
 				w.lastSeen = rec.counter // the urgent correction validates
@@ -958,8 +1008,9 @@ export class CosignalModel {
 			this.quietBoundaryActive ||
 			this.coreFlushDepth !== 0 ||
 			this.activeReactEffect !== undefined
-		)
+		) {
 			return
+		}
 		this.quietBoundaryActive = true
 		try {
 			let guard = 0
@@ -1009,24 +1060,29 @@ export class CosignalModel {
 	 * context-free arm — quiet fold, else the ambient batch).
 	 */
 	write(batchId: BatchId | undefined, node: AtomNode, op: Op): void {
-		if (this.evalDepth > 0)
+		if (this.evalDepth > 0) {
 			throw new ScheduleError(
 				'signal write during a world evaluation / render — write from an event handler or effect instead',
 			)
-		if (this.inFoldCallback)
+		}
+		if (this.inFoldCallback) {
 			throw new ScheduleError(
 				'signal write inside an updater/reducer fold — updaters and reducers must be pure',
 			)
-		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms')
+		}
+		if (node.kind !== 'atom') {
+			throw new ScheduleError('writes target atoms')
+		}
 		if (batchId === undefined) {
 			this.bareWrite(node, op)
 			return
 		}
 		const batch = this.batchById(batchId)
-		if (batch.state !== 'live')
+		if (batch.state !== 'live') {
 			throw new ScheduleError(
 				`write into retired batch ${batchId} — a retired batch accepts no new writes`,
 			)
+		}
 
 		// Drop check — the ONLY legal equality drop: empty write log AND the op
 		// evaluates equal against the base. With pending history present, a
@@ -1061,9 +1117,13 @@ export class CosignalModel {
 		// kernel apply (which runs kernel effects) precedes the arena walk.
 		this.refreshEdgesAllWorlds()
 		const reached = this.reachableFrom(node.id)
-		if (advancesNewest) this.flushCoreEffects(reached)
+		if (advancesNewest) {
+			this.flushCoreEffects(reached)
+		}
 		for (const w of this.watchers.values()) {
-			if (!w.live || !reached.has(w.node)) continue
+			if (!w.live || !reached.has(w.node)) {
+				continue
+			}
 			this.deliver(w, batch, slot, seq)
 		}
 	}
@@ -1096,8 +1156,12 @@ export class CosignalModel {
 		// a render has already read past the write and will not fold it.
 		let mustDeliver = false
 		for (const p of this.idToRenderPass.values()) {
-			if (p.state === 'ended') continue // "open" includes yielded and completed-but-uncommitted
-			if (p.root !== w.root) continue
+			if (p.state === 'ended') {
+				continue
+			} // "open" includes yielded and completed-but-uncommitted
+			if (p.root !== w.root) {
+				continue
+			}
 			if (p.maskSlots.has(slot.id) && p.pin < seq) {
 				mustDeliver = true
 				break
@@ -1134,7 +1198,9 @@ export class CosignalModel {
 		this.coreFlushDepth++
 		try {
 			for (const e of this.coreEffects.values()) {
-				if (reached !== undefined && !reached.has(e.node)) continue
+				if (reached !== undefined && !reached.has(e.node)) {
+					continue
+				}
 				const value = this.newestValue(this.nodeById(e.node))
 				if (!Object.is(value, e.lastValue)) {
 					e.lastValue = value
@@ -1179,15 +1245,18 @@ export class CosignalModel {
 		const maskSlots = new Set<BatchSlot>()
 		for (const id of includeBatches) {
 			const t = this.batchById(id)
-			if (t.state !== 'live')
+			if (t.state !== 'live') {
 				throw new ScheduleError(
 					'mask captures live batches only — a retired batch is already permanent history',
 				)
+			}
 			maskBatches.add(id)
 			// A live batch with no slot never wrote; its later log entries postdate the
 			// pin and are excluded by the pin cap anyway (claims are sequenced, so
 			// any future slot's writes sit above this render's pin).
-			if (t.slot !== undefined) maskSlots.add(t.slot)
+			if (t.slot !== undefined) {
+				maskSlots.add(t.slot)
+			}
 		}
 		const render: RenderPass = {
 			id: this.nextRenderPassId++,
@@ -1217,20 +1286,26 @@ export class CosignalModel {
 	 */
 	renderYield(id: RenderPassId): void {
 		const p = this.renderPassById(id)
-		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) render')
+		if (p.state !== 'open') {
+			throw new ScheduleError('yield requires an open (running) render')
+		}
 		p.state = 'yielded'
 	}
 
 	renderResume(id: RenderPassId): void {
 		const p = this.renderPassById(id)
-		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded render')
+		if (p.state !== 'yielded') {
+			throw new ScheduleError('resume requires a yielded render')
+		}
 		p.state = 'open'
 	}
 
 	/** Mount a new watcher inside an open render; its first render reads the render's world. */
 	mountWatcher(renderPassId: RenderPassId, node: AnyNode, name: string): Watcher {
 		const p = this.renderPassById(renderPassId)
-		if (p.state === 'ended') throw new ScheduleError('mount requires an open render')
+		if (p.state === 'ended') {
+			throw new ScheduleError('mount requires an open render')
+		}
 		const value = this.evaluate(node, { kind: 'render', render: p })
 		const watcher: Watcher = {
 			id: this.nextWatcher++,
@@ -1268,18 +1343,26 @@ export class CosignalModel {
 	deferMountEffects(watcherId: WatcherId): void {
 		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId)
-			if (i >= 0) p.mounted.splice(i, 1)
+			if (i >= 0) {
+				p.mounted.splice(i, 1)
+			}
 		}
 	}
 
 	adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const adopter = this.renderPassById(renderPassId)
-		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open')
+		if (adopter.state === 'ended') {
+			throw new ScheduleError('adopting render must be open')
+		}
 		const w = this.mustGet(this.watchers, watcherId, 'watcher')
-		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root')
+		if (w.root !== adopter.root) {
+			throw new ScheduleError('reveal stays on the watcher root')
+		}
 		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId)
-			if (i >= 0) p.mounted.splice(i, 1)
+			if (i >= 0) {
+				p.mounted.splice(i, 1)
+			}
 		}
 		adopter.mounted.push(watcherId)
 	}
@@ -1287,10 +1370,16 @@ export class CosignalModel {
 	/** An existing live watcher re-rendered by a render: its dedup bits re-arm at render. */
 	renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const p = this.renderPassById(renderPassId)
-		if (p.state === 'ended') throw new ScheduleError('render requires an open render')
+		if (p.state === 'ended') {
+			throw new ScheduleError('render requires an open render')
+		}
 		const w = this.watchers.get(watcherId)
-		if (w === undefined || !w.live) throw new ScheduleError('render targets a live watcher')
-		if (w.root !== p.root) throw new ScheduleError('watcher belongs to another root')
+		if (w === undefined || !w.live) {
+			throw new ScheduleError('render targets a live watcher')
+		}
+		if (w.root !== p.root) {
+			throw new ScheduleError('watcher belongs to another root')
+		}
 		w.dedup.clear()
 		p.rendered.add(watcherId)
 	}
@@ -1392,10 +1481,11 @@ export class CosignalModel {
 		// TRACE-ONLY — the terminal's dependency links stay clean (no spurious
 		// re-fire), and the bug-2 body-write semantics are refereed on the
 		// normal re-fire path (writeTap), not replay. See the final report.
-		if (e.writes)
+		if (e.writes) {
 			throw new ScheduleError(
 				'writing terminals are not force-replayable in the referee (test-surface replay pollutes the trace-only values snapshot; scoped out)',
 			)
+		}
 		for (const p of this.idToRenderPass.values()) {
 			if (p.state !== 'ended' && p.root === e.root) {
 				throw new ScheduleError('replay requires the effect root to have no open render frame')
@@ -1461,7 +1551,9 @@ export class CosignalModel {
 	 */
 	private revalidateReactEffects(rootFilter?: RootId): void {
 		for (const e of [...this.reactEffects.values()]) {
-			if (rootFilter !== undefined && e.root !== rootFilter) continue
+			if (rootFilter !== undefined && e.root !== rootFilter) {
+				continue
+			}
 			let open = false
 			for (const p of this.idToRenderPass.values()) {
 				if (p.state !== 'ended' && p.root === e.root) {
@@ -1469,7 +1561,9 @@ export class CosignalModel {
 					break
 				}
 			}
-			if (open) continue // deferred to the frame's close
+			if (open) {
+				continue
+			} // deferred to the frame's close
 			let changed = false
 			for (const d of e.deps) {
 				// At-least-once [sanctioned co-evolution]: re-fire iff the
@@ -1478,13 +1572,17 @@ export class CosignalModel {
 				// conveyed, never gated (the engine mirror skips a
 				// still-pending suspension without touching its stamp).
 				const rec = this.refreshCommitted(e.root, d.node)
-				if (rec.threw) continue
+				if (rec.threw) {
+					continue
+				}
 				if (rec.counter !== d.lastSeen) {
 					changed = true
 					break
 				}
 			}
-			if (changed) this.runReactEffect(e)
+			if (changed) {
+				this.runReactEffect(e)
+			}
 		}
 	}
 
@@ -1500,7 +1598,9 @@ export class CosignalModel {
 			lastValue: this.newestValue(node),
 			runs: 0,
 		}
-		if (writeTo !== undefined) e.writeTo = writeTo
+		if (writeTo !== undefined) {
+			e.writeTo = writeTo
+		}
 		this.coreEffects.set(e.id, e)
 		return e
 	}
@@ -1521,7 +1621,9 @@ export class CosignalModel {
 		opts?: { retireAtCommit?: BatchId[] },
 	): void {
 		const render = this.renderPassById(id)
-		if (render.state === 'ended') throw new ScheduleError('render already ended')
+		if (render.state === 'ended') {
+			throw new ScheduleError('render already ended')
+		}
 		if (kind === 'commit') {
 			for (const tid of opts?.retireAtCommit ?? []) {
 				const t = this.batchById(tid) // throws on unknown ids before any mutation
@@ -1540,7 +1642,9 @@ export class CosignalModel {
 		render.state = 'ended'
 		render.endKind = kind
 		if (kind === 'discard') {
-			for (const wid of render.mounted) this.watchers.delete(wid) // never subscribed; the tree died
+			for (const wid of render.mounted) {
+				this.watchers.delete(wid)
+			} // never subscribed; the tree died
 			this.log({ type: 'render-discarded', renderPass: render.id, root: render.root })
 			this.reevaluateDeferredReleases()
 			// EF2: the frame close is the deferred flush point for boundaries
@@ -1566,7 +1670,9 @@ export class CosignalModel {
 		// committed-truth reconciliation checks against.
 		for (const wid of render.rendered) {
 			const w = this.watchers.get(wid)
-			if (w === undefined) continue // removed mid-render
+			if (w === undefined) {
+				continue
+			} // removed mid-render
 			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'render', render })
 			w.snapshot = {
 				renderPassId: render.id,
@@ -1583,10 +1689,14 @@ export class CosignalModel {
 		// another render's commit — folding it here would land AFTER this
 		// commit's baseline capture and silently break the mount fast path's
 		// accounting (see tests/FLAGS.md, the legality rule under flag 5).
-		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.batchById(tid))
+		for (const tid of opts?.retireAtCommit ?? []) {
+			this.retireInternal(this.batchById(tid))
+		}
 		for (const tid of render.maskBatches) {
 			const t = this.batchById(tid)
-			if (t.state !== 'live') continue // fully retired above (or earlier): the retired clause subsumes membership
+			if (t.state !== 'live') {
+				continue
+			} // fully retired above (or earlier): the retired clause subsumes membership
 			const root = this.root(render.root)
 			if (!root.committedBatches.has(tid)) {
 				root.committedBatches.add(tid)
@@ -1600,7 +1710,9 @@ export class CosignalModel {
 		// (4) Layout: newly mounted watchers subscribe, then reconcile — before paint.
 		for (const wid of render.mounted) {
 			const w = this.watchers.get(wid)
-			if (w === undefined) continue
+			if (w === undefined) {
+				continue
+			}
 			w.live = true
 			this.mountFixup(w, render, baseline)
 		}
@@ -1617,8 +1729,12 @@ export class CosignalModel {
 		// commit-integrity check the ruling's survivor clause keeps.
 		for (const wid of [...render.rendered, ...render.mounted]) {
 			const w = this.watchers.get(wid)
-			if (w === undefined || !w.live) continue
-			if (w.snapshot.renderPassId !== render.id) continue // adopted reveal: population keeps its own timing
+			if (w === undefined || !w.live) {
+				continue
+			}
+			if (w.snapshot.renderPassId !== render.id) {
+				continue
+			} // adopted reveal: population keeps its own timing
 			const rec = this.refreshCommitted(render.root, this.nodeById(w.node))
 			w.lastSeen = Object.is(rec.v, w.lastRenderedValue) ? rec.counter : 0
 		}
@@ -1636,8 +1752,12 @@ export class CosignalModel {
 	/** A deferred slot release re-evaluates at every render end, commit and discard alike. */
 	private reevaluateDeferredReleases(): void {
 		for (const s of this.slots) {
-			if (!s.releasePending) continue
-			if (!this.slotRetainedByOpenMask(s.id)) this.releaseSlot(s)
+			if (!s.releasePending) {
+				continue
+			}
+			if (!this.slotRetainedByOpenMask(s.id)) {
+				this.releaseSlot(s)
+			}
 		}
 		// A render ending releases its pin, which can unblock pin-gated compaction.
 		this.compactAll()
@@ -1645,7 +1765,9 @@ export class CosignalModel {
 
 	private slotRetainedByOpenMask(slot: BatchSlot): boolean {
 		for (const p of this.idToRenderPass.values()) {
-			if (p.state !== 'ended' && p.maskSlots.has(slot)) return true
+			if (p.state !== 'ended' && p.maskSlots.has(slot)) {
+				return true
+			}
 		}
 		return false
 	}
@@ -1655,8 +1777,12 @@ export class CosignalModel {
 	/** Retirement fires exactly once per batch; parked action batches retire only at settlement. */
 	retire(batchId: BatchId): void {
 		const t = this.batchById(batchId)
-		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per batch')
-		if (t.parked) throw new ScheduleError('parked action batches retire only at settlement')
+		if (t.state === 'retired') {
+			throw new ScheduleError('retirement fires exactly once per batch')
+		}
+		if (t.parked) {
+			throw new ScheduleError('parked action batches retire only at settlement')
+		}
 		this.retireInternal(t)
 		// EF2 boundary: retirement is a guaranteed flush point for every root
 		// (a write-free retirement still flushes pending member-write flips).
@@ -1666,8 +1792,12 @@ export class CosignalModel {
 	/** The async action's thenable settles; the host then retires the batch. */
 	settleAction(batchId: BatchId): void {
 		const t = this.batchById(batchId)
-		if (!t.action) throw new ScheduleError('settle targets an action batch')
-		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled')
+		if (!t.action) {
+			throw new ScheduleError('settle targets an action batch')
+		}
+		if (!t.parked || t.state !== 'live') {
+			throw new ScheduleError('action already settled')
+		}
 		t.parked = false
 		this.retireInternal(t)
 		this.revalidateReactEffects() // EF2 boundary: settlement is a guaranteed flush point
@@ -1693,7 +1823,9 @@ export class CosignalModel {
 		batch.retiredSeq = retiredSeq
 		const touched: AtomNode[] = []
 		for (const n of this.idToNode.values()) {
-			if (n.kind !== 'atom') continue
+			if (n.kind !== 'atom') {
+				continue
+			}
 			let hit = false
 			for (const e of n.log) {
 				if (e.batch === batch.id) {
@@ -1701,11 +1833,17 @@ export class CosignalModel {
 					hit = true
 				}
 			}
-			if (hit) touched.push(n)
+			if (hit) {
+				touched.push(n)
+			}
 		}
 		// Create the retirement stamp per touched atom; advance the committed counter.
-		for (const n of touched) n.retirementStamp = retiredSeq
-		if (touched.length > 0) this.committedAdvance = this.nextSeq()
+		for (const n of touched) {
+			n.retirementStamp = retiredSeq
+		}
+		if (touched.length > 0) {
+			this.committedAdvance = this.nextSeq()
+		}
 		// Fold/compaction. Naive form: try every atom — a retirement can
 		// unblock compactable prefixes anywhere.
 		this.compactAll()
@@ -1714,11 +1852,15 @@ export class CosignalModel {
 		// against it. The engine enumerates only the observers the slot
 		// touched; the naive model checks every observer — corrections are
 		// value-gated, so the fired set is identical (touched ⊇ changed).
-		for (const rootId of this.roots.keys()) this.drainCommittedObservers(rootId, 'retirement')
+		for (const rootId of this.roots.keys()) {
+			this.drainCommittedObservers(rootId, 'retirement')
+		}
 		// Clear per-root committed-table rows (the retired-history rule now
 		// subsumes membership), THEN release the slot unless an open render
 		// mask names it — this order is what keeps recycled slots honest.
-		for (const r of this.roots.values()) r.committedBatches.delete(batch.id)
+		for (const r of this.roots.values()) {
+			r.committedBatches.delete(batch.id)
+		}
 		if (batch.slot !== undefined) {
 			const slot = this.slots[batch.slot]!
 			if (this.slotRetainedByOpenMask(slot.id)) {
@@ -1727,7 +1869,9 @@ export class CosignalModel {
 				this.releaseSlot(slot)
 			}
 		}
-		if (this.ambientBatch === batch.id) this.ambientBatch = undefined
+		if (this.ambientBatch === batch.id) {
+			this.ambientBatch = undefined
+		}
 	}
 
 	/**
@@ -1740,7 +1884,9 @@ export class CosignalModel {
 	 */
 	private compactAll(): void {
 		for (const n of this.idToNode.values()) {
-			if (n.kind === 'atom') this.compactAtom(n)
+			if (n.kind === 'atom') {
+				this.compactAtom(n)
+			}
 		}
 	}
 
@@ -1748,16 +1894,24 @@ export class CosignalModel {
 		const minPin = this.minLivePin()
 		let cut = 0
 		for (const e of atom.log) {
-			if (e.retiredSeq === undefined) break // prefix clause: an unretired earlier entry blocks everything after it
-			if (e.retiredSeq > minPin) break // pin clause: every live pin must already see e via the retired clause
+			if (e.retiredSeq === undefined) {
+				break
+			} // prefix clause: an unretired earlier entry blocks everything after it
+			if (e.retiredSeq > minPin) {
+				break
+			} // pin clause: every live pin must already see e via the retired clause
 			cut++
 		}
-		if (cut === 0) return
+		if (cut === 0) {
+			return
+		}
 		const folded = atom.log.slice(0, cut)
 		for (const e of folded) {
 			const next = this.applyOp(atom, e.op, atom.base)
 			// R-2 order: (current, incoming) — per compacted entry BY DESIGN.
-			if (!this.inCallback(() => atom.equals(atom.base, next))) atom.base = next
+			if (!this.inCallback(() => atom.equals(atom.base, next))) {
+				atom.base = next
+			}
 			atom.baseSeq = e.seq
 			atom.archive.push(e)
 		}
@@ -1777,7 +1931,9 @@ export class CosignalModel {
 	 */
 	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		for (const w of this.watchers.values()) {
-			if (!w.live || w.root !== rootId) continue
+			if (!w.live || w.root !== rootId) {
+				continue
+			}
 			const rec = this.refreshCommitted(rootId, this.nodeById(w.node))
 			// The correction gate [sanctioned co-evolution — at-least-once]:
 			// counter movement since the watcher's last validation corrects,
@@ -1852,13 +2008,19 @@ export class CosignalModel {
 		// no condition observes that write, and this schedule is what carries
 		// it to the watcher, in the batch's own lane.
 		for (const t of this.idToBatch.values()) {
-			if (t.state !== 'live' || t.slot === undefined) continue
-			if (!this.batchTouches(t, closure)) continue
+			if (t.state !== 'live' || t.slot === undefined) {
+				continue
+			}
+			if (!this.batchTouches(t, closure)) {
+				continue
+			}
 			const slot = this.slots[t.slot]!
 			// Fully included (slot in the render's included set AND no post-pin
 			// write in it): the render already folded everything — skip. The skip
 			// is by inclusion + clocks, never by comparing values.
-			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) continue
+			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) {
+				continue
+			}
 			this.log({ type: 'mount-corrective', watcher: w.name, batch: t.id, slot: slot.id })
 			w.dedup.add(slot.id) // the corrective is a re-render scheduled into t's own lane
 		}
@@ -1892,7 +2054,9 @@ export class CosignalModel {
 			baseline.committedAdvance <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet
-		if (fastOut) return // the window was quiet: no evaluation, no comparison
+		if (fastOut) {
+			return
+		} // the window was quiet: no evaluation, no comparison
 		const vFx = this.evaluate(node, {
 			kind: 'mountFix',
 			maskSlots: w.snapshot.maskSlots,
@@ -1918,7 +2082,9 @@ export class CosignalModel {
 		while (grew) {
 			grew = false
 			for (const [dep, outs] of this.episodeEdges) {
-				if (closure.has(dep)) continue
+				if (closure.has(dep)) {
+					continue
+				}
 				for (const out of outs) {
 					if (closure.has(out)) {
 						closure.add(dep)
@@ -1933,8 +2099,12 @@ export class CosignalModel {
 
 	private batchTouches(t: Batch, closure: Set<NodeId>): boolean {
 		for (const n of this.idToNode.values()) {
-			if (n.kind !== 'atom' || !closure.has(n.id)) continue
-			for (const e of n.log) if (e.batch === t.id) return true
+			if (n.kind !== 'atom' || !closure.has(n.id)) {
+				continue
+			}
+			for (const e of n.log) {
+				if (e.batch === t.id) return true
+			}
 		}
 		return false
 	}
@@ -1944,7 +2114,9 @@ export class CosignalModel {
 	/** Synchronously abandons every work-in-progress render on every root (a host capability). */
 	discardAllWip(): void {
 		for (const p of this.idToRenderPass.values()) {
-			if (p.state !== 'ended') this.renderEnd(p.id, 'discard')
+			if (p.state !== 'ended') {
+				this.renderEnd(p.id, 'discard')
+			}
 		}
 	}
 
@@ -1976,8 +2148,9 @@ export class CosignalModel {
 	 * scratch at every write, which is the refreshed state by construction.
 	 */
 	quiesce(): void {
-		if (!this.quiescent())
+		if (!this.quiescent()) {
 			throw new ScheduleError('quiescence requires no live batches, pins, or parked actions')
+		}
 		// Residue check: with no live pins, the last retirement compacted every write log.
 		for (const n of this.idToNode.values()) {
 			if (n.kind === 'atom' && n.log.length > 0) {
@@ -1993,13 +2166,19 @@ export class CosignalModel {
 		// may validate anything in a live one. Id counters stay monotone
 		// across episodes.
 		for (const [id, p] of this.idToRenderPass) {
-			if (p.state === 'ended') this.idToRenderPass.delete(id)
+			if (p.state === 'ended') {
+				this.idToRenderPass.delete(id)
+			}
 		}
 		for (const [id, t] of this.idToBatch) {
-			if (t.state === 'retired') this.idToBatch.delete(id)
+			if (t.state === 'retired') {
+				this.idToBatch.delete(id)
+			}
 		}
 		for (const n of this.idToNode.values()) {
-			if (n.kind !== 'atom') continue
+			if (n.kind !== 'atom') {
+				continue
+			}
 			// The archive belongs to the dead episode; it exists only for the
 			// retention invariant, whose comparisons are per-episode. Clear it.
 			n.archive = []
@@ -2011,7 +2190,9 @@ export class CosignalModel {
 			s.claimSeq = 0
 			s.releasePending = false
 		}
-		for (const w of this.watchers.values()) w.dedup.clear()
+		for (const w of this.watchers.values()) {
+			w.dedup.clear()
+		}
 		this.log({ type: 'epoch-reset', epoch: this.epoch })
 	}
 
@@ -2030,7 +2211,9 @@ export class CosignalModel {
 	 * cache [ruling 2026-07-06: untracked sampling] — see
 	 * `ComputedNode.newestSample`. */
 	newestValue(node: AnyNode): Value {
-		if (node.kind === 'atom') return this.evaluate(node, { kind: 'newest' })
+		if (node.kind === 'atom') {
+			return this.evaluate(node, { kind: 'newest' })
+		}
 		return this.sampledNewest(node)
 	}
 
@@ -2055,12 +2238,15 @@ export class CosignalModel {
 					break
 				}
 			}
-			if (valid) return cached.value
+			if (valid) {
+				return cached.value
+			}
 		}
-		if (this.inFoldCallback)
+		if (this.inFoldCallback) {
 			throw new ScheduleError(
 				'signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching',
 			)
+		}
 		if (node.sampling === true) {
 			throw new ScheduleError(
 				`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`,

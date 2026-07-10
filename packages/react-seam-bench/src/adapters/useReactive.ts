@@ -53,7 +53,9 @@ export function makeCells(
 	writeMany(updates: Array<[number, number]>): void
 } {
 	const cells: CallableCell[] = []
-	for (let i = 0; i < n; i++) cells.push(lib.signal(0))
+	for (let i = 0; i < n; i++) {
+		cells.push(lib.signal(0))
+	}
 	return {
 		cells,
 		writeCell(i: number, v: number): void {
@@ -61,7 +63,9 @@ export function makeCells(
 		},
 		writeMany(updates: Array<[number, number]>): void {
 			lib.startBatch()
-			for (const [i, v] of updates) cells[i](v)
+			for (const [i, v] of updates) {
+				cells[i](v)
+			}
 			lib.endBatch()
 		},
 	}

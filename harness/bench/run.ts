@@ -72,9 +72,13 @@ async function bundleChildForFrameworks(
 				name: 'stub-unrequested-adapters',
 				setup(b) {
 					b.onResolve({ filter: /^\.\/[^/]+$/ }, (args) => {
-						if (args.importer !== adaptersIndex) return null
+						if (args.importer !== adaptersIndex) {
+							return null
+						}
 						const name = args.path.slice('./'.length)
-						if (name === 'types' || keep.has(name)) return null
+						if (name === 'types' || keep.has(name)) {
+							return null
+						}
 						return { path: name, namespace: 'adapter-stub' }
 					})
 					b.onLoad({ filter: /.*/, namespace: 'adapter-stub' }, (args) => ({

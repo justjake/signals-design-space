@@ -24,7 +24,9 @@ function UrgentInput() {
 	useEffect(() => {
 		urgentSetter = setV
 		return () => {
-			if (urgentSetter === setV) urgentSetter = null
+			if (urgentSetter === setV) {
+				urgentSetter = null
+			}
 		}
 	}, [])
 	return <output id="urgent">{v}</output>
@@ -44,7 +46,9 @@ const transition: Scenario = {
 		await drain()
 
 		const updates: Array<[number, number]> = []
-		for (let i = 0; i < N; i++) updates.push([i, 1])
+		for (let i = 0; i < N; i++) {
+			updates.push([i, 1])
+		}
 
 		const latencies: number[] = []
 		const tStart = performance.now()
@@ -53,9 +57,13 @@ const transition: Scenario = {
 			// The first urgent update fires immediately so it contends with
 			// however the contender scheduled the bulk re-render; the rest
 			// pace at roughly one per frame.
-			if (k > 1) await sleep(URGENT_INTERVAL_MS)
+			if (k > 1) {
+				await sleep(URGENT_INTERVAL_MS)
+			}
 			const set = urgentSetter
-			if (set === null) throw new Error('transition: urgent input is not mounted')
+			if (set === null) {
+				throw new Error('transition: urgent input is not mounted')
+			}
 			const t0 = performance.now()
 			set(k)
 			await until(() => readUrgent() === String(k), `urgent update ${k}`)

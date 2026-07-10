@@ -50,12 +50,16 @@ if (SHAPE === 'chain3') {
 let i = 0
 function repOnce() {
 	const t0 = process.hrtime.bigint()
-	for (let k = 0; k < WRITES; k++) a.set(++i)
+	for (let k = 0; k < WRITES; k++) {
+		a.set(++i)
+	}
 	const t1 = process.hrtime.bigint()
 	return Number(t1 - t0)
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const perWrite = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

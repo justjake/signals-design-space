@@ -50,8 +50,11 @@ function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine(options)
 	return engine
@@ -141,8 +144,9 @@ describe('1. KERNEL (index.ts arena)', () => {
 			gate.set(i % 2 === 0)
 			void c.state // re-track: one link unlinks (freed), its replacement allocates
 			const memory = E.buffer()
-			for (let l = memory[cid + NodeField.DEPS]!; l !== 0; l = memory[l + LinkField.NEXT_DEP]!)
+			for (let l = memory[cid + NodeField.DEPS]!; l !== 0; l = memory[l + LinkField.NEXT_DEP]!) {
 				linkIds.add(l)
+			}
 		}
 		expect(linkIds.size).toBeLessThanOrEqual(6) // the flip cycles the same few records, not 400 fresh ones
 	})
@@ -210,7 +214,9 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 			const c = new Computed(() => (at.state as number) * 2 + i)
 			const node = b.internalsForComputed(c as unknown as Computed<unknown>) // useComputed: adopt…
 			expect(b.committedValue(node, 'R')).toBe(2 + i) // …evaluate in the live committed arena (serves correctly through reuse)…
-			if (i % 64 === 0) commitWrite(b, other, i) // …with committed-truth flips + the armed check interleaved
+			if (i % 64 === 0) {
+				commitWrite(b, other, i)
+			} // …with committed-truth flips + the armed check interleaved
 			b.disposeComputed(c as unknown as Computed<unknown>) // …then the deps-change disposal
 		}
 		// Pre-fix signature: shell.next === next0 + 8 * N (one dead 8-int record
@@ -237,7 +243,9 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 			try {
 				return __TEST__ctxUse(c.ix, 'k', () => gate.promise)
 			} catch (err) {
-				if (err instanceof SuspendedRead) return err // background fold (battery 16d)
+				if (err instanceof SuspendedRead) {
+					return err
+				} // background fold (battery 16d)
 				throw err
 			}
 		})
@@ -262,7 +270,9 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 			try {
 				return __TEST__ctxUse(c.ix, 'k', () => gate.promise)
 			} catch (err) {
-				if (err instanceof SuspendedRead) return err
+				if (err instanceof SuspendedRead) {
+					return err
+				}
 				throw err
 			}
 		})
@@ -388,13 +398,17 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 			try {
 				return __TEST__ctxUse(c.ix, `k${v}`, () => gates[v]!.promise)
 			} catch (err) {
-				if (err instanceof SuspendedRead) return err
+				if (err instanceof SuspendedRead) {
+					return err
+				}
 				throw err
 			}
 		})
 		mount(b, 'R', c, 'W')
 		for (let v = 0; v < 20; v++) {
-			if (v > 0) commitWrite(b, version, v)
+			if (v > 0) {
+				commitWrite(b, version, v)
+			}
 			expect(b.__TEST__arenaStats().suspended).toBe(1)
 			gates[v]!.resolve(`d${v}`)
 			await tick()

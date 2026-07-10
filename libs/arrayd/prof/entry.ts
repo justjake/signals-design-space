@@ -39,7 +39,9 @@ function buildBroad() {
 			startBatch()
 			head(i)
 			endBatch()
-			if (last() !== i + 50) throw new Error('broad wrong')
+			if (last() !== i + 50) {
+				throw new Error('broad wrong')
+			}
 		}
 	}
 }
@@ -61,7 +63,9 @@ function buildAvoidable() {
 			startBatch()
 			head(i)
 			endBatch()
-			if (c5() !== 6) throw new Error('avoidable wrong')
+			if (c5() !== 6) {
+				throw new Error('avoidable wrong')
+			}
 		}
 	}
 }
@@ -73,11 +77,15 @@ const dispose = effectScope(() => {
 })
 
 // warmup
-for (let i = 0; i < 100; i++) iter()
+for (let i = 0; i < 100; i++) {
+	iter()
+}
 
 const t0 = performance.now()
 const N = which === 'broad' ? 2000 : 1500
-for (let i = 0; i < N; i++) iter()
+for (let i = 0; i < N; i++) {
+	iter()
+}
 const t1 = performance.now()
 console.log(`${which} x${N}: ${(t1 - t0).toFixed(2)} ms`)
 dispose()

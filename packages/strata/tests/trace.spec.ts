@@ -18,7 +18,9 @@ describe('causality log', () => {
 		let latestEffect = 0
 		const events = log.events()
 		for (let i = 0; i < events.length; i++) {
-			if (events[i]!.kind === 'effect-run') latestEffect = events[i]!.id
+			if (events[i]!.kind === 'effect-run') {
+				latestEffect = events[i]!.id
+			}
 		}
 		const chain = log.causeChain(latestEffect)
 		expect(chain[0]?.kind).toBe('effect-run')
@@ -33,7 +35,9 @@ describe('causality log', () => {
 		const runtime = new Runtime()
 		const log = trace(runtime, 3)
 		const value = runtime.atom(0)
-		for (let i = 1; i <= 5; i++) value.set(i)
+		for (let i = 1; i <= 5; i++) {
+			value.set(i)
+		}
 		expect(log.events()).toHaveLength(3)
 		expect(log.overflow).toBe(2)
 		expect(log.events()[2]?.id).toBe(5)

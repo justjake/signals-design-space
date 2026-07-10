@@ -37,7 +37,9 @@ function deep(scale) {
 	const dispose = effect(() => {
 		seen = last()
 	})
-	for (let i = 0; i < waves; i++) src(i)
+	for (let i = 0; i < waves; i++) {
+		src(i)
+	}
 	dispose()
 	return seen
 }
@@ -57,8 +59,12 @@ function broad(scale) {
 			}),
 		)
 	}
-	for (let i = 0; i < waves; i++) src(i)
-	for (const d of disposers) d()
+	for (let i = 0; i < waves; i++) {
+		src(i)
+	}
+	for (const d of disposers) {
+		d()
+	}
 	return sink
 }
 
@@ -68,17 +74,23 @@ function diamond(scale) {
 	const waves = 1000 * scale
 	const src = signal(1)
 	const branches = []
-	for (let i = 0; i < F; i++) branches.push(computed(() => src() + i))
+	for (let i = 0; i < F; i++) {
+		branches.push(computed(() => src() + i))
+	}
 	const join = computed(() => {
 		let t = 0
-		for (const b of branches) t += b()
+		for (const b of branches) {
+			t += b()
+		}
 		return t
 	})
 	let seen = 0
 	const dispose = effect(() => {
 		seen = join()
 	})
-	for (let i = 0; i < waves; i++) src(i)
+	for (let i = 0; i < waves; i++) {
+		src(i)
+	}
 	dispose()
 	return seen
 }
@@ -96,8 +108,11 @@ function dynamic(scale) {
 	})
 	for (let i = 0; i < waves; i++) {
 		toggle(i % 2 === 0)
-		if (i % 2 === 0) x(i)
-		else y(i)
+		if (i % 2 === 0) {
+			x(i)
+		} else {
+			y(i)
+		}
 	}
 	dispose()
 	return seen
@@ -135,7 +150,9 @@ if (mode === 'bench') {
 			const t0 = performance.now()
 			checksum = shape(scale)
 			const ms = performance.now() - t0
-			if (ms < best) best = ms
+			if (ms < best) {
+				best = ms
+			}
 		}
 		console.log(
 			`@@ROW ${JSON.stringify({ lib: libName, shape: name, ms: +best.toFixed(2), checksum })}`,

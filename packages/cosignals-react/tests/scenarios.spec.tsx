@@ -76,7 +76,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 0 && gate.settled !== true) throw gate.promise
+			if (v > 0 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await h.mount(
@@ -108,7 +110,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 0 && gate.settled !== true) throw gate.promise
+			if (v > 0 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await h.mount(
@@ -161,7 +165,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('2,2;2,2;')
-		for (const [v1, v2] of observedPairs) expect(v1).toBe(v2) // no intra-render tear
+		for (const [v1, v2] of observedPairs) {
+			expect(v1).toBe(v2)
+		} // no intra-render tear
 	})
 
 	test('R6: mount mid-transition with suspending pending state (the KNOWN BUG — must pass)', async () => {
@@ -170,7 +176,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 0 && gate.settled !== true) throw gate.promise
+			if (v > 0 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		function App({ extra }: { extra: boolean }) {
@@ -409,7 +417,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v > 0 && gate.settled !== true) throw gate.promise
+			if (v > 0 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await h.mount(
@@ -442,7 +452,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useSignal(a)
-			if (v !== 10 && gate.settled !== true) throw gate.promise
+			if (v !== 10 && gate.settled !== true) {
+				throw gate.promise
+			}
 			return <span>s:{v};</span>
 		}
 		const { container } = await h.mount(

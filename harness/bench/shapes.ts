@@ -73,7 +73,9 @@ const deep: Shape = (a, scale) => {
 	const dispose = a.effect(() => {
 		seen = last.read()
 	})
-	for (let i = 0; i < waves; i++) src.write(i)
+	for (let i = 0; i < waves; i++) {
+		src.write(i)
+	}
 	dispose()
 	return seen
 }
@@ -93,8 +95,12 @@ const broad: Shape = (a, scale) => {
 			}),
 		)
 	}
-	for (let i = 0; i < waves; i++) src.write(i)
-	for (const d of disposers) d()
+	for (let i = 0; i < waves; i++) {
+		src.write(i)
+	}
+	for (const d of disposers) {
+		d()
+	}
 	return sink
 }
 
@@ -104,17 +110,23 @@ const diamond: Shape = (a, scale) => {
 	const waves = Math.round(1000 * scale)
 	const src = a.signal(1)
 	const branches: Array<{ read(): number }> = []
-	for (let i = 0; i < F; i++) branches.push(a.computed(() => src.read() + i))
+	for (let i = 0; i < F; i++) {
+		branches.push(a.computed(() => src.read() + i))
+	}
 	const join = a.computed(() => {
 		let t = 0
-		for (const b of branches) t += b.read()
+		for (const b of branches) {
+			t += b.read()
+		}
 		return t
 	})
 	let seen = 0
 	const dispose = a.effect(() => {
 		seen = join.read()
 	})
-	for (let i = 0; i < waves; i++) src.write(i)
+	for (let i = 0; i < waves; i++) {
+		src.write(i)
+	}
 	dispose()
 	return seen
 }
@@ -132,8 +144,11 @@ const dynamic: Shape = (a, scale) => {
 	})
 	for (let i = 0; i < waves; i++) {
 		toggle.write(i % 2 === 0)
-		if (i % 2 === 0) x.write(i)
-		else y.write(i)
+		if (i % 2 === 0) {
+			x.write(i)
+		} else {
+			y.write(i)
+		}
 	}
 	dispose()
 	return seen
@@ -160,7 +175,9 @@ const create: Shape = (a, scale) => {
 const write: Shape = (a, scale) => {
 	const N = Math.round(400_000 * scale)
 	const s = a.signal(0)
-	for (let i = 0; i < N; i++) s.write(i)
+	for (let i = 0; i < N; i++) {
+		s.write(i)
+	}
 	return s.read()
 }
 
@@ -178,9 +195,13 @@ const reads: Shape = (a, scale) => {
 	const l2 = l1.map((c, i) => a.computed(() => c.read() + l1[(i + 1) % K]!.read()))
 	// settle everything once
 	let sum = 0
-	for (const c of l2) sum += c.read()
+	for (const c of l2) {
+		sum += c.read()
+	}
 	for (let r = 0; r < rounds; r++) {
-		for (let i = 0; i < K; i++) sum += l2[i]!.read()
+		for (let i = 0; i < K; i++) {
+			sum += l2[i]!.read()
+		}
 	}
 	return sum
 }
@@ -204,10 +225,14 @@ const isolate: Shape = (a, scale) => {
 	const bSigs = Array.from({ length: K }, (_, i) => a.signal(i))
 	const bComps = bSigs.map((s) => a.computed(() => s.read() * 2))
 	let sum = 0
-	for (const c of bComps) sum += c.read() // settle
+	for (const c of bComps) {
+		sum += c.read()
+	} // settle
 	for (let r = 0; r < rounds; r++) {
 		aSrc.write(r) // unrelated write
-		for (let i = 0; i < K; i++) sum += bComps[i]!.read() // quiet reads of B
+		for (let i = 0; i < K; i++) {
+			sum += bComps[i]!.read()
+		} // quiet reads of B
 	}
 	disposeA()
 	return sum + aSeen
@@ -245,9 +270,13 @@ async function runChild(): Promise<void> {
 	const gcSupported = (supported ?? []).includes('gc')
 	const gcEntries: Array<{ t: number; dur: number }> = []
 	const obs = new PerformanceObserver((list) => {
-		for (const e of list.getEntries()) gcEntries.push({ t: e.startTime, dur: e.duration })
+		for (const e of list.getEntries()) {
+			gcEntries.push({ t: e.startTime, dur: e.duration })
+		}
 	})
-	if (gcSupported) obs.observe({ type: 'gc', buffered: true })
+	if (gcSupported) {
+		obs.observe({ type: 'gc', buffered: true })
+	}
 
 	interface Pending {
 		shape: string
@@ -259,7 +288,9 @@ async function runChild(): Promise<void> {
 
 	for (const shapeName of wanted) {
 		const shape = SHAPES[shapeName]
-		if (!shape) continue
+		if (!shape) {
+			continue
+		}
 		shape(adapter, 1) // warmup at scale 1 (JIT tiers), outside the window
 		const times: number[] = []
 		let checksum = 0
@@ -338,7 +369,9 @@ function runParent(): void {
 			continue
 		}
 		for (const line of res.stdout.split('\n')) {
-			if (line.startsWith('@@ROW ')) rows.push(JSON.parse(line.slice(6)))
+			if (line.startsWith('@@ROW ')) {
+				rows.push(JSON.parse(line.slice(6)))
+			}
 		}
 		console.error(
 			`${fw} (${runtime}): child done in ${((performance.now() - t0) / 1000).toFixed(1)}s`,
@@ -348,7 +381,9 @@ function runParent(): void {
 	const base = frameworks[0]
 	const byShape = new Map<string, Map<string, Row>>()
 	for (const r of rows) {
-		if (!byShape.has(r.shape)) byShape.set(r.shape, new Map())
+		if (!byShape.has(r.shape)) {
+			byShape.set(r.shape, new Map())
+		}
 		byShape.get(r.shape)!.set(r.framework, r)
 	}
 	const pad = (s: string, n: number) => s.padEnd(n)

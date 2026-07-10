@@ -112,8 +112,12 @@ function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
 	// instance; the bridge's internalsForAtom/internalsForComputed then assert the
 	// handle belongs to THIS shim's bound engine, throwing a clear cross-instance
 	// error rather than silently resolving its id against the wrong arena.
-	if (isAtom(signal)) return shim.internalsForAtom(signal as Atom<unknown>)
-	if (isComputed(signal)) return shim.bridge.internalsForComputed(signal as Computed<unknown>)
+	if (isAtom(signal)) {
+		return shim.internalsForAtom(signal as Atom<unknown>)
+	}
+	if (isComputed(signal)) {
+		return shim.bridge.internalsForComputed(signal as Computed<unknown>)
+	}
 	throw new Error(
 		'cosignals-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).',
 	)
@@ -170,7 +174,9 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	const node = resolveNode(shim, signal as SignalSource<unknown>)
 	const [, force] = React.useReducer((c: number) => c + 1, 0)
 	const ref = React.useRef<SignalRefState | null>(null)
-	if (ref.current === null) ref.current = { current: null, retired: [] }
+	if (ref.current === null) {
+		ref.current = { current: null, retired: [] }
+	}
 	const state = ref.current
 
 	// Signal identity changed across renders: queue the old subscription for
@@ -179,7 +185,9 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		state.retired.push(state.current)
 		state.current = null
 	}
-	if (state.current === null) state.current = createSignalRecord(node, () => force())
+	if (state.current === null) {
+		state.current = createSignalRecord(node, () => force())
+	}
 	const rec = state.current
 
 	const rendering = shim.renderingRoot()
@@ -222,7 +230,9 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 
 	React.useLayoutEffect(() => {
 		shim.claimWatcher(rec)
-		for (const old of state.retired.splice(0)) shim.finalizeUnsub(old)
+		for (const old of state.retired.splice(0)) {
+			shim.finalizeUnsub(old)
+		}
 		return () => {
 			// Microtask-debounced unsubscribe. In development StrictMode React
 			// mounts, unmounts, and remounts each component to surface unsafe
@@ -237,7 +247,9 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 				// that boundary would tear down a watcher id inside a fresh
 				// composition it never belonged to. A disposed shim's pending
 				// unsubscribes died with its targets.
-				if (!shim.disposed && rec.pendingUnsub) shim.finalizeUnsub(rec)
+				if (!shim.disposed && rec.pendingUnsub) {
+					shim.finalizeUnsub(rec)
+				}
 			})
 		}
 	}, [shim, rec])
@@ -300,7 +312,9 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	React.useEffect(() => {
 		const prev = prevRef.current
 		prevRef.current = handle
-		if (prev !== null && prev !== handle) shim.bridge.disposeComputed(prev as Computed<unknown>)
+		if (prev !== null && prev !== handle) {
+			shim.bridge.disposeComputed(prev as Computed<unknown>)
+		}
 	}, [shim, handle])
 	return handle
 }
@@ -396,7 +410,9 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	}
 	const state = stateRef.current
 	const rendering = shim.renderingRoot()
-	if (rendering !== undefined) rootRef.current = rendering.id // idempotent render capture
+	if (rendering !== undefined) {
+		rootRef.current = rendering.id
+	} // idempotent render capture
 	if (
 		state.id !== undefined &&
 		state.hasRun &&
@@ -426,17 +442,23 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 			state.hasRun = true
 			if (state.id === undefined) {
 				const id = shim.registerEffect(root, () => {
-					if (state.disposed || state.id === undefined || state.fn === undefined) return
+					if (state.disposed || state.id === undefined || state.fn === undefined) {
+						return
+					}
 					const cleanup = state.cleanup
 					state.cleanup = undefined
-					if (typeof cleanup === 'function') cleanup()
+					if (typeof cleanup === 'function') {
+						cleanup()
+					}
 					shim.captureEffectRun(state.id, state.run)
 				})
 				state.id = id
 			}
 			const cleanup = state.cleanup
 			state.cleanup = undefined
-			if (typeof cleanup === 'function') cleanup()
+			if (typeof cleanup === 'function') {
+				cleanup()
+			}
 			shim.captureEffectRun(state.id, state.run)
 		},
 		deps === undefined ? undefined : [shim, ...deps],
@@ -444,11 +466,15 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	React.useEffect(() => {
 		return () => {
 			state.disposed = true
-			if (state.id !== undefined) shim.unregisterEffect(state.id)
+			if (state.id !== undefined) {
+				shim.unregisterEffect(state.id)
+			}
 			state.id = undefined
 			const cleanup = state.cleanup
 			state.cleanup = undefined
-			if (typeof cleanup === 'function') cleanup()
+			if (typeof cleanup === 'function') {
+				cleanup()
+			}
 		}
 	}, [shim, state])
 }
@@ -486,7 +512,9 @@ export function startSignalTransition(fn: () => unknown): void {
 		// the action runs and its writes classify as they land — ordinary
 		// no-context writes, the same fall-through as the write classifier —
 		// rather than creating a parked batch nothing could ever settle.
-		if (batchId !== BATCH_NONE) shim.upgradeToAction(batchId)
+		if (batchId !== BATCH_NONE) {
+			shim.upgradeToAction(batchId)
+		}
 		// Returning fn's thenable keeps the transition pending until it settles
 		// (React async-action semantics); the protocol host retires the batch
 		// at settlement, which is when its writes become permanent history.

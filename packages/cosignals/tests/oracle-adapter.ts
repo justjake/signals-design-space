@@ -125,19 +125,25 @@ function registryOf(_b: CosignalEngine): EntityRegistry {
 
 function batchAt(b: CosignalEngine, index: number): number | undefined {
 	const ids = registryOf(b).batches
-	if (ids.length === 0) throw new ScheduleError('no batches yet')
+	if (ids.length === 0) {
+		throw new ScheduleError('no batches yet')
+	}
 	return ids[index % ids.length]
 }
 
 function renderPassAt(b: CosignalEngine, index: number): number {
 	const ids = registryOf(b).renderPasses
-	if (ids.length === 0) throw new ScheduleError('no render passes yet')
+	if (ids.length === 0) {
+		throw new ScheduleError('no render passes yet')
+	}
 	return ids[index % ids.length]!
 }
 
 function watcherAt(b: CosignalEngine, index: number): number {
 	const ids = [...b.watchers.keys()]
-	if (ids.length === 0) throw new ScheduleError('no watchers yet')
+	if (ids.length === 0) {
+		throw new ScheduleError('no watchers yet')
+	}
 	return ids[index % ids.length]!
 }
 
@@ -148,8 +154,12 @@ function watcherAt(b: CosignalEngine, index: number): number {
  * diverge once a core effect mounts, which is why resolution is positional). */
 function effectAt(b: CosignalEngine, index: number): number {
 	const ids: number[] = []
-	for (const effect of b.idToSignalEffect.values()) ids.push(effect.id)
-	if (ids.length === 0) throw new ScheduleError('no react effects yet')
+	for (const effect of b.idToSignalEffect.values()) {
+		ids.push(effect.id)
+	}
+	if (ids.length === 0) {
+		throw new ScheduleError('no react effects yet')
+	}
 	return ids[index % ids.length]!
 }
 
@@ -321,8 +331,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				// scoped out (test-surface replay pollutes the trace-only values
 				// snapshot via committed-arena materialization; see model.ts).
 				const id = effectAt(b, op.effect)
-				if (reg.writerEffects.has(id))
+				if (reg.writerEffects.has(id)) {
 					throw new ScheduleError('writing terminals are not force-replayable in the referee')
+				}
 				b.replaySignalEffect(id)
 				break
 			}
@@ -334,8 +345,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				// One writer per output atom (mirrors the model's legality —
 				// sibling firing order is implementation-defined, so a shared
 				// output's final value would be order-dependent).
-				if (reg.outWriters.has(outName))
+				if (reg.outWriters.has(outName)) {
 					throw new ScheduleError(`output atom ${outName} already has a writing effect`)
+				}
 				const out = allNodes.find(
 					(n): n is AtomInternals => n.kind === 'atom' && n.name === outName,
 				)!
@@ -357,7 +369,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 			}
 			case 'mountTapCore': {
 				// One writer per `sig` (the model's legality; order-freedom).
-				if (reg.outWriters.has('sig')) throw new ScheduleError('sig already has a writing effect')
+				if (reg.outWriters.has('sig')) {
+					throw new ScheduleError('sig already has a writing effect')
+				}
 				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
 				const sig = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sig')!
 				mountEngineCoreEffect(b, tap, `CE${uniq}`, sig)
@@ -367,7 +381,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 			case 'mountSibWriter': {
 				// QUIET-ONLY (b.quiet is the model's isQuiet twin): confine the
 				// body's sib write to the quiet fold path, never a batch.
-				if (!b.quiet) throw new ScheduleError('the writing terminal mounts only on the quiet path')
+				if (!b.quiet) {
+					throw new ScheduleError('the writing terminal mounts only on the quiet path')
+				}
 				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
 				const sib = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sib')!
 				const w = mountEngineReactEffectWrite(
@@ -383,7 +399,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 			case 'writeTap': {
 				// QUIET-ONLY — the engine's `quiet` getter is the model's isQuiet
 				// twin, so legality is decided identically on both sides.
-				if (!b.quiet) throw new ScheduleError('tap writes only on the quiet path')
+				if (!b.quiet) {
+					throw new ScheduleError('tap writes only on the quiet path')
+				}
 				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
 				b.bareWrite(tap, 0, op.value)
 				break
@@ -401,7 +419,9 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 		}
 		return true
 	} catch (err) {
-		if (err instanceof ScheduleError) return false
+		if (err instanceof ScheduleError) {
+			return false
+		}
 		throw err
 	}
 }
@@ -423,8 +443,11 @@ export function engineAsAdapter(): EngineAdapter & {
 	// idle preconditions run (the helpers.ts drain, inlined).
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	// devChecks armed (an engine-inert switch): the corpus referees the
 	// engine with it on, proving the flag perturbs no engine semantics.
@@ -545,7 +568,9 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 			continue
 		}
 		let j = i + 1
-		while (j < out.length && inBlock(out[j]!)) j++
+		while (j < out.length && inBlock(out[j]!)) {
+			j++
+		}
 		// Trim trailing non-run events only if the block contains ≥2 runs or
 		// any out-write (a lone run needs no canonicalization).
 		const block = out.slice(i, j)
@@ -586,7 +611,9 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++]! } as ModelEvent) : e)
 				}
 			}
-			for (let k = i; k < j; k++) out[k] = flat[k - i]!
+			for (let k = i; k < j; k++) {
+				out[k] = flat[k - i]!
+			}
 		}
 		i = j
 	}
@@ -604,7 +631,9 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>()
 	for (const e of events) {
-		if (!DELIVERYISH.has(e.type)) continue
+		if (!DELIVERYISH.has(e.type)) {
+			continue
+		}
 		const d = e as unknown as { watcher: string; batch: number; slot: number }
 		const key = `${d.watcher}|${d.batch}|${d.slot}`
 		out.set(key, (out.get(key) ?? 0) + 1)
@@ -662,8 +691,9 @@ export function diffAgainstModelTolerant(
 		if (mRest !== eRest) {
 			return { seed, step, message: `events diverged:\nengine ${eRest}\nmodel  ${mRest}` }
 		}
-		for (const [key, n] of deliveryKeyCounts(mEvents))
+		for (const [key, n] of deliveryKeyCounts(mEvents)) {
 			modelPool.set(key, (modelPool.get(key) ?? 0) + n)
+		}
 		for (const [key, n] of deliveryKeyCounts(eEvents)) {
 			const used = (engineUsed.get(key) ?? 0) + n
 			engineUsed.set(key, used)
@@ -676,7 +706,9 @@ export function diffAgainstModelTolerant(
 			}
 		}
 		const dpcFail = dpc?.afterOp(ops[step]!, eEvents)
-		if (dpcFail !== undefined) return { seed, step, message: dpcFail }
+		if (dpcFail !== undefined) {
+			return { seed, step, message: dpcFail }
+		}
 	}
 	return undefined
 }
@@ -782,7 +814,9 @@ class DeliveryPrecedesCorrection {
 		) {
 			this.resetAll() // commits/discards re-baseline; renders re-arm dedup; conservative wholesale reset
 		} else if (singleBoundary) {
-			for (const mk of this.marks.values()) mk.boundaries++
+			for (const mk of this.marks.values()) {
+				mk.boundaries++
+			}
 		}
 		// A live parked batch anywhere in the window disarms (dead-arena-retreat exclusion).
 		let parked = false
@@ -793,7 +827,9 @@ class DeliveryPrecedesCorrection {
 			}
 		}
 		if (parked) {
-			for (const mk of this.marks.values()) mk.disarmed = true
+			for (const mk of this.marks.values()) {
+				mk.disarmed = true
+			}
 		}
 		return undefined
 	}

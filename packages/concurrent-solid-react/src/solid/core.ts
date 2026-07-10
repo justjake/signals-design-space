@@ -96,7 +96,9 @@ export let snapshotSources: Set<any> | null = null
 
 function ownerInSnapshotScope(owner: Owner | null): boolean {
 	while (owner) {
-		if (owner._snapshotScope) return true
+		if (owner._snapshotScope) {
+			return true
+		}
 		owner = owner._parent
 	}
 	return false
@@ -104,7 +106,9 @@ function ownerInSnapshotScope(owner: Owner | null): boolean {
 
 export function setSnapshotCapture(active: boolean): void {
 	snapshotCaptureActive = active
-	if (active && !snapshotSources) snapshotSources = new Set()
+	if (active && !snapshotSources) {
+		snapshotSources = new Set()
+	}
 }
 
 export function markSnapshotScope(owner: Owner): void {
@@ -130,7 +134,9 @@ function releaseSubtree(owner: Owner): void {
 			if (comp._flags & REACTIVE_SNAPSHOT_STALE) {
 				comp._flags &= ~REACTIVE_SNAPSHOT_STALE
 				comp._flags |= REACTIVE_DIRTY
-				if (dirtyQueue._min > comp._height) dirtyQueue._min = comp._height
+				if (dirtyQueue._min > comp._height) {
+					dirtyQueue._min = comp._height
+				}
 				insertIntoHeap(comp, dirtyQueue)
 			}
 		}
@@ -174,16 +180,21 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 		deleteFromHeap(el, el._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue)
 		el._inFlight = null
 		// Tracked effects run after finalizePureQueue, so dispose immediately instead of deferring
-		if (el._transition || isEffect === EFFECT_TRACKED) disposeChildren(el)
-		else if (el._firstChild !== null || el._disposal !== null) {
+		if (el._transition || isEffect === EFFECT_TRACKED) {
+			disposeChildren(el)
+		} else if (el._firstChild !== null || el._disposal !== null) {
 			markDisposal(el)
 			el._pendingDisposal = el._disposal
 			el._pendingFirstChild = el._firstChild
 			el._disposal = null
 			el._firstChild = null
 			el._childCount = 0
-			if (__DEV__) clearSignals(el)
-		} else if (__DEV__) clearSignals(el)
+			if (__DEV__) {
+				clearSignals(el)
+			}
+		} else if (__DEV__) {
+			clearSignals(el)
+		}
 	}
 
 	let isOptimisticDirty = !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY)
@@ -209,7 +220,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 	tracking = true
 	if (isOptimisticDirty) {
 		const lane = resolveLane(el)
-		if (lane) currentOptimisticLane = lane
+		if (lane) {
+			currentOptimisticLane = lane
+		}
 	} else if (activeTransition && !create && activeTransition._optimisticNodes.length) {
 		// Lane adoption: parent-deeper-than-owned-child can run before its OPT-dirty
 		// child propagates. Walk deps once and inherit the OPT lane so this node
@@ -230,7 +243,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 	}
 	const isStaleEffect = isEffect && isEffect !== EFFECT_USER
 	const prevStale = stale
-	if (isStaleEffect) stale = true
+	if (isStaleEffect) {
+		stale = true
+	}
 	try {
 		if (!__DEV__ && el._config & CONFIG_SYNC) {
 			value = el._fn(value)
@@ -246,7 +261,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 			const isAsyncResult = typeof fnResult === 'object' && fnResult !== null
 			const inFlightChanged = el._inFlight !== prevInFlight
 			value = inFlightChanged || !isAsyncResult ? fnResult : handleAsync(el, fnResult)
-			if (!inFlightChanged && !isAsyncResult) el._inFlight = null
+			if (!inFlightChanged && !isAsyncResult) {
+				el._inFlight = null
+			}
 		}
 		clearStatus(el, create)
 		if (el._optimisticLane) {
@@ -267,7 +284,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 				updatePendingSignal(lane._source)
 			}
 		}
-		if (e instanceof NotReadyError) el._blocked = true
+		if (e instanceof NotReadyError) {
+			el._blocked = true
+		}
 		notifyStatus(
 			el,
 			e instanceof NotReadyError ? STATUS_PENDING : STATUS_ERROR,
@@ -277,8 +296,12 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 		)
 	} finally {
 		tracking = prevTracking
-		if (__DEV__) strictRead = prevStrictRead
-		if (isStaleEffect) stale = prevStale
+		if (__DEV__) {
+			strictRead = prevStrictRead
+		}
+		if (isStaleEffect) {
+			stale = prevStale
+		}
 		el._flags = REACTIVE_NONE | (create ? el._flags & REACTIVE_SNAPSHOT_STALE : 0)
 		context = oldcontext
 	}
@@ -300,7 +323,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 		// effect() can call its runner synchronously for the first run.
 		if (isEffect && valueChanged) {
 			;(el as any)._modified = !el._error
-			if (!create) el._queue.enqueue(isEffect, GlobalQueue._runEffect.bind(null, el))
+			if (!create) {
+				el._queue.enqueue(isEffect, GlobalQueue._runEffect.bind(null, el))
+			}
 		}
 
 		if (valueChanged) {
@@ -313,14 +338,18 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 					el._overrideValue = value
 					el._pendingValue = value
 				}
-			} else el._pendingValue = value
+			} else {
+				el._pendingValue = value
+			}
 
 			// Correct override for async resolution (non-lane path) unless user wrote since lane creation
-			if (hasOverride && !isOptimisticDirty && wasPending && !(el as any)._overrideSinceLane)
+			if (hasOverride && !isOptimisticDirty && wasPending && !(el as any)._overrideSinceLane) {
 				el._overrideValue = value
+			}
 
-			if (!hasOverride || isOptimisticDirty || el._overrideValue !== prevVisible)
+			if (!hasOverride || isOptimisticDirty || el._overrideValue !== prevVisible) {
 				insertSubs(el, isOptimisticDirty || hasOverride)
+			}
 		} else if (hasOverride) {
 			el._pendingValue = value
 		} else if (el._height != oldHeight) {
@@ -345,7 +374,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
 		activeTransition !== el._transition &&
 		runInTransition(el._transition, () => recompute(el))
 	// [react-adapt E9] restore the ambient world this recompute entered under.
-	if (prevWorld !== undefined) setActiveTransition(prevWorld)
+	if (prevWorld !== undefined) {
+		setActiveTransition(prevWorld)
+	}
 }
 
 function updateIfNecessary(el: Computed<unknown>): void {
@@ -422,7 +453,9 @@ export function computed<T>(
 		_inFlight: null,
 		_transition: null,
 	} as Computed<T>
-	if (__DEV__) (self as any)._name = options?.name ?? 'computed'
+	if (__DEV__) {
+		;(self as any)._name = options?.name ?? 'computed'
+	}
 	setupComputedNode(self, options)
 	return self
 }
@@ -488,7 +521,9 @@ export function createEffectNode<T>(
 		_type: type,
 		_notifyStatus: notifyStatus,
 	} as any
-	if (__DEV__) self._name = options?.name ?? 'effect'
+	if (__DEV__) {
+		self._name = options?.name ?? 'effect'
+	}
 	setupComputedNode(self, lazyOptions)
 	return self
 }
@@ -521,8 +556,12 @@ function setupComputedNode<T>(self: Computed<T>, options: NodeOptions<T> | undef
 			context._firstChild = self
 		}
 	}
-	if (__DEV__) DEV.hooks.onOwner?.(self)
-	if (parent) self._height = parent._height + 1
+	if (__DEV__) {
+		DEV.hooks.onOwner?.(self)
+	}
+	if (parent) {
+		self._height = parent._height + 1
+	}
 	if (externalSourceConfig) {
 		const bridgeSignal = signal<undefined>(undefined, { equals: false, ownedWrite: true })
 		const source = externalSourceConfig.factory(self._fn as any, () => {
@@ -657,18 +696,25 @@ export function runTracked<T>(observer: Computed<any>, fn: () => T): T {
 }
 
 export function untrack<T>(fn: () => T, strictReadLabel?: string | false): T {
-	if (!externalSourceConfig && !tracking && (!__DEV__ || (!strictRead && !strictReadLabel)))
+	if (!externalSourceConfig && !tracking && (!__DEV__ || (!strictRead && !strictReadLabel))) {
 		return fn()
+	}
 	const prevTracking = tracking
 	const prevStrictRead = strictRead
 	tracking = false
-	if (__DEV__) strictRead = strictReadLabel || false
+	if (__DEV__) {
+		strictRead = strictReadLabel || false
+	}
 	try {
-		if (externalSourceConfig) return externalSourceConfig.untrack(fn)
+		if (externalSourceConfig) {
+			return externalSourceConfig.untrack(fn)
+		}
 		return fn()
 	} finally {
 		tracking = prevTracking
-		if (__DEV__) strictRead = prevStrictRead
+		if (__DEV__) {
+			strictRead = prevStrictRead
+		}
 	}
 }
 
@@ -690,12 +736,16 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		try {
 			value = read(pendingComputed)
 		} catch (e) {
-			if (!context && e instanceof NotReadyError) return visibleValue
+			if (!context && e instanceof NotReadyError) {
+				return visibleValue
+			}
 			throw e
 		} finally {
 			latestReadActive = prevPending
 		}
-		if (pendingComputed._statusFlags & STATUS_PENDING) return visibleValue
+		if (pendingComputed._statusFlags & STATUS_PENDING) {
+			return visibleValue
+		}
 		// Cross-lane stale read: a child lane should keep seeing the parent's
 		// committed value until the parent lane resolves.
 		if (stale && currentOptimisticLane && pendingComputed._optimisticLane) {
@@ -714,7 +764,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		const prevCheck = pendingCheckActive
 		pendingCheckActive = false
 		let c = context
-		if ((c as Root)?._root) c = (c as Root)._parentComputed
+		if ((c as Root)?._root) {
+			c = (c as Root)._parentComputed
+		}
 		const owner = firewall || (el as Computed<any>)
 		const pendingComputed = el as Partial<Computed<unknown>>
 		if (typeof pendingComputed._fn === 'function') {
@@ -729,7 +781,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 			}
 		}
 		if (c && owner._statusFlags & STATUS_PENDING && owner._statusFlags & STATUS_UNINITIALIZED) {
-			if (tracking && el !== c) link(el, c as Computed<any>)
+			if (tracking && el !== c) {
+				link(el, c as Computed<any>)
+			}
 			pendingCheckActive = prevCheck
 			throw owner._error
 		}
@@ -742,16 +796,22 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 			}
 			collectPendingSources(el)
 			collectPendingSources(firewall)
-			if (c && tracking) link(el, c as Computed<any>)
+			if (c && tracking) {
+				link(el, c as Computed<any>)
+			}
 		} else {
 			collectPendingSources(el)
-			if (firewall) collectPendingSources(firewall)
+			if (firewall) {
+				collectPendingSources(firewall)
+			}
 		}
 		pendingCheckActive = prevCheck
 	}
 
 	let c = context
-	if ((c as Root)?._root) c = (c as Root)._parentComputed
+	if ((c as Root)?._root) {
+		c = (c as Root)._parentComputed
+	}
 	const computed = el as Partial<Computed<unknown>>
 	if (typeof computed._fn === 'function') {
 		const comp = el as Computed<unknown>
@@ -777,7 +837,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		!snapshotCaptureActive &&
 		(!__DEV__ || !strictRead)
 	) {
-		if (c && tracking) link(el, c as Computed<any>)
+		if (c && tracking) {
+			link(el, c as Computed<any>)
+		}
 		const fastValue = (!c || el._pendingValue === NOT_PENDING ? el._value : el._pendingValue) as T
 		// [react-adapt E13] render-pass value pinning (render-probe reads only)
 		if (c !== null && renderValueInterceptor !== null && (c as any)._isRenderProbe === true) {
@@ -863,15 +925,21 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 				const pendingLane = (owner as any)._optimisticLane
 				const lane = findLane(currentOptimisticLane)
 				if (pendingLane && findLane(pendingLane) === lane && !hasActiveOverride(owner)) {
-					if (!tracking && el !== c) link(el, c as Computed<any>)
+					if (!tracking && el !== c) {
+						link(el, c as Computed<any>)
+					}
 					throw owner._error
 				}
 			} else {
-				if (!tracking && el !== c) link(el, c as Computed<any>)
+				if (!tracking && el !== c) {
+					link(el, c as Computed<any>)
+				}
 				throw owner._error
 			}
 		} else if (c && owner !== el && owner._statusFlags & STATUS_UNINITIALIZED) {
-			if (!tracking && el !== c) link(el, c as Computed<any>)
+			if (!tracking && el !== c) {
+				link(el, c as Computed<any>)
+			}
 			throw owner._error
 		} else if (!c && owner._statusFlags & STATUS_UNINITIALIZED) {
 			throw owner._error
@@ -885,7 +953,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		if (tracking && !pendingCheckActive && el._time < clock) {
 			recompute(el as Computed<unknown>)
 			return read(el)
-		} else throw (el as Computed<any>)._error
+		} else {
+			throw (el as Computed<any>)._error
+		}
 	}
 
 	if (snapshotCaptureActive && c && (c as Computed<any>)._config & CONFIG_IN_SNAPSHOT_SCOPE) {
@@ -893,7 +963,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		if (sv !== undefined) {
 			const snapshot = sv === NO_SNAPSHOT ? undefined : sv
 			const current = el._pendingValue !== NOT_PENDING ? el._pendingValue : el._value
-			if (current !== snapshot) (c as Computed<any>)._flags |= REACTIVE_SNAPSHOT_STALE
+			if (current !== snapshot) {
+				;(c as Computed<any>)._flags |= REACTIVE_SNAPSHOT_STALE
+			}
 			return snapshot as T
 		}
 	}
@@ -916,7 +988,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 	}
 
 	if (el._overrideValue !== undefined && el._overrideValue !== NOT_PENDING) {
-		if (c && stale && shouldReadStashedOptimisticValue(el as Signal<any>)) return el._value as T
+		if (c && stale && shouldReadStashedOptimisticValue(el as Signal<any>)) {
+			return el._value as T
+		}
 		return el._overrideValue as T
 	}
 
@@ -1031,8 +1105,9 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
 			if (activeTransition) {
 				// A deferred write to a node held by another live transition
 				// entangles the two worlds (they now share staged state).
-				if (currentTransition(el._transition) !== activeTransition)
+				if (currentTransition(el._transition) !== activeTransition) {
 					globalQueue.initTransition(el._transition)
+				}
 			} else if (el._overrideValue === undefined) {
 				// [react-adapt E3] Urgent write to a transition-held node: React
 				// lane semantics. The urgent update must be visible in the committed
@@ -1053,8 +1128,12 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
 						: { committed: v, staged: v }
 				el._value = next.committed
 				el._pendingValue = next.staged
-				if (el._pendingSignal) updatePendingSignal(el)
-				if (el._latestValueComputed) setSignal(el._latestValueComputed, next.staged)
+				if (el._pendingSignal) {
+					updatePendingSignal(el)
+				}
+				if (el._latestValueComputed) {
+					setSignal(el._latestValueComputed, next.staged)
+				}
 				el._time = clock
 				insertSubs(el)
 				// The cone's normal recompute refreshes only the staged world (E9);
@@ -1115,7 +1194,9 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 			? el._value
 			: (el._pendingValue as T)
 
-	if (typeof v === 'function') v = (v as (prev: T) => T)(currentValue)
+	if (typeof v === 'function') {
+		v = (v as (prev: T) => T)(currentValue)
+	}
 
 	const valueChanged =
 		!el._equals ||
@@ -1126,7 +1207,9 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 		// nodes may have stale _inFlight based on old upstream data.
 		if (isOptimistic && hasOverride) {
 			const transition = resolveTransition(el as any)
-			if (transition && activeTransition !== transition) globalQueue.initTransition(transition)
+			if (transition && activeTransition !== transition) {
+				globalQueue.initTransition(transition)
+			}
 			if ((el as Computed<T>)._fn) {
 				insertSubs(el, true)
 				schedule()
@@ -1137,7 +1220,9 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 
 	if (isOptimistic) {
 		const firstOverride = el._overrideValue === NOT_PENDING
-		if (!firstOverride) globalQueue.initTransition(resolveTransition(el as any))
+		if (!firstOverride) {
+			globalQueue.initTransition(resolveTransition(el as any))
+		}
 		if (firstOverride) {
 			el._pendingValue = el._value
 			// [react-adapt E8] register with the world that created the override
@@ -1151,12 +1236,16 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 
 		el._overrideValue = v
 	} else {
-		if (el._pendingValue === NOT_PENDING) queuePendingNode(el)
+		if (el._pendingValue === NOT_PENDING) {
+			queuePendingNode(el)
+		}
 		el._pendingValue = v
 	}
 
 	// Update pending signal if it exists (for isPending reactivity)
-	if (el._pendingSignal) updatePendingSignal(el)
+	if (el._pendingSignal) {
+		updatePendingSignal(el)
+	}
 
 	// Also write to latest value computed if it exists (for latest())
 	if (el._latestValueComputed) {
@@ -1266,7 +1355,9 @@ function getPendingSignal(el: Signal<any> | Computed<any>): Signal<boolean> {
 function collectPendingSources(el: Signal<any> | Computed<any>): void {
 	pendingCheckSources?.add(el)
 	const owner = (el as FirewallSignal<any>)._firewall || el
-	if (owner !== el) pendingCheckSources?.add(owner)
+	if (owner !== el) {
+		pendingCheckSources?.add(owner)
+	}
 }
 
 /**
@@ -1279,8 +1370,9 @@ function computePendingState(el: Signal<any> | Computed<any>): boolean {
 	const firewall = (el as FirewallSignal<any>)._firewall
 	if (el._parentSource) {
 		const parent = el._parentSource as Computed<any>
-		if (parent._statusFlags & STATUS_PENDING && !(parent._statusFlags & STATUS_UNINITIALIZED))
+		if (parent._statusFlags & STATUS_PENDING && !(parent._statusFlags & STATUS_UNINITIALIZED)) {
 			return true
+		}
 		return el._pendingValue !== NOT_PENDING && !(comp._statusFlags & STATUS_UNINITIALIZED)
 	}
 	if (firewall && el._pendingValue !== NOT_PENDING) {
@@ -1291,8 +1383,9 @@ function computePendingState(el: Signal<any> | Computed<any>): boolean {
 	}
 	// Optimistic nodes with active override:
 	if (el._overrideValue !== undefined && el._overrideValue !== NOT_PENDING) {
-		if (comp._statusFlags & STATUS_PENDING && !(comp._statusFlags & STATUS_UNINITIALIZED))
+		if (comp._statusFlags & STATUS_PENDING && !(comp._statusFlags & STATUS_UNINITIALIZED)) {
 			return true
+		}
 		// Internal pending/latest helpers carry `_parentSource`; user-created
 		// optimistic nodes just stay pending while the override is active.
 		if (el._parentSource) {
@@ -1311,8 +1404,9 @@ function computePendingState(el: Signal<any> | Computed<any>): boolean {
 		el._overrideValue !== NOT_PENDING &&
 		el._pendingValue !== NOT_PENDING &&
 		!(comp._statusFlags & STATUS_UNINITIALIZED)
-	)
+	) {
 		return true
+	}
 	// Downstream: async in flight with previous value (not initial load)
 	// STATUS_UNINITIALIZED is cleared on first successful completion
 	return !!(comp._statusFlags & STATUS_PENDING && !(comp._statusFlags & STATUS_UNINITIALIZED))
@@ -1333,11 +1427,15 @@ export function updatePendingSignal(el: Signal<any> | Computed<any>): void {
 		// write leaves the ambient world so it stages urgently and commits at
 		// the next flush even while the source's transition stays parked.
 		const prevWorld = activeTransition
-		if (prevWorld) setActiveTransition(null)
+		if (prevWorld) {
+			setActiveTransition(null)
+		}
 		try {
 			setSignal(sig, pending)
 		} finally {
-			if (prevWorld) setActiveTransition(currentTransition(prevWorld))
+			if (prevWorld) {
+				setActiveTransition(currentTransition(prevWorld))
+			}
 		}
 		// When override clears: merge sub-lane into source's lane
 		if (!pending && sig._optimisticLane) {
@@ -1444,13 +1542,19 @@ export function isPending(fn: () => any): boolean {
 	const collectPending = () => {
 		pendingCheckActive = false
 		const prevStrictRead = __DEV__ ? strictRead : false
-		if (__DEV__) strictRead = false
+		if (__DEV__) {
+			strictRead = false
+		}
 		try {
 			pendingCheckSources!.forEach((source) => {
-				if (read(getPendingSignal(source))) foundPending = true
+				if (read(getPendingSignal(source))) {
+					foundPending = true
+				}
 			})
 		} finally {
-			if (__DEV__) strictRead = prevStrictRead
+			if (__DEV__) {
+				strictRead = prevStrictRead
+			}
 			pendingCheckActive = true
 		}
 	}
@@ -1461,8 +1565,12 @@ export function isPending(fn: () => any): boolean {
 	} catch (e) {
 		collectPending()
 		if (e instanceof NotReadyError) {
-			if (foundPending && !(e.source?._statusFlags & STATUS_UNINITIALIZED)) return true
-			if (context) throw e
+			if (foundPending && !(e.source?._statusFlags & STATUS_UNINITIALIZED)) {
+				return true
+			}
+			if (context) {
+				throw e
+			}
 		}
 		// When a thunk throws during pending check (e.g., accessing undefined values
 		// from uninitialized async memos), return foundPending. The error indicates
@@ -1541,7 +1649,9 @@ export function refresh<T>(target: Refreshable<T>): void {
 		// the world rides the node's re-entry mark (E9) rather than the scope.
 		const restoreWorld = writeRouter !== null ? writeRouter(node) : undefined
 		try {
-			if (activeTransition) node._reentryWorld = activeTransition
+			if (activeTransition) {
+				node._reentryWorld = activeTransition
+			}
 			node._flags = (node._flags & ~REACTIVE_CHECK) | REACTIVE_DIRTY
 			insertIntoHeap(node, node._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue)
 			schedule()

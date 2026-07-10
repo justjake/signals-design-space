@@ -339,7 +339,9 @@ function track(dep: Node, sub: Node): void {
 				sub.dep0 = dep
 			} else {
 				let arr = sub.deps
-				if (arr === undefined) arr = sub.deps = []
+				if (arr === undefined) {
+					arr = sub.deps = []
+				}
 				arr[c - 1] = dep
 			}
 			sub.depCount = c + 1
@@ -421,8 +423,11 @@ function trimDeps(sub: Node, newCount: number): void {
 	for (let i = sub.depCount - 1; i >= newCount; i--) {
 		const d = i === 0 ? sub.dep0 : sub.deps![i - 1]
 		if (d !== undefined) {
-			if (i === 0) sub.dep0 = undefined
-			else sub.deps![i - 1] = undefined
+			if (i === 0) {
+				sub.dep0 = undefined
+			} else {
+				sub.deps![i - 1] = undefined
+			}
 			removeSub(d, sub)
 		}
 	}
@@ -440,8 +445,11 @@ function finishDiverged(sub: Node, version: number): void {
 	for (let i = oldCount - 1; i >= cur; i--) {
 		const d = i === 0 ? sub.dep0 : sub.deps![i - 1]
 		if (d !== undefined && d.stamp !== version) {
-			if (i === 0) sub.dep0 = undefined
-			else sub.deps![i - 1] = undefined
+			if (i === 0) {
+				sub.dep0 = undefined
+			} else {
+				sub.deps![i - 1] = undefined
+			}
 			removeSub(d, sub)
 		}
 	}
@@ -454,15 +462,20 @@ function finishDiverged(sub: Node, version: number): void {
 			sub.dep0 = d
 		} else {
 			let arr = sub.deps
-			if (arr === undefined) arr = sub.deps = []
+			if (arr === undefined) {
+				arr = sub.deps = []
+			}
 			arr[i - 1] = d
 		}
 	}
 	DCOUNT = dbase
 	// Clear stale slots beyond the new logical length.
 	for (let i = newCount; i < oldCount; i++) {
-		if (i === 0) sub.dep0 = undefined
-		else sub.deps![i - 1] = undefined
+		if (i === 0) {
+			sub.dep0 = undefined
+		} else {
+			sub.deps![i - 1] = undefined
+		}
 	}
 	sub.depCount = newCount
 }
@@ -551,7 +564,9 @@ function compactSubs(dep: Node): void {
 	let excess = len - w
 	if (excess > 0) {
 		if (excess < 20) {
-			while (excess-- > 0) arr.pop()
+			while (excess-- > 0) {
+				arr.pop()
+			}
 		} else {
 			arr.length = w
 		}
@@ -580,8 +595,11 @@ function disposeDeps(sub: Node): void {
 	for (let i = sub.depCount - 1; i >= 0; i--) {
 		const d = i === 0 ? sub.dep0 : sub.deps![i - 1]
 		if (d !== undefined) {
-			if (i === 0) sub.dep0 = undefined
-			else sub.deps![i - 1] = undefined
+			if (i === 0) {
+				sub.dep0 = undefined
+			} else {
+				sub.deps![i - 1] = undefined
+			}
 			removeSub(d, sub)
 		}
 	}
@@ -596,8 +614,11 @@ function purgeChildren(e: Node): void {
 	for (let i = e.depCount - 1; i >= 0; i--) {
 		const d = i === 0 ? e.dep0 : e.deps![i - 1]
 		if (d !== undefined && d.flags & (F.Effect | F.Scope)) {
-			if (i === 0) e.dep0 = undefined
-			else e.deps![i - 1] = undefined
+			if (i === 0) {
+				e.dep0 = undefined
+			} else {
+				e.deps![i - 1] = undefined
+			}
 			removeSub(d, e)
 		}
 	}

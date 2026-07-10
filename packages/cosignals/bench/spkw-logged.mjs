@@ -79,7 +79,9 @@ function repOnce() {
 	for (let w = 0; w < windows; w++) {
 		const batch = b.openBatch()
 		const s0 = process.hrtime.bigint()
-		for (let k = 0; k < WINDOW; k++) b.write(batch.id, a, 0, ++i)
+		for (let k = 0; k < WINDOW; k++) {
+			b.write(batch.id, a, 0, ++i)
+		}
 		const s1 = process.hrtime.bigint()
 		writeNs += Number(s1 - s0)
 		b.retire(batch.id)
@@ -88,7 +90,9 @@ function repOnce() {
 	return [writeNs / (windows * WINDOW), Number(t1 - t0) / (windows * WINDOW)]
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const writes = []
 const amorts = []
 let evalsPerWrite = 0

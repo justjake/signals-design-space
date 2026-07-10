@@ -459,7 +459,9 @@ export class ReactFork implements ForkLike {
 				}
 			},
 			onRenderPassEnd: (container) => {
-				if (this.passContainer !== container) return
+				if (this.passContainer !== container) {
+					return
+				}
 				this.passContainer = undefined
 				this.emit((listener) => listener.onRenderPassEnd?.(container))
 			},

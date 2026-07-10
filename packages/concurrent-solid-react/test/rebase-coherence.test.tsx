@@ -88,7 +88,9 @@ it('RT3.hold shape: verdict memo never observes count without doubled', async ()
 		gate.resolve('done')
 		await gate.promise
 	})
-	for (const f of frames) expect(f).not.toContain('TORN')
+	for (const f of frames) {
+		expect(f).not.toContain('TORN')
+	}
 	expect(el.textContent).toBe('11/22/consistent/done')
 })
 

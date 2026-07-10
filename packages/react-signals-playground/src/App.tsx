@@ -122,7 +122,9 @@ function createRouteResource(epoch: number, route: RouteName, latency: NavLatenc
 		promise,
 		thrown: maybeWrapThenable(promise),
 		settle() {
-			if (resource.status === 'ready') return
+			if (resource.status === 'ready') {
+				return
+			}
 			resource.status = 'ready'
 			resource.arrivedInMs = Math.round(performance.now() - resource.startedAt)
 			recordFetch(epoch, route, 'settle')
@@ -148,7 +150,9 @@ function releaseHeld(): void {
 	const held = heldResources
 	heldResources = []
 	heldCount.set(0)
-	for (const resource of held) resource.settle()
+	for (const resource of held) {
+		resource.settle()
+	}
 }
 
 /** Render-phase read of a navigation's data; throws the promise while pending (Suspense). */
@@ -157,14 +161,18 @@ function readRouteData(epoch: number): RouteResource {
 	if (resource === undefined) {
 		throw new Error(`react-signals-playground: no data resource for navigation #${epoch}`)
 	}
-	if (resource.status === 'pending') throw resource.thrown
+	if (resource.status === 'pending') {
+		throw resource.thrown
+	}
 	return resource
 }
 
 /** Committed navigations can never be read again; drop everything older. */
 function pruneResources(settledEpoch: number): void {
 	for (const epoch of resources.keys()) {
-		if (epoch < settledEpoch) resources.delete(epoch)
+		if (epoch < settledEpoch) {
+			resources.delete(epoch)
+		}
 	}
 }
 
@@ -192,7 +200,9 @@ const navLog = createAtom<readonly NavRecord[]>([], 'navLog')
 
 function recordUrgentTick(): void {
 	const record = activeNav.state
-	if (record === null) return
+	if (record === null) {
+		return
+	}
 	const offset = Math.round(performance.now() - record.startedAt)
 	activeNav.update((r) => (r === null ? r : { ...r, ticks: [...r.ticks, offset] }))
 }
@@ -210,7 +220,9 @@ function navigate(route: RouteName, pushHistory: boolean): void {
 	const epoch = ++navSeq
 	createRouteResource(epoch, route, navLatency.state)
 	const superseded = activeNav.state
-	if (superseded !== null) closeNavRecord(superseded, true)
+	if (superseded !== null) {
+		closeNavRecord(superseded, true)
+	}
 	if (pushHistory) {
 		const index = histIndex.state
 		histEntries.update((entries) => [...entries.slice(0, index + 1), route])
@@ -246,7 +258,9 @@ function navigate(route: RouteName, pushHistory: boolean): void {
 		void resources.get(epoch)!.promise.then(() => {
 			// A newer navigation superseded this one while its data was in
 			// flight; committing it now would navigate backwards.
-			if (targetEpoch.state !== epoch) return
+			if (targetEpoch.state !== epoch) {
+				return
+			}
 			commitNavigation()
 		})
 	}
@@ -254,7 +268,9 @@ function navigate(route: RouteName, pushHistory: boolean): void {
 
 function goBack(): void {
 	const index = histIndex.state
-	if (index <= 0) return
+	if (index <= 0) {
+		return
+	}
 	histIndex.set(index - 1)
 	navigate(histEntries.state[index - 1]!, false)
 }
@@ -262,7 +278,9 @@ function goBack(): void {
 function goForward(): void {
 	const index = histIndex.state
 	const entries = histEntries.state
-	if (index >= entries.length - 1) return
+	if (index >= entries.length - 1) {
+		return
+	}
 	histIndex.set(index + 1)
 	navigate(entries[index + 1]!, false)
 }
@@ -307,7 +325,9 @@ function rowText(value: number): string {
 function visibleRowsOf(seed: number, total: number, filter: string, rounds: number): number[] {
 	const out: number[] = []
 	for (let index = 0; index < total; index++) {
-		if (rowText(rowValue(seed, index, rounds)).includes(filter)) out.push(index)
+		if (rowText(rowValue(seed, index, rounds)).includes(filter)) {
+			out.push(index)
+		}
 	}
 	return out
 }
@@ -389,7 +409,9 @@ let committedRendersEl: HTMLElement | null = null
 function useCommittedRenderTally(): void {
 	React.useEffect(() => {
 		committedRenders += 1
-		if (committedRendersEl !== null) committedRendersEl.textContent = String(committedRenders)
+		if (committedRendersEl !== null) {
+			committedRendersEl.textContent = String(committedRenders)
+		}
 	})
 }
 
@@ -536,7 +558,9 @@ function StatsPanel(): React.ReactElement {
 					data-testid="renders-committed"
 					ref={(el) => {
 						committedRendersEl = el
-						if (el !== null) el.textContent = String(committedRenders)
+						if (el !== null) {
+							el.textContent = String(committedRenders)
+						}
 					}}
 				/>
 			</Stat>
@@ -981,7 +1005,9 @@ function TimelineBar(props: {
 function TimelineLiveBar(): React.ReactElement | null {
 	const record = useSignal(activeNav)
 	const now = useSignal(clockMs)
-	if (record === null) return null
+	if (record === null) {
+		return null
+	}
 	return (
 		<TimelineBar
 			route={record.route}
@@ -1021,7 +1047,9 @@ function TimelineStrip(): React.ReactElement {
 
 function ErrorStrip(): React.ReactElement | null {
 	const lines = useSignal(errorLog)
-	if (lines.length === 0) return null
+	if (lines.length === 0) {
+		return null
+	}
 	return (
 		<section id="errors" aria-label="errors" data-testid="errors">
 			{lines.map((line, i) => (

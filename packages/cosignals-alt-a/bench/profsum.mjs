@@ -15,7 +15,9 @@ const deltas = prof.timeDeltas ?? []
 const samples = prof.samples ?? []
 for (let i = 0; i < samples.length; ++i) {
 	const node = nodesById.get(samples[i])
-	if (!node) continue
+	if (!node) {
+		continue
+	}
 	const fn = node.callFrame.functionName || '(anonymous)'
 	const key = `${fn} ${node.callFrame.url.split('/').pop() ?? ''}:${node.callFrame.lineNumber}`
 	self.set(key, (self.get(key) ?? 0) + (deltas[i] ?? 0))

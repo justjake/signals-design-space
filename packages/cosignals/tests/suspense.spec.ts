@@ -308,8 +308,11 @@ describe('ctx.use', () => {
 function freshEngine() {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	return engine
@@ -350,7 +353,9 @@ describe('SignalEffect dependency links under suspension (battery 16d)', () => {
 		let pending = false
 		const c = b.computed('c', (read) => {
 			read(gate)
-			if (pending) throw sentinel // hook-shaped rethrow on re-evaluation
+			if (pending) {
+				throw sentinel
+			} // hook-shaped rethrow on re-evaluation
 			return 'v0'
 		})
 		const e = mountEngineReactEffect(b, 'A', c, 'E') // link stamp: (c, 'v0')

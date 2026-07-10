@@ -21,7 +21,9 @@ const cosignalsReact: Contender = {
 	name: 'cosignals-react',
 	createCells(n) {
 		const atoms: Atom<number>[] = []
-		for (let i = 0; i < n; i++) atoms.push(new Atom(0))
+		for (let i = 0; i < n; i++) {
+			atoms.push(new Atom(0))
+		}
 		return {
 			// Reads subscribe via the bindings' own hook; writes stay plain
 			// atom.set calls from outside React (writes during render throw).
@@ -29,7 +31,9 @@ const cosignalsReact: Contender = {
 			writeCell: (i, v) => atoms[i].set(v),
 			writeMany(updates) {
 				batch(() => {
-					for (const [i, v] of updates) atoms[i].set(v)
+					for (const [i, v] of updates) {
+						atoms[i].set(v)
+					}
 				})
 			},
 			// Writes made inside React.startTransition classify into that
@@ -38,7 +42,9 @@ const cosignalsReact: Contender = {
 			writeManyInTransition(updates) {
 				startTransition(() => {
 					batch(() => {
-						for (const [i, v] of updates) atoms[i].set(v)
+						for (const [i, v] of updates) {
+							atoms[i].set(v)
+						}
 					})
 				})
 			},

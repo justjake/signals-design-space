@@ -144,8 +144,13 @@ describe('randomized schedules against the naive model', () => {
 			qDrops += m.eventsOfType('write-dropped').filter((e) => e.node === 'q').length
 			// A writing core effect leaves observable history on its output atom.
 			for (const n of m.idToNode.values()) {
-				if ((n.name === 'out1' || n.name === 'out2') && n.kind === 'atom' && m.newestValue(n) !== 0)
+				if (
+					(n.name === 'out1' || n.name === 'out2') &&
+					n.kind === 'atom' &&
+					m.newestValue(n) !== 0
+				) {
 					effectWrites++
+				}
 			}
 		}
 		expect(qWrites, 'the custom-equals band never emitted').toBeGreaterThan(0)

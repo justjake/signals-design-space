@@ -57,7 +57,9 @@ export function getOrCreateLane(signal: Signal<any>): OptimisticLane {
  * Union-find: find the root lane.
  */
 export function findLane(lane: OptimisticLane): OptimisticLane {
-	while (lane._mergedInto) lane = lane._mergedInto
+	while (lane._mergedInto) {
+		lane = lane._mergedInto
+	}
 	return lane
 }
 
@@ -67,10 +69,14 @@ export function findLane(lane: OptimisticLane): OptimisticLane {
 export function mergeLanes(lane1: OptimisticLane, lane2: OptimisticLane): OptimisticLane {
 	lane1 = findLane(lane1)
 	lane2 = findLane(lane2)
-	if (lane1 === lane2) return lane1
+	if (lane1 === lane2) {
+		return lane1
+	}
 
 	lane2._mergedInto = lane1
-	for (const node of lane2._pendingAsync) lane1._pendingAsync.add(node)
+	for (const node of lane2._pendingAsync) {
+		lane1._pendingAsync.add(node)
+	}
 	lane1._effectQueues[0].push(...lane2._effectQueues[0])
 	lane1._effectQueues[1].push(...lane2._effectQueues[1])
 
@@ -82,9 +88,13 @@ export function mergeLanes(lane1: OptimisticLane, lane2: OptimisticLane): Optimi
  */
 export function resolveLane(el: { _optimisticLane?: OptimisticLane }): OptimisticLane | undefined {
 	const lane = el._optimisticLane
-	if (!lane) return undefined
+	if (!lane) {
+		return undefined
+	}
 	const root = findLane(lane)
-	if (activeLanes.has(root)) return root
+	if (activeLanes.has(root)) {
+		return root
+	}
 	el._optimisticLane = undefined
 	return undefined
 }
@@ -130,7 +140,9 @@ export function assignOrMergeLane(
 					el._optimisticLane = sourceLane
 				} else if (existingRoot._parentLane && findLane(existingRoot._parentLane) === sourceRoot) {
 					// Existing is already the child — keep it
-				} else mergeLanes(sourceRoot, existingRoot)
+				} else {
+					mergeLanes(sourceRoot, existingRoot)
+				}
 			}
 			return
 		}

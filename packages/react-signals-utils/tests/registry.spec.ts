@@ -40,7 +40,9 @@ class TapsDouble implements ReactSignalsTaps {
 
 	emit<K extends keyof TapConsumer>(name: K, ...args: Parameters<TapConsumer[K]>): void {
 		const consumer = this.consumer
-		if (consumer === null) throw new Error('No tap consumer is attached.')
+		if (consumer === null) {
+			throw new Error('No tap consumer is attached.')
+		}
 		;(consumer[name] as (...args: Parameters<TapConsumer[K]>) => void)(...args)
 	}
 }
@@ -333,19 +335,29 @@ describe('ReactBatchRegistry', () => {
 		const violations: string[] = []
 		registry.subscribe({
 			onBatchOpened(token) {
-				if (opened.has(token)) violations.push(`opened twice: ${token}`)
+				if (opened.has(token)) {
+					violations.push(`opened twice: ${token}`)
+				}
 				opened.add(token)
 			},
 			onRootCommitted(_container, tokens) {
 				for (const token of tokens) {
-					if (!registry.isBatchLive(token)) violations.push(`reported dead: ${token}`)
+					if (!registry.isBatchLive(token)) {
+						violations.push(`reported dead: ${token}`)
+					}
 					reported.add(token)
 				}
 			},
 			onBatchRetired(token, committed) {
-				if (!opened.has(token)) violations.push(`retired unopened: ${token}`)
-				if (retired.has(token)) violations.push(`retired twice: ${token}`)
-				if (committed && !reported.has(token)) violations.push(`retired before report: ${token}`)
+				if (!opened.has(token)) {
+					violations.push(`retired unopened: ${token}`)
+				}
+				if (retired.has(token)) {
+					violations.push(`retired twice: ${token}`)
+				}
+				if (committed && !reported.has(token)) {
+					violations.push(`retired before report: ${token}`)
+				}
 				retired.add(token)
 			},
 		})
@@ -370,7 +382,9 @@ describe('ReactBatchRegistry', () => {
 				case 1:
 					taps.writeIn(lane, (random() & 1) !== 0)
 					registry.getCurrentWriteBatch()
-					if ((random() & 1) !== 0) taps.emit('onRootUpdated', root, container, lane)
+					if ((random() & 1) !== 0) {
+						taps.emit('onRootUpdated', root, container, lane)
+					}
 					break
 				case 2:
 					taps.emit('onScheduledRootPending', root, container, random() & allLanes)

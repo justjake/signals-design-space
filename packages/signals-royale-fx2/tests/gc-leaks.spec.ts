@@ -25,13 +25,20 @@ import {
 
 function subCount(x: Signal<number>): number {
 	let n = 0
-	for (let l: Link | undefined = (x.node as CellNode<number>).subs; l !== undefined; l = l.nextSub)
+	for (
+		let l: Link | undefined = (x.node as CellNode<number>).subs;
+		l !== undefined;
+		l = l.nextSub
+	) {
 		n++
+	}
 	return n
 }
 
 async function collect(times = 5): Promise<void> {
-	if (typeof gc !== 'function') throw new Error('run with --expose-gc')
+	if (typeof gc !== 'function') {
+		throw new Error('run with --expose-gc')
+	}
 	for (let i = 0; i < times; i++) {
 		gc!()
 		await new Promise<void>((r) => setTimeout(() => r(), 10))
@@ -217,7 +224,9 @@ describe('leak audit', () => {
 		const payloadRef = (() => {
 			const disposeThrowing = effect(() => {
 				cell.get()
-				if (armed) throw new Error('boom')
+				if (armed) {
+					throw new Error('boom')
+				}
 			})
 			// Scheduled behind the thrower: the aborted flush clears it via the
 			// catch path, which must null its unconsumed slot too.

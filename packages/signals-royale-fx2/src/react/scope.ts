@@ -43,7 +43,9 @@ export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 }
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	const live = prev.ids.filter((d) => isLiveDraft(d))
 	const add = isLiveDraft(id) && !live.includes(id)
-	if (add) live.push(id)
+	if (add) {
+		live.push(id)
+	}
 	const ids = !add && live.length === prev.ids.length ? prev.ids : live
 	return { ids, rev: prev.rev + 1 }
 }

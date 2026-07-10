@@ -226,7 +226,9 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 				handles[i]!.update((v) => v + 1)
 			}
 			rHandle.dispatch(1)
-			for (let i = 0; i < doubles.length; i++) sink += doubles[i]!.state
+			for (let i = 0; i < doubles.length; i++) {
+				sink += doubles[i]!.state
+			}
 		}
 		dispose()
 		expect(sink).not.toBe(0)

@@ -99,7 +99,9 @@ function modelValue(
 			(worldIds === 'latest'
 				? live(it.draft)
 				: worldIds !== null && worldIds.includes(it.draft) && live(it.draft))
-		if (!included) continue
+		if (!included) {
+			continue
+		}
 		v = it.kind === 'set' ? (it.payload as number) : (it.payload as (p: number) => number)(v)
 	}
 	return v
@@ -118,11 +120,16 @@ function modelEval(
 	ref: Ref,
 	world: readonly number[] | 'latest' | null,
 ): number {
-	if ('cell' in ref) return modelValue(m, ref.cell, world)
+	if ('cell' in ref) {
+		return modelValue(m, ref.cell, world)
+	}
 	const e = exprs[ref.comp]
-	if (e.op === 'sum') return e.args.reduce((acc, r) => acc + modelEval(m, exprs, r, world), 0)
-	if (e.op === 'mul')
+	if (e.op === 'sum') {
+		return e.args.reduce((acc, r) => acc + modelEval(m, exprs, r, world), 0)
+	}
+	if (e.op === 'mul') {
 		return e.args.reduce((acc, r) => acc * modelEval(m, exprs, r, world), 1) % 1000003
+	}
 	return modelEval(m, exprs, e.cond, world) % 2 === 0
 		? modelEval(m, exprs, e.then, world)
 		: modelEval(m, exprs, e.else, world)
@@ -281,7 +288,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 		}
 		const rerender = () => {
 			for (const id of [...sub.ids]) {
-				if (!isLiveDraft(id)) sub.ids.delete(id) // the reducer's prune
+				if (!isLiveDraft(id)) {
+					sub.ids.delete(id)
+				} // the reducer's prune
 			}
 			const st = resolveState(node, worldOf([...sub.ids]))
 			if ((st.flags & Flag.AsyncMask) !== 0) {
@@ -300,7 +309,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 			}
 		}
 		const join = (id: DraftId) => {
-			if (!isLiveDraft(id)) return
+			if (!isLiveDraft(id)) {
+				return
+			}
 			sub.ids.add(id)
 			rerender()
 		}
@@ -311,21 +322,29 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 				// resolution of THIS sub's world differs from what it shows.
 				const ids = [...sub.ids].filter((id) => isLiveDraft(id))
 				const st = resolveState(node, worldOf(ids))
-				if ((st.flags & Flag.AsyncMask) !== 0 || !Object.is(st.value, sub.view)) rerender()
+				if ((st.flags & Flag.AsyncMask) !== 0 || !Object.is(st.value, sub.view)) {
+					rerender()
+				}
 			},
 			(id) => seams.deliverWake(join, id),
 		)
 		// The subscription attaches after drafts may already hold intents on
 		// this node's sources; join them (correctSubscription's job in the
 		// bindings), through the same sabotage seam as write-time wakes.
-		for (const id of draftsAffecting(node)) seams.deliverWake(join, id)
+		for (const id of draftsAffecting(node)) {
+			seams.deliverWake(join, id)
+		}
 		rerender()
 		scopedSubs.push(sub)
 	}
 	const checkScopedSubs = (): string | null => {
 		for (const sub of scopedSubs) {
-			if (sub.failure !== null) return sub.failure
-			if (sub.modelIds === null) continue
+			if (sub.failure !== null) {
+				return sub.failure
+			}
+			if (sub.modelIds === null) {
+				continue
+			}
 			// Strong (cell) subscribers: the model's own wake bookkeeping is the
 			// expectation, so a swallowed wake or a missed silent fold surfaces
 			// as a stale view here — this is the silent-fold honesty check.
@@ -339,7 +358,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 	}
 
 	const refreshExpectedEffect = () => {
-		if (effectRef === null) return
+		if (effectRef === null) {
+			return
+		}
 		const v = modelEval(model, exprs, effectRef, null)
 		if (expectedEffectLog.length === 0 || expectedEffectLog[expectedEffectLog.length - 1] !== v) {
 			expectedEffectLog.push(v)
@@ -354,7 +375,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 				case 'cell': {
 					model.cells.push({ init: s.init, intents: [] })
 					engCells.push(signal(s.init))
-					if (engCells.length === 1) attachScoped({ cell: 0 }, true)
+					if (engCells.length === 1) {
+						attachScoped({ cell: 0 }, true)
+					}
 					break
 				}
 				case 'comp': {
@@ -415,7 +438,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					break
 				}
 				case 'draftSet': {
-					if (model.drafts.get(s.draft) !== 'live') break
+					if (model.drafts.get(s.draft) !== 'live') {
+						break
+					}
 					model.cells[s.cell].intents.push({ kind: 'set', payload: s.v, draft: s.draft })
 					for (const sub of scopedSubs) {
 						if (sub.modelIds !== null && 'cell' in sub.ref && sub.ref.cell === s.cell) {
@@ -426,7 +451,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					break
 				}
 				case 'draftUpdate': {
-					if (model.drafts.get(s.draft) !== 'live') break
+					if (model.drafts.get(s.draft) !== 'live') {
+						break
+					}
 					const k = s.k
 					model.cells[s.cell].intents.push({
 						kind: 'update',
@@ -442,14 +469,18 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					break
 				}
 				case 'retire': {
-					if (model.drafts.get(s.draft) !== 'live') break
+					if (model.drafts.get(s.draft) !== 'live') {
+						break
+					}
 					model.drafts.set(s.draft, 'retired')
 					seams.retire(engDrafts.get(s.draft)!)
 					refreshExpectedEffect()
 					break
 				}
 				case 'discard': {
-					if (model.drafts.get(s.draft) !== 'live') break
+					if (model.drafts.get(s.draft) !== 'live') {
+						break
+					}
 					model.drafts.set(s.draft, 'discarded')
 					discardDraft(engDrafts.get(s.draft)!.id)
 					break
@@ -457,7 +488,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 				case 'readBase': {
 					const got = engRead(s.ref)
 					const want = modelEval(model, exprs, s.ref, null)
-					if (got !== want) return fail(`base read: engine ${got} != model ${want}`)
+					if (got !== want) {
+						return fail(`base read: engine ${got} != model ${want}`)
+					}
 					break
 				}
 				case 'readWorld': {
@@ -465,17 +498,21 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					const engIds = ids.map((ix) => engDrafts.get(ix)!.id)
 					const target = 'cell' in s.ref ? engCells[s.ref.cell] : engComps[s.ref.comp]
 					const st = resolveState(nodeOf(target), worldOf(engIds))
-					if ((st.flags & Flag.AsyncMask) !== 0)
+					if ((st.flags & Flag.AsyncMask) !== 0) {
 						return fail(`world read: unexpected flags ${st.flags}`)
+					}
 					const want = modelEval(model, exprs, s.ref, ids)
-					if (st.value !== want)
+					if (st.value !== want) {
 						return fail(`world read [${ids}]: engine ${String(st.value)} != model ${want}`)
+					}
 					break
 				}
 				case 'readLatest': {
 					const got = latest(engCells[s.cell])
 					const want = modelValue(model, s.cell, 'latest')
-					if (got !== want) return fail(`latest: engine ${got} != model ${want}`)
+					if (got !== want) {
+						return fail(`latest: engine ${got} != model ${want}`)
+					}
 					break
 				}
 				case 'probePending': {
@@ -483,25 +520,33 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					const want = model.cells[s.cell].intents.some(
 						(it) => it.draft !== null && model.drafts.get(it.draft) === 'live',
 					)
-					if (got !== want) return fail(`isPending: engine ${got} != model ${want}`)
+					if (got !== want) {
+						return fail(`isPending: engine ${got} != model ${want}`)
+					}
 					break
 				}
 			}
 			// Scoped subscribers converge synchronously (wakes and notifications
 			// flush with the walk), so their views are checkable after any step.
 			const scoped = checkScopedSubs()
-			if (scoped !== null) return fail(scoped)
+			if (scoped !== null) {
+				return fail(scoped)
+			}
 		}
 		// Final base-state sweep + effect-log comparison.
 		for (let cix = 0; cix < engCells.length; cix++) {
 			const got = read(engCells[cix])
 			const want = modelValue(model, cix, null)
-			if (got !== want) return `final sweep cell ${cix}: engine ${got} != model ${want}`
+			if (got !== want) {
+				return `final sweep cell ${cix}: engine ${got} != model ${want}`
+			}
 		}
 		for (let cix = 0; cix < engComps.length; cix++) {
 			const got = read(engComps[cix])
 			const want = modelEval(model, exprs, { comp: cix }, null)
-			if (got !== want) return `final sweep comp ${cix}: engine ${got} != model ${want}`
+			if (got !== want) {
+				return `final sweep comp ${cix}: engine ${got} != model ${want}`
+			}
 		}
 		if (effectLog.join(',') !== expectedEffectLog.join(',')) {
 			return `effect log: engine [${effectLog}] != model [${expectedEffectLog}]`
@@ -509,7 +554,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 		return null
 	} finally {
 		disposeEffect?.()
-		for (const sub of scopedSubs) sub.unsub()
+		for (const sub of scopedSubs) {
+			sub.unsub()
+		}
 	}
 }
 
@@ -605,7 +652,9 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
 				failures.push(
 					`seed ${seed}: ${failure}\n  shrunk to ${small.length} steps: ${JSON.stringify(small)}\n  shrunk failure: ${replay}`,
 				)
-				if (failures.length >= 3) break
+				if (failures.length >= 3) {
+					break
+				}
 			}
 		}
 		expect(failures, failures.join('\n\n')).toEqual([])

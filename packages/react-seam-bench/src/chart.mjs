@@ -40,7 +40,9 @@ const rows = readFileSync(SRC, 'utf8')
 
 const byFw = new Map()
 for (const [fw, test, time] of rows) {
-	if (!byFw.has(fw)) byFw.set(fw, { tests: 0, sums: { fanout: 0, transition: 0, mount: 0 } })
+	if (!byFw.has(fw)) {
+		byFw.set(fw, { tests: 0, sums: { fanout: 0, transition: 0, mount: 0 } })
+	}
 	const e = byFw.get(fw)
 	e.tests++
 	e.sums[suiteOf(test)] += Number(time)
@@ -58,7 +60,9 @@ for (const [fw, e] of byFw) {
 	frameworks.push({ fw, ...e.sums, total: SUITES.reduce((t, s) => t + e.sums[s], 0) })
 }
 frameworks.sort((a, b) => a.total - b.total)
-if (partial.length) console.error('excluded (crashed mid-run): ' + partial.join('; '))
+if (partial.length) {
+	console.error('excluded (crashed mid-run): ' + partial.join('; '))
+}
 if (frameworks.length === 0) {
 	console.error(
 		`no complete contender rows found in ${SRC} — did the benchmark produce CSV output?`,
@@ -134,7 +138,9 @@ frameworks.forEach((f, i) => {
 	let cx = LABEL_W
 	SUITES.forEach((s, si) => {
 		const w = (f[s] / axisMax) * plotW
-		if (w <= 0) return
+		if (w <= 0) {
+			return
+		}
 		const isLast = si === SUITES.length - 1
 		// 2px surface gap between segments; 4px rounded data-end on the final segment only
 		const gap = isLast ? 0 : 2

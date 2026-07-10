@@ -52,7 +52,9 @@ for (const { section, cases } of testSuite) {
 				try {
 					framework.run(() => fn(framework))
 				} catch (e) {
-					if (e instanceof SkipTest) return
+					if (e instanceof SkipTest) {
+						return
+					}
 					throw e
 				}
 			})

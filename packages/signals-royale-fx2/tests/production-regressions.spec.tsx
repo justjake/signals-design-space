@@ -39,7 +39,9 @@ function makeHeld() {
 	function Holder() {
 		const v = useValue(a)
 		const held = useValue(hold)
-		if (held && !gate.settled) throw gate.promise
+		if (held && !gate.settled) {
+			throw gate.promise
+		}
 		return <b>h:{v};</b>
 	}
 	const start = () =>
@@ -65,7 +67,9 @@ describe('tear: the render-world note is validity-gated', () => {
 		function NoHookProbe() {
 			const [n, setN] = React.useState(0)
 			bump = () => setN((x) => x + 1)
-			if (n > 0) probed.push(latest(a)) // sample only the urgent re-renders
+			if (n > 0) {
+				probed.push(latest(a))
+			} // sample only the urgent re-renders
 			return <i>p:{n};</i>
 		}
 		const { container } = await h.mount(
@@ -130,7 +134,9 @@ describe('tear: the render-world note is validity-gated', () => {
 		function List() {
 			const n = useValue(items)
 			const kids = []
-			for (let k = 0; k < n; k++) kids.push(<SlowItem key={k} k={k} />)
+			for (let k = 0; k < n; k++) {
+				kids.push(<SlowItem key={k} k={k} />)
+			}
 			return (
 				<div>
 					n:{n};{kids}
@@ -144,7 +150,9 @@ describe('tear: the render-world note is validity-gated', () => {
 		function Probe() {
 			const [n, setN] = React.useState(0)
 			bump = () => setN((x) => x + 1)
-			if (n > 0) sampled.push(latest(a))
+			if (n > 0) {
+				sampled.push(latest(a))
+			}
 			return <i>q:{n}</i>
 		}
 		const div = document.body.appendChild(document.createElement('div'))
@@ -159,13 +167,17 @@ describe('tear: the render-world note is validity-gated', () => {
 				a.set(2)
 			})
 			const deadline = Date.now() + 5000
-			while (itemRenders < 3 && Date.now() < deadline) await tick(5)
+			while (itemRenders < 3 && Date.now() < deadline) {
+				await tick(5)
+			}
 			expect(itemRenders).toBeGreaterThanOrEqual(3)
 			expect(itemRenders).toBeLessThan(24) // the transition pass is mid-flight
 			flushSync(() => bump())
 			expect(sampled).toEqual([1]) // urgent interleave: base state, not the draft
 			const done = Date.now() + 15000
-			while (!text(container).includes('n:24;') && Date.now() < done) await tick(10)
+			while (!text(container).includes('n:24;') && Date.now() < done) {
+				await tick(10)
+			}
 			expect(text(container)).toContain('n:24;')
 		} finally {
 			;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -181,7 +193,9 @@ describe('tear: the render-world note is validity-gated', () => {
 		function NoHookProbe() {
 			const [n, setN] = React.useState(0)
 			bump = () => setN((x) => x + 1)
-			if (n > 0) probed.push(latest(a))
+			if (n > 0) {
+				probed.push(latest(a))
+			}
 			return <i>p:{n};</i>
 		}
 		const { container } = await h.mount(
@@ -243,7 +257,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const gate = deferred<void>()
 		function Suspender() {
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>s;</b>
 		}
 		const { container } = await h.mount(
@@ -276,13 +292,17 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			sealDraft(draft)
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
-		for (let i = 2; i < N; i++) expect(renders[i]).toBe(mounted[i]) // never woken
+		for (let i = 2; i < N; i++) {
+			expect(renders[i]).toBe(mounted[i])
+		} // never woken
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(container)).toBe('1;2;0;0;0;0;0;0;s;') // the whole batch lands together
-		for (let i = 2; i < N; i++) expect(renders[i]).toBe(mounted[i]) // silent fold
+		for (let i = 2; i < N; i++) {
+			expect(renders[i]).toBe(mounted[i])
+		} // silent fold
 	})
 
 	test('two interleaved transitions keep distinct audiences', async () => {
@@ -294,7 +314,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		function AReader() {
 			const v = useValue(a)
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>a:{v};</b>
 		}
 		function BReader() {
@@ -352,7 +374,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		let dispatchesBeforeRender = -1
 		await act(() => {
 			startTransitionWrite(() => {
-				for (let k = 1; k <= 100; k++) cell.set(k)
+				for (let k = 1; k <= 100; k++) {
+					cell.set(k)
+				}
 			})
 			// Sampled synchronously after the writes, before React renders the
 			// transition pass: what the burst itself cost in reducer dispatches.
@@ -373,7 +397,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const gate = deferred<void>()
 		function Suspender() {
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>s;</b>
 		}
 		const { container } = await h.mount(
@@ -417,7 +443,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const gate = deferred<void>()
 		function Suspender() {
 			const held = useValue(hold)
-			if (held && !gate.settled) throw gate.promise
+			if (held && !gate.settled) {
+				throw gate.promise
+			}
 			return <b>s;</b>
 		}
 		const { container } = await h.mount(
@@ -461,7 +489,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		await act(async () => {})
 		expect(text(container)).toBe('0;0;5;0;0;0;0;0;')
 		for (let i = 0; i < N; i++) {
-			if (i !== 2) expect(renders[i]).toBe(mounted[i]) // untouched subscribers stay asleep
+			if (i !== 2) {
+				expect(renders[i]).toBe(mounted[i])
+			} // untouched subscribers stay asleep
 		}
 		expect(renders[2]).toBeGreaterThan(mounted[2])
 	})

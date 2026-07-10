@@ -71,7 +71,9 @@ for (let i = 0; i < 25; i++) {
 }
 
 // Batched write traffic over the live watchers (delivery walks, drains).
-for (let i = 1; i <= 50; i++) commitWrite(b, atoms[i % atoms.length]!, i * 3)
+for (let i = 1; i <= 50; i++) {
+	commitWrite(b, atoms[i % atoms.length]!, i * 3)
+}
 
 // Dispose→create churn with record reuse (the nodeIndex recycling path).
 const base = new Atom(1)
@@ -81,8 +83,12 @@ for (let i = 0; i < 120; i++) {
 	b.committedValue(node, 'R')
 	b.disposeComputed(c as unknown as Computed<unknown>)
 }
-for (const stop of stops) stop()
-for (const w of watchers) b.removeWatcher(w.id)
+for (const stop of stops) {
+	stop()
+}
+for (const w of watchers) {
+	b.removeWatcher(w.id)
+}
 
 // ---- the probes ------------------------------------------------------------
 type Probe = { name: string; arr: unknown; smi: boolean }
@@ -116,5 +122,7 @@ for (const p of probes) {
 		failed = true
 	}
 }
-if (failed) process.exit(1)
+if (failed) {
+	process.exit(1)
+}
 process.stdout.write('@@ELEMENTS-OK\n')

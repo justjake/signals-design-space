@@ -465,8 +465,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * re-reads `a.memory` afterward; each allocating site notes this where it re-reads. */
 	function growWorldArenaBuffers(a: WorldArena, needInts: number): void {
 		let len = a.memory.length
-		while (len < needInts) len *= 2
-		if (len === a.memory.length) return
+		while (len < needInts) {
+			len *= 2
+		}
+		if (len === a.memory.length) {
+			return
+		}
 		if (a.storage === 'arena') {
 			const memory = new Int32Array(len)
 			memory.set(a.memory)
@@ -1978,7 +1982,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// owns the drain and runs it after ITS committed-truth fan, so draining
 		// here first would scan before that fan lands. drainQuietBoundary's own
 		// enterDepth check makes re-entrant (mid-effect) flushes no-op.
-		if (opDepth === 0) drainQuietBoundary()
+		if (opDepth === 0) {
+			drainQuietBoundary()
+		}
 	}
 
 	function throwFold(): never {
@@ -2317,7 +2323,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				// errors, not rejections of the settled chain. Epoch-guarded: after
 				// a reset the erroring engine is gone; rethrowing would misattribute.
 				queueMicrotask(() => {
-					if (epoch !== engineEpoch) return
+					if (epoch !== engineEpoch) {
+						return
+					}
 					throw err
 				})
 			}
@@ -2439,7 +2447,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (state.refs <= 0 && !state.isMounted && !state.scheduled) {
 			lifecycleStates.delete(state.id)
 			// This deletion is reclamation's retry trigger for lifecycle atoms.
-			if (reclaimSkippedN !== 0) noteReclaimRetry(state.id)
+			if (reclaimSkippedN !== 0) {
+				noteReclaimRetry(state.id)
+			}
 		}
 	}
 
@@ -2494,7 +2504,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		state.refs += delta
 		const wantMounted = state.refs > 0
 		if (state.wantMounted === wantMounted) {
-			if (!wantMounted) maybeDropDormant(state)
+			if (!wantMounted) {
+				maybeDropDormant(state)
+			}
 			return // interior transition (1↔2, …): the union's edge did not move
 		}
 		state.wantMounted = wantMounted
@@ -2912,7 +2924,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function __TEST__eachInternals(): AnyInternals[] {
 		const out: AnyInternals[] = []
 		for (const node of nodeIndexToInternals) {
-			if (node !== undefined) out.push(node)
+			if (node !== undefined) {
+				out.push(node)
+			}
 		}
 		return out
 	}
@@ -3159,7 +3173,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * a quiet fold, visible to every world by construction. */
 	function internalsForAtom(atom: Atom<unknown>): AtomInternals {
 		const hit = atom._internals
-		if (hit !== undefined) return hit
+		if (hit !== undefined) {
+			return hit
+		}
 		const id = atom._id
 		const current = untracked(() => E.readAtom(id)) // non-linking newest read
 		const node = new AtomInternals(
@@ -3246,7 +3262,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * (ctx.previous, the id-keyed ctx.use cache, background-suspension folding). */
 	function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 		const hit = c._internals
-		if (hit !== undefined) return hit
+		if (hit !== undefined) {
+			return hit
+		}
 		const name = c.label ?? `computed#${c._id}`
 		// Weak handle slot: the world fn closes over the raw fn and this node, never the handle.
 		const node = new ComputedInternals(
@@ -3278,7 +3296,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				} catch (err) {
 					// A pending suspension folds to its stable SuspendedRead sentinel
 					// value; hook-initiated evaluations rethrow so React can suspend.
-					if (err instanceof SuspendedRead && suspendDepth === 0) return err
+					if (err instanceof SuspendedRead && suspendDepth === 0) {
+						return err
+					}
 					throw err
 				}
 			}
@@ -3291,13 +3311,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			fns[fnIx] = (ctxArg: unknown): unknown => {
 				evalDepth++ // writes during a newest evaluation throw, as in every world
 				const tr = trace
-				if (tr !== undefined) tr.evalStart(node, NEWEST)
+				if (tr !== undefined) {
+					tr.evalStart(node, NEWEST)
+				}
 				try {
 					return inner(ctxArg)
 				} finally {
 					evalDepth--
-					if (tr !== undefined) tr.evalEnd()
-					if (obsRefs[node.ix]! > 0) syncObservationAfterKernelRun(node, getKernelStrongDeps(node))
+					if (tr !== undefined) {
+						tr.evalEnd()
+					}
+					if (obsRefs[node.ix]! > 0) {
+						syncObservationAfterKernelRun(node, getKernelStrongDeps(node))
+					}
 				}
 			}
 		}
@@ -3320,13 +3346,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const ws = nodeToWatchers[ix]
 			if (ws !== undefined) {
 				for (const watcher of ws) {
-					if (watcher.live)
+					if (watcher.live) {
 						throw new ScheduleError(
 							`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`,
 						)
+					}
 				}
 			}
-			if (obsRefs[ix]! > 0) exitObservation(node) // release any retained closure (defensive)
+			if (obsRefs[ix]! > 0) {
+				exitObservation(node)
+			} // release any retained closure (defensive)
 			purgeNodeFromArenas(ix)
 			nodeIndexToInternals[ix] = undefined
 			handle._internals = undefined
@@ -3346,7 +3375,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// its observation retains and clear a still-live handle's backlink.
 			const resident = nodeIndexToInternals[ix]
 			if (resident !== undefined) {
-				if (obsRefs[ix]! > 0) exitObservation(resident)
+				if (obsRefs[ix]! > 0) {
+					exitObservation(resident)
+				}
 				clearHandleBacklink(resident)
 			}
 			nodeIndexToInternals[ix] = undefined
@@ -3365,7 +3396,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function clearHandleBacklink(node: AnyInternals): void {
 		const h = node._h
 		const live = h instanceof WeakRef ? h.deref() : h
-		if (live !== undefined) live._internals = undefined
+		if (live !== undefined) {
+			live._internals = undefined
+		}
 	}
 
 	/** Engine-side reclaim guards (installed kernel-side per composition): a
@@ -3376,19 +3409,29 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function reclaimGuards(id: NodeId, ix: NodeIndex): boolean {
 		if (ix < nodeToWatchers.length) {
 			const ws = nodeToWatchers[ix]
-			if (ws !== undefined && ws.length !== 0) return true
-			if (obsRefs[ix]! > 0) return true
+			if (ws !== undefined && ws.length !== 0) {
+				return true
+			}
+			if (obsRefs[ix]! > 0) {
+				return true
+			}
 		}
 		// reclaimNode verified the GEN stamp, so the dense row is this record's node.
 		const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined
-		if (node !== undefined && node.kind === 'atom' && episodeHolds.has(node)) return true
+		if (node !== undefined && node.kind === 'atom' && episodeHolds.has(node)) {
+			return true
+		}
 		for (const p of rootToOpenRender.values()) {
 			const a = p.arena
-			if (a !== undefined && arenaHasShadow(a, ix)) return true
+			if (a !== undefined && arenaHasShadow(a, ix)) {
+				return true
+			}
 		}
 		let suspended = false
 		eachArena((a) => {
-			if (!suspended && arenaHoldsSuspended(a, ix)) suspended = true
+			if (!suspended && arenaHoldsSuspended(a, ix)) {
+				suspended = true
+			}
 		})
 		return suspended
 	}
@@ -3401,15 +3444,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			obsCapture = obsRefs[node.ix]! > 0 ? [] : undefined
 			evalDepth++ // writes during a newest evaluation throw, as in every world
 			const tr = trace
-			if (tr !== undefined) tr.evalStart(node, NEWEST)
+			if (tr !== undefined) {
+				tr.evalStart(node, NEWEST)
+			}
 			try {
 				return node.fn(kernelTrackedReader, kernelUntrackedReader)
 			} finally {
 				evalDepth--
 				const captured = obsCapture
 				obsCapture = savedCapture
-				if (tr !== undefined) tr.evalEnd()
-				if (captured !== undefined) syncObservationAfterKernelRun(node, captured)
+				if (tr !== undefined) {
+					tr.evalEnd()
+				}
+				if (captured !== undefined) {
+					syncObservationAfterKernelRun(node, captured)
+				}
 			}
 		}
 	}
@@ -3417,11 +3466,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** The dep read both kernel-frame readers share: plain kernel reads (which
 	 * link the dep to any open kernel frame); kernel CycleErrors translate to the engine's. */
 	function readKernelValue(dep: AnyInternals): Value {
-		if (dep.kind === 'atom') return E.readAtom(dep.id)
+		if (dep.kind === 'atom') {
+			return E.readAtom(dep.id)
+		}
 		try {
 			return E.computedRead(dep.id)
 		} catch (err) {
-			if (err instanceof CycleError) throw createCycleError(dep.name)
+			if (err instanceof CycleError) {
+				throw createCycleError(dep.name)
+			}
 			throw err
 		}
 	}
@@ -3446,7 +3499,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// Dep ids come off live kernel links: the dense row is the dep's node, or undefined (no engine content).
 			const depIx = memory[memory[l + LinkField.DEP]! + NodeField.NODE_INDEX]!
 			const dep = depIx < nodeIndexToInternals.length ? nodeIndexToInternals[depIx] : undefined
-			if (dep !== undefined) out.push(dep)
+			if (dep !== undefined) {
+				out.push(dep)
+			}
 			l = memory[l + LinkField.NEXT_DEP]!
 		}
 		return out
@@ -3491,14 +3546,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * tenant's count — and stale is forever, so skipped shifts pair up. */
 	function shiftObservedCount(node: AnyInternals, delta: 1 | -1): void {
 		const ix = node.ix
-		if (nodeIndexToInternals[ix] !== node) return
+		if (nodeIndexToInternals[ix] !== node) {
+			return
+		}
 		const refs = obsRefs[ix]! + delta
 		obsRefs[ix] = refs
-		if (refs === 1 && delta === 1) enterObservation(node)
-		else if (refs === 0 && delta === -1) {
+		if (refs === 1 && delta === 1) {
+			enterObservation(node)
+		} else if (refs === 0 && delta === -1) {
 			exitObservation(node)
 			// obsRefs > 0 blocks reclamation, so a release to zero retries skipped frees.
-			if (reclaimSkippedN !== 0) noteReclaimRetry(node.id)
+			if (reclaimSkippedN !== 0) {
+				noteReclaimRetry(node.id)
+			}
 		}
 	}
 
@@ -3531,19 +3591,27 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return
 		}
 		const held = obsDeps[node.ix]
-		if (held === undefined) return
+		if (held === undefined) {
+			return
+		}
 		obsDeps[node.ix] = undefined
-		for (const dep of held) shiftObservedCount(dep, -1)
+		for (const dep of held) {
+			shiftObservedCount(dep, -1)
+		}
 	}
 
 	/** Re-point retains: retain-new before release-old, so deps present in both
 	 * sets never shift. Consumes `prev` destructively (callers replace it). */
 	function repointRetains(prev: Set<AnyInternals> | undefined, next: Set<AnyInternals>): void {
 		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) shiftObservedCount(dep, 1)
+			if (prev === undefined || !prev.delete(dep)) {
+				shiftObservedCount(dep, 1)
+			}
 		}
 		if (prev !== undefined) {
-			for (const dep of prev) shiftObservedCount(dep, -1)
+			for (const dep of prev) {
+				shiftObservedCount(dep, -1)
+			}
 		}
 	}
 
@@ -3551,10 +3619,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * its retains at the strong deps this evaluation recorded. Skipped if
 	 * observation left mid-evaluation — installing a retained set now would leak. */
 	function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
-		if (obsRefs[node.ix]! === 0) return
+		if (obsRefs[node.ix]! === 0) {
+			return
+		}
 		const prev = obsDeps[node.ix]
 		const next = new Set<AnyInternals>()
-		for (const dep of list) next.add(dep)
+		for (const dep of list) {
+			next.add(dep)
+		}
 		obsDeps[node.ix] = next
 		repointRetains(prev, next)
 	}
@@ -3637,7 +3709,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 		materialize(): WriteLogEntry[] {
 			const out: WriteLogEntry[] = []
-			for (const entry of this.entries) out.push(materializeRecord(entry))
+			for (const entry of this.entries) {
+				out.push(materializeRecord(entry))
+			}
 			return out
 		}
 
@@ -3665,7 +3739,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * that can make a prefix foldable (stamps land, pins lapse).
 	 */
 	function runFoldValve(): void {
-		if (foldCandidates.size === 0) return
+		if (foldCandidates.size === 0) {
+			return
+		}
 		const minPin = getMinLivePin()
 		for (const atom of foldCandidates) {
 			foldRetiredPrefix(atom, minPin)
@@ -3684,7 +3760,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let n = 0
 		while (n < entries.length) {
 			const r = entries[n]!.retiredSeq
-			if (r === undefined || r > minPin) break
+			if (r === undefined || r > minPin) {
+				break
+			}
 			n++
 		}
 		if (n >= FOLD_VALVE_THRESHOLD) {
@@ -3693,24 +3771,34 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const e = entries[i]!
 				const next = applyOp(atom, e.kind, e.payload, atom.base)
 				// Stepwise equality per replayed entry, order isEqual(current, incoming).
-				if (!isAtomValueEqual(atom, atom.base, next)) atom.base = next
+				if (!isAtomValueEqual(atom, atom.base, next)) {
+					atom.base = next
+				}
 				atom.baseSeq = e.seq
-				if (onDrop !== undefined) onDrop(atom, materializeRecord(e))
+				if (onDrop !== undefined) {
+					onDrop(atom, materializeRecord(e))
+				}
 			}
 			entries.splice(0, n) // the folded prefix drops in one splice
 			// The stamp max may have lived in the folded prefix: recompute.
 			let max: Seq = 0
 			for (let i = 0; i < entries.length; i++) {
 				const r = entries[i]!.retiredSeq
-				if (r !== undefined && r > max) max = r
+				if (r !== undefined && r > max) {
+					max = r
+				}
 			}
 			log.maxRetiredSeq = max
 		}
-		if (entries.length < FOLD_VALVE_THRESHOLD) foldCandidates.delete(atom)
+		if (entries.length < FOLD_VALVE_THRESHOLD) {
+			foldCandidates.delete(atom)
+		}
 		if (entries.length === 0) {
 			episodeHolds.delete(atom)
 			// Log emptied mid-episode: membership cleared, so retry skipped reclaims.
-			if (reclaimSkippedN !== 0) noteReclaimRetry(atom.id)
+			if (reclaimSkippedN !== 0) {
+				noteReclaimRetry(atom.id)
+			}
 		}
 	}
 
@@ -3721,14 +3809,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * membership sets and retired batch records drop, then reclamation retries.
 	 */
 	function maybeCloseEpisode(): void {
-		if (liveBatchCount !== 0 || rootToOpenRender.size !== 0) return
+		if (liveBatchCount !== 0 || rootToOpenRender.size !== 0) {
+			return
+		}
 		if (episodeHolds.size !== 0) {
 			const onDrop = onLogEntryDrop
 			for (const atom of episodeHolds) {
 				const log = atom.log
 				const entries = log.entries
 				if (onDrop !== undefined) {
-					for (let i = 0; i < entries.length; i++) onDrop(atom, materializeRecord(entries[i]!))
+					for (let i = 0; i < entries.length; i++) {
+						onDrop(atom, materializeRecord(entries[i]!))
+					}
 				}
 				// The durable handoff (see the section header): adopt kernel newest by identity.
 				atom.base = untracked(() => E.readAtom(atom.id)) // untracked: a close reached from inside a kernel effect frame records no link
@@ -3863,28 +3955,36 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		liveBatchCount++
 		recomputeQuiet() // a live batch: the pipeline is armed until the last retirement
 		const tr = trace
-		if (tr !== undefined) tr.batchOpen(batch)
+		if (tr !== undefined) {
+			tr.batchOpen(batch)
+		}
 		return batch
 	}
 
 	/** Look up a batch id or throw the schedule error every resolver shares. */
 	function getBatchById(id: BatchId): Batch {
 		const t = idToBatch.get(id)
-		if (t === undefined) throw new ScheduleError(`unknown batch ${id}`)
+		if (t === undefined) {
+			throw new ScheduleError(`unknown batch ${id}`)
+		}
 		return t
 	}
 
 	function liveBatches(): Batch[] {
 		const out: Batch[] = []
 		for (const batch of idToBatch.values()) {
-			if (batch.state === 'live') out.push(batch)
+			if (batch.state === 'live') {
+				out.push(batch)
+			}
 		}
 		return out
 	}
 
 	/** Intern the batch's slot, claiming a free one at its first write. */
 	function internSlot(batch: Batch): BatchSlotMeta {
-		if (batch.slot !== undefined) return slots[batch.slot]!
+		if (batch.slot !== undefined) {
+			return slots[batch.slot]!
+		}
 		let free: BatchSlotMeta | undefined
 		for (const slot of slots) {
 			if (slot.tenant === undefined) {
@@ -3898,7 +3998,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			let victim: BatchSlotMeta | undefined
 			let victimRetiredSeq = Infinity
 			for (const slot of slots) {
-				if (!slot.releasePending) continue
+				if (!slot.releasePending) {
+					continue
+				}
 				const retiredSeq = getBatchById(slot.tenant!).retiredSeq ?? 0
 				if (retiredSeq < victimRetiredSeq) {
 					victim = slot
@@ -3911,7 +4013,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				)
 			}
 			const tr = trace
-			if (tr !== undefined) tr.slotBackstopReleased(victim.id, victim.tenant!)
+			if (tr !== undefined) {
+				tr.slotBackstopReleased(victim.id, victim.tenant!)
+			}
 			releaseSlot(victim)
 			free = victim
 		}
@@ -3923,15 +4027,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// A batch can commit before its first write: such a late intern adds the
 		// slot to its roots' membership bits so the coming entries stay visible.
 		for (const r of roots.values()) {
-			if (r.committedBatches.has(batch.id)) r.committedBits |= 1 << free.id
+			if (r.committedBatches.has(batch.id)) {
+				r.committedBits |= 1 << free.id
+			}
 		}
 		{
 			const clear = ~(1 << free.id)
-			for (const w of watchers.values()) w.dedupBits &= clear // dedup clear at re-intern
+			for (const w of watchers.values()) {
+				w.dedupBits &= clear
+			} // dedup clear at re-intern
 		}
 		{
 			const tr = trace
-			if (tr !== undefined) tr.slotClaimed(free.id, batch.id)
+			if (tr !== undefined) {
+				tr.slotClaimed(free.id, batch.id)
+			}
 		}
 		return free
 	}
@@ -3941,7 +4051,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (tenant !== undefined) {
 			tenant.slot = undefined // identity release; log entries keep their denormalized slot
 			const tr = trace
-			if (tr !== undefined) tr.slotReleased(slot.id, tenant.id)
+			if (tr !== undefined) {
+				tr.slotReleased(slot.id, tenant.id)
+			}
 		}
 		slot.tenant = undefined
 		slot.releasePending = false
@@ -3951,14 +4063,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let bits = 0
 		for (const tid of r.committedBatches) {
 			const batch = idToBatch.get(tid)
-			if (batch !== undefined && batch.slot !== undefined) bits |= 1 << batch.slot
+			if (batch !== undefined && batch.slot !== undefined) {
+				bits |= 1 << batch.slot
+			}
 		}
 		r.committedBits = bits
 	}
 
 	function isSlotRetainedByOpenMask(slot: BatchSlot): boolean {
 		for (const p of rootToOpenRender.values()) {
-			if ((p.maskBits >>> slot) & 1) return true
+			if ((p.maskBits >>> slot) & 1) {
+				return true
+			}
 		}
 		return false
 	}
@@ -3969,8 +4085,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * only at settlement (their pending state must stay pending until then). */
 	function retire(batchId: BatchId): void {
 		const t = getBatchById(batchId)
-		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per batch')
-		if (t.parked) throw new ScheduleError('parked action batches retire only at settlement')
+		if (t.state === 'retired') {
+			throw new ScheduleError('retirement fires exactly once per batch')
+		}
+		if (t.parked) {
+			throw new ScheduleError('parked action batches retire only at settlement')
+		}
 		opDepth++ // public-operation frame (see the engine's write dispatch)
 		try {
 			retireInner(t)
@@ -3987,13 +4107,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** The async action's promise settled; the protocol host then retires the batch. */
 	function settleAction(batchId: BatchId): void {
 		const t = getBatchById(batchId)
-		if (!t.action) throw new ScheduleError('settle targets an action batch')
-		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled')
+		if (!t.action) {
+			throw new ScheduleError('settle targets an action batch')
+		}
+		if (!t.parked || t.state !== 'live') {
+			throw new ScheduleError('action already settled')
+		}
 		opDepth++ // public-operation frame (see the engine's write dispatch)
 		try {
 			t.parked = false
 			const tr = trace
-			if (tr !== undefined) tr.batchSettle(t)
+			if (tr !== undefined) {
+				tr.batchSettle(t)
+			}
 			retireInner(t)
 			flushDirtySignalEffects(undefined) // boundary rule: settlement is a guaranteed flush point
 			endOperation()
@@ -4022,7 +4148,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const touchedAtoms = batch.atomsTouched
 		for (let i = 0; i < touchedAtoms.length; i++) {
 			const n = touchedAtoms[i]!
-			if (n.retirementStamp === retiredSeq) continue // duplicate touch entry
+			if (n.retirementStamp === retiredSeq) {
+				continue
+			} // duplicate touch entry
 			const log = n.log
 			const entries = log.entries
 			let stamped = 0
@@ -4040,13 +4168,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				touchedAny = true
 			}
 		}
-		if (touchedAny) advanceCommitted()
+		if (touchedAny) {
+			advanceCommitted()
+		}
 		runFoldValve()
 		// Committed-truth flip site (mutate → fan → drain): fan before the drains.
-		if (touchedAny) fanAtomsToCommittedArenas(batch.atomsTouched)
+		if (touchedAny) {
+			fanAtomsToCommittedArenas(batch.atomsTouched)
+		}
 		{
 			const tr = trace
-			if (tr !== undefined) tr.retired(batch.id, retiredSeq)
+			if (tr !== undefined) {
+				tr.retired(batch.id, retiredSeq)
+			}
 		}
 		// Durable drains, per root, gated on a flipped slot, member-write drift,
 		// or restaled leftovers (candidates persist on each arena's dirty list).
@@ -4056,29 +4190,38 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const bits = slotBit | r.committedDirtySlots
 				r.committedDirtySlots = 0
 				const re = restaled.get(r.id)
-				if (bits !== 0 || (re !== undefined && re.size > 0))
+				if (bits !== 0 || (re !== undefined && re.size > 0)) {
 					drainCommittedObservers(r.id, 'retirement')
+				}
 			}
 			preserveDirtySignalEffects(undefined)
 			// Boundary mark decay: unconsumed marks on unwatched nodes stop re-appending.
-			for (const a of rootToArena.values()) arenaDecay(a)
+			for (const a of rootToArena.values()) {
+				arenaDecay(a)
+			}
 		}
 		// Retired writes are visible everywhere, so membership rows go; release
 		// the slot unless an open render's mask still names it.
 		for (const r of roots.values()) {
-			if (r.committedBatches.delete(batch.id)) rebuildCommittedBits(r)
+			if (r.committedBatches.delete(batch.id)) {
+				rebuildCommittedBits(r)
+			}
 		}
 		if (batch.slot !== undefined) {
 			const slot = slots[batch.slot]!
 			if (isSlotRetainedByOpenMask(slot.id)) {
 				slot.releasePending = true // re-evaluated at every render end
 				const tr = trace
-				if (tr !== undefined) tr.slotReleaseDeferred(slot.id, batch.id)
+				if (tr !== undefined) {
+					tr.slotReleaseDeferred(slot.id, batch.id)
+				}
 			} else {
 				releaseSlot(slot)
 			}
 		}
-		if (ambientBatch === batch.id) ambientBatch = undefined
+		if (ambientBatch === batch.id) {
+			ambientBatch = undefined
+		}
 		// Episode close before quiet re-derives: this operation's notification and
 		// settlement callbacks must classify their writes against post-episode state.
 		maybeCloseEpisode()
@@ -4145,7 +4288,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			)
 		}
 		const world = activeWorld
-		if (world !== undefined) return world
+		if (world !== undefined) {
+			return world
+		}
 		const p = worldProvider
 		return p === undefined ? undefined : p()
 	}
@@ -4175,7 +4320,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// capture (tracked reads only) happens here — mirrors routedRead.
 		if (currentSink !== 0) {
 			const oc = obsCapture
-			if (oc !== undefined) oc.push(node)
+			if (oc !== undefined) {
+				oc.push(node)
+			}
 		}
 		return evaluate(node, world)
 	}
@@ -4200,10 +4347,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let value = atom.base
 		for (let i = 0; i < entries.length; i++) {
 			const e = entries[i]!
-			if (!isVisible(e, world)) continue
+			if (!isVisible(e, world)) {
+				continue
+			}
 			const next = applyOp(atom, e.kind, e.payload, value)
 			// isEqual(current, incoming), re-invoked per replayed entry by design.
-			if (!isAtomValueEqual(atom, value, next)) value = next
+			if (!isAtomValueEqual(atom, value, next)) {
+				value = next
+			}
 		}
 		return value
 	}
@@ -4223,18 +4374,26 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			case 'render': {
 				const w = world.render
 				const r = e.retiredSeq
-				if (r !== undefined && r <= w.pin) return true // clause 1: retired by my pin
+				if (r !== undefined && r <= w.pin) {
+					return true
+				} // clause 1: retired by my pin
 				return ((w.includedBits >>> e.slot) & 1) === 1 && e.seq <= w.pin // clause 2
 			}
 			case 'committed': {
-				if (e.retiredSeq !== undefined) return true // committed truth at now
+				if (e.retiredSeq !== undefined) {
+					return true
+				} // committed truth at now
 				// `root()` is lookup-or-create, so a map hit equals its answer; only
 				// the first consult pays the materializing miss (reference-model parity).
 				return (((roots.get(world.root) ?? root(world.root)).committedBits >>> e.slot) & 1) === 1
 			}
 			case 'mountFix': {
-				if (((world.maskBits >>> e.slot) & 1) === 1 && e.seq <= world.pin) return true
-				if (e.retiredSeq !== undefined) return true // committed truth as of now
+				if (((world.maskBits >>> e.slot) & 1) === 1 && e.seq <= world.pin) {
+					return true
+				}
+				if (e.retiredSeq !== undefined) {
+					return true
+				} // committed truth as of now
 				return (((roots.get(world.root) ?? root(world.root)).committedBits >>> e.slot) & 1) === 1 // hot get + materializing miss arrow (see the committed arm)
 			}
 		}
@@ -4244,7 +4403,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * the updater (a ReducerAtom dispatch arrives as an update whose closure
 	 * carries the reducer and the captured action). */
 	function applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value {
-		if (kind === WriteKind.SET) return payload
+		if (kind === WriteKind.SET) {
+			return payload
+		}
 		return runInFoldCallback(() => {
 			// Both fold guards apply: engine (runInFoldCallback) + kernel (POISON).
 			const saved = foldGuardSwap()
@@ -4292,7 +4453,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function routedRead(atom: AtomInternals, world: World): Value {
 		if (currentSink !== 0) {
 			const oc = obsCapture
-			if (oc !== undefined) oc.push(atom)
+			if (oc !== undefined) {
+				oc.push(atom)
+			}
 		}
 		return readAtomValue(atom, world)
 	}
@@ -4302,7 +4465,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function readAtomValue(atom: AtomInternals, world: World): Value {
 		const route = serveOverride // one override test on the routed-read path
 		if (route !== undefined) {
-			if (route !== FOLD_TRUTH) return arenaServe(route, atom) // arena-refold routing override
+			if (route !== FOLD_TRUTH) {
+				return arenaServe(route, atom)
+			} // arena-refold routing override
 			return foldAtom(atom, world) // fold-truth reads (armed checker)
 		}
 		if (world.kind === 'newest') {
@@ -4311,7 +4476,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		if (world.kind === 'render' || world.kind === 'committed') {
 			const a = getArena(world)
-			if (a !== undefined) return arenaServe(a, atom)
+			if (a !== undefined) {
+				return arenaServe(a, atom)
+			}
 			// Unmaterialized root: fold plain — a read never creates record or arena.
 		}
 		return foldAtom(atom, world)
@@ -4325,25 +4492,36 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * the memo-free fold-through below, with per-world cycle detection. */
 	function evaluate(node: AnyInternals, world: World): Value {
 		probes.worldEvals++ // engine-activity counter (tests/one-spec.ts's zero-cost check)
-		if (inFoldCallback)
+		if (inFoldCallback) {
 			throw new ScheduleError(
 				'signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching',
 			)
+		}
 		const route = serveOverride // no-override fast-out is the one hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
-		if (route !== undefined && route !== FOLD_TRUTH) return arenaServe(route, node) // arena-refold routing override
+		if (route !== undefined && route !== FOLD_TRUTH) {
+			return arenaServe(route, node)
+		} // arena-refold routing override
 		if (world.kind === 'render' || world.kind === 'committed') {
 			const a = getArena(world)
-			if (a !== undefined) return arenaServe(a, node)
+			if (a !== undefined) {
+				return arenaServe(a, node)
+			}
 		}
-		if (node.kind === 'atom') return readAtomValue(node, world)
-		if (world.kind === 'newest') return readKernelComputed(node)
+		if (node.kind === 'atom') {
+			return readAtomValue(node, world)
+		}
+		if (world.kind === 'newest') {
+			return readKernelComputed(node)
+		}
 		// Fold-through: memo-free recursion in the frame's world; cycle marks
 		// carry the current top-level evaluation generation.
 		const marks = evalMark
 		if (marks[node.ix] === evalGen && evalDepth > 0) {
 			throw createCycleError(node.name)
 		}
-		if (evalDepth === 0) evalGen++
+		if (evalDepth === 0) {
+			evalGen++
+		}
 		marks[node.ix] = evalGen
 		evalDepth++
 		const savedWorld = activeWorld
@@ -4354,7 +4532,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		obsCapture = obsRefs[node.ix]! > 0 ? [] : undefined
 		currentSink = node.ix
 		const tr = trace // paired eval hooks; end fires on throw too
-		if (tr !== undefined) tr.evalStart(node, world)
+		if (tr !== undefined) {
+			tr.evalStart(node, world)
+		}
 		try {
 			return node.fn(trackedReader, untrackedReader)
 		} finally {
@@ -4364,10 +4544,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			setWorld(savedWorld)
 			evalDepth--
 			marks[node.ix] = 0
-			if (tr !== undefined) tr.evalEnd()
+			if (tr !== undefined) {
+				tr.evalEnd()
+			}
 			// Observed-closure sync after every restore, so the discovery evaluations
 			// it may trigger run on a clean frame stack (on a throw: the deps so far).
-			if (obsCaptured !== undefined) syncObservedDeps(node, obsCaptured)
+			if (obsCaptured !== undefined) {
+				syncObservedDeps(node, obsCaptured)
+			}
 		}
 	}
 
@@ -4394,7 +4578,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * own): capture the observation, then evaluate the dep in the frame's world. */
 	const trackedReader: Reader = (dep) => {
 		const oc = obsCapture
-		if (oc !== undefined) oc.push(dep)
+		if (oc !== undefined) {
+			oc.push(dep)
+		}
 		return evaluate(dep, activeWorld!)
 	}
 
@@ -4560,14 +4746,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (
 				(a.memory[sh + ArenaField.NODE] ?? 0) !== 0 &&
 				a.nodeToShadow[a.memory[sh + ArenaField.NODE]!] === sh
-			)
+			) {
 				a.memory[sh + ArenaField.MARK] = 0
+			}
 		}
 		a.readClock = 0
 	}
 
 	function arenaBumpReadClock(a: WorldArena): void {
-		if (a.readClock >= ArenaGeom.CLOCK_LIMIT) arenaRenumberMarks(a)
+		if (a.readClock >= ArenaGeom.CLOCK_LIMIT) {
+			arenaRenumberMarks(a)
+		}
 		a.readClock++
 	}
 
@@ -4585,15 +4774,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					let l = memory[sh + ArenaField.DEPS]!;
 					l !== 0;
 					l = memory[l + ArenaLinkField.NEXT_DEP]!
-				)
+				) {
 					memory[l + ArenaLinkField.VERSION] = 0
+				}
 			}
 		}
 		a.cycle = 0
 	}
 
 	function arenaBumpCycle(a: WorldArena): number {
-		if (a.cycle >= ArenaGeom.CLOCK_LIMIT) arenaRenumberLinkVersions(a)
+		if (a.cycle >= ArenaGeom.CLOCK_LIMIT) {
+			arenaRenumberLinkVersions(a)
+		}
 		return ++a.cycle
 	}
 
@@ -4606,7 +4798,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		} else {
 			id = a.next
 			const end = id + ArenaGeom.STRIDE
-			if (end > a.memory.length) growWorldArenaBuffers(a, end) // may replace the buffers: `memory` caches below this arm only
+			if (end > a.memory.length) {
+				growWorldArenaBuffers(a, end)
+			} // may replace the buffers: `memory` caches below this arm only
 			a.next = end
 		}
 		const memory = a.memory
@@ -4617,7 +4811,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		memory[id + ArenaField.NODE] = ix
 		memory[id + ArenaField.NODE_GEN] = gen
 		growWorldArenaColumns(a, id >> ArenaGeom.ID_TO_COLUMN_SHIFT) // the grown-together columns
-		while (a.nodeToShadow.length <= ix) a.nodeToShadow.push(0) // stay packed, never holey
+		while (a.nodeToShadow.length <= ix) {
+			a.nodeToShadow.push(0)
+		} // stay packed, never holey
 		a.nodeToShadow[ix] = id
 		return id
 	}
@@ -4629,7 +4825,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		} else {
 			id = a.next
 			const end = id + ArenaGeom.STRIDE
-			if (end > a.memory.length) growWorldArenaBuffers(a, end) // may replace the buffers: callers re-load cached views (see its doc)
+			if (end > a.memory.length) {
+				growWorldArenaBuffers(a, end)
+			} // may replace the buffers: callers re-load cached views (see its doc)
 			a.next = end
 		}
 		a.links++
@@ -4651,12 +4849,20 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const nextSub = memory[id + ArenaLinkField.NEXT_SUB]!
 		const prevSub = memory[id + ArenaLinkField.PREV_SUB]!
 		const weak = (memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0
-		if (nextSub !== 0) memory[nextSub + ArenaLinkField.PREV_SUB] = prevSub
-		else if (weak) a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = prevSub
-		else memory[dep + ArenaField.SUBS_TAIL] = prevSub
-		if (prevSub !== 0) memory[prevSub + ArenaLinkField.NEXT_SUB] = nextSub
-		else if (weak) a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = nextSub
-		else memory[dep + ArenaField.SUBS] = nextSub
+		if (nextSub !== 0) {
+			memory[nextSub + ArenaLinkField.PREV_SUB] = prevSub
+		} else if (weak) {
+			a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = prevSub
+		} else {
+			memory[dep + ArenaField.SUBS_TAIL] = prevSub
+		}
+		if (prevSub !== 0) {
+			memory[prevSub + ArenaLinkField.NEXT_SUB] = nextSub
+		} else if (weak) {
+			a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = nextSub
+		} else {
+			memory[dep + ArenaField.SUBS] = nextSub
+		}
 	}
 
 	/** Append a link to its dep's mode-matching subs list tail (sets the link's own prev/next and mode). */
@@ -4668,16 +4874,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		memory[id + ArenaLinkField.MODE] = weak ? ArenaLinkMode.WEAK : 0
 		memory[id + ArenaLinkField.PREV_SUB] = tail
 		memory[id + ArenaLinkField.NEXT_SUB] = 0
-		if (tail !== 0) memory[tail + ArenaLinkField.NEXT_SUB] = id
-		else if (weak) a.weakSubs[vi] = id
-		else memory[dep + ArenaField.SUBS] = id
-		if (weak) a.weakSubsTail[vi] = id
-		else memory[dep + ArenaField.SUBS_TAIL] = id
+		if (tail !== 0) {
+			memory[tail + ArenaLinkField.NEXT_SUB] = id
+		} else if (weak) {
+			a.weakSubs[vi] = id
+		} else {
+			memory[dep + ArenaField.SUBS] = id
+		}
+		if (weak) {
+			a.weakSubsTail[vi] = id
+		} else {
+			memory[dep + ArenaField.SUBS_TAIL] = id
+		}
 	}
 
 	/** Set a live link's mode; a change moves it between the dep's two subs lists. */
 	function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
-		if (((a.memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0) === weak) return
+		if (((a.memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0) === weak) {
+			return
+		}
 		arenaSubsDetach(a, id)
 		arenaSubsAppend(a, id, weak)
 	}
@@ -4700,7 +4915,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const prevDep = memory[sub + ArenaField.DEPS_TAIL]!
 		if (prevDep !== 0 && memory[prevDep + ArenaLinkField.DEP] === dep) {
 			// Duplicate occurrence within this evaluation: strong dominates.
-			if (!weak) arenaSetLinkWeak(a, prevDep, false)
+			if (!weak) {
+				arenaSetLinkWeak(a, prevDep, false)
+			}
 			return prevDep
 		}
 		const nextDep =
@@ -4739,7 +4956,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			a.memory[wTail + ArenaLinkField.VERSION] === version &&
 			a.memory[wTail + ArenaLinkField.SUB] === sub
 		) {
-			if (!weak) arenaSetLinkWeak(a, wTail, false) // upgrade weak→strong
+			if (!weak) {
+				arenaSetLinkWeak(a, wTail, false)
+			} // upgrade weak→strong
 			return wTail
 		}
 		const newLink = arenaAllocLink(a) // may grow the arena: re-load memory after
@@ -4750,9 +4969,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		memory[newLink + ArenaLinkField.SUB] = sub
 		memory[newLink + ArenaLinkField.PREV_DEP] = prevDep
 		memory[newLink + ArenaLinkField.NEXT_DEP] = nextDep
-		if (nextDep !== 0) memory[nextDep + ArenaLinkField.PREV_DEP] = newLink
-		if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = newLink
-		else memory[sub + ArenaField.DEPS] = newLink
+		if (nextDep !== 0) {
+			memory[nextDep + ArenaLinkField.PREV_DEP] = newLink
+		}
+		if (prevDep !== 0) {
+			memory[prevDep + ArenaLinkField.NEXT_DEP] = newLink
+		} else {
+			memory[sub + ArenaField.DEPS] = newLink
+		}
 		arenaSubsAppend(a, newLink, weak) // subs-side wiring + mode, on the matching list
 		// The K_EFFECT-sub bookkeeping (SignalEffect terminal dep counts) can only
 		// apply when a SignalEffect exists at all — the bit is set only on terminal
@@ -4763,8 +4987,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			signalEffectCount !== 0 &&
 			!weak &&
 			(memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0
-		)
+		) {
 			shiftEffectDep(a, dep as ShadowId, 1)
+		}
 		return newLink
 	}
 
@@ -4787,10 +5012,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		) {
 			shiftEffectDep(a, dep as ShadowId, -1)
 		}
-		if (nextDep !== 0) memory[nextDep + ArenaLinkField.PREV_DEP] = prevDep
-		else memory[sub + ArenaField.DEPS_TAIL] = prevDep
-		if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = nextDep
-		else memory[sub + ArenaField.DEPS] = nextDep
+		if (nextDep !== 0) {
+			memory[nextDep + ArenaLinkField.PREV_DEP] = prevDep
+		} else {
+			memory[sub + ArenaField.DEPS_TAIL] = prevDep
+		}
+		if (prevDep !== 0) {
+			memory[prevDep + ArenaLinkField.NEXT_DEP] = nextDep
+		} else {
+			memory[sub + ArenaField.DEPS] = nextDep
+		}
 		arenaSubsDetach(a, id) // mode-matching subs list; the freed link keeps stale pointers for mid-walk readers
 		arenaFreeLink(a, id)
 		if (
@@ -4835,10 +5066,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				: a.memory[sub + ArenaField.DEPS]!
 		let guard = 0
 		while (dep !== 0) {
-			if (++guard > ArenaWalk.CYCLE_CAP)
+			if (++guard > ArenaWalk.CYCLE_CAP) {
 				throw new InvariantViolation(
 					`arenaPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`,
 				)
+			}
 			dep = arenaUnlink(a, dep, sub)
 		}
 	}
@@ -4865,7 +5097,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const stackBase = arenaPropSp
 		let guard = 0
 		top: do {
-			if (++guard > ArenaWalk.CYCLE_CAP) arenaWalkCycle('arenaPropagate', cur)
+			if (++guard > ArenaWalk.CYCLE_CAP) {
+				arenaWalkCycle('arenaPropagate', cur)
+			}
 			const sub = memory[cur + ArenaLinkField.SUB]!
 			let flags = memory[sub + ArenaField.FLAGS]!
 			if (
@@ -4893,9 +5127,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const subWeak = a.weakSubs[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
 				let park = 0 // the weak head, parked when both lists are populated
 				if (subWeak !== 0) {
-					if (subSubs === 0)
-						subSubs = subWeak // only weak dependents: descend into them
-					else park = subWeak
+					if (subSubs === 0) {
+						subSubs = subWeak
+					} // only weak dependents: descend into them
+					else {
+						park = subWeak
+					}
 				}
 				if (subSubs !== 0) {
 					cur = subSubs
@@ -4906,7 +5143,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 							bigger.set(arenaPropStack)
 							arenaPropStack = bigger
 						}
-						if (park !== 0) arenaPropStack[arenaPropSp++] = park
+						if (park !== 0) {
+							arenaPropStack[arenaPropSp++] = park
+						}
 						if (nextSub !== 0) {
 							arenaPropStack[arenaPropSp++] = next
 							next = nextSub
@@ -4941,9 +5180,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Seed arenaPropagate over both of a shadow's subs lists (fanout sites). */
 	function arenaPropagateBoth(a: WorldArena, sh: number): void {
 		const subs = a.memory[sh + ArenaField.SUBS]!
-		if (subs !== 0) arenaPropagate(a, subs)
+		if (subs !== 0) {
+			arenaPropagate(a, subs)
+		}
 		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
-		if (weak !== 0) arenaPropagate(a, weak)
+		if (weak !== 0) {
+			arenaPropagate(a, weak)
+		}
 	}
 
 	function arenaShallowPropagate(a: WorldArena, startLink: number): void {
@@ -4951,8 +5194,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let cur = startLink
 		let guard = 0
 		do {
-			if (++guard > ArenaWalk.CYCLE_CAP)
+			if (++guard > ArenaWalk.CYCLE_CAP) {
 				throw new InvariantViolation(`arenaShallowPropagate: subs chain cycle at link ${cur}`)
+			}
 			const sub = memory[cur + ArenaLinkField.SUB]!
 			const flags = memory[sub + ArenaField.FLAGS]!
 			if ((flags & (ArenaFlag.PENDING | ArenaFlag.DIRTY)) === ArenaFlag.PENDING) {
@@ -4966,9 +5210,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Shallow-propagate over both subs lists (weak dependents upgrade too). */
 	function arenaShallowPropagateBoth(a: WorldArena, sh: number): void {
 		const subs = a.memory[sh + ArenaField.SUBS]!
-		if (subs !== 0) arenaShallowPropagate(a, subs)
+		if (subs !== 0) {
+			arenaShallowPropagate(a, subs)
+		}
 		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
-		if (weak !== 0) arenaShallowPropagate(a, weak)
+		if (weak !== 0) {
+			arenaShallowPropagate(a, weak)
+		}
 	}
 
 	function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolean {
@@ -4976,9 +5224,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let cur = memory[sub + ArenaField.DEPS_TAIL]!
 		let guard = 0
 		while (cur !== 0) {
-			if (++guard > ArenaWalk.CYCLE_CAP)
+			if (++guard > ArenaWalk.CYCLE_CAP) {
 				throw new InvariantViolation(`arenaIsValidLink: prev-dep chain cycle at link ${cur}`)
-			if (cur === checkLink) return true
+			}
+			if (cur === checkLink) {
+				return true
+			}
 			cur = memory[cur + ArenaLinkField.PREV_DEP]!
 		}
 		return false
@@ -5091,14 +5342,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.claimGen++
 		// Pre-size nodeToShadow densely (holey reads cost; resolveShadow probes per read).
 		const n = nodeIndexToInternals.length
-		for (let i = a.nodeToShadow.length; i < n; i++) a.nodeToShadow.push(0)
+		for (let i = a.nodeToShadow.length; i < n; i++) {
+			a.nodeToShadow.push(0)
+		}
 		return a
 	}
 
 	/** Release an arena: scrub every column and the written record prefix, then
 	 * pool the shell (dirty + suspended cones die unobserved with the tenancy). */
 	function releaseArena(a: WorldArena): void {
-		for (let i = 0; i < a.suspended.length; i++) suspendedCount--
+		for (let i = 0; i < a.suspended.length; i++) {
+			suspendedCount--
+		}
 		a.alive = false
 		a.claimGen++
 		// Keep the side columns' CAPACITY across tenancies (truncation forced ~2k
@@ -5115,7 +5370,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.links = 0
 		a.readClock = 0
 		a.cycle = 0
-		if (arenaPool.length < ARENA_POOL_CAP) arenaPool.push(a)
+		if (arenaPool.length < ARENA_POOL_CAP) {
+			arenaPool.push(a)
+		}
 		// Reclamation retry: whole-arena teardown clears every member's guard rows at once. Size-0 bail inside.
 		reclaimRetryAllSkipped()
 	}
@@ -5133,11 +5390,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 */
 	function settleObserverClock(a: WorldArena, node: AnyInternals): Clock {
 		const sh = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0
-		if (sh === 0 || !a.bumpsClocks) return 0
+		if (sh === 0 || !a.bumpsClocks) {
+			return 0
+		}
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
 		const v = a.vals[vi]
 		const clock = a.clocks[vi]!
-		if (clock !== 0 && !isValueChanged(node, a.cutoffVals[vi], v)) return clock
+		if (clock !== 0 && !isValueChanged(node, a.cutoffVals[vi], v)) {
+			return clock
+		}
 		a.cutoffVals[vi] = v
 		return (a.clocks[vi] = ++clockSource)
 	}
@@ -5147,17 +5408,22 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function getArena(world: World): WorldArena | undefined {
 		if (world.kind === 'render') {
 			const a = world.render.arena
-			if (a !== undefined && !a.alive)
+			if (a !== undefined && !a.alive) {
 				throw new InvariantViolation(
 					`arena of render ${world.render.id} was reclaimed while still reachable`,
 				)
+			}
 			return a
 		}
-		if (world.kind !== 'committed') return undefined
+		if (world.kind !== 'committed') {
+			return undefined
+		}
 		let a = rootToArena.get(world.root)
 		if (a === undefined) {
 			// Never create the root record on a read.
-			if (!roots.has(world.root)) return undefined
+			if (!roots.has(world.root)) {
+				return undefined
+			}
 			a = claimArena('committed', { kind: 'committed', root: world.root }, world.root)
 			rootToArena.set(world.root, a)
 		}
@@ -5165,9 +5431,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	}
 
 	function eachArena(fn: (a: WorldArena) => void): void {
-		for (const a of rootToArena.values()) fn(a)
+		for (const a of rootToArena.values()) {
+			fn(a)
+		}
 		for (const p of rootToOpenRender.values()) {
-			if (p.arena !== undefined) fn(p.arena)
+			if (p.arena !== undefined) {
+				fn(p.arena)
+			}
 		}
 	}
 
@@ -5178,7 +5448,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
 		const gen = getKernelGeneration(node.id) // one kernel-memory load per consult (priced by the bench trio)
 		if (sh !== 0) {
-			if (a.memory[sh + ArenaField.NODE_GEN] === gen) return sh
+			if (a.memory[sh + ArenaField.NODE_GEN] === gen) {
+				return sh
+			}
 			// Dead tenancy: evict, purge links both directions, refold under the new tenant — never serve dead state.
 			arenaEvictShadow(a, sh)
 			a.memory[sh + ArenaField.FLAGS] = kindFlags
@@ -5202,7 +5474,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				sl = next
 			}
 		}
-		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh)
+		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) {
+			arenaUnsuspend(a, sh)
+		}
 		scrubWorldShadowColumnsOnEvict(a, sh) // value + clock slots clear together
 	}
 
@@ -5210,10 +5484,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * capture rides the strong arm only (the observation union is strong-only). */
 	function arenaRecordDep(dep: AnyInternals, weak: boolean): void {
 		const a = arenaFrame
-		if (a === undefined) return
+		if (a === undefined) {
+			return
+		}
 		if (!weak) {
 			const oc = obsCapture
-			if (oc !== undefined) oc.push(dep)
+			if (oc !== undefined) {
+				oc.push(dep)
+			}
 		}
 		const sh =
 			dep.kind === 'atom'
@@ -5232,7 +5510,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Suspended-list append on the box-suspended bit's 0→1 (field stores dense index + 1). */
 	function arenaSuspend(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
-		if (a.suspIdx[vi] !== 0) return // already a member (value column just swaps sentinels)
+		if (a.suspIdx[vi] !== 0) {
+			return
+		} // already a member (value column just swaps sentinels)
 		a.suspended.push(sh)
 		a.suspIdx[vi] = a.suspended.length // index + 1
 		suspendedCount++
@@ -5242,7 +5522,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function arenaUnsuspend(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
 		const slot = a.suspIdx[vi]!
-		if (slot === 0) return
+		if (slot === 0) {
+			return
+		}
 		const last = a.suspended.length - 1
 		const moved = a.suspended[last]!
 		a.suspended[slot - 1] = moved
@@ -5253,7 +5535,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// Reclamation retry: the suspended-list guard clears here, covering every exit path. Size-0 bail first.
 		if (reclaimSkippedN !== 0) {
 			const node = nodeIndexToInternals[a.memory[sh + ArenaField.NODE]!]
-			if (node !== undefined) noteReclaimRetry(node.id)
+			if (node !== undefined) {
+				noteReclaimRetry(node.id)
+			}
 		}
 	}
 
@@ -5276,7 +5560,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			arenaSuspend(a, sh)
 			return
 		}
-		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh)
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
+			arenaUnsuspend(a, sh)
+		}
 		a.vals[vi] = err
 		memory[sh + ArenaField.FLAGS] =
 			(flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.BOX_SUSPENDED)) |
@@ -5297,7 +5583,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const flags = memory[sh + ArenaField.FLAGS]!
 			if ((flags & ArenaFlag.VALID) === 0 || (flags & ArenaFlag.DIRTY) !== 0) {
 				// A changed refold upgrades PENDING dependents to DIRTY so their re-check refolds them.
-				if (arenaUpdateShadow(a, sh)) arenaShallowPropagateBoth(a, sh)
+				if (arenaUpdateShadow(a, sh)) {
+					arenaShallowPropagateBoth(a, sh)
+				}
 			}
 			if (
 				arenaFrame === a &&
@@ -5317,7 +5605,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					}
 				}
 				const oc = obsCapture
-				if (oc !== undefined) oc.push(node)
+				if (oc !== undefined) {
+					oc.push(node)
+				}
 			}
 			return a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 		}
@@ -5347,7 +5637,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			(flags & ArenaFlag.VALID) === 0 ||
 			((flags & ArenaFlag.PENDING) !== 0 && arenaCheckDirty(a, a.memory[sh + ArenaField.DEPS]!, sh))
 		) {
-			if (arenaUpdateComputed(a, sh)) arenaShallowPropagateBoth(a, sh)
+			if (arenaUpdateComputed(a, sh)) {
+				arenaShallowPropagateBoth(a, sh)
+			}
 		} else if ((flags & ArenaFlag.PENDING) !== 0) {
 			a.memory[sh + ArenaField.FLAGS] = flags & ~ArenaFlag.PENDING
 		}
@@ -5365,7 +5657,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					? a.signalEffects[arenaFrameShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 					: undefined
 			const oc = obsCapture
-			if (oc !== undefined) oc.push(node)
+			if (oc !== undefined) {
+				oc.push(node)
+			}
 		}
 		const outFlags = a.memory[sh + ArenaField.FLAGS]!
 		// boxedRead-style rethrow: thrown payloads rethrow from cache; a returned
@@ -5389,7 +5683,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * returns whether the world's value changed (the value cutoff). */
 	function arenaUpdateShadow(a: WorldArena, sh: number): boolean {
 		const flags = a.memory[sh + ArenaField.FLAGS]!
-		if ((flags & ArenaFlag.K_COMPUTED) !== 0) return arenaUpdateComputed(a, sh)
+		if ((flags & ArenaFlag.K_COMPUTED) !== 0) {
+			return arenaUpdateComputed(a, sh)
+		}
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!
 		const atom = nodeIndexToInternals[nid] as AtomInternals
 		// Marked ⇒ refold unconditionally — no fingerprint shortcut.
@@ -5434,7 +5730,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		setWorld(a.world)
 		evalDepth++
 		const tr = trace // paired eval hooks; end fires on throw too
-		if (tr !== undefined) tr.evalStart(node, a.world)
+		if (tr !== undefined) {
+			tr.evalStart(node, a.world)
+		}
 		try {
 			return arenaFoldOutcome(
 				a,
@@ -5446,7 +5744,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			arenaNoteThrow(a, sh, err)
 			throw err
 		} finally {
-			if (tr !== undefined) tr.evalEnd()
+			if (tr !== undefined) {
+				tr.evalEnd()
+			}
 			const obsCaptured = obsCapture
 			evalDepth--
 			setWorld(savedWorld)
@@ -5459,7 +5759,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS]! & ~ArenaFlag.RECURSED_CHECK
 			arenaPurgeDeps(a, sh)
 			arenaBumpReadClock(a)
-			if (obsCaptured !== undefined) arenaSyncObservationAfterRefold(node, obsCaptured)
+			if (obsCaptured !== undefined) {
+				arenaSyncObservationAfterRefold(node, obsCaptured)
+			}
 		}
 	}
 
@@ -5515,7 +5817,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				? Object.is(a.vals[vi], value)
 				: arenaIsValueEqualCold(eq, a.vals[vi], value))
 		)
-		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh)
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
+			arenaUnsuspend(a, sh)
+		}
 		if (changed) {
 			a.vals[vi] = value
 		}
@@ -5533,8 +5837,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	function ensureSignalEffectShadow(effect: SignalEffect): ShadowId {
 		const a = getArena({ kind: 'committed', root: effect.root })
-		if (a === undefined)
+		if (a === undefined) {
 			throw new InvariantViolation(`SignalEffect ${effect.id} has no committed arena`)
+		}
 		const ix = getKernelNodeIndex(effect.rec)
 		const gen = getKernelGeneration(effect.rec)
 		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
@@ -5559,7 +5864,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Retrack one SignalEffect directly into its committed arena. Its links are
 	 * the notification state; link clock slots hold the last consult stamp. */
 	function runSignalEffectFrame(effect: SignalEffect, body: () => void): void {
-		if (activeSignalEffect !== undefined) throw new ScheduleError('SignalEffect runs do not nest')
+		if (activeSignalEffect !== undefined) {
+			throw new ScheduleError('SignalEffect runs do not nest')
+		}
 		const sh = ensureSignalEffectShadow(effect)
 		const a = effect.arena!
 		a.memory[sh + ArenaField.DEPS_TAIL] = 0
@@ -5600,10 +5907,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function removeSignalEffectFrame(effect: SignalEffect): void {
 		const a = effect.arena
 		const sh = effect.shadow
-		if (a === undefined || sh === 0) return
+		if (a === undefined || sh === 0) {
+			return
+		}
 		const ix = a.memory[sh + ArenaField.NODE]!
 		arenaEvictShadow(a, sh)
-		for (let f = 0; f < ArenaGeom.STRIDE; f++) a.memory[sh + f] = 0
+		for (let f = 0; f < ArenaGeom.STRIDE; f++) {
+			a.memory[sh + f] = 0
+		}
 		a.nodeToShadow[ix] = 0
 		a.memory[sh + ArenaField.DEPS] = a.shadowFree
 		a.shadowFree = sh
@@ -5615,9 +5926,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function signalEffectChanged(effect: SignalEffect): boolean {
 		const a = effect.arena
 		const sh = effect.shadow
-		if (a === undefined || sh === 0) return false
+		if (a === undefined || sh === 0) {
+			return false
+		}
 		const effectFlags = a.memory[sh + ArenaField.FLAGS]!
-		if ((effectFlags & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) === 0) return false
+		if ((effectFlags & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) === 0) {
+			return false
+		}
 		let link = a.memory[sh + ArenaField.DEPS]!
 		while (link !== 0) {
 			const depShadow = a.memory[link + ArenaLinkField.DEP]!
@@ -5641,11 +5956,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					try {
 						evaluate(node, a.world)
 					} catch (err) {
-						if (!(err instanceof SuspendedRead)) throw err
+						if (!(err instanceof SuspendedRead)) {
+							throw err
+						}
 						link = a.memory[link + ArenaLinkField.NEXT_DEP]!
 						continue
 					}
-					if (settleObserverClock(a, node) !== stamp) return true
+					if (settleObserverClock(a, node) !== stamp) {
+						return true
+					}
 				}
 			}
 			link = a.memory[link + ArenaLinkField.NEXT_DEP]!
@@ -5662,7 +5981,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let sp = 0
 		for (let i = 0; i < a.dirty.length; i++) {
 			const sh = a.dirty[i]!
-			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) continue
+			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) {
+				continue
+			}
 			walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 			stack[sp++] = sh
 			const effect = a.signalEffects[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
@@ -5712,7 +6033,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * arena growth), so the walk re-loads `a.memory` after every update call.
 	 * Entry wrapper owns the scratch-stack base restore (V8 inline budget). */
 	function arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {
-		if (startLink === 0) return false
+		if (startLink === 0) {
+			return false
+		}
 		const stackBase = arenaCheckSp
 		try {
 			return arenaCheckDirtyLoop(a, startLink, startSub)
@@ -5730,8 +6053,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const subs = a.memory[node + ArenaField.SUBS]!
 		const weak = a.weakSubs[node >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
 		if (arenaUpdateShadow(a, node)) {
-			if (subs !== 0) arenaShallowPropagate(a, subs)
-			if (weak !== 0) arenaShallowPropagate(a, weak)
+			if (subs !== 0) {
+				arenaShallowPropagate(a, subs)
+			}
+			if (weak !== 0) {
+				arenaShallowPropagate(a, weak)
+			}
 			return true
 		}
 		return false
@@ -5743,7 +6070,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let dirty = false
 		let guard = 0
 		top: do {
-			if (++guard > ArenaWalk.CYCLE_CAP) arenaWalkCycle('arenaCheckDirty', cur)
+			if (++guard > ArenaWalk.CYCLE_CAP) {
+				arenaWalkCycle('arenaCheckDirty', cur)
+			}
 			const memory = a.memory
 			const dep = memory[cur + ArenaLinkField.DEP]!
 			const depFlags = memory[dep + ArenaField.FLAGS]!
@@ -5818,9 +6147,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const memory = a.memory
 		for (let i = 0; i < atoms.length; i++) {
 			const sh = a.nodeToShadow[atoms[i]!.ix] ?? 0
-			if (sh === 0) continue // no shadow: nothing consumes this atom here
+			if (sh === 0) {
+				continue
+			} // no shadow: nothing consumes this atom here
 			const flags = memory[sh + ArenaField.FLAGS]!
-			if ((flags & ArenaFlag.DIRTY) !== 0 && memory[sh + ArenaField.MARK] === a.readClock) continue // dedup
+			if ((flags & ArenaFlag.DIRTY) !== 0 && memory[sh + ArenaField.MARK] === a.readClock) {
+				continue
+			} // dedup
 			if ((flags & ArenaFlag.DIRTY) === 0) {
 				memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY
 				a.dirty.push(sh) // dirty-list append on the mark's 0→1 edge
@@ -5839,21 +6172,29 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** Fan into every live committed arena (retirement, quiet fold). */
 	function fanAtomsToCommittedArenas(atoms: AtomInternals[]): void {
-		if (rootToArena.size === 0) return // the one scalar check quiet writes pay
-		for (const a of rootToArena.values()) fanAtomsToArena(a, atoms, false)
+		if (rootToArena.size === 0) {
+			return
+		} // the one scalar check quiet writes pay
+		for (const a of rootToArena.values()) {
+			fanAtomsToArena(a, atoms, false)
+		}
 	}
 
 	/** Decay-by-eviction: swap the dirty list; an unconsumed entry with no live
 	 * consumer MAY drop to cold — the list stays bounded by live consumers' cones. */
 	function arenaDecay(a: WorldArena): void {
-		if (a.dirty.length === 0) return
+		if (a.dirty.length === 0) {
+			return
+		}
 		const list = a.dirty
 		a.dirty = []
 		const memory = a.memory
 		for (let i = 0; i < list.length; i++) {
 			const sh = list[i]!
 			const flags = memory[sh + ArenaField.FLAGS]!
-			if ((flags & ArenaFlag.DIRTY) === 0) continue // consumed by an evaluation: drop the entry
+			if ((flags & ArenaFlag.DIRTY) === 0) {
+				continue
+			} // consumed by an evaluation: drop the entry
 			const nid = memory[sh + ArenaField.NODE]!
 			const ws = nodeToWatchers[nid]
 			// Keep-the-dirt while any live observer can consume the mark (same-root
@@ -5873,7 +6214,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				a.dirty.push(sh) // keep-the-dirt: unconsumed marks survive to the next boundary
 			} else {
 				// Drop-to-cold: links and MUTABLE stay, so routing coverage survives.
-				if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh)
+				if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
+					arenaUnsuspend(a, sh)
+				}
 				memory[sh + ArenaField.FLAGS] =
 					flags &
 					~(
@@ -5893,10 +6236,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function purgeNodeFromArenas(ix: NodeIndex): void {
 		eachArena((a) => {
 			const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
-			if (sh === 0) return
+			if (sh === 0) {
+				return
+			}
 			arenaEvictShadow(a, sh)
 			// Zero and unindex: dirty-list residue reads an inert record (FLAGS 0).
-			for (let f = 0; f < ArenaGeom.STRIDE; f++) a.memory[sh + f] = 0
+			for (let f = 0; f < ArenaGeom.STRIDE; f++) {
+				a.memory[sh + f] = 0
+			}
 			a.nodeToShadow[ix] = 0
 			// Thread onto the free list (see shadowFree); stale dirty-list entries stay benign (decay re-checks flags).
 			a.memory[sh + ArenaField.DEPS] = a.shadowFree
@@ -5913,7 +6260,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let matched = false
 		for (let j = 0; j < list.length; j++) {
 			const sh = list[j]!
-			if (a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== suspendSentinel) continue
+			if (a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== suspendSentinel) {
+				continue
+			}
 			const flags = memory[sh + ArenaField.FLAGS]!
 			if ((flags & ArenaFlag.DIRTY) === 0) {
 				memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY
@@ -5923,7 +6272,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			arenaPropagateBoth(a, sh) // strong and weak; pin-exempt for render arenas
 			matched = true
 		}
-		if (matched) arenaBumpReadClock(a)
+		if (matched) {
+			arenaBumpReadClock(a)
+		}
 		return matched
 	}
 
@@ -5938,7 +6289,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (ws !== undefined) {
 			for (let i = 0; i < ws.length; i++) {
 				const w = ws[i]!
-				if (w.live) found.push(w)
+				if (w.live) {
+					found.push(w)
+				}
 			}
 		}
 	}
@@ -5949,7 +6302,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (nw !== undefined) {
 			for (let j = 0; j < nw.length; j++) {
 				const w = nw[j]!
-				if (w.live && w.root === rootId) ws.push(w)
+				if (w.live && w.root === rootId) {
+					ws.push(w)
+				}
 			}
 		}
 	}
@@ -5965,8 +6320,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		effects: SignalEffect[],
 	): void {
 		const start = from < a.nodeToShadow.length ? a.nodeToShadow[from]! : 0
-		if (start === 0) return
-		if (a.memory[start + ArenaField.NODE_GEN] !== kGen) return
+		if (start === 0) {
+			return
+		}
+		if (a.memory[start + ArenaField.NODE_GEN] !== kGen) {
+			return
+		}
 		const memory = a.memory
 		const walk = a.walk
 		const stack = walkStack
@@ -6016,7 +6375,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const list = a.dirty
 		for (let i = 0; i < list.length; i++) {
 			const sh = list[i]!
-			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) continue
+			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) {
+				continue
+			}
 			walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 			stack[sp++] = sh
 			const nid = memory[sh + ArenaField.NODE]!
@@ -6050,8 +6411,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** One arena's reverse-deps half of the fixup closure (strong links); shadows map back to NodeIds via the node row. */
 	function collectArenaClosure(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void {
 		const start = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0
-		if (start === 0) return
-		if (a.memory[start + ArenaField.NODE_GEN] !== getKernelGeneration(node.id)) return // dead-tenancy residue never routes
+		if (start === 0) {
+			return
+		}
+		if (a.memory[start + ArenaField.NODE_GEN] !== getKernelGeneration(node.id)) {
+			return
+		} // dead-tenancy residue never routes
 		const gen = ++walkGen
 		const memory = a.memory
 		const walk = a.walk
@@ -6068,7 +6433,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					if (walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 						const depNode = nodeIndexToInternals[memory[dep + ArenaField.NODE]!]
-						if (depNode !== undefined) closure.add(depNode.id)
+						if (depNode !== undefined) {
+							closure.add(depNode.id)
+						}
 						stack[sp++] = dep
 					}
 				}
@@ -6111,9 +6478,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const memory = a.memory
 			for (let ix = 0; ix < a.nodeToShadow.length; ix++) {
 				const sh = a.nodeToShadow[ix]!
-				if (sh === 0) continue
+				if (sh === 0) {
+					continue
+				}
 				const depNode = nodeIndexToInternals[ix]
-				if (depNode === undefined) continue // dead residue: not part of the live graph
+				if (depNode === undefined) {
+					continue
+				} // dead residue: not part of the live graph
 				for (let list = 0; list < 2; list++) {
 					let l = arenaSubsHead(a, sh, list)
 					while (l !== 0) {
@@ -6143,14 +6514,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		sub: AnyInternals,
 	): 'strong' | 'weak' | undefined {
 		const a = rootToArena.get(rootId)
-		if (a === undefined) return undefined
+		if (a === undefined) {
+			return undefined
+		}
 		const depSh = a.nodeToShadow[dep.ix] ?? 0
 		const subSh = a.nodeToShadow[sub.ix] ?? 0
-		if (depSh === 0 || subSh === 0) return undefined
+		if (depSh === 0 || subSh === 0) {
+			return undefined
+		}
 		let cur = a.memory[subSh + ArenaField.DEPS]!
 		while (cur !== 0) {
-			if (a.memory[cur + ArenaLinkField.DEP] === depSh)
+			if (a.memory[cur + ArenaLinkField.DEP] === depSh) {
 				return (a.memory[cur + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0 ? 'weak' : 'strong'
+			}
 			cur = a.memory[cur + ArenaLinkField.NEXT_DEP]!
 		}
 		return undefined
@@ -6160,13 +6536,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * none (freelist-discipline pins capture ids before a teardown). @internal */
 	function __TEST__arenaLinkId(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number {
 		const a = rootToArena.get(rootId)
-		if (a === undefined) return 0
+		if (a === undefined) {
+			return 0
+		}
 		const depSh = a.nodeToShadow[dep.ix] ?? 0
 		const subSh = a.nodeToShadow[sub.ix] ?? 0
-		if (depSh === 0 || subSh === 0) return 0
+		if (depSh === 0 || subSh === 0) {
+			return 0
+		}
 		let cur = a.memory[subSh + ArenaField.DEPS]!
 		while (cur !== 0) {
-			if (a.memory[cur + ArenaLinkField.DEP] === depSh) return cur
+			if (a.memory[cur + ArenaLinkField.DEP] === depSh) {
+				return cur
+			}
 			cur = a.memory[cur + ArenaLinkField.NEXT_DEP]!
 		}
 		return 0
@@ -6176,7 +6558,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * links too (stale nextDep must name former neighbors, never the free list). @internal */
 	function __TEST__arenaLinkNextDep(rootId: RootId, linkId: number): number {
 		const a = rootToArena.get(rootId)
-		if (a === undefined) return -1
+		if (a === undefined) {
+			return -1
+		}
 		return a.memory[linkId + ArenaLinkField.NEXT_DEP] ?? -1
 	}
 
@@ -6226,7 +6610,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * public operation started BY a listener appends behind the live bound
 	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
 	function flushNotify(): void {
-		if (notifyState.n === 0 || notifyState.flushing) return
+		if (notifyState.n === 0 || notifyState.flushing) {
+			return
+		}
 		// Listener slots are read live per item — detaching mid-flush affects the rest.
 		notifyState.flushing = true
 		try {
@@ -6240,17 +6626,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				notifyEffects[i] = undefined
 				if (kind === NotifyKind.DELIVERY) {
 					const l = onDelivery
-					if (l !== undefined) l(obs!, t!, notifySlots[i]!)
+					if (l !== undefined) {
+						l(obs!, t!, notifySlots[i]!)
+					}
 				} else if (kind === NotifyKind.MOUNT_CORRECTIVE) {
 					const l = onMountCorrective
-					if (l !== undefined) l(obs!, t!, notifySlots[i]!)
+					if (l !== undefined) {
+						l(obs!, t!, notifySlots[i]!)
+					}
 				} else if (kind === NotifyKind.CORRECTION) {
 					const l = onCorrection
-					if (l !== undefined) l(obs!)
+					if (l !== undefined) {
+						l(obs!)
+					}
 				} else if (effect !== undefined && effect.live) {
 					effect.queuedRun = false
 					const listener = onSignalEffect
-					if (listener !== undefined) listener(effect)
+					if (listener !== undefined) {
+						listener(effect)
+					}
 				}
 			}
 		} finally {
@@ -6281,14 +6675,24 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const kGen = getKernelGeneration(from.id) // one read per walk: seeds validate tenancy against it
 		lastWalk[from.ix] = gen
 		collectWatchersAt(from.ix, found)
-		for (const a of rootToArena.values()) walkArenaStrong(a, from.ix, kGen, gen, found, effects)
+		for (const a of rootToArena.values()) {
+			walkArenaStrong(a, from.ix, kGen, gen, found, effects)
+		}
 		for (const p of rootToOpenRender.values()) {
-			if (p.arena !== undefined) walkArenaStrong(p.arena, from.ix, kGen, gen, found, effects)
+			if (p.arena !== undefined) {
+				walkArenaStrong(p.arena, from.ix, kGen, gen, found, effects)
+			}
 		}
 		const bit = 1 << slot.id
-		for (let i = 0; i < effects.length; i++) effects[i]!.pendingSlots |= bit
-		if (found.length > 1) found.sort((a, b) => a.id - b.id)
-		for (let i = 0; i < found.length; i++) deliver(found[i]!, batch, slot, seq)
+		for (let i = 0; i < effects.length; i++) {
+			effects[i]!.pendingSlots |= bit
+		}
+		if (found.length > 1) {
+			found.sort((a, b) => a.id - b.id)
+		}
+		for (let i = 0; i < found.length; i++) {
+			deliver(found[i]!, batch, slot, seq)
+		}
 		found.length = 0
 		effects.length = 0
 	}
@@ -6302,18 +6706,28 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const bit = 1 << slot.id
 		if ((w.dedupBits & bit) === 0) {
 			w.dedupBits |= bit
-			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, false)
-			if (onDelivery !== undefined) queueNotify(NotifyKind.DELIVERY, w, batch, slot.id)
+			if (tr !== undefined) {
+				tr.delivery(w, batch.id, slot.id, seq, false)
+			}
+			if (onDelivery !== undefined) {
+				queueNotify(NotifyKind.DELIVERY, w, batch, slot.id)
+			}
 			return
 		}
 		// Bit set: an open render that froze BEFORE this write (slot in its
 		// mask, pin < seq) would fold without it — deliver again; else suppress.
 		const p = rootToOpenRender.get(w.root)
 		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
-			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, true)
-			if (onDelivery !== undefined) queueNotify(NotifyKind.DELIVERY, w, batch, slot.id)
+			if (tr !== undefined) {
+				tr.delivery(w, batch.id, slot.id, seq, true)
+			}
+			if (onDelivery !== undefined) {
+				queueNotify(NotifyKind.DELIVERY, w, batch, slot.id)
+			}
 		} else {
-			if (tr !== undefined) tr.suppressed(w, batch.id, slot.id, seq)
+			if (tr !== undefined) {
+				tr.suppressed(w, batch.id, slot.id, seq)
+			}
 		}
 	}
 
@@ -6341,28 +6755,38 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			(committing !== undefined && w.snapshot.renderPassId === committing.id)
 		) {
 			// Cross-world gate (the value compare per-root clocks cannot replace).
-			if (!isValueChanged(wInternals, w.lastRenderedValue, now)) return false
+			if (!isValueChanged(wInternals, w.lastRenderedValue, now)) {
+				return false
+			}
 			if (cause !== 'mount') {
 				const a = rootToArena.get(w.root)
-				if (a !== undefined) w.lastValidatedAt = committedNodeClock(a, w.nodeIx)
+				if (a !== undefined) {
+					w.lastValidatedAt = committedNodeClock(a, w.nodeIx)
+				}
 			}
 		} else {
 			const a = rootToArena.get(w.root)
 			const clockNow = a === undefined ? 0 : committedNodeClock(a, w.nodeIx)
-			if (clockNow === w.lastValidatedAt) return false
+			if (clockNow === w.lastValidatedAt) {
+				return false
+			}
 			w.lastValidatedAt = clockNow
 		}
 		if (cause !== 'quiet') {
 			const tr = trace
 			if (tr !== undefined) {
-				if (cause === 'mount') tr.mountCorrection(w, w.lastRenderedValue, now)
-				else
+				if (cause === 'mount') {
+					tr.mountCorrection(w, w.lastRenderedValue, now)
+				} else {
 					tr.reconcileCorrection(w, w.root, w.lastRenderedValue, now, cause === 'per-root-commit')
+				}
 			}
 		}
 		w.lastRenderedValue = now // the urgent pre-paint re-render
 		w.dedupBits = 0 // dedup bits re-arm at the watcher's render
-		if (onCorrection !== undefined) queueNotify(NotifyKind.CORRECTION, w, undefined, 0)
+		if (onCorrection !== undefined) {
+			queueNotify(NotifyKind.CORRECTION, w, undefined, 0)
+		}
 		return true
 	}
 
@@ -6376,9 +6800,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		cause: 'retirement' | 'per-root-commit' | 'quiet',
 	): void {
 		const wInternals = resolveWatcherInternals(w)
-		if (wInternals === undefined) return // loud skip: record tenancy moved
+		if (wInternals === undefined) {
+			return
+		} // loud skip: record tenancy moved
 		const now = evaluate(wInternals, world)
-		if (a !== undefined) settleObserverClock(a, wInternals)
+		if (a !== undefined) {
+			settleObserverClock(a, wInternals)
+		}
 		correctWatcher(w, wInternals, now, cause)
 	}
 
@@ -6386,7 +6814,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * state scopes candidates, so every live watcher re-checks directly. */
 	function quietDrain(): void {
 		for (const w of watchers.values()) {
-			if (!w.live) continue
+			if (!w.live) {
+				continue
+			}
 			reconcileWatcher(w, rootToArena.get(w.root), { kind: 'committed', root: w.root }, 'quiet')
 		}
 	}
@@ -6410,15 +6840,23 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const re = restaled.get(rootId)
 			if (re !== undefined && re.size > 0) {
 				for (const w of re) {
-					if (!w.live) continue
-					if (lastWalk[w.nodeIx] === gen) continue // its node was already listed (cached index; valid while the gen-checked fire below resolves)
+					if (!w.live) {
+						continue
+					}
+					if (lastWalk[w.nodeIx] === gen) {
+						continue
+					} // its node was already listed (cached index; valid while the gen-checked fire below resolves)
 					ws.push(w)
 				}
 				re.clear()
 			}
 		}
-		if (ws.length > 1) ws.sort((a, b) => a.id - b.id)
-		for (let i = 0; i < ws.length; i++) reconcileWatcher(ws[i]!, a, world, cause)
+		if (ws.length > 1) {
+			ws.sort((a, b) => a.id - b.id)
+		}
+		for (let i = 0; i < ws.length; i++) {
+			reconcileWatcher(ws[i]!, a, world, cause)
+		}
 		ws.length = 0
 	}
 
@@ -6449,8 +6887,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function settleTap(t: PromiseLike<unknown>): void {
 		const th = t as PromiseLike<unknown> & { suspendSentinel?: SuspendedRead }
 		const suspendSentinel = (th.suspendSentinel ??= new SuspendedRead(t))
-		if (suspendedCount === 0 && pendingSettle.length === 0) return // no arena suspensions anywhere
-		if (pendingSettleSet.has(suspendSentinel)) return // queued bit
+		if (suspendedCount === 0 && pendingSettle.length === 0) {
+			return
+		} // no arena suspensions anywhere
+		if (pendingSettleSet.has(suspendSentinel)) {
+			return
+		} // queued bit
 		pendingSettleSet.add(suspendSentinel)
 		pendingSettle.push(suspendSentinel)
 		if (
@@ -6468,7 +6910,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const epoch = engineEpoch
 				queueMicrotask(() => {
 					settleDrainScheduled = false
-					if (epoch !== engineEpoch) return
+					if (epoch !== engineEpoch) {
+						return
+					}
 					if (
 						pendingSettle.length !== 0 &&
 						opDepth === 0 &&
@@ -6491,7 +6935,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * thenable lands in the queue and gets the next iteration; the drain never
 	 * returns with a settlement unscanned or a notification unflushed. */
 	function drainSettlements(): void {
-		if (settleDraining) return
+		if (settleDraining) {
+			return
+		}
 		settleDraining = true
 		opDepth++ // taps landing mid-drain enqueue (next iteration)
 		try {
@@ -6504,31 +6950,40 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				}
 				const taken = pendingSettle
 				pendingSettle = []
-				for (let i = 0; i < taken.length; i++) pendingSettleSet.delete(taken[i]!)
+				for (let i = 0; i < taken.length; i++) {
+					pendingSettleSet.delete(taken[i]!)
+				}
 				const touchedRoots = new Set<RootId>()
 				for (let i = 0; i < taken.length; i++) {
 					const suspendSentinel = taken[i]!
 					eachArena((a) => {
 						// Mark shadows caching this sentinel stale; the scan and mark
 						// mechanics live in {@link arenaInvalidateSettled}.
-						if (arenaInvalidateSettled(a, suspendSentinel) && a.kind === 'committed')
+						if (arenaInvalidateSettled(a, suspendSentinel) && a.kind === 'committed') {
 							touchedRoots.add(a.root)
+						}
 					})
 					// (Kernel-cached suspensions need nothing here: {@link attachSettleListener} invalidates them; {@link boxedRead} self-heals.)
 				}
 				// Re-check each touched root's live watchers against the fresh
 				// marks; roots with an open render frame defer to the frame's close.
 				for (const rootId of touchedRoots) {
-					if (rootToOpenRender.has(rootId)) continue
+					if (rootToOpenRender.has(rootId)) {
+						continue
+					}
 					const ra = rootToArena.get(rootId)
 					const world: World = { kind: 'committed', root: rootId }
 					for (const w of watchers.values()) {
-						if (!w.live || w.root !== rootId) continue
+						if (!w.live || w.root !== rootId) {
+							continue
+						}
 						reconcileWatcher(w, ra, world, 'retirement')
 					}
 				}
 				// (Settlement moves world visibility, never newest values, so core effects need nothing here.)
-				if (signalEffectCount !== 0) flushDirtySignalEffects(undefined)
+				if (signalEffectCount !== 0) {
+					flushDirtySignalEffects(undefined)
+				}
 				flushNotify()
 			}
 		} finally {
@@ -6543,20 +6998,28 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * settlements to empty, then the divergence check a test armed
 	 * ({@link epilogueCheck}) — both only at the outermost exit. */
 	function runOperationEpilogue(): void {
-		if (opDepth !== 0) return // nested operation: the outer epilogue owns the boundary
-		if (pendingSettle.length !== 0 && !settleDraining) drainSettlements()
+		if (opDepth !== 0) {
+			return
+		} // nested operation: the outer epilogue owns the boundary
+		if (pendingSettle.length !== 0 && !settleDraining) {
+			drainSettlements()
+		}
 		// Safety net: consume any quiet-pipeline boundary owed by a write issued
 		// from inside a frame that could not drain it (e.g. a SignalEffect body
 		// writing during a settlement drain). A no-op when nothing is owed.
 		drainQuietBoundary()
-		if (epilogueCheck !== undefined) epilogueCheck()
+		if (epilogueCheck !== undefined) {
+			epilogueCheck()
+		}
 	}
 
 	/** The last act inside every public operation's frame, shared by every
 	 * exit: mark the operation's end for the tracer, then flush notifications. */
 	function endOperation(): void {
 		const tr = trace
-		if (tr !== undefined) tr.opEnd()
+		if (tr !== undefined) {
+			tr.opEnd()
+		}
 		flushNotify()
 	}
 
@@ -6784,7 +7247,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		get deps(): { node: AnyInternals; value: Value }[] {
 			const out: { node: AnyInternals; value: Value }[] = []
 			const a = this.arena
-			if (a === undefined || this.shadow === 0) return out
+			if (a === undefined || this.shadow === 0) {
+				return out
+			}
 			let link = a.memory[this.shadow + ArenaField.DEPS]!
 			while (link !== 0) {
 				const dep = a.memory[link + ArenaLinkField.DEP]!
@@ -6904,32 +7369,38 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let clear = 0
 		for (let slotId = 0; slotId < slots.length; slotId++) {
 			const bit = 1 << slotId
-			if ((effect.pendingSlots & bit) === 0) continue
+			if ((effect.pendingSlots & bit) === 0) {
+				continue
+			}
 			const tenant = slots[slotId]!.tenant
 			const batch = tenant === undefined ? undefined : idToBatch.get(tenant)
 			if (
 				batch === undefined ||
 				batch.state === 'retired' ||
 				(tenant !== undefined && roots.get(effect.root)?.committedBatches.has(tenant) === true)
-			)
+			) {
 				clear |= bit
+			}
 		}
 		effect.pendingSlots &= ~clear
 	}
 
 	function captureSignalEffectRun(id: SignalEffectId, body: () => void): void {
 		const effect = idToSignalEffect.get(id)
-		if (effect === undefined) throw new ScheduleError(`unknown SignalEffect ${id}`)
+		if (effect === undefined) {
+			throw new ScheduleError(`unknown SignalEffect ${id}`)
+		}
 		// The body does committed-world routed reads to record its dependency
 		// links; those resolve only outside every kernel effect frame (enterDepth
 		// 0) and world evaluation (evalDepth 0). Running it inside one would record
 		// zero links and silently drop the effect's dependencies — so the engine's
 		// own scheduling defers it to a boundary, and a mistimed embedder call
 		// throws loudly rather than corrupting.
-		if (evalDepth > 0 || enterDepth > 0)
+		if (evalDepth > 0 || enterDepth > 0) {
 			throw new ScheduleError(
 				'SignalEffect execution is illegal inside an open evaluation/effect frame',
 			)
+		}
 		if (effect.pendingReactRun) {
 			effect.pendingSlots &= ~effect.pendingReactSlots
 			effect.pendingReactSlots = 0
@@ -6944,20 +7415,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Test helper equivalent of a routed public signal read. */
 	function readSignalEffectDep(node: AnyInternals): Value {
 		const effect = activeSignalEffect
-		if (effect === undefined)
+		if (effect === undefined) {
 			throw new ScheduleError('SignalEffect read requires an open execution frame')
+		}
 		return evaluate(node, { kind: 'committed', root: effect.root })
 	}
 
 	/** Remove the terminal and all ordinary edges before freeing its observer record. */
 	function removeSignalEffect(id: SignalEffectId): void {
 		const effect = idToSignalEffect.get(id)
-		if (effect === undefined) throw new ScheduleError(`unknown SignalEffect ${id}`)
+		if (effect === undefined) {
+			throw new ScheduleError(`unknown SignalEffect ${id}`)
+		}
 		idToSignalEffect.delete(id)
 		signalEffectCount--
 		effect.cleanups++
 		const tr = trace
-		if (tr !== undefined) tr.reactEffectCleanup(effect.name, effect.root)
+		if (tr !== undefined) {
+			tr.reactEffectCleanup(effect.name, effect.root)
+		}
 		removeSignalEffectFrame(effect)
 		E.disposeObserver(effect.rec)
 	}
@@ -6965,7 +7441,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Test surface — StrictMode-style replay. */
 	function replaySignalEffect(id: SignalEffectId): void {
 		const effect = idToSignalEffect.get(id)
-		if (effect === undefined) throw new ScheduleError(`unknown SignalEffect ${id}`)
+		if (effect === undefined) {
+			throw new ScheduleError(`unknown SignalEffect ${id}`)
+		}
 		if (rootToOpenRender.has(effect.root)) {
 			throw new ScheduleError('replay requires the effect root to have no open render frame')
 		}
@@ -6977,33 +7455,46 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * inline body through the same graph retracker. */
 	function runCommittedSignalEffect(effect: SignalEffect): void {
 		if (effect.body === undefined) {
-			if (effect.pendingReactRun || effect.queuedRun) return
+			if (effect.pendingReactRun || effect.queuedRun) {
+				return
+			}
 			effect.queuedRun = true
 			queueNotify(NotifyKind.SIGNAL_EFFECT, undefined, undefined, 0, effect)
 			return
 		}
 		effect.cleanups++
 		const tr = trace
-		if (tr !== undefined) tr.reactEffectCleanup(effect.name, effect.root)
+		if (tr !== undefined) {
+			tr.reactEffectCleanup(effect.name, effect.root)
+		}
 		const body = effect.body
-		if (body !== undefined) captureSignalEffectRun(effect.id, body)
+		if (body !== undefined) {
+			captureSignalEffectRun(effect.id, body)
+		}
 		effect.runs++
-		if (tr !== undefined)
+		if (tr !== undefined) {
 			tr.reactEffectRun(effect.name, effect.root, effect.lastValue, effect.traceValues ?? [])
+		}
 	}
 
 	/** Preserve PENDING-only terminals across dirty-list decay while their
 	 * causal render is still unresolved. */
 	function preserveDirtySignalEffects(rootFilter: RootId | undefined): void {
-		if (signalEffectCount === 0) return
+		if (signalEffectCount === 0) {
+			return
+		}
 		const gen = ++walkGen
 		const effects = dirtySignalEffects
 		effects.length = 0
 		if (rootFilter === undefined) {
-			for (const a of rootToArena.values()) collectDirtySignalEffects(a, gen, effects)
+			for (const a of rootToArena.values()) {
+				collectDirtySignalEffects(a, gen, effects)
+			}
 		} else {
 			const a = rootToArena.get(rootFilter)
-			if (a !== undefined) collectDirtySignalEffects(a, gen, effects)
+			if (a !== undefined) {
+				collectDirtySignalEffects(a, gen, effects)
+			}
 		}
 		for (let i = 0; i < effects.length; i++) {
 			const effect = effects[i]!
@@ -7025,20 +7516,30 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Walk dirty committed cones, validate canonical terminal links, and
 	 * request at most one runner per terminal. */
 	function flushDirtySignalEffects(rootFilter: RootId | undefined): void {
-		if (signalEffectCount === 0) return
+		if (signalEffectCount === 0) {
+			return
+		}
 		const gen = ++walkGen
 		const effects = dirtySignalEffects
 		effects.length = 0
 		if (rootFilter === undefined) {
-			for (const a of rootToArena.values()) collectDirtySignalEffects(a, gen, effects)
+			for (const a of rootToArena.values()) {
+				collectDirtySignalEffects(a, gen, effects)
+			}
 		} else {
 			const a = rootToArena.get(rootFilter)
-			if (a !== undefined) collectDirtySignalEffects(a, gen, effects)
+			if (a !== undefined) {
+				collectDirtySignalEffects(a, gen, effects)
+			}
 		}
-		if (effects.length > 1) effects.sort((a, b) => a.id - b.id)
+		if (effects.length > 1) {
+			effects.sort((a, b) => a.id - b.id)
+		}
 		for (let i = 0; i < effects.length; i++) {
 			const effect = effects[i]!
-			if (!effect.live) continue
+			if (!effect.live) {
+				continue
+			}
 			if (effect.pendingReactRun || effect.queuedRun || rootToOpenRender.has(effect.root)) {
 				const a = effect.arena
 				const sh = effect.shadow
@@ -7053,8 +7554,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				}
 				continue
 			}
-			if (signalEffectChanged(effect)) runCommittedSignalEffect(effect)
-			else clearResolvedDeliverySlots(effect)
+			if (signalEffectChanged(effect)) {
+				runCommittedSignalEffect(effect)
+			} else {
+				clearResolvedDeliverySlots(effect)
+			}
 		}
 		effects.length = 0
 	}
@@ -7125,12 +7629,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * ref on its watched node; stale watchers shift nothing (skips pair up). */
 	function observerShift(w: Watcher, delta: 1 | -1): void {
 		const node = resolveWatcherInternals(w)
-		if (node !== undefined) shiftObservedCount(node, delta)
+		if (node !== undefined) {
+			shiftObservedCount(node, delta)
+		}
 	}
 
 	function getMinLivePin(): Seq {
 		let min = Number.POSITIVE_INFINITY
-		for (const p of rootToOpenRender.values()) if (p.pin < min) min = p.pin
+		for (const p of rootToOpenRender.values()) {
+			if (p.pin < min) min = p.pin
+		}
 		return min
 	}
 
@@ -7148,14 +7656,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let maskBits = 0
 		for (const id of includeBatches) {
 			const t = getBatchById(id)
-			if (t.state !== 'live')
+			if (t.state !== 'live') {
 				throw new ScheduleError(
 					'mask captures live batches only — a retired batch is already permanent history',
 				)
+			}
 			maskBatches.add(id)
 			// A slotless live batch never wrote; later writes postdate this
 			// render's pin, so the visibility rule excludes them anyway.
-			if (t.slot !== undefined) maskBits |= 1 << t.slot
+			if (t.slot !== undefined) {
+				maskBits |= 1 << t.slot
+			}
 		}
 		// The committed-set capture materializes the root record (reference-model parity).
 		const includedBits = maskBits | root(rootId).committedBits
@@ -7192,7 +7703,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * handlers, other renders) is "not in render" for this render. */
 	function renderYield(id: RenderPassId): void {
 		const p = getRenderPassById(id)
-		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) render')
+		if (p.state !== 'open') {
+			throw new ScheduleError('yield requires an open (running) render')
+		}
 		p.state = 'yielded'
 		const tr = trace
 		if (tr !== undefined) {
@@ -7203,7 +7716,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	function renderResume(id: RenderPassId): void {
 		const p = getRenderPassById(id)
-		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded render')
+		if (p.state !== 'yielded') {
+			throw new ScheduleError('resume requires a yielded render')
+		}
 		p.state = 'open'
 		const tr = trace
 		if (tr !== undefined) {
@@ -7215,7 +7730,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Mount a new watcher inside an open render; it renders in the render's world. */
 	function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: string): Watcher {
 		const p = getRenderPassById(renderPassId)
-		if (p.state === 'ended') throw new ScheduleError('mount requires an open render')
+		if (p.state === 'ended') {
+			throw new ScheduleError('mount requires an open render')
+		}
 		const value = evaluate(node, { kind: 'render', render: p })
 		const watcher = newWatcher(nextWatcher++, name, p.root, node, value, {
 			renderPassId: p.id,
@@ -7240,7 +7757,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function unlistMounted(watcherId: WatcherId): void {
 		for (const p of idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId)
-			if (i >= 0) p.mounted.splice(i, 1)
+			if (i >= 0) {
+				p.mounted.splice(i, 1)
+			}
 		}
 	}
 
@@ -7252,9 +7771,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	function adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const adopter = getRenderPassById(renderPassId)
-		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open')
+		if (adopter.state === 'ended') {
+			throw new ScheduleError('adopting render must be open')
+		}
 		const w = getOrThrow(watchers, watcherId, 'watcher')
-		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root')
+		if (w.root !== adopter.root) {
+			throw new ScheduleError('reveal stays on the watcher root')
+		}
 		unlistMounted(watcherId)
 		adopter.mounted.push(watcherId)
 	}
@@ -7263,10 +7786,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * render (the queued work the bits stood for has now started). */
 	function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const p = getRenderPassById(renderPassId)
-		if (p.state === 'ended') throw new ScheduleError('render requires an open render')
+		if (p.state === 'ended') {
+			throw new ScheduleError('render requires an open render')
+		}
 		const w = watchers.get(watcherId)
-		if (w === undefined || !w.live) throw new ScheduleError('render targets a live watcher')
-		if (w.root !== p.root) throw new ScheduleError('watcher belongs to another root')
+		if (w === undefined || !w.live) {
+			throw new ScheduleError('render targets a live watcher')
+		}
+		if (w.root !== p.root) {
+			throw new ScheduleError('watcher belongs to another root')
+		}
 		w.dedupBits = 0
 		p.rendered.add(watcherId)
 	}
@@ -7277,12 +7806,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		willRun: boolean,
 	): void {
 		const p = getRenderPassById(renderPassId)
-		if (p.state === 'ended') throw new ScheduleError('signal effect render requires an open render')
+		if (p.state === 'ended') {
+			throw new ScheduleError('signal effect render requires an open render')
+		}
 		const effect = idToSignalEffect.get(signalEffectId)
-		if (effect === undefined || !effect.live)
+		if (effect === undefined || !effect.live) {
 			throw new ScheduleError(`unknown SignalEffect ${signalEffectId}`)
-		if (effect.root !== p.root)
+		}
+		if (effect.root !== p.root) {
 			throw new ScheduleError('signal effect rendered in a different root than its registration')
+		}
 		const report = willRun ? signalEffectId : -signalEffectId
 		if (effect.reportPass === p.id) {
 			p.signalEffects[effect.reportIndex] = report
@@ -7306,7 +7839,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * its arena record. */
 	function dropWatcher(wid: WatcherId): void {
 		const w = watchers.get(wid)
-		if (w === undefined) return
+		if (w === undefined) {
+			return
+		}
 		// Deletion implies non-live: releases the observation retain when a
 		// discarded render held an adopted live watcher (no-op otherwise).
 		w.live = false
@@ -7316,10 +7851,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const nodeWatchers = nodeToWatchers[w.nodeIx]
 		if (nodeWatchers !== undefined) {
 			const i = nodeWatchers.indexOf(w)
-			if (i >= 0) nodeWatchers.splice(i, 1)
+			if (i >= 0) {
+				nodeWatchers.splice(i, 1)
+			}
 			// Reclamation defers for rows still holding watchers; the row's LAST
 			// entry leaving (every teardown funnels here) retries the skipped work.
-			if (reclaimSkippedN !== 0 && nodeWatchers.length === 0) noteReclaimRetry(w.node)
+			if (reclaimSkippedN !== 0 && nodeWatchers.length === 0) {
+				noteReclaimRetry(w.node)
+			}
 		}
 		// Free the record LAST: the free defers to the next boundary sweep, so
 		// queued notifications holding the handle still read their own fields.
@@ -7339,7 +7878,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			changed = commitBatchesInner(rootId, batches)
 			// This call is its own boundary: if committed truth moved, re-check the
 			// root's dirty SignalEffects here. No-op calls re-check nothing.
-			if (changed) flushDirtySignalEffects(rootId)
+			if (changed) {
+				flushDirtySignalEffects(rootId)
+			}
 			endOperation()
 		} finally {
 			opDepth--
@@ -7354,26 +7895,37 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let changed = false
 		for (const tid of batches) {
 			const t = idToBatch.get(tid)
-			if (t === undefined || t.state !== 'live') continue // retired (or reclaimed): the retired clause subsumes membership
-			if (rootState.committedBatches.has(t.id)) continue // idempotent set-add: already a member
+			if (t === undefined || t.state !== 'live') {
+				continue
+			} // retired (or reclaimed): the retired clause subsumes membership
+			if (rootState.committedBatches.has(t.id)) {
+				continue
+			} // idempotent set-add: already a member
 			rootState.committedBatches.add(t.id)
-			if (t.slot !== undefined) rootState.committedBits |= 1 << t.slot
+			if (t.slot !== undefined) {
+				rootState.committedBits |= 1 << t.slot
+			}
 			rootState.commitGen++
 			advanceCommitted() // committed-advance: every per-root commit bumps it
 			// Committed-truth flip site: fan this batch's touched atoms into this
 			// root's arena — after the membership mutation, before the drain.
 			{
 				const ra = rootToArena.get(rootId)
-				if (ra !== undefined) fanAtomsToArena(ra, t.atomsTouched, false)
+				if (ra !== undefined) {
+					fanAtomsToArena(ra, t.atomsTouched, false)
+				}
 			}
-			if (tr !== undefined) tr.perRootCommit(rootId, t.id, rootState.commitGen)
+			if (tr !== undefined) {
+				tr.perRootCommit(rootId, t.id, rootState.commitGen)
+			}
 			// Durable drain, gated the same at every flip site: dirty slots or
 			// re-staled leftovers (see markRestaled) mean committed truth moved.
 			const bits = (t.slot !== undefined ? 1 << t.slot : 0) | rootState.committedDirtySlots
 			rootState.committedDirtySlots = 0
 			const re = restaled.get(rootId)
-			if (bits !== 0 || (re !== undefined && re.size > 0))
+			if (bits !== 0 || (re !== undefined && re.size > 0)) {
 				drainCommittedObservers(rootId, 'per-root-commit')
+			}
 			changed = true
 		}
 		return changed
@@ -7405,7 +7957,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		opts?: { retireAtCommit?: BatchId[] },
 	): void {
 		const render = getRenderPassById(id)
-		if (render.state === 'ended') throw new ScheduleError('render already ended')
+		if (render.state === 'ended') {
+			throw new ScheduleError('render already ended')
+		}
 		if (kind === 'commit') {
 			for (const tid of opts?.retireAtCommit ?? []) {
 				const t = getBatchById(tid) // throws on unknown ids before any mutation
@@ -7427,7 +7981,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// fixup's clock condition reads them at commit time (see runMountFixup).
 		const maskBatchRecords: Batch[] = []
 		if (kind === 'commit') {
-			for (const tid of render.maskBatches) maskBatchRecords.push(getBatchById(tid))
+			for (const tid of render.maskBatches) {
+				maskBatchRecords.push(getBatchById(tid))
+			}
 		}
 		render.state = 'ended'
 		render.endKind = kind
@@ -7435,10 +7991,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// The disposition record fires before the end's consequences, so they can
 		// cite it as cause; the checkpoint markers below fire after them.
 		const tr = trace
-		if (tr !== undefined) tr.renderEnd(render, kind)
+		if (tr !== undefined) {
+			tr.renderEnd(render, kind)
+		}
 		if (kind === 'discard') {
-			for (const wid of render.mounted) dropWatcher(wid) // never subscribed; the tree died
-			if (tr !== undefined) tr.renderDiscarded(render)
+			for (const wid of render.mounted) {
+				dropWatcher(wid)
+			} // never subscribed; the tree died
+			if (tr !== undefined) {
+				tr.renderDiscarded(render)
+			}
 			reevaluateDeferredReleases()
 			reclaimAfterRenderEnd(render)
 			maybeCloseEpisode() // the last open render just closed: the episode may end here
@@ -7453,7 +8015,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// this commit's own drains gate this render's watchers by value (see correctWatcher).
 		committingRender = render
 		for (const report of render.signalEffects) {
-			if (report < 0) continue
+			if (report < 0) {
+				continue
+			}
 			const effect = idToSignalEffect.get(report as SignalEffectId)
 			if (effect !== undefined && effect.live) {
 				const matching = effect.pendingSlots & render.maskBits
@@ -7469,9 +8033,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// rendered value is the comparator later drains reconcile against.
 		for (const wid of render.rendered) {
 			const w = watchers.get(wid)
-			if (w === undefined) continue // removed mid-render
+			if (w === undefined) {
+				continue
+			} // removed mid-render
 			const wInternals = resolveWatcherInternals(w)
-			if (wInternals === undefined) continue // loud skip: record tenancy moved mid-render
+			if (wInternals === undefined) {
+				continue
+			} // loud skip: record tenancy moved mid-render
 			w.lastRenderedValue = evaluate(wInternals, { kind: 'render', render })
 			w.snapshot = {
 				renderPassId: render.id,
@@ -7483,16 +8051,22 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		// (2) retirement folds due at this commit, then per-root lock-in of every
 		// still-live mask batch via commitBatchesInner — including step (3), the drains.
-		for (const tid of opts?.retireAtCommit ?? []) retireInner(getBatchById(tid))
+		for (const tid of opts?.retireAtCommit ?? []) {
+			retireInner(getBatchById(tid))
+		}
 		commitBatchesInner(render.root, render.maskBatches)
 		// (4) layout: subscribe, then mount fixup (React's layout-effect phase).
 		for (const wid of render.mounted) {
 			const w = watchers.get(wid)
-			if (w === undefined) continue
+			if (w === undefined) {
+				continue
+			}
 			// The node record may have died (and been reused) between mount and
 			// commit; a stale watcher must never subscribe the record's new tenant.
 			const wInternals = resolveWatcherInternals(w)
-			if (wInternals === undefined) continue // loud skip (counted)
+			if (wInternals === undefined) {
+				continue
+			} // loud skip (counted)
 			w.live = true
 			runMountFixup(w, wInternals, render, baseline, maskBatchRecords)
 		}
@@ -7501,7 +8075,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const populated: WatcherId[] = [...render.rendered]
 		for (const wid of render.mounted) {
 			const w = watchers.get(wid)
-			if (w !== undefined && w.snapshot.renderPassId === render.id) populated.push(wid)
+			if (w !== undefined && w.snapshot.renderPassId === render.id) {
+				populated.push(wid)
+			}
 		}
 		// Re-staled detection doubles as routing population: each committed
 		// evaluation writes the watcher's committed dep cone into the root's
@@ -7509,9 +8085,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// before any post-commit write needs routing.
 		for (const wid of populated) {
 			const w = watchers.get(wid)
-			if (w === undefined || !w.live) continue
+			if (w === undefined || !w.live) {
+				continue
+			}
 			const wInternals = resolveWatcherInternals(w)
-			if (wInternals === undefined) continue // loud skip (live ⇒ alive in practice; belt for binding-side flips)
+			if (wInternals === undefined) {
+				continue
+			} // loud skip (live ⇒ alive in practice; belt for binding-side flips)
 			const committedNow = evaluate(wInternals, { kind: 'committed', root: render.root })
 			// The committed-render stamp rule: settle the watched node's committed
 			// clock, then compare. Agreement validates the screen — stamp
@@ -7519,7 +8099,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// 0 (never-validated), forcing the next drain to correct it either way.
 			{
 				const ra = rootToArena.get(render.root)
-				if (ra !== undefined) settleObserverClock(ra, wInternals)
+				if (ra !== undefined) {
+					settleObserverClock(ra, wInternals)
+				}
 				if (isValueChanged(wInternals, w.lastRenderedValue, committedNow)) {
 					markRestaled(w)
 					w.lastValidatedAt = 0
@@ -7534,7 +8116,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const ra = rootToArena.get(render.root)
 			for (const wid of populated) {
 				const w = watchers.get(wid)
-				if (w === undefined || !w.live) continue
+				if (w === undefined || !w.live) {
+					continue
+				}
 				if (ra === undefined || !arenaHasShadow(ra, w.nodeIx)) {
 					throw new InvariantViolation(
 						`watcher-population rule: watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`,
@@ -7542,20 +8126,30 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				}
 			}
 		}
-		if (tr !== undefined) tr.renderCommitted(render)
+		if (tr !== undefined) {
+			tr.renderCommitted(render)
+		}
 		// ctx.previous holds the last committed value (a pending render may still
 		// be discarded), so it updates only here, at commit.
 		for (const wid of [...render.rendered, ...render.mounted]) {
 			const w = watchers.get(wid)
-			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue
+			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) {
+				continue
+			}
 			const node =
 				w.nodeIx < nodeIndexToInternals.length ? nodeIndexToInternals[w.nodeIx] : undefined
-			if (node === undefined || getKernelGeneration(w.node) !== w.nodeRecordGen) continue // stale: no hint to update (gen-checked exactly as resolveWatcherInternals; uncounted — not a resolution consumers observe)
-			if (node.kind === 'computed') node.prevCommitted = w.lastRenderedValue
+			if (node === undefined || getKernelGeneration(w.node) !== w.nodeRecordGen) {
+				continue
+			} // stale: no hint to update (gen-checked exactly as resolveWatcherInternals; uncounted — not a resolution consumers observe)
+			if (node.kind === 'computed') {
+				node.prevCommitted = w.lastRenderedValue
+			}
 		}
 		{
 			const ra = rootToArena.get(render.root)
-			if (ra !== undefined) arenaDecay(ra) // boundary mark decay
+			if (ra !== undefined) {
+				arenaDecay(ra)
+			} // boundary mark decay
 		}
 		reevaluateDeferredReleases()
 		reclaimAfterRenderEnd(render)
@@ -7582,8 +8176,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Deferred releases re-evaluate at every render end, commit and discard alike. */
 	function reevaluateDeferredReleases(): void {
 		for (const s of slots) {
-			if (!s.releasePending) continue
-			if (!isSlotRetainedByOpenMask(s.id)) releaseSlot(s)
+			if (!s.releasePending) {
+				continue
+			}
+			if (!isSlotRetainedByOpenMask(s.id)) {
+				releaseSlot(s)
+			}
 		}
 		// A render ending releases its pin, which can unlock retired-prefix
 		// folds (the bounded-memory valve's pin clause).
@@ -7608,7 +8206,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * fast-out's clock conjunct, quantified over a snapshot's slot bits). */
 	function areSlotClocksQuiet(bits: BatchSlotSet, pin: Seq): boolean {
 		for (let s = 0; bits !== 0; s++, bits >>>= 1) {
-			if ((bits & 1) === 1 && slots[s]!.writeClock > pin) return false
+			if ((bits & 1) === 1 && slots[s]!.writeClock > pin) {
+				return false
+			}
 		}
 		return true
 	}
@@ -7639,16 +8239,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// committed member can write post-pin without tripping any condition.
 		let correctives = 0
 		for (const b of idToBatch.values()) {
-			if (b.state !== 'live' || b.slot === undefined) continue
-			if (!isBatchTouchingClosure(b, closure)) continue
+			if (b.state !== 'live' || b.slot === undefined) {
+				continue
+			}
+			if (!isBatchTouchingClosure(b, closure)) {
+				continue
+			}
 			const slot = slots[b.slot]!
 			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
-			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin)
+			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) {
 				continue
-			if (tr !== undefined) tr.mountCorrective(w, b.id, slot.id)
+			}
+			if (tr !== undefined) {
+				tr.mountCorrective(w, b.id, slot.id)
+			}
 			correctives++
 			w.dedupBits |= 1 << slot.id // the corrective is a state update scheduled into the batch's lane (the protocol's runInBatch)
-			if (onMountCorrective !== undefined) queueNotify(NotifyKind.MOUNT_CORRECTIVE, w, b, slot.id)
+			if (onMountCorrective !== undefined) {
+				queueNotify(NotifyKind.MOUNT_CORRECTIVE, w, b, slot.id)
+			}
 		}
 		// The clock condition checks captured mask slots AND mask batches at
 		// commit time: a slot interned mid-render postdates the captured set.
@@ -7667,7 +8276,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet
 		if (fastOut) {
-			if (tr !== undefined) tr.runMountFixup(w, 'fast-out', correctives)
+			if (tr !== undefined) {
+				tr.runMountFixup(w, 'fast-out', correctives)
+			}
 			return // nothing committed or retired in the window: no evaluation, no comparison
 		}
 		const vFx = evaluate(node, {
@@ -7677,10 +8288,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			root: w.root,
 		})
 		if (correctWatcher(w, node, vFx, 'mount')) {
-			if (tr !== undefined) tr.runMountFixup(w, 'corrected', correctives)
+			if (tr !== undefined) {
+				tr.runMountFixup(w, 'corrected', correctives)
+			}
 			return
 		}
-		if (tr !== undefined) tr.runMountFixup(w, 'compare-clean', correctives)
+		if (tr !== undefined) {
+			tr.runMountFixup(w, 'compare-clean', correctives)
+		}
 	}
 
 	/** Transitive dependency closure feeding a node: reverse walks over kernel
@@ -7695,12 +8310,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// the row resolution carries its own identity check (getResidentInternals).
 		const ix = getKernelNodeIndex(nodeId)
 		const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined
-		if (node === undefined || node.id !== nodeId) return closure // unregistered/dead id: nothing routes
+		if (node === undefined || node.id !== nodeId) {
+			return closure
+		} // unregistered/dead id: nothing routes
 		const pa = render?.arena
-		if (pa !== undefined) collectArenaClosure(pa, node, closure)
+		if (pa !== undefined) {
+			collectArenaClosure(pa, node, closure)
+		}
 		if (render !== undefined) {
 			const ca = rootToArena.get(render.root)
-			if (ca !== undefined) collectArenaClosure(ca, node, closure)
+			if (ca !== undefined) {
+				collectArenaClosure(ca, node, closure)
+			}
 		}
 		collectKernelClosure(node.id, closure, new Set())
 		return closure
@@ -7709,7 +8330,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** The kernel leg of the fixup closure: a reverse walk over the kernel's own
 	 * dep links off the raw arena view. One id space — a record's id is its NodeId. */
 	function collectKernelClosure(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
-		if (seen.has(kernelId)) return
+		if (seen.has(kernelId)) {
+			return
+		}
 		seen.add(kernelId)
 		const memory = E.buffer()
 		let l = memory[kernelId + NodeField.DEPS]!
@@ -7718,10 +8341,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// Dep ids come off live kernel links: a defined dense row ⇔ engine
 			// content. Unregistered intermediates traverse but contribute nothing.
 			const depIx = memory[depKernelId + NodeField.NODE_INDEX]!
-			if (depIx < nodeIndexToInternals.length && nodeIndexToInternals[depIx] !== undefined)
+			if (depIx < nodeIndexToInternals.length && nodeIndexToInternals[depIx] !== undefined) {
 				closure.add(depKernelId)
-			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0)
+			}
+			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) {
 				collectKernelClosure(depKernelId, closure, seen)
+			}
 			l = memory[l + LinkField.NEXT_DEP]!
 		}
 	}
@@ -7729,7 +8354,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function isBatchTouchingClosure(t: Batch, closure: Set<NodeId>): boolean {
 		const atoms = t.atomsTouched
 		for (let i = 0; i < atoms.length; i++) {
-			if (closure.has(atoms[i]!.id)) return true
+			if (closure.has(atoms[i]!.id)) {
+				return true
+			}
 		}
 		return false
 	}
@@ -7758,10 +8385,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function getConsumerCount(rootId: RootId): number {
 		let n = 0
 		for (const w of watchers.values()) {
-			if (w.live && w.root === rootId) n++
+			if (w.live && w.root === rootId) {
+				n++
+			}
 		}
 		for (const effect of idToSignalEffect.values()) {
-			if (effect.live && effect.root === rootId) n++
+			if (effect.live && effect.root === rootId) {
+				n++
+			}
 		}
 		return n
 	}
@@ -7775,7 +8406,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				releaseArena(a)
 			}
 		}
-		for (const a of rootToArena.values()) arenaRenumberMarks(a)
+		for (const a of rootToArena.values()) {
+			arenaRenumberMarks(a)
+		}
 	}
 
 	/** The checker window: the seam feeding tests/arena-checker.ts (the armed
@@ -7852,7 +8485,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let renders = 0
 		let dirty = 0
 		for (const p of rootToOpenRender.values()) {
-			if (p.arena !== undefined) renders++
+			if (p.arena !== undefined) {
+				renders++
+			}
 		}
 		eachArena((a) => {
 			dirty += a.dirty.length
@@ -7876,14 +8511,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * stamps baseSeq and {@link committedAdvance}. No batch, no log entry, no
 	 * delivery walk: live observers reconcile value-gated, as a durable drain would. */
 	function quietWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
-		if (evalDepth > 0)
+		if (evalDepth > 0) {
 			throw new ScheduleError(
 				'signal write during a world evaluation / render — write from an event handler or effect instead',
 			)
-		if (inFoldCallback)
+		}
+		if (inFoldCallback) {
 			throw new ScheduleError(
 				'signal write inside an updater/reducer fold — updaters and reducers must be pure',
 			)
+		}
 		// Public-operation frame: nested effect writes' settlements enqueue for this fold's epilogue.
 		opDepth++
 		try {
@@ -7914,7 +8551,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		node.base = next
 		node.baseSeq = committedAdvance = ++seq // advance the base + committed-advance clocks together (nextSeq, inlined)
 		const tr = trace
-		if (tr !== undefined) tr.quietWrite(node, node.baseSeq)
+		if (tr !== undefined) {
+			tr.quietWrite(node, node.baseSeq)
+		}
 		// Direct kernel apply — a public-method re-entry would re-run the
 		// policy comparator. Flushed effects classify normally on re-entry.
 		// writeNewest may run core effects (a kernel flush): one of those bodies
@@ -7949,8 +8588,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			quietBoundaryActive ||
 			enterDepth !== 0 ||
 			activeSignalEffect !== undefined
-		)
+		) {
 			return
+		}
 		quietBoundaryActive = true
 		try {
 			let guard = 0
@@ -7961,10 +8601,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					)
 				}
 				quietBoundaryOwed = false
-				if (watchers.size !== 0) quietDrain()
-				if (signalEffectCount !== 0) flushDirtySignalEffects(undefined)
-				for (const a of rootToArena.values()) arenaDecay(a) // boundary mark decay
-				if (notifyState.n !== 0) flushNotify()
+				if (watchers.size !== 0) {
+					quietDrain()
+				}
+				if (signalEffectCount !== 0) {
+					flushDirtySignalEffects(undefined)
+				}
+				for (const a of rootToArena.values()) {
+					arenaDecay(a)
+				} // boundary mark decay
+				if (notifyState.n !== 0) {
+					flushNotify()
+				}
 			}
 		} finally {
 			quietBoundaryActive = false
@@ -7997,15 +8645,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		kind: WriteKind,
 		payload: unknown,
 	): void {
-		if (evalDepth > 0)
+		if (evalDepth > 0) {
 			throw new ScheduleError(
 				'signal write during a world evaluation / render — write from an event handler or effect instead',
 			)
-		if (inFoldCallback)
+		}
+		if (inFoldCallback) {
 			throw new ScheduleError(
 				'signal write inside an updater/reducer fold — updaters and reducers must be pure',
 			)
-		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms')
+		}
+		if (node.kind !== 'atom') {
+			throw new ScheduleError('writes target atoms')
+		}
 		// Public-operation frame: settlements landing anywhere inside drain at the epilogue.
 		opDepth++
 		try {
@@ -8034,10 +8686,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			lastBatchId = batchId
 			lastBatchRef = batch
 		}
-		if (batch.state !== 'live')
+		if (batch.state !== 'live') {
 			throw new ScheduleError(
 				`write into retired batch ${batchId} — a retired batch accepts no new writes`,
 			)
+		}
 
 		const log = node.log
 		// Drop check: a write may be dropped only when every world provably folds
@@ -8050,7 +8703,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				// into their general arms measured +11% bare, +3-6% chain3+watch1).
 				if (Object.is(payload, node.base)) {
 					const tr = trace
-					if (tr !== undefined) tr.writeDropped(node, batchId)
+					if (tr !== undefined) {
+						tr.writeDropped(node, batchId)
+					}
 					endOperation()
 					return
 				}
@@ -8059,7 +8714,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				if (isAtomValueEqual(node, node.base, evaluated)) {
 					// Policy equality — once, kernel order (current, incoming).
 					const tr = trace
-					if (tr !== undefined) tr.writeDropped(node, batchId)
+					if (tr !== undefined) {
+						tr.writeDropped(node, batchId)
+					}
 					endOperation()
 					return
 				}
@@ -8071,7 +8728,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (kind === WriteKind.SET && node.eqIsDefault) {
 				if (Object.is(payload, newest)) {
 					const tr = trace
-					if (tr !== undefined) tr.writeDropped(node, batchId)
+					if (tr !== undefined) {
+						tr.writeDropped(node, batchId)
+					}
 					endOperation()
 					return
 				}
@@ -8079,7 +8738,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const evaluated = applyOp(node, kind, payload, newest)
 				if (isAtomValueEqual(node, newest, evaluated)) {
 					const tr = trace
-					if (tr !== undefined) tr.writeDropped(node, batchId)
+					if (tr !== undefined) {
+						tr.writeDropped(node, batchId)
+					}
 					endOperation()
 					return
 				}
@@ -8096,8 +8757,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		// The first entry joins the episode; reaching the valve threshold files a fold candidate.
 		const logLen = log.length
-		if (logLen === 1) episodeHolds.add(node)
-		else if (logLen === FOLD_VALVE_THRESHOLD) foldCandidates.add(node)
+		if (logLen === 1) {
+			episodeHolds.add(node)
+		} else if (logLen === FOLD_VALVE_THRESHOLD) {
+			foldCandidates.add(node)
+		}
 		slot.writeClock = writeSeq
 		if (roots.size !== 0) {
 			// A write into a committed-member slot moves committed truth immediately.
@@ -8108,14 +8772,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					// Committed-truth flip site: committed-member write (marks only;
 					// the effect scan waits for the next boundary).
 					const ra = rootToArena.get(r.id)
-					if (ra !== undefined) fanAtomsToArena(ra, getSingleAtomBuffer(node), false)
+					if (ra !== undefined) {
+						fanAtomsToArena(ra, getSingleAtomBuffer(node), false)
+					}
 				}
 			}
 		}
 		{
 			// One trace record per logged write (the decoder rebuilds the 'write' event from it).
 			const tr = trace
-			if (tr !== undefined) tr.logEntry(node, log.tailEntry())
+			if (tr !== undefined) {
+				tr.logEntry(node, log.tailEntry())
+			}
 		}
 
 		// Eager kernel apply with stepwise equality: the newest world stays
@@ -8143,7 +8811,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * implementation-defined; values and firing operations are the contract. */
 	function logCoreEffectRun(name: string, value: Value): void {
 		const tr = trace
-		if (tr !== undefined) tr.coreEffectRun(name, value)
+		if (tr !== undefined) {
+			tr.coreEffectRun(name, value)
+		}
 	}
 
 	// ------------------------------------------- episodes and quiescence
@@ -8173,8 +8843,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * trace decode fidelity — not engine correctness — degrades past 2^31-1.)
 	 */
 	function quiesce(): void {
-		if (!quiescent())
+		if (!quiescent()) {
 			throw new ScheduleError('quiescence requires no live batches, pins, or parked actions')
+		}
 		// Residue check: the episode close already ran, so no atom may still hold entries.
 		for (const n of episodeHolds) {
 			throw new InvariantViolation(
@@ -8190,10 +8861,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			s.claimSeq = 0
 			s.releasePending = false
 		}
-		for (const w of watchers.values()) w.dedupBits = 0
+		for (const w of watchers.values()) {
+			w.dedupBits = 0
+		}
 		{
 			const tr = trace
-			if (tr !== undefined) tr.epochReset(epoch)
+			if (tr !== undefined) {
+				tr.epochReset(epoch)
+			}
 		}
 		recomputeQuiet() // quiescent by definition; re-derive from the new episode's state
 		endOperation()
@@ -8219,28 +8894,38 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Idle preconditions for {@link __TEST__resetEngine}: a reset from inside any
 	 * open frame fails the running test loudly instead of corrupting the next one. */
 	function assertIdleForReset(): void {
-		if (!quiescent())
+		if (!quiescent()) {
 			throw new ScheduleError(
 				'__TEST__resetEngine requires quiescence: no live batches (parked actions included) and no open renders',
 			)
-		if (opDepth !== 0)
+		}
+		if (opDepth !== 0) {
 			throw new ScheduleError('__TEST__resetEngine inside a public operation (opDepth !== 0)')
-		if (evalDepth !== 0)
+		}
+		if (evalDepth !== 0) {
 			throw new ScheduleError('__TEST__resetEngine inside a world evaluation (evalDepth !== 0)')
-		if (inFoldCallback)
+		}
+		if (inFoldCallback) {
 			throw new ScheduleError('__TEST__resetEngine inside an updater/reducer/equality callback')
-		if (activeSignalEffect !== undefined)
+		}
+		if (activeSignalEffect !== undefined) {
 			throw new ScheduleError('__TEST__resetEngine inside an open SignalEffect frame')
-		if (serveOverride !== undefined)
+		}
+		if (serveOverride !== undefined) {
 			throw new ScheduleError('__TEST__resetEngine inside an arena evaluation frame')
-		if (currentSink !== 0)
+		}
+		if (currentSink !== 0) {
 			throw new ScheduleError('__TEST__resetEngine inside a fold-through evaluation frame')
-		if (suspendDepth !== 0)
+		}
+		if (suspendDepth !== 0) {
 			throw new ScheduleError('__TEST__resetEngine inside a hook-initiated (suspending) evaluation')
-		if (notifyState.flushing)
+		}
+		if (notifyState.flushing) {
 			throw new ScheduleError('__TEST__resetEngine inside a notification flush')
-		if (notifyState.n !== 0)
+		}
+		if (notifyState.n !== 0) {
 			throw new ScheduleError('__TEST__resetEngine with queued notifications undelivered')
+		}
 		// (A drain in progress holds opDepth > 0. Queued-but-undrained settlements
 		// are legal: the queue dies with the composition, its microtask epoch-guarded.)
 	}
@@ -8256,7 +8941,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function __TEST__resetEngine(options?: EngineResetOptions): void {
 		assertIdleForReset()
 		const d = driver
-		if (d !== undefined && d.protocolReset !== undefined) d.protocolReset()
+		if (d !== undefined && d.protocolReset !== undefined) {
+			d.protocolReset()
+		}
 		resetKernelState() // bumps the engine epoch; scrubs kernel state
 		__TEST__resetPolicy()
 		__TEST__resetSuspense()
@@ -8365,7 +9052,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		get idToInternals(): Map<NodeId, AnyInternals> {
 			const out = new Map<NodeId, AnyInternals>()
 			for (const n of nodeIndexToInternals) {
-				if (n !== undefined) out.set(n.id, n)
+				if (n !== undefined) {
+					out.set(n.id, n)
+				}
 			}
 			return out
 		},
@@ -8477,7 +9166,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Engine computeds' {@link Reader}: kernel read plus observation capture. */
 	const kernelTrackedReader: Reader = (dep) => {
 		const oc = obsCapture
-		if (oc !== undefined) oc.push(dep)
+		if (oc !== undefined) {
+			oc.push(dep)
+		}
 		return readKernelValue(dep)
 	}
 
@@ -8903,20 +9594,28 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Idle preconditions for `__TEST__resetEngine`: a reset inside a live
 	 * kernel frame would corrupt the next test, not fail this one. @internal */
 	function __assertKernelIdleForReset(): void {
-		if (enterDepth !== 0)
+		if (enterDepth !== 0) {
 			throw new Error(
 				'cosignals: __TEST__resetEngine inside an open kernel frame (enterDepth !== 0)',
 			)
-		if (batchDepth !== 0)
+		}
+		if (batchDepth !== 0) {
 			throw new Error('cosignals: __TEST__resetEngine inside batch() (batchDepth !== 0)')
-		if (runDepth !== 0) throw new Error('cosignals: __TEST__resetEngine inside an effect run')
-		if (queuedLength !== notifyIndex)
+		}
+		if (runDepth !== 0) {
+			throw new Error('cosignals: __TEST__resetEngine inside an effect run')
+		}
+		if (queuedLength !== notifyIndex) {
 			throw new Error('cosignals: __TEST__resetEngine with queued effects unflushed')
-		if (E === POISON) throw new Error('cosignals: __TEST__resetEngine inside a fold-purity frame')
-		if (reclaimDrainGuard === true)
+		}
+		if (E === POISON) {
+			throw new Error('cosignals: __TEST__resetEngine inside a fold-purity frame')
+		}
+		if (reclaimDrainGuard === true) {
 			throw new Error(
 				"cosignals: __TEST__resetEngine inside the deferred-cleanup drain (a reclaimed record's user cleanup is on the stack)",
 			)
+		}
 	}
 
 	/** The kernel scrub (test-only): zero the used arena range, reset allocator
@@ -9359,10 +10058,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		atoms: Record<string, Atom<unknown> | ReducerAtom<unknown, unknown>>,
 		replacer?: (key: string, value: unknown) => unknown,
 	): string {
-		if (!quiescent()) throw new ScheduleError('serializeAtomState requires no live batch or render')
+		if (!quiescent()) {
+			throw new ScheduleError('serializeAtomState requires no live batch or render')
+		}
 		const out: Record<string, unknown> = {}
 		for (const key in atoms) {
-			if (!Object.prototype.hasOwnProperty.call(atoms, key)) continue
+			if (!Object.prototype.hasOwnProperty.call(atoms, key)) {
+				continue
+			}
 			const value = atoms[key]!.state
 			out[key] = replacer === undefined ? value : replacer(key, value)
 		}
@@ -9374,11 +10077,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		atoms: Record<string, Atom<unknown> | ReducerAtom<unknown, unknown>>,
 		reviver?: (key: string, value: unknown) => unknown,
 	): void {
-		if (!quiescent())
+		if (!quiescent()) {
 			throw new ScheduleError('initializeAtomState requires no live batch or render')
+		}
 		const data = JSON.parse(json) as Record<string, unknown>
 		for (const key in data) {
-			if (!Object.prototype.hasOwnProperty.call(data, key)) continue
+			if (!Object.prototype.hasOwnProperty.call(data, key)) {
+				continue
+			}
 			const atom = atoms[key]
 			if (atom === undefined) {
 				console.warn(`cosignals: initializeAtomState: unknown key "${key}"`)

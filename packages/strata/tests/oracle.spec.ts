@@ -45,7 +45,9 @@ function fold(atom: ModelAtom, include: (operation: ModelOperation) => boolean):
 	let value = atom.base
 	for (let i = 0; i < atom.operations.length; i++) {
 		const operation = atom.operations[i]!
-		if (include(operation)) value = apply(operation, value)
+		if (include(operation)) {
+			value = apply(operation, value)
+		}
 	}
 	return value
 }
@@ -167,11 +169,16 @@ function run(schedule: Op[]): string | undefined {
 			const previous = writer(atom, branch)
 			const next =
 				operation.kind === 'set' ? operation.value : updateFns[operation.update](previous)
-			if (operation.kind === 'set') actual[operation.atom]!.set(operation.value)
-			else actual[operation.atom]!.update(updateFns[operation.update])
+			if (operation.kind === 'set') {
+				actual[operation.atom]!.set(operation.value)
+			} else {
+				actual[operation.atom]!.update(updateFns[operation.update])
+			}
 			if (branch.engine === undefined) {
 				for (const candidate of runtime.activeBranches()) {
-					if (candidate.lane === branch.lane) branch.engine = candidate
+					if (candidate.lane === branch.lane) {
+						branch.engine = candidate
+					}
 				}
 			}
 			if (!Object.is(previous, next)) {
@@ -183,16 +190,23 @@ function run(schedule: Op[]): string | undefined {
 				branch.lastSeq = modeled.seq
 			}
 		} else if (operation.kind === 'commit') {
-			if (branch !== undefined) cutoffs.set(branch, branch.lastSeq)
+			if (branch !== undefined) {
+				cutoffs.set(branch, branch.lastSeq)
+			}
 		} else if (branch !== undefined) {
 			branch.status = operation.committed ? 1 : 2
-			if (operation.committed) cutoffs.set(branch, branch.lastSeq)
-			else cutoffs.delete(branch)
+			if (operation.committed) {
+				cutoffs.set(branch, branch.lastSeq)
+			} else {
+				cutoffs.delete(branch)
+			}
 			runtime.finishBranch(branch.engine!, operation.committed)
 			slots[operation.slot] = undefined
 			let anyActive = false
 			for (let i = 0; i < slots.length; i++) {
-				if (slots[i] !== undefined) anyActive = true
+				if (slots[i] !== undefined) {
+					anyActive = true
+				}
 			}
 			if (!anyActive) {
 				for (let i = 0; i < model.length; i++) {
@@ -206,7 +220,9 @@ function run(schedule: Op[]): string | undefined {
 		for (let i = 0; i < actual.length; i++) {
 			const got = actual[i]!.state
 			const want = canonical(model[i]!)
-			if (!Object.is(got, want)) return `step ${step} atom ${i} canonical: ${got} != ${want}`
+			if (!Object.is(got, want)) {
+				return `step ${step} atom ${i} canonical: ${got} != ${want}`
+			}
 			const gotLatest = runtime.latest(actual[i]!)
 			const wantLatest = newest(model[i]!)
 			if (!Object.is(gotLatest, wantLatest)) {
@@ -216,7 +232,9 @@ function run(schedule: Op[]): string | undefined {
 		const wantSum = canonical(model[0]!) * 3 + canonical(model[1]!)
 		const wantDynamic =
 			(canonical(model[2]!) & 1) === 0 ? canonical(model[3]!) : canonical(model[4]!)
-		if (sum.state !== wantSum) return `step ${step} sum: ${sum.state} != ${wantSum}`
+		if (sum.state !== wantSum) {
+			return `step ${step} sum: ${sum.state} != ${wantSum}`
+		}
 		if (dynamic.state !== wantDynamic) {
 			return `step ${step} dynamic: ${dynamic.state} != ${wantDynamic}`
 		}
@@ -232,7 +250,9 @@ function run(schedule: Op[]): string | undefined {
 
 		const engineCutoffs = new Map<Branch, number>()
 		for (const [modelBranch, cutoff] of cutoffs) {
-			if (modelBranch.engine !== undefined) engineCutoffs.set(modelBranch.engine, cutoff)
+			if (modelBranch.engine !== undefined) {
+				engineCutoffs.set(modelBranch.engine, cutoff)
+			}
 		}
 		const root = {}
 		const world = runtime.createWorld(root, operation.mask, engineCutoffs, false, true)
@@ -249,7 +269,9 @@ function run(schedule: Op[]): string | undefined {
 			const got = runtime.withWorld(world, leaves, () => total.state)
 			const expectedDynamic = (expected[2]! & 1) === 0 ? expected[3]! : expected[4]!
 			const want = expected[0]! * 3 + expected[1]! + expectedDynamic
-			if (!Object.is(got, want)) return `step ${step} computed world: ${got} != ${want}`
+			if (!Object.is(got, want)) {
+				return `step ${step} computed world: ${got} != ${want}`
+			}
 		} finally {
 			runtime.releaseWorld(world)
 		}
@@ -270,7 +292,9 @@ function shrink(schedule: Op[]): Op[] {
 				break
 			}
 		}
-		if (!reduced) width = Math.floor(width / 2)
+		if (!reduced) {
+			width = Math.floor(width / 2)
+		}
 	}
 	return result
 }

@@ -24,7 +24,9 @@ const b =
 		? mod.registerReactBridge()
 		: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine)
 const atoms = []
-for (let i = 0; i < 4; i++) atoms.push(b.atom(`a${i}`, 0))
+for (let i = 0; i < 4; i++) {
+	atoms.push(b.atom(`a${i}`, 0))
+}
 const computeds = []
 for (let j = 0; j < 4; j++) {
 	const x = atoms[j]
@@ -36,34 +38,48 @@ for (let j = 0; j < 4; j++) {
 // IS the core-effect form (value-gated like the anchor's subscription, so
 // per-write observer work matches).
 if (typeof b.mountCoreEffect === 'function') {
-	for (const c of computeds) b.mountCoreEffect(c, `e-${c.name}`)
+	for (const c of computeds) {
+		b.mountCoreEffect(c, `e-${c.name}`)
+	}
 } else {
 	for (const c of computeds) {
 		let last
 		mod.effect(() => {
 			const value = c.handle.state // tracked kernel read (newest world)
-			if (Object.is(value, last)) return // value gate
+			if (Object.is(value, last)) {
+				return
+			} // value gate
 			last = value
 		})
 	}
 }
 if (WATCHERS > 0) {
 	const p = b.renderStart('R', [])
-	for (let i = 0; i < WATCHERS; i++) b.mountWatcher(p.id, computeds[i % 4], `w${i}`)
+	for (let i = 0; i < WATCHERS; i++) {
+		b.mountWatcher(p.id, computeds[i % 4], `w${i}`)
+	}
 	b.renderEnd(p.id, 'commit')
 }
 
 let v = 0
 function repOnce() {
-	if (b.events !== undefined) b.events.length = 0 // anchor-tree retained log; this tree retains no events
+	if (b.events !== undefined) {
+		b.events.length = 0
+	} // anchor-tree retained log; this tree retains no events
 	const t0 = process.hrtime.bigint()
 	const batches = []
-	for (let k = 0; k < K; k++) batches.push(b.openBatch())
 	for (let k = 0; k < K; k++) {
-		for (let m = 0; m < M; m++) b.write(batches[k].id, atoms[m % 4], 0, ++v)
+		batches.push(b.openBatch())
+	}
+	for (let k = 0; k < K; k++) {
+		for (let m = 0; m < M; m++) {
+			b.write(batches[k].id, atoms[m % 4], 0, ++v)
+		}
 	}
 	const t1 = process.hrtime.bigint()
-	for (const t of batches) b.retire(t.id)
+	for (const t of batches) {
+		b.retire(t.id)
+	}
 	const t2 = process.hrtime.bigint()
 	return {
 		writeNsPerBatch: Number(t1 - t0) / K,
@@ -72,7 +88,9 @@ function repOnce() {
 	}
 }
 
-for (let r = 0; r < WARMUP; r++) repOnce()
+for (let r = 0; r < WARMUP; r++) {
+	repOnce()
+}
 const acc = []
 for (let r = 0; r < REPS; r++) {
 	globalThis.gc?.()

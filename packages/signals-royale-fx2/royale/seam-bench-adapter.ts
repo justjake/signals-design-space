@@ -28,7 +28,9 @@ const contender: Contender = {
 	name: 'royale-fx2',
 	createCells(n: number): CellStore {
 		const cells: Signal<number>[] = []
-		for (let i = 0; i < n; i++) cells.push(signal(0))
+		for (let i = 0; i < n; i++) {
+			cells.push(signal(0))
+		}
 		return {
 			useCell(i: number): number {
 				return useValue(cells[i])
@@ -38,12 +40,16 @@ const contender: Contender = {
 			},
 			writeMany(updates) {
 				batch(() => {
-					for (const [i, v] of updates) set(cells[i], v)
+					for (const [i, v] of updates) {
+						set(cells[i], v)
+					}
 				})
 			},
 			writeManyInTransition(updates) {
 				startTransitionWrite(() => {
-					for (const [i, v] of updates) set(cells[i], v)
+					for (const [i, v] of updates) {
+						set(cells[i], v)
+					}
 				})
 			},
 			dispose() {

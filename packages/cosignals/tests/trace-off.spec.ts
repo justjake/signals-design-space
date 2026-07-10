@@ -49,8 +49,11 @@ function src(rel: string): string {
 function freshEngine(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	__TEST__resetEngine()
 	return engine
@@ -64,7 +67,9 @@ function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
 /** One record per call, with a recognizable payload (the typed epoch-reset
  * create — the direct emit surface the engine's sites call). */
 function emitN(tr: Tracer, n: number, from = 0): void {
-	for (let i = from; i < from + n; i++) tr.epochReset(i)
+	for (let i = from; i < from + n; i++) {
+		tr.epochReset(i)
+	}
 }
 
 describe('R11 zero-cost-when-off: source discipline', () => {
@@ -97,9 +102,13 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		const lines = src('src/CosignalEngine.ts').split('\n')
 		let accessorPair = 0
 		for (const line of lines) {
-			if (!/(^|[^.\w'])trace\b/.test(line)) continue
+			if (!/(^|[^.\w'])trace\b/.test(line)) {
+				continue
+			}
 			const t = line.trim()
-			if (t === 'return trace;' || t === 'trace = hooks;') accessorPair++
+			if (t === 'return trace;' || t === 'trace = hooks;') {
+				accessorPair++
+			}
 			expect(
 				allowed.some((p) => p.test(t)),
 				`unexpected use of the trace slot: ${t}`,
@@ -114,7 +123,9 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 			const lines = src(rel).split('\n')
 			for (let i = 0; i < lines.length; i++) {
 				const t = lines[i]!.trim()
-				if (!/(^|[^.\w])tr\.\w+\(/.test(t)) continue
+				if (!/(^|[^.\w])tr\.\w+\(/.test(t)) {
+					continue
+				}
 				const guardedInline = /^if \(tr !== undefined\) tr\.\w+\(/.test(t)
 				const guardedBlock = lines
 					.slice(Math.max(0, i - 3), i)
@@ -182,7 +193,9 @@ describe('R11 runtime enable/disable', () => {
 			const b = freshEngine()
 			buildEngineTopology(b)
 			const tr = traced ? attachTracer(b, { mode: 'ring', capacity: 16 }) : undefined // tiny ring: wrap under load
-			for (const op of generateSchedule(7, 80)) applyEngineOp(b, op)
+			for (const op of generateSchedule(7, 80)) {
+				applyEngineOp(b, op)
+			}
 			const snapshot = {
 				seq: b.seq,
 				committedAdvance: b.committedAdvance,
@@ -295,7 +308,9 @@ describe('R11 recorder details', () => {
 
 	it('ref-ring: object payloads retained until overwritten; capacity 0 disables capture', () => {
 		const tr = bareTracer({ refCapacity: 8 })
-		for (let i = 0; i < 10; i++) tr.coreEffectRun('E', i)
+		for (let i = 0; i < 10; i++) {
+			tr.coreEffectRun('E', i)
+		}
 		expect(tr.decode(0)!.data['value']).toBe(REF_DROPPED) // overwritten
 		expect(tr.decode(1)!.data['value']).toBe(REF_DROPPED)
 		expect(tr.decode(2)!.data['value']).toBe(2) // oldest survivor

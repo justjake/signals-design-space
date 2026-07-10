@@ -40,7 +40,9 @@ const gcNow = () => {
 	for (let i = 0; i < 10; i++) {
 		globalThis.gc!()
 		const used = process.memoryUsage().heapUsed
-		if (prev - used < 16 * 1024) break
+		if (prev - used < 16 * 1024) {
+			break
+		}
 		prev = used
 	}
 }

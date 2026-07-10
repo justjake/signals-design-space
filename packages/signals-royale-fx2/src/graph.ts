@@ -350,24 +350,37 @@ export function makeDerived<T>(
 // ---------------------------------------------------------------------------
 
 function linkIntoSubs(link: Link): void {
-	if (link.inSubs) return
+	if (link.inSubs) {
+		return
+	}
 	link.inSubs = true
 	const dep = link.dep
 	link.prevSub = dep.subsTail
 	link.nextSub = undefined
-	if (dep.subsTail !== undefined) dep.subsTail.nextSub = link
-	else dep.subs = link
+	if (dep.subsTail !== undefined) {
+		dep.subsTail.nextSub = link
+	} else {
+		dep.subs = link
+	}
 	dep.subsTail = link
 }
 
 function unlinkFromSubs(link: Link): void {
-	if (!link.inSubs) return
+	if (!link.inSubs) {
+		return
+	}
 	link.inSubs = false
 	const dep = link.dep
-	if (link.prevSub !== undefined) link.prevSub.nextSub = link.nextSub
-	else dep.subs = link.nextSub
-	if (link.nextSub !== undefined) link.nextSub.prevSub = link.prevSub
-	else dep.subsTail = link.prevSub
+	if (link.prevSub !== undefined) {
+		link.prevSub.nextSub = link.nextSub
+	} else {
+		dep.subs = link.nextSub
+	}
+	if (link.nextSub !== undefined) {
+		link.nextSub.prevSub = link.prevSub
+	} else {
+		dep.subsTail = link.prevSub
+	}
 	link.prevSub = undefined
 	link.nextSub = undefined
 }
@@ -411,7 +424,9 @@ export function addObserver(node: ReactiveNode): void {
 					invalid = true
 				}
 			}
-			if (invalid && (node.flags & Flag.StaleMask) === 0) node.flags |= Flag.StaleCheck
+			if (invalid && (node.flags & Flag.StaleMask) === 0) {
+				node.flags |= Flag.StaleCheck
+			}
 		}
 		noteLifetimeTransition(node)
 	}
@@ -464,9 +479,13 @@ let lifetimeFlushScheduled = false
 
 /** Called at the promote/demote boundary (observation count 0<->1). */
 function noteLifetimeTransition(node: ReactiveNode): void {
-	if ((node.flags & Flag.KindCell) === 0) return
+	if ((node.flags & Flag.KindCell) === 0) {
+		return
+	}
 	const cell = node as CellNode<unknown>
-	if (cell.lifetime === undefined) return
+	if (cell.lifetime === undefined) {
+		return
+	}
 	pendingLifetimeCells.add(cell)
 	if (!lifetimeFlushScheduled) {
 		lifetimeFlushScheduled = true
@@ -481,7 +500,9 @@ export function flushLifetimeTransitions(): void {
 	pendingLifetimeCells.clear()
 	for (const cell of cells) {
 		const shouldBeActive = cell.observerCount > 0
-		if (shouldBeActive === cell.lifetimeActive) continue
+		if (shouldBeActive === cell.lifetimeActive) {
+			continue
+		}
 		cell.lifetimeActive = shouldBeActive
 		if (shouldBeActive) {
 			const ctx = {
@@ -495,7 +516,9 @@ export function flushLifetimeTransitions(): void {
 		} else {
 			const cleanup = cell.lifetimeCleanup
 			cell.lifetimeCleanup = undefined
-			if (cleanup !== undefined) untracked(cleanup)
+			if (cleanup !== undefined) {
+				untracked(cleanup)
+			}
 		}
 	}
 }
@@ -503,7 +526,9 @@ export function flushLifetimeTransitions(): void {
 /** Record "sub read dep" for the eval in progress, reusing edges in place. */
 function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 	const tail = sub.depsTail
-	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) return tail
+	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
+		return tail
+	}
 	const next = tail === undefined ? sub.deps : tail.nextDep
 	if (next !== undefined && next.dep === dep) {
 		next.evalPass = evalPass
@@ -520,7 +545,9 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 		// re-reads keep the tolerated duplicate forward edges (reading-
 		// consistent, forward-only garbage).
 		const last = dep.subsTail
-		if (last !== undefined && last.sub === sub && last.evalPass === evalPass) return last
+		if (last !== undefined && last.sub === sub && last.evalPass === evalPass) {
+			return last
+		}
 	}
 	const link: Link = {
 		dep,
@@ -531,8 +558,11 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 		inSubs: false,
 		evalPass,
 	}
-	if (tail === undefined) sub.deps = link
-	else tail.nextDep = link
+	if (tail === undefined) {
+		sub.deps = link
+	} else {
+		tail.nextDep = link
+	}
 	sub.depsTail = link
 	if (watched) {
 		linkIntoSubs(link)
@@ -545,8 +575,11 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 function trimDeps(sub: ReactiveNode): void {
 	const tail = sub.depsTail
 	let stale = tail === undefined ? sub.deps : tail.nextDep
-	if (tail !== undefined) tail.nextDep = undefined
-	else sub.deps = undefined
+	if (tail !== undefined) {
+		tail.nextDep = undefined
+	} else {
+		sub.deps = undefined
+	}
 	while (stale !== undefined) {
 		const next = stale.nextDep
 		if (stale.inSubs) {
@@ -593,7 +626,9 @@ let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
 function scheduleWatcher(w: WatcherNode): void {
 	const flags = w.flags
 	// One masked test: not already queued AND not disposed (Watched = alive).
-	if ((flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) return
+	if ((flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) {
+		return
+	}
 	if ((flags & Flag.WatchRender) !== 0) {
 		renderNotifyQueue[renderNotifyCount++] = w
 	} else if ((flags & Flag.WatchRunEffect) !== 0) {
@@ -665,7 +700,9 @@ interface PokeFrame extends WaveFrame {
  * growth at all.
  */
 function propagateWave(link: Link | undefined, cause: TraceEventId): void {
-	if (link === undefined) return
+	if (link === undefined) {
+		return
+	}
 	let cur: Link = link
 	let next: Link | undefined = cur.nextSub
 	let stack: WaveFrame | undefined
@@ -768,9 +805,13 @@ export function pokeDraftWatchers(
 					// poke because pendingness may change while the value stays equal.
 					if (w.onDraftWake === undefined || changed) {
 						scheduleWatcher(w)
-						if ((w.flags & Flag.StaleMask) === 0) w.flags |= Flag.StaleCheck
+						if ((w.flags & Flag.StaleMask) === 0) {
+							w.flags |= Flag.StaleCheck
+						}
 						w.causeEvent = cause
-						if (wake !== undefined && w.onDraftWake !== undefined) (wakes ??= []).push(w)
+						if (wake !== undefined && w.onDraftWake !== undefined) {
+							;(wakes ??= []).push(w)
+						}
 					}
 				} else if ((flags & Flag.KindDerived) !== 0) {
 					const subSubs = sub.subs
@@ -804,10 +845,14 @@ export function pokeDraftWatchers(
 			break
 		} while (true)
 	}
-	if (batchDepth === 0) flush()
+	if (batchDepth === 0) {
+		flush()
+	}
 	if (wakes !== null) {
 		for (const w of wakes) {
-			if ((w.flags & Flag.Watched) !== 0) w.onDraftWake!(wake!)
+			if ((w.flags & Flag.Watched) !== 0) {
+				w.onDraftWake!(wake!)
+			}
 		}
 	}
 }
@@ -815,7 +860,9 @@ export function pokeDraftWatchers(
 /** Push a change wave from a cell whose base value advanced. */
 export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): void {
 	propagateWave(cell.subs, cause)
-	if (batchDepth === 0) flush()
+	if (batchDepth === 0) {
+		flush()
+	}
 }
 
 /**
@@ -831,7 +878,9 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
 	// Invariant: changes are stamped with the CURRENT clock, after the tick.
 	node.changedAtGraphChange = graphChangeClock
 	propagateWave(node.subs, cause)
-	if (batchDepth === 0) flush()
+	if (batchDepth === 0) {
+		flush()
+	}
 }
 
 /** Cells written inside the current batch scope, with their pre-batch state:
@@ -848,12 +897,16 @@ const batchBase = new Map<
 let batchPass: BatchPass = 0
 
 export function startBatch(): void {
-	if (batchDepth === 0) batchPass++
+	if (batchDepth === 0) {
+		batchPass++
+	}
 	batchDepth++
 }
 
 export function endBatch(): void {
-	if (batchDepth === 0) throw new Error('endBatch() without a matching startBatch()')
+	if (batchDepth === 0) {
+		throw new Error('endBatch() without a matching startBatch()')
+	}
 	batchDepth--
 	if (batchDepth === 0) {
 		if (batchBase.size > 0) {
@@ -897,19 +950,27 @@ const enum Limit {
  * throwing effect aborts the flush; the effects it preempted are skipped
  * (cleared), not left armed for unrelated writes to trigger later. */
 export function flush(): void {
-	if (flushing) return
-	if (effectCount === 0 && renderNotifyCount === 0) return
+	if (flushing) {
+		return
+	}
+	if (effectCount === 0 && renderNotifyCount === 0) {
+		return
+	}
 	flushing = true
 	try {
 		let guard = 0
 		while (queueHead < effectCount) {
-			if (++guard > Limit.FlushRuns) throw new Error('effect flush did not settle (cycle?)')
+			if (++guard > Limit.FlushRuns) {
+				throw new Error('effect flush did not settle (cycle?)')
+			}
 			const i = queueHead++
 			const w = effectQueue[i]!
 			effectQueue[i] = undefined // consumed slot must not pin the watcher
 			// Clear Scheduled alone: runWatcher's validation reads StaleCheck.
 			const flags = (w.flags &= ~Flag.Scheduled)
-			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) continue
+			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
+				continue
+			}
 			runWatcher(w)
 		}
 		effectCount = 0
@@ -948,12 +1009,16 @@ export function flush(): void {
 			try {
 				for (let i = 0; i < n; i++) {
 					const w = delivering[i] as WatcherNode
-					if ((w.flags & Flag.Watched) !== 0) w.onNotify!()
+					if ((w.flags & Flag.Watched) !== 0) {
+						w.onNotify!()
+					}
 				}
 			} finally {
 				// Null consumed slots — retained capacity must not pin watchers —
 				// and hand the buffer back as the spare, also on a throwing notify.
-				for (let i = 0; i < n; i++) delivering[i] = undefined
+				for (let i = 0; i < n; i++) {
+					delivering[i] = undefined
+				}
 				spareRenderNotify = delivering
 			}
 		}
@@ -974,11 +1039,15 @@ let readsForbidden: string | null = null
 let writesForbidden: string | null = null
 
 export function assertSignalReadAllowed(): void {
-	if (readsForbidden !== null) throw new Error(readsForbidden)
+	if (readsForbidden !== null) {
+		throw new Error(readsForbidden)
+	}
 }
 
 export function assertSignalWriteAllowed(): void {
-	if (writesForbidden !== null) throw new WriteForbiddenError(writesForbidden)
+	if (writesForbidden !== null) {
+		throw new WriteForbiddenError(writesForbidden)
+	}
 	if (
 		FORBID_WRITE_FROM_COMPUTED &&
 		activeConsumer !== null &&
@@ -1008,9 +1077,13 @@ export function runUpdater<T>(fn: (value: T) => T, value: T): T {
 }
 
 function materializeCell<T>(cell: CellNode<T>): void {
-	if (cell.value !== UNINITIALIZED) return
+	if (cell.value !== UNINITIALIZED) {
+		return
+	}
 	const init = cell.initializer
-	if (init === undefined) throw new Error('cyclic lazy initializer')
+	if (init === undefined) {
+		throw new Error('cyclic lazy initializer')
+	}
 	cell.initializer = undefined
 	const prevConsumer = activeConsumer
 	const prevForbidden = setWritesForbidden('a lazy state initializer must not write to other state')
@@ -1036,7 +1109,9 @@ export function peekCell<T>(cell: CellNode<T>): T {
 export function readCell<T>(cell: CellNode<T>): T {
 	assertSignalReadAllowed()
 	materializeCell(cell)
-	if (activeConsumer !== null) trackRead(cell, activeConsumer)
+	if (activeConsumer !== null) {
+		trackRead(cell, activeConsumer)
+	}
 	return cell.value as T
 }
 
@@ -1045,7 +1120,9 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	// The equality contract compares against the base value, so a write that
 	// arrives before the first read still runs the initializer.
 	materializeCell(cell)
-	if (cell.equals(cell.value as T, next)) return false
+	if (cell.equals(cell.value as T, next)) {
+		return false
+	}
 	if (batchDepth > 0 && cell.batchPass !== batchPass) {
 		// First write to this cell in this batch pass: save the pre-batch state.
 		// The pass stamp stands in for a batchBase.has probe on repeat writes.
@@ -1101,7 +1178,9 @@ export let finishComputeImpl: (
 	error: unknown,
 	value: unknown,
 ) => boolean = (node, parked, hasError, error, value) => {
-	if (parked || hasError) throw hasError ? error : new Error('parked without async layer')
+	if (parked || hasError) {
+		throw hasError ? error : new Error('parked without async layer')
+	}
 	const prev = node.value
 	if (prev === UNINITIALIZED || !node.equals(prev, value)) {
 		node.value = value
@@ -1132,8 +1211,9 @@ function recompute(node: DerivedNode<unknown>): void {
 	try {
 		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
 	} catch (e) {
-		if (e === PARKED) parked = true
-		else {
+		if (e === PARKED) {
+			parked = true
+		} else {
 			hasError = true
 			error = e
 		}
@@ -1150,7 +1230,9 @@ function recompute(node: DerivedNode<unknown>): void {
 	// Stamped with the CURRENT clock, not the pre-eval reading: recomputes do
 	// not tick the clock, and any consumer that validated before this
 	// recompute holds a strictly older validAt reading.
-	if (changed) node.changedAtGraphChange = graphChangeClock
+	if (changed) {
+		node.changedAtGraphChange = graphChangeClock
+	}
 	// A computed whose evaluation wrote state is self-affecting: its inputs
 	// moved under it, so it never caches — every read re-evaluates.
 	node.flags =
@@ -1163,7 +1245,9 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 	const flags = node.flags
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
-		if ((flags & Flag.StaleMask) === 0) return
+		if ((flags & Flag.StaleMask) === 0) {
+			return
+		}
 	} else if ((flags & Flag.StaleMask) === 0 && node.validAtGraphChange === graphChangeClock) {
 		return
 	}
@@ -1207,7 +1291,9 @@ export function readDerived<T>(node: DerivedNode<T>): T {
 	if ((node.flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
 		ensureFresh(node as DerivedNode<unknown>)
 	}
-	if (activeConsumer !== null) trackRead(node, activeConsumer)
+	if (activeConsumer !== null) {
+		trackRead(node, activeConsumer)
+	}
 	return node.value as T
 }
 
@@ -1283,7 +1369,9 @@ function runWatcher(w: WatcherNode): void {
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
 				ensureFresh(dep as DerivedNode<unknown>)
-				if ((w.flags & Flag.Watched) === 0) return // disposed mid-validation
+				if ((w.flags & Flag.Watched) === 0) {
+					return
+				} // disposed mid-validation
 			}
 			if (dep.changedAtGraphChange > w.validAtGraphChange) {
 				changed = true
@@ -1307,7 +1395,9 @@ function executeWatcher(w: WatcherNode): void {
 	if (w.children !== undefined) {
 		const children = w.children
 		w.children = undefined
-		for (const child of children) disposeWatcher(child)
+		for (const child of children) {
+			disposeWatcher(child)
+		}
 	}
 	if (w.cleanup !== undefined) {
 		const c = w.cleanup
@@ -1341,7 +1431,9 @@ function executeWatcher(w: WatcherNode): void {
 	const prevCause = setCurrentCause(cause)
 	try {
 		const ret = w.fn!()
-		if (typeof ret === 'function') w.cleanup = ret
+		if (typeof ret === 'function') {
+			w.cleanup = ret
+		}
 	} finally {
 		setCurrentCause(prevCause)
 		evalPass = myPass
@@ -1354,11 +1446,15 @@ function executeWatcher(w: WatcherNode): void {
 
 export function disposeWatcher(w: WatcherNode): void {
 	// Disposal state is the Watched bit: Watching set + Watched clear = dead.
-	if ((w.flags & Flag.Watched) === 0) return
+	if ((w.flags & Flag.Watched) === 0) {
+		return
+	}
 	w.flags &= ~Flag.Watched
 	try {
 		if (w.children !== undefined) {
-			for (const child of w.children) disposeWatcher(child)
+			for (const child of w.children) {
+				disposeWatcher(child)
+			}
 			w.children = undefined
 		}
 		if (w.cleanup !== undefined) {
@@ -1408,7 +1504,9 @@ export function makeEffect(fn: () => void | (() => void)): () => void {
 	// with its owner; dropping the per-effect disposer is normal usage there,
 	// not abandonment. Only ownerless effects arm the reclamation registry —
 	// a collected disposer must never kill an effect something still owns.
-	if (!owned) droppedDisposers.register(dispose, w, dispose)
+	if (!owned) {
+		droppedDisposers.register(dispose, w, dispose)
+	}
 	return dispose
 }
 
@@ -1455,8 +1553,9 @@ export function observeNode(
 	const prevConsumer = activeConsumer
 	activeConsumer = sub
 	try {
-		if ((node.flags & Flag.KindCell) !== 0) readCell(node as CellNode<unknown>)
-		else if ((node.flags & Flag.KindDerived) !== 0) {
+		if ((node.flags & Flag.KindCell) !== 0) {
+			readCell(node as CellNode<unknown>)
+		} else if ((node.flags & Flag.KindDerived) !== 0) {
 			// Subscribe to invalidation only; do not force evaluation here.
 			trackRead(node, sub)
 			// This installed a back-edge without a pull, so the stale-cover
@@ -1481,7 +1580,9 @@ export function observeNode(
 	} finally {
 		activeConsumer = prevConsumer
 	}
-	if (batchDepth === 0) flush()
+	if (batchDepth === 0) {
+		flush()
+	}
 	const dispose = () => {
 		droppedDisposers.unregister(dispose)
 		disposeWatcher(sub)

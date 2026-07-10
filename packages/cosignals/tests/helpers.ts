@@ -81,7 +81,9 @@ function isDeliveryish(e: ModelEvent): boolean {
 function deliveryCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>()
 	for (const e of events) {
-		if (!isDeliveryish(e)) continue
+		if (!isDeliveryish(e)) {
+			continue
+		}
 		const d = e as unknown as { watcher: string; batch: number; slot: number }
 		const key = `${d.watcher}|${d.batch}|${d.slot}`
 		out.set(key, (out.get(key) ?? 0) + 1)
@@ -215,7 +217,9 @@ export function mountEngineCoreEffect(
 			rec.lastValue = value // silent baseline (the model seeds lastValue the same way)
 			return
 		}
-		if (Object.is(value, rec.lastValue)) return // value gate
+		if (Object.is(value, rec.lastValue)) {
+			return
+		} // value gate
 		rec.lastValue = value
 		rec.runs++
 		b.logCoreEffectRun(rec.name, value)
@@ -321,22 +325,25 @@ export class TwinDriver {
 
 	private toEngine(node: AnyNode): EInternals {
 		const e = this.nodeMap.get(node)
-		if (e === undefined)
+		if (e === undefined) {
 			throw new Error(`twin: node ${node.name} was not created through the driver`)
+		}
 		return e
 	}
 
 	private toEngineRenderPass(render: RenderPass): ERenderPass {
 		const p = this.idToEngineRenderPass.get(render.id)
-		if (p === undefined)
+		if (p === undefined) {
 			throw new Error(`twin: render pass ${render.id} was not created through the driver`)
+		}
 		return p
 	}
 
 	private toEngineEffect(modelId: number): number {
 		const id = this.effectMap.get(modelId)
-		if (id === undefined)
+		if (id === undefined) {
 			throw new Error(`twin: react effect ${modelId} was not created through the driver`)
+		}
 		return id
 	}
 
@@ -386,7 +393,9 @@ export class TwinDriver {
 	private normalizedEngineEvents(): ModelEvent[] {
 		const base = this.batchIdBase
 		const events = this.engineEvents.events as ModelEvent[]
-		if (base === 0) return events
+		if (base === 0) {
+			return events
+		}
 		return events.map((e) => {
 			const batch = (e as { batch?: number }).batch
 			return typeof batch === 'number' && batch > 0
@@ -494,7 +503,9 @@ export class TwinDriver {
 					...opScalars(op),
 				),
 		)
-		if (batchId === undefined) this.mirrorQuietFold(node, op, mark)
+		if (batchId === undefined) {
+			this.mirrorQuietFold(node, op, mark)
+		}
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
@@ -516,7 +527,9 @@ export class TwinDriver {
 	 * (compareStreams already proved the engine created the same one). */
 	private mirrorQuietFold(node: AtomNode, op: Op, mark: number): void {
 		for (const e of this.model.events.slice(mark)) {
-			if (e.type !== 'quiet-write') continue
+			if (e.type !== 'quiet-write') {
+				continue
+			}
 			const eInternals = this.toEngine(node) as EAtomInternals
 			this.mirror
 				.archiveOf(eInternals)
@@ -716,7 +729,9 @@ export class TwinDriver {
 	livePins(): number[] {
 		const m = this.model.livePins()
 		const e: number[] = []
-		for (const p of this.engine.idToRenderPass.values()) if (p.state !== 'ended') e.push(p.pin)
+		for (const p of this.engine.idToRenderPass.values()) {
+			if (p.state !== 'ended') e.push(p.pin)
+		}
 		expect(e, 'twin livePins diverged').toEqual(m)
 		return m
 	}
@@ -785,7 +800,9 @@ export class TwinDriver {
 		// Eager-apply invariant: writes land in the kernel immediately, so the
 		// kernel's newest value must equal replaying the log entries over the base.
 		for (const n of this.engine.idToInternals.values()) {
-			if (n.kind !== 'atom') continue
+			if (n.kind !== 'atom') {
+				continue
+			}
 			const folded = this.engine.foldAtom(n, { kind: 'newest' } as EWorld)
 			const kernel = this.engine.newestValue(n)
 			expect(
@@ -807,8 +824,11 @@ export class TwinDriver {
 function drainLeftoverEpisode(): void {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id)
-		else engine.retire(t.id)
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 }
 
@@ -835,7 +855,9 @@ export function commitAndRetire(
 	watchers: Watcher[] = [],
 ): void {
 	const p = m.renderStart(root, [batch.id])
-	for (const w of watchers) m.renderWatcher(p.id, w.id)
+	for (const w of watchers) {
+		m.renderWatcher(p.id, w.id)
+	}
 	m.renderEnd(p.id, 'commit', { retireAtCommit: [batch.id] })
 }
 

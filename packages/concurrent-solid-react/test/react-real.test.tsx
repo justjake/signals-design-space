@@ -317,7 +317,9 @@ describe('real React: suspense', () => {
 			await gates[1].promise
 		})
 		expect(text(el)).toBe('v2:settled')
-		for (const f of frames) expect(f).not.toContain('loading')
+		for (const f of frames) {
+			expect(f).not.toContain('loading')
+		}
 	})
 
 	it('interleaved pending transitions on one root keep distinct per-node data (no aliasing)', async () => {
@@ -404,7 +406,9 @@ describe('real React: flushSync parity', () => {
 			expect(match[1]).toBe(match[2])
 		})
 		expect(text(el)).toBe('s5:m5:n1')
-		for (const f of frames) expect(f.s).toBe(f.m)
+		for (const f of frames) {
+			expect(f.s).toBe(f.m)
+		}
 	})
 })
 

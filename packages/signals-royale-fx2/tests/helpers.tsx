@@ -48,9 +48,13 @@ export function makeHarness(): Harness {
 		},
 		async cleanup() {
 			await act(() => {
-				for (const r of roots) r.unmount()
+				for (const r of roots) {
+					r.unmount()
+				}
 			})
-			for (const c of containers) c.remove()
+			for (const c of containers) {
+				c.remove()
+			}
 		},
 	}
 }

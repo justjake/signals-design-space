@@ -33,11 +33,15 @@ const args = process.argv.slice(2)
 const opts = { fork: undefined, base: undefined, head: 'HEAD', libs: [] }
 for (let i = 0; i < args.length; i++) {
 	const a = args[i]
-	if (a === '--fork') opts.fork = args[++i]
-	else if (a === '--base') opts.base = args[++i]
-	else if (a === '--head') opts.head = args[++i]
-	else if (a === '--lib') opts.libs.push(args[++i])
-	else {
+	if (a === '--fork') {
+		opts.fork = args[++i]
+	} else if (a === '--base') {
+		opts.base = args[++i]
+	} else if (a === '--head') {
+		opts.head = args[++i]
+	} else if (a === '--lib') {
+		opts.libs.push(args[++i])
+	} else {
 		console.error(`unknown argument: ${a}`)
 		process.exit(2)
 	}
@@ -58,11 +62,17 @@ function countFork(checkout, base, head) {
 	let total = 0
 	const perFile = {}
 	for (const line of out.split('\n')) {
-		if (line.trim() === '') continue
+		if (line.trim() === '') {
+			continue
+		}
 		const [adds, dels, ...pathParts] = line.split('\t')
 		const path = pathParts.join('\t')
-		if (adds === '-' || dels === '-') continue // binary
-		if (path.includes('__tests__')) continue // test files are free
+		if (adds === '-' || dels === '-') {
+			continue
+		} // binary
+		if (path.includes('__tests__')) {
+			continue
+		} // test files are free
 		const n = Number(adds) + Number(dels)
 		total += n
 		perFile[path] = n
@@ -86,7 +96,9 @@ function listSourceFiles(dir) {
 		const full = join(dir, name)
 		const st = statSync(full)
 		if (st.isDirectory()) {
-			if (EXCLUDED_SEGMENTS.test(name)) continue
+			if (EXCLUDED_SEGMENTS.test(name)) {
+				continue
+			}
 			out.push(...listSourceFiles(full))
 		} else if (/\.tsx?$/.test(name) && !EXCLUDED_FILE.test(name)) {
 			out.push(full)
@@ -105,7 +117,9 @@ async function loadPrettier() {
 		join(here, 'package.json'),
 	]
 	for (const from of candidates) {
-		if (!existsSync(from)) continue
+		if (!existsSync(from)) {
+			continue
+		}
 		try {
 			const req = createRequire(from)
 			const entry = req.resolve('prettier')
@@ -176,8 +190,11 @@ function countCodeLines(src) {
 		}
 		if (c === '`' || (inTemplate && c === '}' && templateDepth[templateDepth.length - 1] === 0)) {
 			// Enter (or re-enter after ${expr}) a template literal body.
-			if (c === '`') templateDepth.push(0)
-			else templateDepth[templateDepth.length - 1] = -1 // consumed the closing }
+			if (c === '`') {
+				templateDepth.push(0)
+			} else {
+				templateDepth[templateDepth.length - 1] = -1
+			} // consumed the closing }
 			out.push(c)
 			i++
 			let closed = false
@@ -202,13 +219,19 @@ function countCodeLines(src) {
 				out.push(src[i] === '\n' ? '\n' : src[i])
 				i++
 			}
-			if (closed) templateDepth.pop()
+			if (closed) {
+				templateDepth.pop()
+			}
 			inTemplate = templateDepth.length > 0
 			prevSignificant = '`'
 			continue
 		}
-		if (c === '{' && inTemplate) templateDepth[templateDepth.length - 1]++
-		if (c === '}' && inTemplate) templateDepth[templateDepth.length - 1]--
+		if (c === '{' && inTemplate) {
+			templateDepth[templateDepth.length - 1]++
+		}
+		if (c === '}' && inTemplate) {
+			templateDepth[templateDepth.length - 1]--
+		}
 		if (c === '/' && !/[\w)\]$'"`]/.test(prevSignificant)) {
 			// Regex literal: skip to the unescaped closing /, honoring classes.
 			out.push('/')
@@ -220,8 +243,12 @@ function countCodeLines(src) {
 					i += 2
 					continue
 				}
-				if (src[i] === '[') inClass = true
-				if (src[i] === ']') inClass = false
+				if (src[i] === '[') {
+					inClass = true
+				}
+				if (src[i] === ']') {
+					inClass = false
+				}
 				out.push(src[i])
 				if (src[i] === '/' && !inClass) {
 					i++
@@ -233,7 +260,9 @@ function countCodeLines(src) {
 			continue
 		}
 		out.push(c)
-		if (!/\s/.test(c)) prevSignificant = c
+		if (!/\s/.test(c)) {
+			prevSignificant = c
+		}
 		i++
 	}
 	return out

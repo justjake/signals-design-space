@@ -95,7 +95,9 @@ export class Bridge {
 		this.unsubscribe = this.registry.subscribe({
 			onBatchOpened: (token) =>
 				this.guard(() => {
-					if (!(token & 1)) return
+					if (!(token & 1)) {
+						return
+					}
 					const transition = createBridgeTransition()
 					const retainer = { csrToken: token }
 					retainTransition(transition, retainer)
@@ -118,11 +120,17 @@ export class Bridge {
 		// (or a re-wrapped async-action continuation) see the scope's own staged
 		// writes; all other outside-render reads resolve committed state.
 		setAmbientWorldResolver(() => {
-			if (renderReadDepth > 0) return null
+			if (renderReadDepth > 0) {
+				return null
+			}
 			const scope = this.fork.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.T
-			if (scope === null || scope === undefined || scope.gesture) return null
+			if (scope === null || scope === undefined || scope.gesture) {
+				return null
+			}
 			const token = this.registry.getCurrentWriteBatch()
-			if (!(token & 1)) return null
+			if (!(token & 1)) {
+				return null
+			}
 			const rec = this.worlds.get(token)
 			return rec && isTransitionLive(rec.transition) ? currentTransition(rec.transition) : null
 		})
@@ -130,10 +138,16 @@ export class Bridge {
 		// (commit fixups must see live values).
 		setRenderValueInterceptor((el, value) => {
 			const ctx = this.registry.getRenderContext()
-			if (ctx === null) return value
+			if (ctx === null) {
+				return value
+			}
 			let pinned = this.passValues.get(ctx.container)
-			if (pinned === undefined) this.passValues.set(ctx.container, (pinned = new Map()))
-			if (pinned.has(el)) return pinned.get(el)
+			if (pinned === undefined) {
+				this.passValues.set(ctx.container, (pinned = new Map()))
+			}
+			if (pinned.has(el)) {
+				return pinned.get(el)
+			}
 			pinned.set(el, value)
 			return value
 		})
@@ -153,12 +167,19 @@ export class Bridge {
 		// it renders them together, which is exactly Solid's transition merge.
 		let world: Transition | null = null
 		for (const token of included) {
-			if (!(token & 1)) continue
+			if (!(token & 1)) {
+				continue
+			}
 			const rec = this.worlds.get(token)
-			if (!rec || !isTransitionLive(rec.transition)) continue
+			if (!rec || !isTransitionLive(rec.transition)) {
+				continue
+			}
 			const t = currentTransition(rec.transition)
-			if (world === null) world = t
-			else if (world !== t) world = this.entangle(world, t)
+			if (world === null) {
+				world = t
+			} else if (world !== t) {
+				world = this.entangle(world, t)
+			}
 		}
 		this.passWorlds.set(container, world)
 	}
@@ -175,7 +196,9 @@ export class Bridge {
 
 	private retire(token: number): void {
 		const rec = this.worlds.get(token)
-		if (!rec) return // urgent tokens have no world
+		if (!rec) {
+			return
+		} // urgent tokens have no world
 		this.worlds.delete(token)
 		const root = currentTransition(rec.transition)
 		releaseTransition(root, rec.retainer)
@@ -187,14 +210,18 @@ export class Bridge {
 			try {
 				flush()
 			} finally {
-				if (activeTransition === root) setActiveTransition(null)
+				if (activeTransition === root) {
+					setActiveTransition(null)
+				}
 			}
 		}
 	}
 
 	/** [react-adapt E3] setSignal classification hook. */
 	private routeWrite(_el: Signal<any> | Computed<any>): (() => void) | undefined {
-		if (renderReadDepth > 0) return // internal writes during a render read keep the render's world
+		if (renderReadDepth > 0) {
+			return
+		} // internal writes during a render read keep the render's world
 		if (this.registry.getRenderContext() !== null) {
 			// React renders speculatively and replays them freely; a write issued
 			// from a render body can run any number of times, including from
@@ -206,9 +233,13 @@ export class Bridge {
 			)
 		}
 		const token = this.registry.getCurrentWriteBatch()
-		if (!(token & 1)) return // urgent (or no batch): ambient world untouched
+		if (!(token & 1)) {
+			return
+		} // urgent (or no batch): ambient world untouched
 		const rec = this.worlds.get(token)
-		if (!rec || !isTransitionLive(rec.transition)) return
+		if (!rec || !isTransitionLive(rec.transition)) {
+			return
+		}
 		const prev = activeTransition
 		const root = currentTransition(rec.transition)
 		if (prev === root) {
@@ -227,7 +258,9 @@ export class Bridge {
 	/** The transition world of the render pass currently on the callstack. */
 	currentRenderWorld(): Transition | null {
 		const ctx = this.registry.getRenderContext()
-		if (!ctx) return null
+		if (!ctx) {
+			return null
+		}
 		const world = this.passWorlds.get(ctx.container) ?? null
 		return world && isTransitionLive(world) ? currentTransition(world) : null
 	}
@@ -236,7 +269,9 @@ export class Bridge {
 	tokenOfWorld(world: Transition): number {
 		for (const action of currentTransition(world)._actions) {
 			const token = (action as { csrToken?: number } | null)?.csrToken
-			if (typeof token === 'number' && this.worlds.has(token)) return token
+			if (typeof token === 'number' && this.worlds.has(token)) {
+				return token
+			}
 		}
 		return 0
 	}
@@ -258,12 +293,19 @@ export class Bridge {
 	): void {
 		const token = world && isTransitionLive(world) ? this.tokenOfWorld(world) : 0
 		const fire = () => {
-			if (token && this.worlds.has(token)) this.registry.runInBatch(token, wake)
-			else if (forceUrgent) this.registry.runInBatch(0, wake)
-			else wake()
+			if (token && this.worlds.has(token)) {
+				this.registry.runInBatch(token, wake)
+			} else if (forceUrgent) {
+				this.registry.runInBatch(0, wake)
+			} else {
+				wake()
+			}
 		}
-		if (this.registry.getRenderContext() !== null) queueMicrotask(() => this.guard(fire))
-		else fire()
+		if (this.registry.getRenderContext() !== null) {
+			queueMicrotask(() => this.guard(fire))
+		} else {
+			fire()
+		}
 	}
 
 	dispose(): void {
@@ -275,9 +317,13 @@ export class Bridge {
 		this.registry.dispose()
 		// Complete any worlds still open so engine state doesn't leak across
 		// tests: writes are real (React never reverts them either).
-		for (const rec of this.worlds.values()) this.retire(rec.token)
+		for (const rec of this.worlds.values()) {
+			this.retire(rec.token)
+		}
 		this.passWorlds.clear()
-		if (bridge === this) bridge = null
+		if (bridge === this) {
+			bridge = null
+		}
 	}
 }
 
@@ -304,7 +350,9 @@ export function renderRead<T>(selector: () => T): RenderReadResult<T> {
 	const world = bridge ? bridge.currentRenderWorld() : null
 	renderReadDepth++
 	const prevWorld = activeTransition
-	if (world) setActiveTransition(world)
+	if (world) {
+		setActiveTransition(world)
+	}
 	try {
 		const { value, deps } = staleValues(() => probeRead(selector))
 		return { value, deps, world, errored: false }
@@ -321,7 +369,9 @@ export function renderRead<T>(selector: () => T): RenderReadResult<T> {
 		}
 		return { value: PENDING, deps, world, error: e, errored: true }
 	} finally {
-		if (world) setActiveTransition(prevWorld ? currentTransition(prevWorld) : null)
+		if (world) {
+			setActiveTransition(prevWorld ? currentTransition(prevWorld) : null)
+		}
 		renderReadDepth--
 	}
 }
@@ -339,7 +389,9 @@ const settlements = new WeakMap<Computed<any>, Promise<void>>()
  */
 export function settlementOf(source: Computed<any>): Promise<void> {
 	let p = settlements.get(source)
-	if (p) return p
+	if (p) {
+		return p
+	}
 	let resolve!: () => void
 	p = new Promise<void>((res) => (resolve = res))
 	settlements.set(source, p)
@@ -349,14 +401,18 @@ export function settlementOf(source: Computed<any>): Promise<void> {
 		resolve()
 	}
 	// Raced settle (status cleared between throw and here): resolve now.
-	if (!(source._statusFlags & STATUS_PENDING)) source._onStatusSettled()
+	if (!(source._statusFlags & STATUS_PENDING)) {
+		source._onStatusSettled()
+	}
 	return p
 }
 
 // -- Registration ------------------------------------------------------------
 
 export function attachBridge(fork: ForkReact): Bridge {
-	if (bridge) throw new Error('concurrent-solid-react: bridge already attached')
+	if (bridge) {
+		throw new Error('concurrent-solid-react: bridge already attached')
+	}
 	assertForkPresent(fork)
 	bridge = new Bridge(fork)
 	return bridge

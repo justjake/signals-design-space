@@ -23,7 +23,9 @@ for (const G of [4, 16, 64]) {
 			PROCS,
 		)
 		const w = r.byMetric.get(`writeNs:${shape}`)
-		if (!HELD) burstBase.set(G, median(w))
+		if (!HELD) {
+			burstBase.set(G, median(w))
+		}
 		out.push({
 			row: `burst ${shape}`,
 			writeNs: stat(w, 0),

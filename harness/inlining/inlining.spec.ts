@@ -32,7 +32,9 @@ const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 const cleanups: Array<() => void> = []
 afterAll(() => {
-	for (const cleanup of cleanups) cleanup()
+	for (const cleanup of cleanups) {
+		cleanup()
+	}
 })
 
 async function probeFramework(framework: string): Promise<OptTrace> {

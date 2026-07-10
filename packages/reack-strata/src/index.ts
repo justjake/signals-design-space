@@ -116,7 +116,9 @@ function rootFor(container: object): RootState {
 		committed: new Set(),
 		subscriptions: 0,
 	}
-	for (const branch of settledBranches) root.cutoffs.set(branch, branch.lastSeq)
+	for (const branch of settledBranches) {
+		root.cutoffs.set(branch, branch.lastSeq)
+	}
 	roots.set(container, root)
 	liveRoots.add(root)
 	return root
@@ -129,12 +131,16 @@ function retainRoot(root: RootState): void {
 
 function releaseRoot(root: RootState): void {
 	root.subscriptions--
-	if (root.subscriptions === 0 && root.branches.size === 0) liveRoots.delete(root)
+	if (root.subscriptions === 0 && root.branches.size === 0) {
+		liveRoots.delete(root)
+	}
 }
 
 function metaFor(runtime: Runtime, branch: Branch): BranchMeta {
 	let meta = branchMetas.get(branch)
-	if (meta !== undefined) return meta
+	if (meta !== undefined) {
+		return meta
+	}
 	meta = {
 		runtime,
 		branch,
@@ -149,30 +155,40 @@ function metaFor(runtime: Runtime, branch: Branch): BranchMeta {
 }
 
 function trackRoot(meta: BranchMeta, root: RootState): void {
-	if (meta.roots.has(root)) return
+	if (meta.roots.has(root)) {
+		return
+	}
 	meta.roots.add(root)
 	meta.hadRoot = true
 	root.branches.add(meta)
 }
 
 function queueSettlement(meta: BranchMeta): void {
-	if (meta.settleQueued || meta.branch.status !== 0) return
+	if (meta.settleQueued || meta.branch.status !== 0) {
+		return
+	}
 	meta.settleQueued = true
 	const settle = () => {
 		meta.settleQueued = false
-		if (meta.branch.status !== 0 || meta.roots.size !== 0) return
+		if (meta.branch.status !== 0 || meta.roots.size !== 0) {
+			return
+		}
 		const committed = meta.committed || !meta.hadRoot
 		meta.runtime.finishBranch(meta.branch, committed)
 		if (committed) {
 			for (const effect of meta.effects) {
-				if (effect.root !== undefined) effect.root.cutoffs.set(meta.branch, meta.branch.lastSeq)
+				if (effect.root !== undefined) {
+					effect.root.cutoffs.set(meta.branch, meta.branch.lastSeq)
+				}
 				effect.waiting.delete(meta.branch)
 				scheduleSignalEffect(effect)
 			}
 		}
 		meta.effects.clear()
 		settledBranches.add(meta.branch)
-		if (openPasses.size === 0) clearSettledBranches()
+		if (openPasses.size === 0) {
+			clearSettledBranches()
+		}
 	}
 	if (!meta.hadRoot && meta.effects.size !== 0) {
 		setTimeout(settle, 0)
@@ -182,7 +198,9 @@ function queueSettlement(meta: BranchMeta): void {
 }
 
 function clearSettledBranches(): void {
-	if (openPasses.size !== 0 || settledBranches.size === 0) return
+	if (openPasses.size !== 0 || settledBranches.size === 0) {
+		return
+	}
 	for (const branch of settledBranches) {
 		const meta = branchMetas.get(branch)!
 		let hasActiveBranch = false
@@ -191,15 +209,21 @@ function clearSettledBranches(): void {
 			hasActiveBranch = true
 			break
 		}
-		if (hasActiveBranch) continue
-		for (const root of liveRoots) root.cutoffs.delete(branch)
+		if (hasActiveBranch) {
+			continue
+		}
+		for (const root of liveRoots) {
+			root.cutoffs.delete(branch)
+		}
 		settledBranches.delete(branch)
 	}
 }
 
 export function registerStrata(runtime: Runtime = defaultRuntime): () => void {
 	const existing = runtimes.get(runtime)
-	if (existing !== undefined) return () => {}
+	if (existing !== undefined) {
+		return () => {}
+	}
 	const host: RuntimeHost = {
 		write(fn) {
 			return bridge.write((lane, deferred) => {
@@ -217,7 +241,9 @@ export function registerStrata(runtime: Runtime = defaultRuntime): () => void {
 	const detach = runtime.attachHost(host)
 	runtimes.set(runtime, detach)
 	return () => {
-		if (runtimes.get(runtime) !== detach) return
+		if (runtimes.get(runtime) !== detach) {
+			return
+		}
 		runtimes.delete(runtime)
 		detach()
 	}
@@ -225,7 +251,9 @@ export function registerStrata(runtime: Runtime = defaultRuntime): () => void {
 
 function beginPass(token: object, container: object, lanes: number, remainingLanes: number): void {
 	const previous = passes.get(token)
-	if (previous !== undefined) finishPass(previous, false, 0, remainingLanes)
+	if (previous !== undefined) {
+		finishPass(previous, false, 0, remainingLanes)
+	}
 	const root = rootFor(container)
 	const pass: Pass = {
 		token,
@@ -238,7 +266,9 @@ function beginPass(token: object, container: object, lanes: number, remainingLan
 	for (const runtime of runtimes.keys()) {
 		const included: Branch[] = []
 		for (const branch of runtime.activeBranches()) {
-			if ((branch.lane & lanes) === 0) continue
+			if ((branch.lane & lanes) === 0) {
+				continue
+			}
 			included.push(branch)
 			trackRoot(metaFor(runtime, branch), root)
 		}
@@ -273,16 +303,26 @@ function beginPass(token: object, container: object, lanes: number, remainingLan
 }
 
 function disposeCandidate(candidate: Candidate<any>): void {
-	if (candidate.disposed) return
+	if (candidate.disposed) {
+		return
+	}
 	candidate.disposed = true
-	for (let i = 0; i < candidate.unsubscribes.length; i++) candidate.unsubscribes[i]!()
+	for (let i = 0; i < candidate.unsubscribes.length; i++) {
+		candidate.unsubscribes[i]!()
+	}
 	candidate.unsubscribes.length = 0
 	candidate.pass.records.delete(candidate)
-	if (candidate.owner.pending === candidate) candidate.owner.pending = undefined
+	if (candidate.owner.pending === candidate) {
+		candidate.owner.pending = undefined
+	}
 	if (candidate.active) {
 		candidate.active = false
-		if (candidate.owner.active === candidate) candidate.owner.active = undefined
-		if (candidate.mode === 2) candidate.root.committed.delete(candidate)
+		if (candidate.owner.active === candidate) {
+			candidate.owner.active = undefined
+		}
+		if (candidate.mode === 2) {
+			candidate.root.committed.delete(candidate)
+		}
 		for (let i = 0; i < candidate.leaves.length; i++) {
 			candidate.runtime._release(candidate.leaves[i]!)
 		}
@@ -291,9 +331,13 @@ function disposeCandidate(candidate: Candidate<any>): void {
 }
 
 function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLanes: number): void {
-	if (!openPasses.delete(pass)) return
+	if (!openPasses.delete(pass)) {
+		return
+	}
 	passes.delete(pass.token)
-	if (activePass === pass) activePass = undefined
+	if (activePass === pass) {
+		activePass = undefined
+	}
 	pass.committed = committed
 	if (committed) {
 		const moved: Branch[] = []
@@ -321,7 +365,9 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 					metaFor(runtime, branch).committed = true
 					const meta = metaFor(runtime, branch)
 					for (const effect of meta.effects) {
-						if (effect.root !== pass.root) continue
+						if (effect.root !== pass.root) {
+							continue
+						}
 						const waiting = effect.waiting.get(branch) ?? 0
 						if (waiting <= cutoff) {
 							effect.waiting.delete(branch)
@@ -336,7 +382,9 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 		if (moved.length !== 0) {
 			queueMicrotask(() => {
 				for (const candidate of pass.root.committed) {
-					if (candidate.disposed || !candidate.active) continue
+					if (candidate.disposed || !candidate.active) {
+						continue
+					}
 					let relevant: Branch | undefined
 					for (let i = 0; i < moved.length && relevant === undefined; i++) {
 						const branch = moved[i]!
@@ -364,7 +412,9 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 			})
 		}
 		queueMicrotask(() => {
-			for (const candidate of pass.records) disposeCandidate(candidate)
+			for (const candidate of pass.records) {
+				disposeCandidate(candidate)
+			}
 		})
 	} else {
 		for (const [runtime, passWorld] of pass.worlds) {
@@ -374,10 +424,14 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 			})
 			runtime.releaseWorld(passWorld.world)
 		}
-		for (const candidate of pass.records) disposeCandidate(candidate)
+		for (const candidate of pass.records) {
+			disposeCandidate(candidate)
+		}
 	}
 	for (const meta of pass.root.branches) {
-		if ((meta.branch.lane & remainingLanes) !== 0) continue
+		if ((meta.branch.lane & remainingLanes) !== 0) {
+			continue
+		}
 		meta.roots.delete(pass.root)
 		pass.root.branches.delete(meta)
 		queueSettlement(meta)
@@ -391,20 +445,28 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 
 function abortPass(token: object, remainingLanes: number): void {
 	const pass = passes.get(token)
-	if (pass !== undefined) finishPass(pass, false, 0, remainingLanes)
+	if (pass !== undefined) {
+		finishPass(pass, false, 0, remainingLanes)
+	}
 }
 
 function pausePass(token: object): void {
-	if (activePass?.token === token) activePass = undefined
+	if (activePass?.token === token) {
+		activePass = undefined
+	}
 }
 
 function endPass(token: object, committed: boolean, lanes: number, remainingLanes: number): void {
 	const pass = passes.get(token)
-	if (pass !== undefined) finishPass(pass, committed, lanes, remainingLanes)
+	if (pass !== undefined) {
+		finishPass(pass, committed, lanes, remainingLanes)
+	}
 }
 
 function resetPasses(): void {
-	for (const pass of openPasses) finishPass(pass, false, 0, 0)
+	for (const pass of openPasses) {
+		finishPass(pass, false, 0, 0)
+	}
 }
 
 function mutation(active: boolean, container: Element): void {
@@ -433,17 +495,23 @@ const unregisterBridge = bridge.register({
 
 function worldFor(pass: Pass, runtime: Runtime): PassWorld {
 	let passWorld = pass.worlds.get(runtime)
-	if (passWorld !== undefined) return passWorld
+	if (passWorld !== undefined) {
+		return passWorld
+	}
 	registerStrata(runtime)
 	const included: Branch[] = []
 	for (const branch of runtime.activeBranches()) {
-		if ((branch.lane & pass.lanes) === 0) continue
+		if ((branch.lane & pass.lanes) === 0) {
+			continue
+		}
 		included.push(branch)
 		trackRoot(metaFor(runtime, branch), pass.root)
 	}
 	let deferred = false
 	for (let i = 0; i < included.length; i++) {
-		if (included[i]!.deferred) deferred = true
+		if (included[i]!.deferred) {
+			deferred = true
+		}
 	}
 	passWorld = {
 		world: runtime.createWorld(
@@ -475,7 +543,9 @@ function represented(world: RenderWorld, branch: Branch, sequence: number): bool
 
 function listenCandidate(candidate: Candidate<any>): void {
 	const notify = (branch: Branch, sequence: number, cause: number) => {
-		if (candidate.disposed) return
+		if (candidate.disposed) {
+			return
+		}
 		if (candidate.mode === 3) {
 			candidate.runtime.emitTrace('component-delivery', candidate.source, cause, {
 				branch: branch.id,
@@ -491,8 +561,9 @@ function listenCandidate(candidate: Candidate<any>): void {
 				branch.status === 2 &&
 				passWorld !== undefined &&
 				represented(passWorld.world, branch, sequence)
-			)
+			) {
 				bridge.urgent(candidate.force)
+			}
 			return
 		}
 		trackRoot(metaFor(candidate.runtime, branch), candidate.root)
@@ -514,7 +585,9 @@ function listenCandidate(candidate: Candidate<any>): void {
 					break
 				}
 			}
-			if (!found) candidate.missed.push(branch)
+			if (!found) {
+				candidate.missed.push(branch)
+			}
 		}
 	}
 	if (candidate.source instanceof Computed) {
@@ -534,7 +607,9 @@ function activateCandidate<T>(candidate: Candidate<T>): () => void {
 		listenCandidate(candidate)
 	}
 	const previous = candidate.owner.active
-	if (previous !== undefined && previous !== candidate) disposeCandidate(previous)
+	if (previous !== undefined && previous !== candidate) {
+		disposeCandidate(previous)
+	}
 	candidate.pass.records.delete(candidate)
 	candidate.owner.pending = undefined
 	candidate.owner.active = candidate
@@ -542,7 +617,9 @@ function activateCandidate<T>(candidate: Candidate<T>): () => void {
 	candidate.owner.hasValue = true
 	if (!candidate.active) {
 		candidate.active = true
-		if (candidate.mode === 2) candidate.root.committed.add(candidate)
+		if (candidate.mode === 2) {
+			candidate.root.committed.add(candidate)
+		}
 		retainRoot(candidate.root)
 		for (let i = 0; i < candidate.leaves.length; i++) {
 			candidate.runtime._retain(candidate.leaves[i]!)
@@ -550,7 +627,9 @@ function activateCandidate<T>(candidate: Candidate<T>): () => void {
 	}
 	for (let i = 0; i < candidate.missed.length; i++) {
 		const branch = candidate.missed[i]!
-		if (branch.status !== 0) continue
+		if (branch.status !== 0) {
+			continue
+		}
 		trackRoot(metaFor(candidate.runtime, branch), candidate.root)
 		bridge.run(branch.lane, candidate.force)
 	}
@@ -565,10 +644,16 @@ function useSignalValue<T>(source: Signal<T>, mode: 0 | 1 | 2 | 3): T | boolean 
 	const pass = bridge.current() as Pass | null
 	const [, force] = React.useReducer(increment, 0)
 	const owner = React.useRef<HookOwner<any>>(undefined)
-	if (owner.current === undefined) owner.current = { hasValue: false }
+	if (owner.current === undefined) {
+		owner.current = { hasValue: false }
+	}
 	if (pass === null) {
-		if (mode === 0) return source.state
-		if (mode === 3) return source.runtime.isPending(source)
+		if (mode === 0) {
+			return source.state
+		}
+		if (mode === 3) {
+			return source.runtime.isPending(source)
+		}
 		return mode === 1 ? source.runtime.latest(source) : source.runtime.committed(source)
 	}
 
@@ -599,7 +684,9 @@ function useSignalValue<T>(source: Signal<T>, mode: 0 | 1 | 2 | 3): T | boolean 
 			: passWorld.world
 	try {
 		value = source.runtime.withWorld(readWorld, candidate.leaves, () => {
-			if (mode === 0) return source.state
+			if (mode === 0) {
+				return source.state
+			}
 			const latestValue = source.runtime.latest(source)
 			return mode === 3 ? source.runtime.pendingInWorld(source, readWorld) : latestValue
 		})
@@ -614,15 +701,21 @@ function useSignalValue<T>(source: Signal<T>, mode: 0 | 1 | 2 | 3): T | boolean 
 	} catch (caught) {
 		error = caught
 	} finally {
-		if (mode === 2) source.runtime.releaseWorld(readWorld)
+		if (mode === 2) {
+			source.runtime.releaseWorld(readWorld)
+		}
 		listenCandidate(candidate)
 	}
-	if (error !== undefined) throw error
+	if (error !== undefined) {
+		throw error
+	}
 	let renderCause = 0
 	let renderSequence = 0
 	for (let i = 0; i < passWorld.included.length; i++) {
 		const branch = passWorld.included[i]!
-		if (branch.lastSeq <= renderSequence) continue
+		if (branch.lastSeq <= renderSequence) {
+			continue
+		}
 		if (source instanceof Computed && branch.signals.has(source)) {
 			renderSequence = branch.lastSeq
 			renderCause = branch.lastCause
@@ -659,10 +752,14 @@ export function useComputed<T>(
 }
 
 function clearSignalEffectSubscriptions(record: SignalEffectRecord): void {
-	for (let i = 0; i < record.unsubscribes.length; i++) record.unsubscribes[i]!()
+	for (let i = 0; i < record.unsubscribes.length; i++) {
+		record.unsubscribes[i]!()
+	}
 	record.unsubscribes.length = 0
 	if (record.runtime !== undefined) {
-		for (let i = 0; i < record.leaves.length; i++) record.runtime._release(record.leaves[i]!)
+		for (let i = 0; i < record.leaves.length; i++) {
+			record.runtime._release(record.leaves[i]!)
+		}
 	}
 	record.leaves.length = 0
 }
@@ -678,7 +775,9 @@ function runSignalEffect(record: SignalEffectRecord): void {
 		return
 	}
 	for (const [branch] of record.waiting) {
-		if (branch.status === 0) return
+		if (branch.status === 0) {
+			return
+		}
 	}
 	if (record.cleanup !== undefined) {
 		const cleanup = record.cleanup
@@ -694,7 +793,9 @@ function runSignalEffect(record: SignalEffectRecord): void {
 	try {
 		record.runtime.emitTrace('effect-run', record, record.cause)
 		const cleanup = record.runtime.withWorld(world, record.leaves, record.fn)
-		if (typeof cleanup === 'function') record.cleanup = cleanup
+		if (typeof cleanup === 'function') {
+			record.cleanup = cleanup
+		}
 	} catch (error) {
 		errors.push(error)
 	} finally {
@@ -705,10 +806,14 @@ function runSignalEffect(record: SignalEffectRecord): void {
 		record.runtime._retain(atom)
 		record.unsubscribes.push(
 			record.runtime.subscribeJournal(atom, (branch, sequence, cause) => {
-				if (record.disposed || branch.status !== 0) return
+				if (record.disposed || branch.status !== 0) {
+					return
+				}
 				record.cause = cause
 				const previous = record.waiting.get(branch) ?? 0
-				if (sequence > previous) record.waiting.set(branch, sequence)
+				if (sequence > previous) {
+					record.waiting.set(branch, sequence)
+				}
 				metaFor(record.runtime!, branch).effects.add(record)
 			}),
 		)
@@ -716,15 +821,21 @@ function runSignalEffect(record: SignalEffectRecord): void {
 }
 
 function scheduleSignalEffect(record: SignalEffectRecord): void {
-	if (record.pending || record.disposed) return
+	if (record.pending || record.disposed) {
+		return
+	}
 	record.pending = true
 	queueMicrotask(() => runSignalEffect(record))
 }
 
 function disposeSignalEffect(record: SignalEffectRecord): void {
-	if (record.disposed) return
+	if (record.disposed) {
+		return
+	}
 	record.disposed = true
-	for (const [branch] of record.waiting) branchMetas.get(branch)?.effects.delete(record)
+	for (const [branch] of record.waiting) {
+		branchMetas.get(branch)?.effects.delete(record)
+	}
 	record.waiting.clear()
 	clearSignalEffectSubscriptions(record)
 	if (record.retainedRoot !== undefined) {
@@ -744,7 +855,9 @@ function disposeSignalEffect(record: SignalEffectRecord): void {
 
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
 	const pass = bridge.current() as Pass | null
-	if (pass !== null) registerStrata(defaultRuntime)
+	if (pass !== null) {
+		registerStrata(defaultRuntime)
+	}
 	const ref = React.useRef<SignalEffectRecord>(undefined)
 	if (ref.current === undefined) {
 		ref.current = {
@@ -764,7 +877,9 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	React.useLayoutEffect(() => {
 		record.fn = fn
 		if (pass !== null && record.retainedRoot !== pass.root) {
-			if (record.retainedRoot !== undefined) releaseRoot(record.retainedRoot)
+			if (record.retainedRoot !== undefined) {
+				releaseRoot(record.retainedRoot)
+			}
 			record.root = pass.root
 			record.retainedRoot = pass.root
 			retainRoot(pass.root)
@@ -807,9 +922,13 @@ export function useCommitted<T>(source: Signal<T>): T | undefined {
 }
 
 export function committed<T>(source: Signal<T>, container?: object): T | undefined {
-	if (container === undefined) return source.runtime.committed(source)
+	if (container === undefined) {
+		return source.runtime.committed(source)
+	}
 	const root = roots.get(container)
-	if (root === undefined) return source.runtime.committed(source)
+	if (root === undefined) {
+		return source.runtime.committed(source)
+	}
 	const world = source.runtime.createWorld(container, 0, root.cutoffs)
 	const leaves: Atom<any>[] = []
 	try {
@@ -844,7 +963,9 @@ export function resetForTest(): void {
 
 export function disposeReackStrata(): void {
 	unregisterBridge()
-	for (const detach of runtimes.values()) detach()
+	for (const detach of runtimes.values()) {
+		detach()
+	}
 	runtimes.clear()
 }
 

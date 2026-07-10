@@ -42,7 +42,9 @@ test('quiescence compacts operation journals', () => {
 	value.set(2)
 	let urgent!: typeof deferred
 	for (const branch of runtime.activeBranches()) {
-		if (branch !== deferred) urgent = branch
+		if (branch !== deferred) {
+			urgent = branch
+		}
 	}
 	runtime.finishBranch(urgent, true)
 	runtime.finishBranch(deferred, false)

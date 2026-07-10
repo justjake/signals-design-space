@@ -32,7 +32,9 @@ import {
 import type { Computed, FirewallSignal, Link } from './types.js'
 
 function addPendingSource(el: Computed<any>, source: Computed<any>): boolean {
-	if (el._pendingSource === source || el._pendingSources?.has(source)) return false
+	if (el._pendingSource === source || el._pendingSources?.has(source)) {
+		return false
+	}
 	if (!el._pendingSource) {
 		el._pendingSource = source
 		return true
@@ -48,11 +50,15 @@ function addPendingSource(el: Computed<any>, source: Computed<any>): boolean {
 
 function removePendingSource(el: Computed<any>, source: Computed<any>): boolean {
 	if (el._pendingSource) {
-		if (el._pendingSource !== source) return false
+		if (el._pendingSource !== source) {
+			return false
+		}
 		el._pendingSource = undefined
 		return true
 	}
-	if (!el._pendingSources?.delete(source)) return false
+	if (!el._pendingSources?.delete(source)) {
+		return false
+	}
 	if (el._pendingSources.size === 1) {
 		el._pendingSource = el._pendingSources.values().next().value
 		el._pendingSources = undefined
@@ -84,13 +90,17 @@ function setPendingError(el: Computed<any>, source?: Computed<any>, error?: any)
 }
 
 function forEachDependent(el: Computed<any>, fn: (node: Computed<any>, link: Link) => void): void {
-	for (let s = el._subs; s !== null; s = s._nextSub) fn(s._sub, s)
+	for (let s = el._subs; s !== null; s = s._nextSub) {
+		fn(s._sub, s)
+	}
 	for (
 		let child: FirewallSignal<unknown> | null = el._child;
 		child !== null;
 		child = child._nextChild
 	) {
-		for (let s = child._subs; s !== null; s = s._nextSub) fn(s._sub, s)
+		for (let s = child._subs; s !== null; s = s._nextSub) {
+			fn(s._sub, s)
+		}
 	}
 }
 
@@ -102,7 +112,9 @@ function enqueueForRerun(node: Computed<any>): void {
 		enqueueTrackedRun(node)
 	} else {
 		const queue = node._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue
-		if (queue._min > node._height) queue._min = node._height
+		if (queue._min > node._height) {
+			queue._min = node._height
+		}
 		insertIntoHeap(node, queue)
 	}
 }
@@ -111,7 +123,9 @@ export function settlePendingSource(el: Computed<any>): void {
 	let scheduled = false
 	const visited = new Set<Computed<any>>()
 	const settle = (node: Computed<any>) => {
-		if (visited.has(node) || !removePendingSource(node, el)) return
+		if (visited.has(node) || !removePendingSource(node, el)) {
+			return
+		}
 		visited.add(node)
 		node._time = clock
 		const source = node._pendingSource ?? node._pendingSources?.values().next().value
@@ -133,7 +147,9 @@ export function settlePendingSource(el: Computed<any>): void {
 
 	forEachDependent(el, settle)
 
-	if (scheduled) schedule()
+	if (scheduled) {
+		schedule()
+	}
 }
 
 // Object-thenable detection (Promises/A+ shape).
@@ -191,7 +207,9 @@ export function handleAsync<T>(
 	let syncValue: T
 
 	const handleError = (error: any) => {
-		if (el._inFlight !== result) return
+		if (el._inFlight !== result) {
+			return
+		}
 		globalQueue.initTransition(resolveTransition(el as any))
 		// NotReadyError from rejected promises should be treated as pending, not error
 		notifyStatus(el, error instanceof NotReadyError ? STATUS_PENDING : STATUS_ERROR, error)
@@ -199,20 +217,28 @@ export function handleAsync<T>(
 	}
 
 	const asyncWrite = (value: T, then?: () => void) => {
-		if (el._inFlight !== result) return
+		if (el._inFlight !== result) {
+			return
+		}
 		// If the node was dirtied by a newer write (optimistic override or regular),
 		// skip this stale async result — the upcoming flush will recompute the node
 		// with the new value, creating a fresh Promise that supersedes this one.
-		if (el._flags & (REACTIVE_DIRTY | REACTIVE_OPTIMISTIC_DIRTY)) return
+		if (el._flags & (REACTIVE_DIRTY | REACTIVE_OPTIMISTIC_DIRTY)) {
+			return
+		}
 		globalQueue.initTransition(resolveTransition(el as any))
 		const wasUninitialized = !!(el._statusFlags & STATUS_UNINITIALIZED)
 		trimStaleDeps(el)
 		clearStatus(el)
 		const lane = resolveLane(el as any)
-		if (lane) lane._pendingAsync.delete(el)
+		if (lane) {
+			lane._pendingAsync.delete(el)
+		}
 		if (setter) {
 			setter(value)
-			if (wasUninitialized) clearStatus(el, true)
+			if (wasUninitialized) {
+				clearStatus(el, true)
+			}
 		} else if (el._overrideValue !== undefined) {
 			if (el._overrideValue !== NOT_PENDING) {
 				// Active override: hold the fresh value as the revert target. The override
@@ -222,7 +248,9 @@ export function handleAsync<T>(
 				// Resting optimistic node (no active override): commit through the shared
 				// pending-node path, exactly like a plain async memo, so the commit clears
 				// STATUS_UNINITIALIZED — no divergence from a non-optimistic source (#2806).
-				if (el._pendingValue === NOT_PENDING) queuePendingNode(el)
+				if (el._pendingValue === NOT_PENDING) {
+					queuePendingNode(el)
+				}
 				el._pendingValue = value
 				insertSubs(el)
 			}
@@ -260,13 +288,17 @@ export function handleAsync<T>(
 				if (isSync) {
 					syncValue = v
 					resolved = true
-				} else asyncWrite(v)
+				} else {
+					asyncWrite(v)
+				}
 			},
 			(e) => {
 				if (isSync) {
 					syncError = e
 					rejected = true
-				} else handleError(e)
+				} else {
+					handleError(e)
+				}
 			},
 		)
 		isSync = false
@@ -288,11 +320,15 @@ export function handleAsync<T>(
 		let completed = false
 
 		cleanup(() => {
-			if (completed) return
+			if (completed) {
+				return
+			}
 			completed = true
 			try {
 				const returned = it.return?.()
-				if (isThenable(returned)) returned.then(undefined, () => {})
+				if (isThenable(returned)) {
+					returned.then(undefined, () => {})
+				}
 			} catch {}
 		})
 
@@ -305,11 +341,14 @@ export function handleAsync<T>(
 					if (isSync) {
 						syncResult = r
 						resolved = true
-						if (r.done) completed = true
+						if (r.done) {
+							completed = true
+						}
 					} else if (el._inFlight !== result) {
 						return
-					} else if (!r.done) asyncWrite(r.value, iterate)
-					else {
+					} else if (!r.done) {
+						asyncWrite(r.value, iterate)
+					} else {
 						completed = true
 						schedule()
 						flush()
@@ -342,13 +381,23 @@ export function handleAsync<T>(
 }
 
 export function clearStatus(el: Computed<any>, clearUninitialized: boolean = false): void {
-	if (el._pendingSource || el._pendingSources) clearPendingSources(el)
-	if (el._blocked) el._blocked = false
+	if (el._pendingSource || el._pendingSources) {
+		clearPendingSources(el)
+	}
+	if (el._blocked) {
+		el._blocked = false
+	}
 	el._statusFlags = clearUninitialized ? 0 : el._statusFlags & STATUS_UNINITIALIZED
-	if (el._error) setPendingError(el)
+	if (el._error) {
+		setPendingError(el)
+	}
 	// Update pending signal for isPending() reactivity
-	if (el._pendingSignal) updatePendingSignal(el)
-	if (el._notifyStatus) el._notifyStatus()
+	if (el._pendingSignal) {
+		updatePendingSignal(el)
+	}
+	if (el._notifyStatus) {
+		el._notifyStatus()
+	}
 	// [react-adapt E11] wake React Suspense retries waiting on this node
 	el._onStatusSettled?.()
 }
@@ -365,8 +414,9 @@ export function notifyStatus(
 		status === STATUS_ERROR &&
 		!(error instanceof StatusError) &&
 		!(error instanceof NotReadyError)
-	)
+	) {
 		error = new StatusError(el, error)
+	}
 
 	const pendingSource =
 		status === STATUS_PENDING && error instanceof NotReadyError ? error.source : undefined
@@ -389,7 +439,9 @@ export function notifyStatus(
 			el._error = error
 			// [react-adapt E11] a real error settles the suspension: React retries
 			// the render, the read rethrows the error, an error boundary catches.
-			if (status === STATUS_ERROR) el._onStatusSettled?.()
+			if (status === STATUS_ERROR) {
+				el._onStatusSettled?.()
+			}
 		}
 		updatePendingSignal(el)
 	}
@@ -432,7 +484,9 @@ export function notifyStatus(
 				schedule()
 				return
 			}
-			if (!downstreamBlockStatus && !sub._transition) queuePendingNode(sub)
+			if (!downstreamBlockStatus && !sub._transition) {
+				queuePendingNode(sub)
+			}
 			notifyStatus(sub, status, error, downstreamBlockStatus, downstreamLane)
 		}
 	})

@@ -90,7 +90,9 @@ export function setActiveShim(shim: Shim): void {
  * disposed predecessor's late unregister must never clobber a successor's
  * registration. */
 export function unregisterShim(shim: Shim): void {
-	if (activeShim === shim) activeShim = undefined
+	if (activeShim === shim) {
+		activeShim = undefined
+	}
 }
 
 /** The active shim if it is still live. (A shim disposed directly — without
@@ -224,7 +226,9 @@ export class Shim {
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
 	private guard(fn: () => void): void {
-		if (this.disposed) return
+		if (this.disposed) {
+			return
+		}
 		try {
 			fn()
 		} catch (error) {
@@ -276,7 +280,9 @@ export class Shim {
 	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
 		const ctx = this.registry.getRenderContext()
-		if (ctx === null) return undefined
+		if (ctx === null) {
+			return undefined
+		}
 		return this.rootsByContainer.get(ctx.container)
 	}
 
@@ -313,25 +319,33 @@ export class Shim {
 
 	private handleYield(container: unknown): void {
 		const rec = this.rootsByContainer.get(container)
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
 		this.bridge.renderYield(rec.renderPass.id)
 	}
 
 	private handleResume(container: unknown): void {
 		const rec = this.rootsByContainer.get(container)
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
 		this.bridge.renderResume(rec.renderPass.id)
 	}
 
 	private handleRenderEnd(container: unknown, committed: boolean): void {
 		const rec = this.rootsByContainer.get(container)
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
 		const render = rec.renderPass
 		if (!committed) {
 			// Discard: render-owned mounts die in the bridge; drop their targets too.
 			this.bridge.renderEnd(render.id, 'discard')
 			for (const wid of rec.created) {
-				if (!this.claimed.has(wid)) this.targets.delete(wid)
+				if (!this.claimed.has(wid)) {
+					this.targets.delete(wid)
+				}
 			}
 			rec.created = new Set()
 			rec.renderPass = undefined
@@ -358,9 +372,13 @@ export class Shim {
 		const created = rec.created
 		rec.created = new Set()
 		queueMicrotask(() => {
-			if (this.disposed) return
+			if (this.disposed) {
+				return
+			}
 			for (const wid of created) {
-				if (this.claimed.has(wid)) continue
+				if (this.claimed.has(wid)) {
+					continue
+				}
 				// removeWatcher, never a bare watchers.delete: the engine keeps a
 				// per-node watcher index next to the id map, and a map-only delete
 				// strands the index entry (dead watchers then seed the engine's
@@ -373,7 +391,9 @@ export class Shim {
 
 	private handleBatchRetired(registryBatch: number, committed: boolean): void {
 		const batchId = this.registryToEngine.get(registryBatch)
-		if (batchId === undefined) return
+		if (batchId === undefined) {
+			return
+		}
 		const t = this.bridge.idToBatch.get(batchId)
 		if (t === undefined || t.state !== 'live') {
 			this.registryToEngine.delete(registryBatch)
@@ -387,12 +407,17 @@ export class Shim {
 		// attached. Batches with no protocol report (the engine-side ambient
 		// batch) create none.
 		const tr = this.bridge.trace
-		if (tr !== undefined) tr.batchDisposition(batchId, committed)
+		if (tr !== undefined) {
+			tr.batchDisposition(batchId, committed)
+		}
 		// Retirement/settlement flush dirty SignalEffect terminals and deliver
 		// their runner requests at this operation boundary.
-		if (t.parked)
-			this.bridge.settleAction(batchId) // async action reached settlement
-		else this.bridge.retire(batchId) // batch done everywhere: its writes become permanent history
+		if (t.parked) {
+			this.bridge.settleAction(batchId)
+		} // async action reached settlement
+		else {
+			this.bridge.retire(batchId)
+		} // batch done everywhere: its writes become permanent history
 		this.registryToEngine.delete(registryBatch)
 		this.engineToRegistry.delete(batchId)
 	}
@@ -417,7 +442,9 @@ export class Shim {
 				reported.push(batchId)
 			}
 		}
-		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported)
+		if (reported.length !== 0) {
+			this.bridge.commitBatches(rec.id, reported)
+		}
 		// commitBatches is itself a boundary operation: when the report
 		// actually moved committed truth, the engine re-checked that root's
 		// committed SignalEffects inside the call.
@@ -435,7 +462,9 @@ export class Shim {
 	/** Schedules a re-render in the batch's lane, or urgently if it is gone. */
 	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
 		const target = this.targets.get(watcherId)
-		if (target === undefined || !target.live) return
+		if (target === undefined || !target.live) {
+			return
+		}
 		const registryBatch =
 			batchId === undefined ? BATCH_NONE : (this.engineToRegistry.get(batchId) ?? BATCH_NONE)
 		this.registry.runInBatch(registryBatch, () => target.bump())
@@ -517,12 +546,16 @@ export class Shim {
 
 	unregisterEffect(id: number): void {
 		this.effectRunners.delete(id)
-		if (this.bridge.idToSignalEffect.has(id)) this.bridge.removeSignalEffect(id)
+		if (this.bridge.idToSignalEffect.has(id)) {
+			this.bridge.removeSignalEffect(id)
+		}
 	}
 
 	/** Runs an effect body while its committed graph terminal retracks. */
 	captureEffectRun(id: number, body: () => void): void {
-		if (!this.bridge.idToSignalEffect.has(id)) return // torn down between queue and run
+		if (!this.bridge.idToSignalEffect.has(id)) {
+			return
+		} // torn down between queue and run
 		this.bridge.captureSignalEffectRun(id, body)
 	}
 
@@ -556,7 +589,9 @@ export class Shim {
 		try {
 			return fn()
 		} catch (err) {
-			if (err instanceof SuspendedRead) throw err.thenable
+			if (err instanceof SuspendedRead) {
+				throw err.thenable
+			}
 			throw err
 		} finally {
 			this.bridge.suspendDepth--
@@ -611,7 +646,9 @@ export class Shim {
 		} finally {
 			this.bridge.renderEnd(render.id, 'discard')
 		}
-		if (created === undefined) return
+		if (created === undefined) {
+			return
+		}
 		created.live = true
 		created.lastRenderedValue = rec.lastValue // what the committed DOM shows
 		rec.watcherId = created.id
@@ -620,7 +657,9 @@ export class Shim {
 		this.targets.set(created.id, rec.target)
 		// Conservative reveal compare: fix any drift urgently, pre-paint.
 		const now = this.bridge.committedValue(rec.node, root)
-		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(created.id, undefined)
+		if (!Object.is(now, rec.lastValue)) {
+			this.bumpInBatch(created.id, undefined)
+		}
 	}
 
 	/** Debounce-finalized unsubscription (or immediate teardown for retired recs). */
@@ -632,7 +671,9 @@ export class Shim {
 		rec.pendingUnsub = false
 		rec.target.live = false
 		const wid = rec.watcherId
-		if (wid === undefined) return
+		if (wid === undefined) {
+			return
+		}
 		rec.watcherId = undefined
 		this.claimed.delete(wid)
 		this.targets.delete(wid)

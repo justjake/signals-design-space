@@ -26,13 +26,17 @@ afterEach(async () => {
 
 const drainMicrotasks = async () => {
 	// A handful of microtask turns with no task-queue progress.
-	for (let i = 0; i < 8; i++) await Promise.resolve()
+	for (let i = 0; i < 8; i++) {
+		await Promise.resolve()
+	}
 }
 
 /** Wait (macrotasks) until the condition holds, so scheduler-task renders
  * can land; bounded so a genuine failure still fails fast. */
 const settleUntil = async (cond: () => boolean) => {
-	for (let i = 0; i < 20 && !cond(); i++) await tick()
+	for (let i = 0; i < 20 && !cond(); i++) {
+		await tick()
+	}
 }
 
 describe('base writes behave like useState', () => {
@@ -128,7 +132,9 @@ describe('base writes behave like useState', () => {
 
 		await new Promise<void>((res) =>
 			setTimeout(() => {
-				for (let i = 1; i <= 100; i++) a.set(i)
+				for (let i = 1; i <= 100; i++) {
+					a.set(i)
+				}
 				res()
 			}, 0),
 		)

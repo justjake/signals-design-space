@@ -86,7 +86,9 @@ export function checkArenas(b: CosignalEngine): void {
 
 function runCheck(st: CheckerState): void {
 	const v = st.views
-	if (st.checking || v.evalDepth > 0 || v.inFoldCallback) return
+	if (st.checking || v.evalDepth > 0 || v.inFoldCallback) {
+		return
+	}
 	st.checking = true
 	try {
 		v.holdOp(() => {
@@ -95,9 +97,13 @@ function runCheck(st: CheckerState): void {
 				const naiveMemo = new Map<AnyInternals, NaiveOutcome>() // object-keyed: record ids recycle
 				for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
 					const sh = a.nodeToShadow[nid] ?? 0
-					if (sh === 0) continue
+					if (sh === 0) {
+						continue
+					}
 					const node = v.internalsAt(nid)
-					if (node === undefined) continue
+					if (node === undefined) {
+						continue
+					}
 					// The arena answer is computed BEFORE the fold-truth side runs:
 					// folding first could refresh the very state under measurement.
 					let aVal: Value
@@ -181,10 +187,14 @@ function naiveValue(
 	world: World,
 	memo: Map<AnyInternals, NaiveOutcome>,
 ): Value {
-	if (node.kind === 'atom') return st.engine.foldAtom(node, world)
+	if (node.kind === 'atom') {
+		return st.engine.foldAtom(node, world)
+	}
 	const hit = memo.get(node)
 	if (hit !== undefined) {
-		if (hit.threw) throw hit.v
+		if (hit.threw) {
+			throw hit.v
+		}
 		return hit.v
 	}
 	if (st.naiveStack.has(node)) {
@@ -218,19 +228,23 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 	let suspSeen = 0
 	for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
 		const sh = a.nodeToShadow[nid] ?? 0
-		if (sh === 0) continue
-		if (memory[sh + ArenaField.NODE] !== nid)
+		if (sh === 0) {
+			continue
+		}
+		if (memory[sh + ArenaField.NODE] !== nid) {
 			throw new InvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`)
+		}
 		// A dead-GEN shadow is legal cold residue: the invariant is
 		// that it never serves — enforced at resolveShadow (re-tenant on consult),
 		// which every serve/link path routes through. No assert here.
 		const flags = memory[sh + ArenaField.FLAGS]!
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
 			const slot = a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
-			if (slot === 0 || a.suspended[slot - 1] !== sh)
+			if (slot === 0 || a.suspended[slot - 1] !== sh) {
 				throw new InvariantViolation(
 					`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`,
 				)
+			}
 			suspSeen++
 		} else if ((a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0) {
 			throw new InvariantViolation(
@@ -247,14 +261,17 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 		let prev = 0
 		let steps = 0
 		while (cur !== 0) {
-			if (++steps > CAP)
+			if (++steps > CAP) {
 				throw new InvariantViolation(
 					`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`,
 				)
-			if (memory[cur + ArenaLinkField.SUB] !== sh)
+			}
+			if (memory[cur + ArenaLinkField.SUB] !== sh) {
 				throw new InvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`)
-			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev)
+			}
+			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev) {
 				throw new InvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`)
+			}
 			const dep = memory[cur + ArenaLinkField.DEP]!
 			// Weak symmetry: the link must sit on its MODE's subs list —
 			// a weak-flagged link on the strong list (or vice versa) makes
@@ -266,26 +283,29 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 			let found = false
 			let ssteps = 0
 			while (s !== 0) {
-				if (++ssteps > CAP)
+				if (++ssteps > CAP) {
 					throw new InvariantViolation(
 						`arena ${a.root}: subs list of shadow ${dep} exceeds ${CAP} steps (cycle)`,
 					)
+				}
 				if (s === cur) {
 					found = true
 					break
 				}
 				s = memory[s + ArenaLinkField.NEXT_SUB]!
 			}
-			if (!found)
+			if (!found) {
 				throw new InvariantViolation(
 					`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`,
 				)
+			}
 			prev = cur
 			cur = memory[cur + ArenaLinkField.NEXT_DEP]!
 		}
 	}
-	if (suspSeen !== a.suspended.length)
+	if (suspSeen !== a.suspended.length) {
 		throw new InvariantViolation(
 			`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`,
 		)
+	}
 }

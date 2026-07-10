@@ -44,10 +44,14 @@ const altAUses: Contender = {
 	name: 'alt-a-uses',
 	createCells(n) {
 		const cells: NumAtom[] = []
-		for (let i = 0; i < n; i++) cells.push(new Atom({ state: 0 }))
+		for (let i = 0; i < n; i++) {
+			cells.push(new Atom({ state: 0 }))
+		}
 		const writeMany = (updates: Array<[number, number]>): void => {
 			startBatch()
-			for (const [i, v] of updates) cells[i].set(v)
+			for (const [i, v] of updates) {
+				cells[i].set(v)
+			}
 			endBatch()
 		}
 		return {

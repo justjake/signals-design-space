@@ -178,7 +178,9 @@ export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
 	const out: TraceEvent[] = []
 	for (const te of tr.events()) {
 		const be = decodeTraceEvent(te)
-		if (be !== undefined) out.push(be)
+		if (be !== undefined) {
+			out.push(be)
+		}
 	}
 	return out
 }
@@ -205,9 +207,13 @@ export class RefereeStream {
 		const head = this.tracer.stats().recorded
 		for (let id = this.nextId; id < head; id++) {
 			const te = this.tracer.decode(id)
-			if (te === undefined) continue // unreachable while the session stays lossless
+			if (te === undefined) {
+				continue
+			} // unreachable while the session stays lossless
 			const be = decodeTraceEvent(te)
-			if (be !== undefined) this.decoded.push(be)
+			if (be !== undefined) {
+				this.decoded.push(be)
+			}
 		}
 		this.nextId = head
 		return this.decoded
@@ -246,9 +252,10 @@ export function attachRefereeStream(b: CosignalEngine, opts?: TracerOptions): Re
  * after every `__TEST__resetEngine`). */
 export function refereeStreamOf(b: CosignalEngine): RefereeStream {
 	const s = streams.get(b)
-	if (s === undefined || s.epoch !== engineEpoch)
+	if (s === undefined || s.epoch !== engineEpoch) {
 		throw new Error(
 			'no referee stream attached to this engine composition (call attachRefereeStream after the reset)',
 		)
+	}
 	return s.stream
 }

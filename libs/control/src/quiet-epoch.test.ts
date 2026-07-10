@@ -193,7 +193,9 @@ test('propagate through a branching tree with live leaves', () => {
 	W(2)
 	assert.equal(leafRuns, leaves)
 	assert.equal(leafSum, leaves * (2 + depth - 1))
-	for (const d of disposers) d()
+	for (const d of disposers) {
+		d()
+	}
 })
 
 // 8. Exception safety: a getter that throws mid-checkDirty must not corrupt
