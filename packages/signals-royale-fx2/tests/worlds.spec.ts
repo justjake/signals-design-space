@@ -1,6 +1,7 @@
 /** Engine-level world semantics: drafts, replay order, fold, views. */
 import { describe, expect, test } from 'vitest';
 import {
+  Flag,
   ReducerAtom,
   computed,
   effect,
@@ -28,6 +29,16 @@ import {
   type DraftId,
 } from '../src/worlds.ts';
 import { observeNode } from '../src/graph.ts';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve));
 
 function inDraft(fn: () => void): DraftId {
   const d = openDraft();
@@ -273,6 +284,135 @@ describe('computeds across worlds', () => {
     expect(state1).toBe(state2); // stable identity for unchanged resolution
     expect((state1 as { value: { n: number } }).value.n).toBe(6);
     retireDraft(id);
+  });
+
+  test('world memo certificates ignore unrelated graph and draft activity', () => {
+    const source = signal(1);
+    const unrelated = signal(0);
+    let runs = 0;
+    const c = computed(() => {
+      runs++;
+      return source.get() * 2;
+    });
+    const draft = openDraft();
+    runInDraft(draft, () => source.set(2));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(4));
+    expect(runs).toBe(1);
+
+    unrelated.set(1);
+    expect(stateIn(c, [draft.id])).toEqual(valueState(4));
+    expect(runs).toBe(1);
+
+    const otherDraft = openDraft();
+    runInDraft(otherDraft, () => unrelated.set(2));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(4));
+    expect(runs).toBe(1);
+    discardDraft(otherDraft.id);
+    expect(stateIn(c, [draft.id])).toEqual(valueState(4));
+    expect(runs).toBe(1);
+    discardDraft(draft.id);
+  });
+
+  test('a source log revision invalidates only memos that read that source', () => {
+    const source = signal(1);
+    let runs = 0;
+    const c = computed(() => {
+      runs++;
+      return source.get() * 2;
+    });
+    const draft = openDraft();
+    runInDraft(draft, () => source.set(2));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(4));
+    expect(runs).toBe(1);
+
+    runInDraft(draft, () => source.set(3));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(6));
+    expect(runs).toBe(2);
+
+    source.set(10);
+    expect(stateIn(c, [draft.id])).toEqual(valueState(20));
+    expect(runs).toBe(3);
+    discardDraft(draft.id);
+  });
+
+  test('an equality-cutoff urgent write still invalidates through the log revision', () => {
+    const source = signal(5);
+    let runs = 0;
+    const c = computed(() => {
+      runs++;
+      return source.get();
+    });
+    const draft = openDraft();
+    runInDraft(draft, () => source.update((value) => value + 1));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(6));
+    expect(runs).toBe(1);
+
+    source.set(5); // canonical equality cutoff; only the rebase log changes
+    expect(stateIn(c, [draft.id])).toEqual(valueState(5));
+    expect(runs).toBe(2);
+    discardDraft(draft.id);
+  });
+
+  test('nested memo hits flatten their source certificates', () => {
+    const enabled = signal(false);
+    const source = signal(0);
+    let middleRuns = 0;
+    let topRuns = 0;
+    const middle = computed(() => {
+      middleRuns++;
+      return source.get() + 1;
+    });
+    const top = computed(() => {
+      topRuns++;
+      return enabled.get() ? middle.get() : -1;
+    });
+    expect(top.get()).toBe(-1);
+    const draft = openDraft();
+    runInDraft(draft, () => enabled.set(true));
+    expect(stateIn(middle, [draft.id])).toEqual(valueState(1));
+    expect(stateIn(top, [draft.id])).toEqual(valueState(1));
+
+    runInDraft(draft, () => source.set(41));
+    expect(stateIn(top, [draft.id])).toEqual(valueState(42));
+    expect(middleRuns).toBe(2);
+    expect(topRuns).toBe(3); // one canonical run plus two draft-world runs
+    discardDraft(draft.id);
+  });
+
+  test('a canonical previous-value change invalidates its world memo', () => {
+    const worldBranch = signal(false);
+    const canonicalSource = signal(1);
+    let runs = 0;
+    const c = computed<number>((_use, previous) => {
+      runs++;
+      return worldBranch.get() ? (previous ?? 0) : canonicalSource.get();
+    });
+    expect(c.get()).toBe(1);
+    const draft = openDraft();
+    runInDraft(draft, () => worldBranch.set(true));
+    expect(stateIn(c, [draft.id])).toEqual(valueState(1));
+
+    canonicalSource.set(2);
+    expect(c.get()).toBe(2);
+    expect(stateIn(c, [draft.id])).toEqual(valueState(2));
+    expect(runs).toBe(4);
+    discardDraft(draft.id);
+  });
+
+  test('a settled world suspension invalidates an otherwise unchanged certificate', async () => {
+    const gate = deferred<number>();
+    const enabled = signal(false);
+    const c = computed((use) => (enabled.get() ? use(gate.promise) : 0));
+    expect(c.get()).toBe(0);
+    const draft = openDraft();
+    runInDraft(draft, () => enabled.set(true));
+    const pending = stateIn(c, [draft.id]) as { flags: number };
+    expect(pending.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended);
+
+    gate.resolve(7);
+    await tick();
+    expect(stateIn(c, [draft.id])).toEqual(valueState(7));
+    discardDraft(draft.id);
   });
 
   test('isPending flips for drafted cells and computeds over them', () => {

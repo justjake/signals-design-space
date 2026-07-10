@@ -99,6 +99,9 @@ let nextDraftId: DraftId = 1;
 const liveDrafts = new Map<DraftId, Draft>();
 /** Cells with at least one live draft intent. */
 const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>();
+/** Per-cell replay revision. Weak and lazy: untouched cells pay nothing, and
+ * certificates never retain deleted logs or their intent payloads. */
+const draftRevisionByCell = new WeakMap<CellNode<unknown>, DraftChangeClock>();
 let draftChangeClock: DraftChangeClock = 1;
 /** Nodes holding world memos, for sweeping at quiescence. */
 const memoNodes = new Set<ReactiveNode>();
@@ -163,9 +166,11 @@ export function appendDraftIntent(
   }
   // Array order is dispatch order; retirement flips visibility, never
   // position.
-  logFor(cell).intents.push({ kind, payload, draft });
+  const log = logFor(cell);
+  log.intents.push({ kind, payload, draft });
   draft.cells.add(cell);
   draftChangeClock++;
+  draftRevisionByCell.set(cell, draftChangeClock);
   let cause: TraceEventId = NO_EVENT;
   if (traceHook !== null) {
     cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
@@ -184,6 +189,7 @@ export function appendUrgentIntent(cell: CellNode<unknown>, kind: OpKind, payloa
   // position.
   log.intents.push({ kind, payload, draft: null });
   draftChangeClock++;
+  draftRevisionByCell.set(cell, draftChangeClock);
   return true;
 }
 
@@ -267,6 +273,7 @@ export function retireDraft(id: DraftId): void {
     startBatch();
     try {
       for (const cell of draft.cells) {
+        draftRevisionByCell.set(cell, draftChangeClock);
         // The draft is marked retired, so the full committed replay
         // includes its intents interleaved with urgent ones in dispatch
         // order.
@@ -298,6 +305,7 @@ export function discardDraft(id: DraftId): void {
   draftChangeClock++;
   const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT;
   for (const cell of draft.cells) {
+    draftRevisionByCell.set(cell, draftChangeClock);
     pokeDraftWatchers(cell, evt);
   }
   releaseLogs(draft);
@@ -485,10 +493,76 @@ export function worldOf(ids: readonly DraftId[]): World {
   return world;
 }
 
+interface CertificateEntry {
+  node: ReactiveNode | null;
+  changedAtGraphChange: GraphChangeClock;
+  draftRevision: DraftChangeClock;
+}
+
+interface Certificate {
+  entries: CertificateEntry[];
+  count: number;
+}
+
 interface WorldMemo {
   validAtGraphChange: GraphChangeClock;
   validAtDraftChange: DraftChangeClock;
+  nodeChangedAtGraphChange: GraphChangeClock;
+  certificate: Certificate;
   state: DerivedState;
+}
+
+/** The certificate currently being collected by a draft-world computed.
+ * Arrays and entry objects are reused when a memo re-evaluates. */
+let activeCertificate: Certificate | null = null;
+
+function appendCertificate(
+  node: ReactiveNode,
+  changedAtGraphChange: GraphChangeClock,
+  draftRevision: DraftChangeClock,
+): void {
+  const certificate = activeCertificate;
+  if (certificate === null) return;
+  const count = certificate.count;
+  if (count !== 0 && certificate.entries[count - 1]?.node === node) {
+    return;
+  }
+  let entry = certificate.entries[count];
+  if (entry === undefined) {
+    entry = { node, changedAtGraphChange, draftRevision };
+    certificate.entries[count] = entry;
+  } else {
+    entry.node = node;
+    entry.changedAtGraphChange = changedAtGraphChange;
+    entry.draftRevision = draftRevision;
+  }
+  certificate.count = count + 1;
+}
+
+function recordSource(node: ReactiveNode): void {
+  const draftRevision =
+    (node.flags & Flag.KindCell) !== 0
+      ? (draftRevisionByCell.get(node as CellNode<unknown>) ?? 0)
+      : 0;
+  appendCertificate(node, node.changedAtGraphChange, draftRevision);
+}
+
+function inheritCertificate(certificate: Certificate): void {
+  for (let i = 0; i < certificate.count; i++) {
+    const entry = certificate.entries[i] as CertificateEntry;
+    appendCertificate(
+      entry.node as ReactiveNode,
+      entry.changedAtGraphChange,
+      entry.draftRevision,
+    );
+  }
+}
+
+function clearInactiveCertificateEntries(certificate: Certificate, previousCount: number): void {
+  for (let i = certificate.count; i < previousCount; i++) {
+    const entry = certificate.entries[i] as CertificateEntry;
+    entry.node = null;
+  }
 }
 
 function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
@@ -506,6 +580,37 @@ function storeMemo(node: ReactiveNode, sig: string, memo: WorldMemo): void {
     memoNodes.add(node);
   }
   node.worldMemos.set(sig, memo);
+}
+
+function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
+  const graphChange = currentGraphChange();
+  if (
+    memo.validAtGraphChange === graphChange &&
+    memo.validAtDraftChange === draftChangeClock
+  ) {
+    return true;
+  }
+  if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) return false;
+  if (
+    (memo.state.flags & Flag.AsyncSuspended) !== 0 &&
+    (memo.state.throwable as Suspension).settled
+  ) {
+    return false;
+  }
+  for (let i = 0; i < memo.certificate.count; i++) {
+    const entry = memo.certificate.entries[i] as CertificateEntry;
+    const source = entry.node as ReactiveNode;
+    if (source.changedAtGraphChange !== entry.changedAtGraphChange) return false;
+    if (
+      (source.flags & Flag.KindCell) !== 0 &&
+      (draftRevisionByCell.get(source as CellNode<unknown>) ?? 0) !== entry.draftRevision
+    ) {
+      return false;
+    }
+  }
+  memo.validAtGraphChange = graphChange;
+  memo.validAtDraftChange = draftChangeClock;
+  return true;
 }
 
 /** State identity stability: keep the previous state record when the fresh
@@ -544,26 +649,57 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
       if ((node.flags & Flag.KindCell) !== 0) peekCell(node as CellNode<unknown>);
       else ensureFresh(node as DerivedNode<unknown>);
     });
+    recordSource(node);
     return node as CellNode<unknown> | DerivedNode<unknown>;
   }
-  const memo = memoFor(node, world.sig);
-  if (
-    memo !== undefined &&
-    memo.validAtGraphChange === currentGraphChange() &&
-    memo.validAtDraftChange === draftChangeClock
-  ) {
+  let memo = memoFor(node, world.sig);
+  if (memo !== undefined && memoValid(node, memo)) {
+    recordSource(node);
+    inheritCertificate(memo.certificate);
     return memo.state;
   }
-  const fresh: DerivedState =
-    (node.flags & Flag.KindCell) !== 0
-      ? { flags: 0, value: replayLog(node as CellNode<unknown>, world), throwable: null }
-      : draftEvaluate(node as DerivedNode<unknown>, world, memo?.state);
+  const certificate = memo?.certificate ?? { entries: [], count: 0 };
+  let fresh: DerivedState;
+  if ((node.flags & Flag.KindCell) !== 0) {
+    const cell = node as CellNode<unknown>;
+    const previousCount = certificate.count;
+    let entry = certificate.entries[0];
+    if (entry === undefined) {
+      entry = {
+        node: cell,
+        changedAtGraphChange: cell.changedAtGraphChange,
+        draftRevision: draftRevisionByCell.get(cell) ?? 0,
+      };
+      certificate.entries[0] = entry;
+    } else {
+      entry.node = cell;
+      entry.changedAtGraphChange = cell.changedAtGraphChange;
+      entry.draftRevision = draftRevisionByCell.get(cell) ?? 0;
+    }
+    certificate.count = 1;
+    clearInactiveCertificateEntries(certificate, previousCount);
+    fresh = { flags: 0, value: replayLog(cell, world), throwable: null };
+  } else {
+    fresh = draftEvaluate(node as DerivedNode<unknown>, world, memo?.state, certificate);
+  }
   const state = reconcileStates(node, memo?.state, fresh);
-  storeMemo(node, world.sig, {
-    validAtGraphChange: currentGraphChange(),
-    validAtDraftChange: draftChangeClock,
-    state,
-  });
+  if (memo === undefined) {
+    memo = {
+      validAtGraphChange: currentGraphChange(),
+      validAtDraftChange: draftChangeClock,
+      nodeChangedAtGraphChange: node.changedAtGraphChange,
+      certificate,
+      state,
+    };
+    storeMemo(node, world.sig, memo);
+  } else {
+    memo.validAtGraphChange = currentGraphChange();
+    memo.validAtDraftChange = draftChangeClock;
+    memo.nodeChangedAtGraphChange = node.changedAtGraphChange;
+    memo.state = state;
+  }
+  recordSource(node);
+  inheritCertificate(certificate);
   return state;
 }
 
@@ -574,6 +710,7 @@ function draftEvaluate(
   node: DerivedNode<unknown>,
   world: World,
   prev: DerivedState | undefined,
+  certificate: Certificate,
 ): DerivedState {
   let sigs = draftEvalStack.get(node);
   if (sigs?.has(world.sig)) {
@@ -596,10 +733,14 @@ function draftEvaluate(
     throw WORLD_PARKED;
   };
   const prevPark = currentPark;
+  const prevCertificate = activeCertificate;
+  const previousCertificateCount = certificate.count;
   const prevWritesForbidden = FORBID_WRITE_FROM_COMPUTED
     ? setWritesForbidden('writes inside computeds are forbidden')
     : null;
   currentPark = worldUse;
+  activeCertificate = certificate;
+  certificate.count = 0;
   try {
     const previous = isUninitialized(node.value) ? undefined : node.value;
     const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)));
@@ -618,6 +759,8 @@ function draftEvaluate(
     }
     return { flags: Flag.AsyncError, value: node.value, throwable: makeErrorBox(e) };
   } finally {
+    clearInactiveCertificateEntries(certificate, previousCertificateCount);
+    activeCertificate = prevCertificate;
     currentPark = prevPark;
     if (FORBID_WRITE_FROM_COMPUTED) setWritesForbidden(prevWritesForbidden);
     sigs.delete(world.sig);
