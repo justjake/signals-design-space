@@ -127,10 +127,7 @@ type Step =
   | { t: 'open' }
   | { t: 'draftSet'; draft: number; cell: number; v: number }
   | { t: 'draftUpdate'; draft: number; cell: number; k: number }
-  /** silent mirrors the React bindings' fold-after-commit: no storeVersion
-   * bump. Model semantics are identical; the scoped subscribers below assert
-   * the world-delivery channel makes them converge anyway. */
-  | { t: 'retire'; draft: number; silent: boolean }
+  | { t: 'retire'; draft: number }
   | { t: 'discard'; draft: number }
   | { t: 'readBase'; ref: Ref }
   | { t: 'readWorld'; ref: Ref; ids: number[] }
@@ -186,7 +183,7 @@ function generate(rand: () => number, steps: number): Step[] {
       const d = draftIds[ix];
       draftIds = draftIds.filter((x) => x !== d);
       out.push(
-        rand() < 0.7 ? { t: 'retire', draft: d, silent: rand() < 0.5 } : { t: 'discard', draft: d },
+        rand() < 0.7 ? { t: 'retire', draft: d } : { t: 'discard', draft: d },
       );
     } else if (r < 0.8) {
       out.push({ t: 'readBase', ref: anyRef() });
@@ -533,7 +530,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'cell', init: 1 },
         { t: 'open' },
         { t: 'draftSet', draft: 0, cell: 0, v: 9 },
-        { t: 'retire', draft: 0, silent: false },
+        { t: 'retire', draft: 0 },
         { t: 'readBase', ref: { cell: 0 } },
       ];
       expect(runSchedule(schedule, sabotaged)).not.toBeNull();
@@ -544,7 +541,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
 
   test('canary: a scoped subscriber with a sabotaged draft-lane channel is caught (the silent-fold staleness class)', () => {
     // Sabotage: the reducer channel drops every wake. The subscriber's
-    // storeVersion snapshot is silent-fold-blind BY DESIGN, so the wake
+    // the notify predicate compares in the sub's own world, so the wake
     // channel is its only route to a silently folded draft's values — with
     // wakes dropped it strands on the pre-draft view during the draft's
     // life and stays stranded after the silent fold. The oracle must see
