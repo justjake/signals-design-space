@@ -18,6 +18,7 @@ import {
   discardDraft,
   liveDraftCount,
   openDraft,
+  rebaseLogIntentCount,
   resolveState,
   retireDraft,
   runInDraft,
@@ -393,6 +394,66 @@ describe('latest() context resolution', () => {
     } finally {
       setRenderWorldProvider(null);
     }
+  });
+});
+
+describe('dead-prefix folding', () => {
+  test('retirement folds the dead prefix while preserving a later live draft', () => {
+    const a = signal(1);
+    const first = inDraft(() => a.set(2));
+    a.update((value) => value * 10);
+    const second = inDraft(() => a.update((value) => value + 3));
+    expect(rebaseLogIntentCount(a.node)).toBe(3);
+
+    retireDraft(first);
+    expect(a.get()).toBe(20);
+    expect(stateIn(a, [second])).toEqual(valueState(23));
+    expect(rebaseLogIntentCount(a.node)).toBe(1);
+
+    retireDraft(second);
+    expect(rebaseLogIntentCount(a.node)).toBe(0);
+  });
+
+  test('discarded intents are skipped while later urgent history folds', () => {
+    const a = signal(1);
+    const first = inDraft(() => a.set(100));
+    a.update((value) => value * 10);
+    const second = inDraft(() => a.update((value) => value + 3));
+
+    discardDraft(first);
+    expect(a.get()).toBe(10);
+    expect(stateIn(a, [second])).toEqual(valueState(13));
+    expect(rebaseLogIntentCount(a.node)).toBe(1);
+    discardDraft(second);
+  });
+
+  test('a live leading intent blocks folding of later retired history', () => {
+    const a = signal(1);
+    const first = inDraft(() => a.set(2));
+    const second = inDraft(() => a.set(3));
+
+    retireDraft(second);
+    expect(rebaseLogIntentCount(a.node)).toBe(2);
+    expect(a.get()).toBe(3);
+    discardDraft(first);
+  });
+
+  test('prefix folding preserves references retained by custom equality', () => {
+    const base = { value: 1, source: 'base' };
+    const equal = { value: 1, source: 'equal-set' };
+    const a = signal(base, { equals: (left, right) => left.value === right.value });
+    const first = inDraft(() => a.set(equal));
+    const second = inDraft(() =>
+      a.update((previous) => ({
+        value: previous === base ? 2 : 3,
+        source: previous.source,
+      })),
+    );
+
+    retireDraft(first);
+    expect(stateIn(a, [second])).toEqual(valueState({ value: 2, source: 'base' }));
+    expect(rebaseLogIntentCount(a.node)).toBe(1);
+    discardDraft(second);
   });
 });
 

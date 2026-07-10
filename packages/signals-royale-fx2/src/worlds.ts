@@ -224,13 +224,18 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
       d.state === 'retired' ||
       (world !== null && world.drafts.includes(d));
     if (!included) continue;
-    const next =
-      intent.kind === 'set'
-        ? intent.payload
-        : runUpdater(intent.payload as (p: unknown) => unknown, value);
-    if (!cell.equals(value, next)) value = next;
+    value = applyIntent(cell, value, intent);
   }
   return value;
+}
+
+/** The one intent-fold rule, shared by world replay and dead-prefix folding. */
+function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): unknown {
+  const next =
+    intent.kind === 'set'
+      ? intent.payload
+      : runUpdater(intent.payload as (p: unknown) => unknown, value);
+  return cell.equals(value, next) ? value : next;
 }
 
 /** Fold a draft into base state through the normal write path, then
@@ -299,20 +304,35 @@ export function discardDraft(id: DraftId): void {
   maybeQuiesce();
 }
 
-/** Drop rebase logs on cells no longer touched by any live draft. */
+/** Drop finished logs; otherwise fold their globally-dead leading run into
+ * valueBeforeDrafts. Folding stops at the first live intent because later
+ * updater results may depend on that intent's world-specific value. */
 function releaseLogs(dead: Draft): void {
   for (const cell of dead.cells) {
-    let stillDrafted = false;
     const log = rebaseLogs.get(cell);
     if (log === undefined) continue;
-    for (const intent of log.intents) {
-      if (intent.draft !== null && intent.draft.state !== 'retired' && intent.draft.state !== 'discarded') {
-        stillDrafted = true;
-        break;
-      }
+    const intents = log.intents;
+    let value = log.valueBeforeDrafts;
+    let prefix = 0;
+    for (; prefix < intents.length; prefix++) {
+      const intent = intents[prefix] as Intent;
+      const draft = intent.draft;
+      if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') break;
+      if (draft === null || draft.state === 'retired') value = applyIntent(cell, value, intent);
     }
-    if (!stillDrafted) rebaseLogs.delete(cell);
+    if (prefix === intents.length) {
+      rebaseLogs.delete(cell);
+    } else if (prefix !== 0) {
+      log.valueBeforeDrafts = value;
+      intents.copyWithin(0, prefix);
+      intents.length -= prefix;
+    }
   }
+}
+
+/** @internal Test seam for the bounded-history invariant. */
+export function rebaseLogIntentCount<T>(cell: CellNode<T>): number {
+  return rebaseLogs.get(cell as CellNode<unknown>)?.intents.length ?? 0;
 }
 
 /** Quiescence: with no live drafts, every per-suspension structure empties. */
