@@ -201,19 +201,22 @@ function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unkno
 
 function finishCompute(
   node: DerivedNode<unknown>,
-  outcome: { parked: boolean; error: unknown; hasError: boolean; value: unknown },
+  parked: boolean,
+  hasError: boolean,
+  error: unknown,
+  value: unknown,
 ): boolean {
   const flags = node.flags;
-  if (outcome.parked) {
+  if (parked) {
     // baseUse installed the suspended state. Advance the version so
     // downstream readers re-pull and park on the (possibly fresh) suspension.
     return true;
   }
-  if (outcome.hasError) {
+  if (hasError) {
     if ((flags & Flag.AsyncSuspended) !== 0) (node.throwable as Suspension).resolve();
     const sameError =
-      (flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
-    if (!sameError) node.throwable = makeErrorBox(outcome.error);
+      (flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error;
+    if (!sameError) node.throwable = makeErrorBox(error);
     node.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncError;
     return !sameError;
   }
@@ -221,8 +224,8 @@ function finishCompute(
   node.flags = flags & ~Flag.AsyncMask;
   node.throwable = null;
   const prev = node.value;
-  if (isUninitialized(prev) || !node.equals(prev, outcome.value)) {
-    node.value = outcome.value;
+  if (isUninitialized(prev) || !node.equals(prev, value)) {
+    node.value = value;
     return true;
   }
   // The value itself is unchanged; downstream still re-pulls when this ends

@@ -250,6 +250,9 @@ export interface DerivedNode<T> extends ReactiveNode {
   value: T | typeof UNINITIALIZED;
   fn: (use: UseFn, previous: T | undefined) => T;
   equals: EqualsFn<T>;
+  /** The use() argument recompute passes to fn. It closes over nothing but
+   * the node, so it is created once with the node rather than per recompute. */
+  useFn: UseFn;
   /** GraphChangeClock reading at last successful validation — the unwatched
    * tier's currency gate (validAtGraphChange === clock ⇒ nothing relevant
    * happened since; the read short-circuits O(1)). Deriveds only: cells and
@@ -314,7 +317,7 @@ export function makeDerived<T>(
   fn: (use: UseFn, previous: T | undefined) => T,
   opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
-  return {
+  const node: DerivedNode<T> = {
     flags: Flag.KindDerived | Flag.StaleDirty,
     changedAtGraphChange: 0,
     throwable: null,
@@ -328,10 +331,14 @@ export function makeDerived<T>(
     value: UNINITIALIZED,
     fn,
     equals: opts?.equals ?? defaultEquals,
+    useFn: undefined as never, // assigned below; needs the node reference
     validAtGraphChange: 0,
     worldMemos: null,
     pokePass: 0,
   };
+  node.useFn = ((t: PromiseLike<unknown>) =>
+    useImpl(t, node as DerivedNode<unknown>)) as UseFn;
+  return node;
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,15 +1043,20 @@ export function setUseImpl(impl: typeof useImpl): void {
   useImpl = impl;
 }
 
-/** Set by asyncs.ts: finish a recompute, folding parks into async state. */
+/** Set by asyncs.ts: finish a recompute, folding parks into async state.
+ * Positional outcome (parked, hasError, error, value) — this runs once per
+ * recompute, so it must not cost an outcome-object allocation. */
 export let finishComputeImpl: (
   node: DerivedNode<unknown>,
-  outcome: { parked: boolean; error: unknown; hasError: boolean; value: unknown },
-) => boolean = (node, o) => {
-  if (o.parked || o.hasError) throw o.hasError ? o.error : new Error('parked without async layer');
+  parked: boolean,
+  hasError: boolean,
+  error: unknown,
+  value: unknown,
+) => boolean = (node, parked, hasError, error, value) => {
+  if (parked || hasError) throw hasError ? error : new Error('parked without async layer');
   const prev = node.value;
-  if (prev === UNINITIALIZED || !node.equals(prev, o.value)) {
-    node.value = o.value;
+  if (prev === UNINITIALIZED || !node.equals(prev, value)) {
+    node.value = value;
     return true;
   }
   return false;
@@ -1070,10 +1082,7 @@ function recompute(node: DerivedNode<unknown>): void {
   let error: unknown;
   let value: unknown;
   try {
-    value = node.fn(
-      (t) => useImpl(t, node) as never,
-      node.value === UNINITIALIZED ? undefined : node.value,
-    );
+    value = node.fn(node.useFn, node.value === UNINITIALIZED ? undefined : node.value);
   } catch (e) {
     if (e === PARKED) parked = true;
     else {
@@ -1087,7 +1096,7 @@ function recompute(node: DerivedNode<unknown>): void {
     trimDeps(node);
     node.flags &= ~Flag.Computing;
   }
-  const changed = finishComputeImpl(node, { parked, error, hasError, value });
+  const changed = finishComputeImpl(node, parked, hasError, error, value);
   // Invariant: only a REAL change advances the reading (equality cutoff
   // keeps the old stamp, so downstream validAt comparisons stay equal).
   // Stamped with the CURRENT clock, not the pre-eval reading: recomputes do
