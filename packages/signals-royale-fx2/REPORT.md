@@ -931,3 +931,27 @@ second, separately revertable).
   why they bypass suppression. The write-only intent `seq` field, `nextSeq`
   and `OpSeq` are deleted; both push sites carry the invariant: array order
   is dispatch order; retirement flips visibility, never position.
+
+## 21. The final unit: reducer-only notifications + watermark validation
+
+Built as one unit per the owner's order, implemented directly by the
+orchestrator after repeated workflow-agent infrastructure stalls. Change A:
+`useSyncExternalStore` deleted; every wake is a reducer dispatch, so
+re-renders get exactly `useState`'s lanes (owner ruling), with
+`useIsPending`'s flip dispatched outside ambient transitions (the
+`useTransition` precedent) and the notify predicate targeting the COMMITTED
+tree (fold silence is per-subscriber comparison now — the suppression flag,
+`retireDraft({silent})`, and `confirmCommit`'s loudness decision are all
+deleted). Change B: `NodeVersion`/`link.version` deleted; validation is
+`dep.changedAtGraphChange > sub.validAtGraphChange` under three named
+ordering invariants (tick-then-stamp, real-changes-only + net-revert
+restore, freshen-then-stamp); links carry no validation state; promote
+skips history validation on `Computing` nodes (the one job edge stamps did
+that watermarks cannot — caught by T12). Falsified pre-change: the lane
+discriminator (timeout-origin write rendered in the microtask window under
+uSES: "expected '1' to be '0'"). Guards: mixed signal+setState atomicity
+(one render), burst = one render, render→attach layout-write repair,
+lazy-chain/cutoff/net-revert watermark pins. Full design argument in
+docs/final-unit.md. Gates: tsc clean; 290 tests; 1200-seed oracle twice
+(deterministic-green, subscriber model mirrors the notify predicate);
+battery at the pinned 23/2/1.

@@ -5,7 +5,7 @@
  *
  * Runs on stock React — no patches, no build flags. Transition worlds,
  * rebase, per-root committed views, and suspense behavior all ride public
- * React semantics (state updates, context, useSyncExternalStore).
+ * React semantics (state updates, context, effects).
  */
 export {
   registerReactSignals,

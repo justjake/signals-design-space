@@ -1,25 +1,34 @@
 /**
  * React hooks over the engine.
  *
- * The subscribing read hook owns TWO channels:
+ * ONE notification channel: every wake is a dispatch into the hook's own
+ * reducer, so every re-render gets its lane from the dispatch context —
+ * exactly useState's semantics. A base write in a click handler renders
+ * synchronously before paint; the same write from a timeout or a promise
+ * renders at default priority (and may land after a paint — flushSync is
+ * the escape hatch, as for any React state); a drafted write dispatches
+ * inside its owning transition and renders in that transition's passes.
  *
- * - Store channel (useSyncExternalStore): the snapshot is the node's store
- *   version — a stable identity, never a value — so equal resolutions never
- *   re-render and the store never "changes" during a transition. Drafts
- *   live in worlds, not in the store, which is what keeps React's
- *   transition machinery (holding, time slicing, interruption) intact.
+ * Two message kinds flow through the reducer:
  *
- * - Draft-lane channel (a per-hook reducer): when a transition writes a
- *   cell, exactly the subscribers of that cell (and of watched computeds
- *   over it) receive the draft id as a reducer dispatch inside the
- *   transition's own scope. React's update queues then decide visibility
- *   per pass: urgent passes skip the update (base state), the transition's
- *   passes include it, rebased retries recompute it. The render value
- *   resolves the hook's own world — no context value ever changes, so a
- *   transition re-renders only the components its writes actually touch.
- *   Dispatches are deduped per hook per render window (see `delivered`
- *   below): a burst of writes to one cell costs each subscriber one
- *   dispatch, not one per write.
+ * - Draft ids: when a transition writes a cell, exactly the subscribers of
+ *   that cell (and of watched computeds over it) receive the draft id,
+ *   dispatched inside the transition's own scope. React's update queues
+ *   decide visibility per pass: urgent passes skip the update (base
+ *   state), the transition's passes include it, rebased retries recompute
+ *   it. Deduped per hook per render window (see `delivered`).
+ *
+ * - REPAIR_WAKE: "re-render against current state". Sent by the
+ *   render-notify predicate (resolutionDiffers in host.ts) when the engine
+ *   notifies this subscriber AND re-rendering would actually show it
+ *   something different from what it rendered — the per-subscriber compare
+ *   that replaces both a store-version snapshot and any global silent-fold
+ *   suppression. Deduped per render window (see `repairPending`).
+ *
+ * Subscriptions attach in a passive effect (commit time). The gap between
+ * rendering and attaching — including hydration, whose first commit is just
+ * the widest such gap — is closed by correctSubscription, which replays
+ * missed drafts and compares the rendered resolution against current state.
  */
 import * as React from 'react';
 import {
@@ -42,8 +51,11 @@ import { getActiveTracer } from '../tracer.ts';
 import {
   correctSubscription,
   dispatchDraftWake,
+  dispatchUrgent,
   noteHookRender,
   renderPassIds,
+  resolutionDiffers,
+  REPAIR_WAKE,
   type ProviderRecord,
 } from './host.ts';
 import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts';
@@ -106,11 +118,11 @@ function unwrapState(st: DerivedState, world: World): unknown {
  * state. Both come from React state for THIS pass, so neither can run
  * ahead of it.
  *
- * The storeVersion snapshot is silent-fold-blind by design: render-pass
- * worlds already delivered a committed transition's values to every
- * subscriber, so no post-commit repair storm exists. The gap for
- * subscribers that attached late is closed by correctSubscription at
- * subscribe time.
+ * Silent folds cost no renders by construction: the render-notify
+ * predicate resolves in the world this hook RENDERED, and a fold whose
+ * values were already delivered through render-pass worlds compares equal.
+ * The gap for subscribers that attached late is closed by
+ * correctSubscription at subscribe time.
  */
 export function useValue<T>(x: Readable<T>): T {
   const node = nodeOf(x);
@@ -144,24 +156,46 @@ export function useValue<T>(x: Readable<T>): T {
     value: undefined,
     live: false,
   });
-  const subscribe = React.useCallback(
-    (cb: () => void) => {
-      const off = observeNode(node, cb, deliver);
-      // The subscription attaches at commit, after the render that created
-      // it: repair anything that happened in between (live drafts this hook
-      // missed, silent folds the storeVersion snapshot cannot see).
-      if (rendered.current.live) {
-        correctSubscription(node, rendered.current, scope, deliver, wake);
-      }
-      return off;
-    },
-    [node, scope, deliver, wake],
-  );
-  // The store snapshot: storeVersion changes exactly when committed-view
-  // subscribers must re-render (silent draft folds stay still — their
-  // values arrived through render-pass worlds).
-  const versionSnap = React.useCallback(() => node.storeVersion, [node]);
-  React.useSyncExternalStore(subscribe, versionSnap, versionSnap);
+  // Base-channel dedup: at most one REPAIR_WAKE per render window, cleared
+  // with `delivered` under the same reasoning (a pending dispatch already
+  // guarantees a re-render against current state).
+  const repairPending = React.useRef(false);
+  repairPending.current = false;
+  // What the COMMITTED tree shows for this hook: copied from the render in
+  // a layout effect, so it advances exactly at commits. This — not the
+  // latest render — is the repair channel's target: a held transition pass
+  // is speculative, and everything about it (its values, its late appends,
+  // its rebases) belongs to the draft channel and React's own pass
+  // machinery. The committed stash is what makes fold silence exact (a
+  // carrier's committed world resolves the folded value it already shows)
+  // and keeps a live draft's appends from double-dispatching repairs.
+  const committedStash = React.useRef<{ ids: readonly DraftId[]; value: unknown; live: boolean }>({
+    ids: NO_IDS,
+    value: undefined,
+    live: false,
+  });
+  // Render-notify delivery: the engine says "something over your sources
+  // moved" (a base wave, a poke, a fold); the predicate answers "would the
+  // committed tree show anything different if re-rendered now?". The
+  // dispatch inherits the ambient lane — exactly useState's semantics for
+  // the write that caused it.
+  const onNotify = React.useCallback(() => {
+    const stash = committedStash.current;
+    if (!stash.live || repairPending.current) return;
+    if (!resolutionDiffers(node, stash)) return;
+    repairPending.current = true;
+    wake(REPAIR_WAKE);
+  }, [node, wake]);
+  // Subscribe in a passive effect (commit time) — the constant-snapshot
+  // remnant of useSyncExternalStore is exactly this effect, so the effect
+  // is used directly. correctSubscription closes the render→attach gap.
+  React.useEffect(() => {
+    const off = observeNode(node, onNotify, deliver);
+    if (rendered.current.live) {
+      correctSubscription(node, rendered.current, scope, deliver, wake);
+    }
+    return off;
+  }, [node, scope, deliver, wake, onNotify]);
   const world = worldOf(ids);
   const st = resolveState(node, world);
   const value = unwrapState(st, world);
@@ -169,6 +203,14 @@ export function useValue<T>(x: Readable<T>): T {
   stash.ids = ids;
   stash.value = value;
   stash.live = true;
+  // Commit-sync the committed stash (no deps: runs on every commit, with
+  // this render's resolution; a suspended render never reaches it).
+  React.useLayoutEffect(() => {
+    const c = committedStash.current;
+    c.ids = ids;
+    c.value = value;
+    c.live = true;
+  });
   traceDelivery(node, value);
   return value as T;
 }
@@ -194,9 +236,20 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 export function useIsPending(x: AnyReadable): boolean {
   const node = nodeOf(x);
   noteHookRender(requireScope('useIsPending'), null);
-  const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
-  const snap = React.useCallback(() => isPendingPassive(node, null), [node]);
-  return React.useSyncExternalStore(subscribe, snap, () => false);
+  const [, force] = React.useReducer((c: number) => c + 1, 0);
+  const pending = isPendingPassive(node, null);
+  const shown = React.useRef(pending);
+  shown.current = pending;
+  // Predicate wake: dispatch only when the boolean this hook shows would
+  // actually flip (pokes and waves over-notify by design).
+  const onNotify = React.useCallback(() => {
+    // The flip escapes any ambient transition: an indicator scheduled
+    // inside the transition it indicates would be held by it (React's own
+    // useTransition schedules isPending before the scope for this reason).
+    if (isPendingPassive(node, null) !== shown.current) dispatchUrgent(force);
+  }, [node]);
+  React.useEffect(() => observeNode(node, onNotify), [node, onNotify]);
+  return pending;
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
@@ -205,12 +258,16 @@ export function useCommitted<T>(x: Readable<T>): T {
   const scope = requireScope('useCommitted');
   noteHookRender(scope, null);
   const container = scope.container ?? undefined;
-  const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
-  const committedSnap = React.useCallback(
-    () => committedSnapshot(node, container),
-    [node, container],
-  );
-  const snap = React.useSyncExternalStore(subscribe, committedSnap, committedSnap);
+  const [, force] = React.useReducer((c: number) => c + 1, 0);
+  const snap = committedSnapshot(node, container);
+  const shown = React.useRef(snap);
+  shown.current = snap;
+  // Predicate wake: the committed snapshot has stable identity (values, or
+  // a stable error box), so Object.is is the whole compare.
+  const onNotify = React.useCallback(() => {
+    if (!Object.is(committedSnapshot(node, container), shown.current)) force();
+  }, [node, container]);
+  React.useEffect(() => observeNode(node, onNotify), [node, onNotify]);
   if (isErrorBox(snap)) throw snap.error;
   return snap as T;
 }
