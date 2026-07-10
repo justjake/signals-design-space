@@ -380,7 +380,9 @@ describe('fx2 extras', () => {
 
 	test('useCommitted tracks this root screen, urgent and transitional', async () => {
 		const a = signal(0)
+		let renders = 0
 		function App() {
+			renders++
 			const now = useValue(a)
 			const shown = useCommitted(a)
 			return (
@@ -391,15 +393,20 @@ describe('fx2 extras', () => {
 		}
 		const { container } = await h.mount(<App />)
 		expect(text(container)).toBe('n:0;c:0;')
+		expect(renders).toBe(1)
 		await act(() => {
 			a.set(1)
 		})
 		expect(text(container)).toBe('n:1;c:1;')
+		expect(renders).toBe(2)
 		await act(() => {
 			startTransitionWrite(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('n:2;c:2;')
+		// The transition renders the draft, then confirmCommit advances the
+		// root-local committed screen for useCommitted.
+		expect(renders).toBe(4)
 	})
 
 	test('useAtom is component-owned; useComputed derives; useSignalEffect observes commits', async () => {

@@ -744,7 +744,7 @@ function reconcileStates(
  * (deriveds) into memo records per (node, world signature). */
 export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	assertSignalReadAllowed()
-	if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.ComputingMask) !== 0) {
+	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
 	if (world.drafts.length === 0) {

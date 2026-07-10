@@ -1056,10 +1056,7 @@ export function assertSignalWriteAllowed(): void {
 	if (writesForbidden !== null) {
 		throw new WriteForbiddenError(writesForbidden)
 	}
-	if (
-		FORBID_WRITE_FROM_COMPUTED &&
-		activeEvaluation !== null
-	) {
+	if (FORBID_WRITE_FROM_COMPUTED && activeEvaluation !== null) {
 		throw new WriteForbiddenError('writes inside computeds are forbidden')
 	}
 }
