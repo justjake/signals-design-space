@@ -12,6 +12,7 @@ import {
 	read,
 	setRenderWorldProvider,
 	signal,
+	untracked,
 	type Computed,
 	type Signal,
 } from '../src/index.ts'
@@ -323,6 +324,63 @@ describe('computeds across worlds', () => {
 		expect(stateIn(c, [id])).toEqual(valueState(6))
 		expect(seen).toEqual([undefined, 2])
 		retireDraft(id)
+	})
+
+	test('a draft evaluation cannot read itself through get() or latest()', () => {
+		const recurse = signal(false)
+		let direct!: Computed<number>
+		direct = computed(() => (recurse.get() ? direct.get() : 1))
+		let newest!: Computed<number>
+		newest = computed(() => (recurse.get() ? latest(newest) : 1))
+		expect(direct.get()).toBe(1)
+		expect(newest.get()).toBe(1)
+
+		const id = inDraft(() => recurse.set(true))
+		expect(() => latest(direct)).toThrow(/cycle detected in computed/)
+		expect(() => latest(newest)).toThrow(/cycle detected in computed/)
+		discardDraft(id)
+	})
+
+	test('committed() cannot select a root from inside a computed', () => {
+		const source = signal(1)
+		const root = {}
+		const reader = computed(() => committed(source, root))
+		expect(() => reader.get()).toThrow(/committed\(\).*inside a computed/)
+		const untrackedReader = computed(() => untracked(() => committed(source, root)))
+		expect(() => untrackedReader.get()).toThrow(/committed\(\).*inside a computed/)
+	})
+
+	test('committed() cannot select a root during a draft evaluation', () => {
+		const branch = signal(false)
+		const source = signal(1)
+		const root = {}
+		const reader = computed(() => (branch.get() ? committed(source, root) : source.get()))
+		expect(reader.get()).toBe(1)
+		const id = inDraft(() => branch.set(true))
+		expect(() => latest(reader)).toThrow(/committed\(\).*inside a computed/)
+		discardDraft(id)
+	})
+
+	test('committed() self-read is a cycle in every root', () => {
+		const rootA = {}
+		const rootB = {}
+		let sameRoot!: Computed<number>
+		sameRoot = computed(() => committed(sameRoot, rootA))
+		let otherRoot!: Computed<number>
+		otherRoot = computed(() => committed(otherRoot, rootB))
+		expect(() => sameRoot.get()).toThrow(/cycle detected in computed/)
+		expect(() => otherRoot.get()).toThrow(/cycle detected in computed/)
+	})
+
+	test('a computed cannot read its cached value from another world', () => {
+		const branch = signal(false)
+		const committedRoot = {}
+		let self!: Computed<number>
+		self = computed(() => (branch.get() ? committed(self, committedRoot) : 1))
+		expect(self.get()).toBe(1)
+		const id = inDraft(() => branch.set(true))
+		expect(() => latest(self)).toThrow(/cycle detected in computed/)
+		discardDraft(id)
 	})
 
 	test('writes are also forbidden during draft-world computed evaluation', () => {

@@ -12,6 +12,7 @@ import {
 	read,
 	serializeAtomState,
 	signal,
+	untracked,
 	update,
 } from '../src/index.ts'
 import { FORBID_WRITE_FROM_COMPUTED, observeNode } from '../src/graph.ts'
@@ -151,6 +152,26 @@ describe('derived policy and APIs', () => {
 		expect(seen).toEqual([undefined, 2])
 	})
 
+	test('a computed cannot read itself', () => {
+		let self!: ReturnType<typeof computed<number>>
+		self = computed(() => self.get())
+		expect(() => self.get()).toThrow(/cycle detected in computed/)
+	})
+
+	test('a previously settled computed still cannot read itself', () => {
+		const recurse = signal(false)
+		let self!: ReturnType<typeof computed<number>>
+		self = computed((_use, previous) => {
+			if (recurse.get()) {
+				return self.get()
+			}
+			return previous ?? 1
+		})
+		expect(self.get()).toBe(1)
+		recurse.set(true)
+		expect(() => self.get()).toThrow(/cycle detected in computed/)
+	})
+
 	test('updaters cannot read or write signals', () => {
 		const a = signal(1)
 		const b = signal(10)
@@ -173,6 +194,18 @@ describe('derived policy and APIs', () => {
 			target.set(1)
 			return 1
 		})
+		expect(() => writer.get()).toThrow(/writes inside computeds are forbidden/)
+		expect(target.get()).toBe(0)
+	})
+
+	test('untracked does not bypass computed write policy', () => {
+		const target = signal(0)
+		const writer = computed(() =>
+			untracked(() => {
+				target.set(1)
+				return 1
+			}),
+		)
 		expect(() => writer.get()).toThrow(/writes inside computeds are forbidden/)
 		expect(target.get()).toBe(0)
 	})

@@ -116,17 +116,21 @@ export const enum Flag {
 	Watched = 0b0100_0000_0000,
 	/** Watcher sits in a flush queue. */
 	Scheduled = 0b1000_0000_0000,
-	/** Derived evaluation in progress (re-entry = a cycle). */
+	/** Canonical derived evaluation in progress. */
 	Computing = 0b1_0000_0000_0000,
 	/** Derived reads route through the active draft world. Raw graph-level
 	 * deriveds intentionally lack this capability. */
 	WorldAware = 0b10_0000_0000_0000,
+	/** Draft-world derived evaluation in progress. */
+	DraftComputing = 0b100_0000_0000_0000,
 
 	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
 	StaleMask = StaleCheck | StaleDirty,
 	/** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
 	 * state — how DerivedState views are read (see asyncs.ts). */
 	AsyncMask = AsyncError | AsyncSuspended,
+	/** Either kind of derived evaluation; any re-entry is a cycle. */
+	ComputingMask = Computing | DraftComputing,
 }
 /** The stored per-node word: a composition of Flag bits. */
 export type Flags = Brand<number, 'Flags'>
@@ -201,6 +205,9 @@ function newEvalPass(): EvalPass {
 	return evalPass
 }
 let activeConsumer: ReactiveNode | null = null
+/** The computed body executing now, independent of dependency tracking.
+ * untracked() clears activeConsumer but must not bypass computed policies. */
+export let activeEvaluation: DerivedNode<unknown> | null = null
 let batchDepth = 0
 
 /** Bumped and read by the engine layer; here so cells can report writes. */
@@ -1050,8 +1057,7 @@ export function assertSignalWriteAllowed(): void {
 	}
 	if (
 		FORBID_WRITE_FROM_COMPUTED &&
-		activeConsumer !== null &&
-		(activeConsumer.flags & Flag.KindDerived) !== 0
+		activeEvaluation !== null
 	) {
 		throw new WriteForbiddenError('writes inside computeds are forbidden')
 	}
@@ -1193,12 +1199,14 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 }
 
 function recompute(node: DerivedNode<unknown>): void {
-	if ((node.flags & Flag.Computing) !== 0) {
+	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
 	node.flags |= Flag.Computing
 	const prevConsumer = activeConsumer
+	const prevEvaluation = activeEvaluation
 	activeConsumer = node
+	activeEvaluation = node
 	const myPass = newEvalPass()
 	node.depsTail = undefined
 	// The validation reading is taken at the PRE-eval clock: if the evaluation
@@ -1221,6 +1229,7 @@ function recompute(node: DerivedNode<unknown>): void {
 		// A nested eval advanced the pass id; restore ours so trimming is exact.
 		evalPass = myPass
 		activeConsumer = prevConsumer
+		activeEvaluation = prevEvaluation
 		trimDeps(node)
 		node.flags &= ~Flag.Computing
 	}
@@ -1309,6 +1318,12 @@ export function untracked<T>(fn: () => T): T {
 
 export function getActiveConsumer(): ReactiveNode | null {
 	return activeConsumer
+}
+
+export function setActiveEvaluation(node: DerivedNode<unknown> | null): DerivedNode<unknown> | null {
+	const prev = activeEvaluation
+	activeEvaluation = node
+	return prev
 }
 
 export function isUninitialized(v: unknown): boolean {

@@ -45,6 +45,7 @@ import {
 	pokeDraftWatchers,
 	runUpdater,
 	setCurrentCause,
+	setActiveEvaluation,
 	setWritesForbidden,
 	startBatch,
 	endBatch,
@@ -752,6 +753,9 @@ function reconcileStates(
  * (deriveds) into memo records per (node, world signature). */
 export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	assertSignalReadAllowed()
+	if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.ComputingMask) !== 0) {
+		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
+	}
 	if (world.drafts.length === 0) {
 		untracked(() => {
 			if ((node.flags & Flag.KindCell) !== 0) {
@@ -814,23 +818,12 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	return state
 }
 
-/** Guards against a computed reading itself within one world. */
-const draftEvalStack = new Map<ReactiveNode, Set<string>>()
-
 function draftEvaluate(
 	node: DerivedNode<unknown>,
 	world: World,
 	prev: DerivedState | undefined,
 	certificate: Certificate,
 ): DerivedState {
-	let sigs = draftEvalStack.get(node)
-	if (sigs?.has(world.sig)) {
-		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
-	}
-	if (sigs === undefined) {
-		draftEvalStack.set(node, (sigs = new Set()))
-	}
-	sigs.add(world.sig)
 	// Suspense retries must observe one stable thenable per pending span.
 	const suspension =
 		prev !== undefined &&
@@ -858,6 +851,8 @@ function draftEvaluate(
 	currentPark = worldUse
 	activeCertificate = certificate
 	certificate.count = 0
+	node.flags |= Flag.DraftComputing
+	const prevEvaluation = setActiveEvaluation(node)
 	try {
 		const previous = isUninitialized(node.value) ? undefined : node.value
 		const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
@@ -882,10 +877,8 @@ function draftEvaluate(
 		if (FORBID_WRITE_FROM_COMPUTED) {
 			setWritesForbidden(prevWritesForbidden)
 		}
-		sigs.delete(world.sig)
-		if (sigs.size === 0) {
-			draftEvalStack.delete(node)
-		}
+		setActiveEvaluation(prevEvaluation)
+		node.flags &= ~Flag.DraftComputing
 	}
 }
 

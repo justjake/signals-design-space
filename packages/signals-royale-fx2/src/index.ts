@@ -21,6 +21,7 @@ import {
 	Flag,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
+	activeEvaluation,
 	flushLifetimeTransitions,
 	getActiveConsumer,
 	isUninitialized,
@@ -238,6 +239,14 @@ export function latest<T>(x: Readable<T>): T {
 /** What is on screen: per-root when a container is given. Never subscribes. */
 export function committed<T>(x: Readable<T>, container?: object): T {
 	const node = nodeOf(x)
+	if (activeEvaluation === node) {
+		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
+	}
+	if (activeEvaluation !== null) {
+		throw new Error(
+			'committed() cannot be read inside a computed; read the dependency normally or use the previous argument for self history',
+		)
+	}
 	const st = resolveState(node, committedWorldOf(container))
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		throw (st.throwable as ErrorBox).error
