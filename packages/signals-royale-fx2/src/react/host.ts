@@ -16,7 +16,7 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
-import { Flag, NO_EVENT, pokeDraftWatchers, type ReactiveNode } from '../graph.ts';
+import { Flag, isUninitialized, NO_EVENT, pokeDraftWatchers, type ReactiveNode } from '../graph.ts';
 import {
   type Draft,
   type DraftId,
@@ -238,6 +238,28 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
   }
 }
 
+/**
+ * Dispatch outside any ambient transition, so the update is scheduled with
+ * the URGENT semantics of its call site rather than joining a transition.
+ * Mirrors React's own useTransition, whose isPending update is scheduled
+ * before the transition scope — an indicator must not be held hostage by
+ * the very transition it indicates.
+ */
+export function dispatchUrgent(dispatch: () => void): void {
+  const internals = sharedInternals();
+  const prev = internals.T;
+  if (prev == null) {
+    dispatch();
+    return;
+  }
+  internals.T = null;
+  try {
+    dispatch();
+  } finally {
+    internals.T = prev;
+  }
+}
+
 /** A repair wake: never a live draft id (draft ids start at 1), so the
  * reducer prunes it to a pure revision bump — an urgent re-render against
  * whatever the queues say the world is now. */
@@ -262,8 +284,8 @@ interface RenderedResolution {
  *   scope never carried the draft (stock parity — a new root never holds
  *   another root's pending updates), and the retirement fold is loud for
  *   exactly that case;
- * - the draft already folded silently (storeVersion snapshots stay still by
- *   design) and base state moved past what was rendered — repair urgently.
+ * - base state moved past what this subscriber rendered (including a fold
+ *   that completed in the gap) — repair urgently.
  *
  * `deliver` is the hook's draft-lane channel: it dedupes against the ids
  * already dispatched since the hook's last render (a correction shares that
@@ -283,10 +305,31 @@ export function correctSubscription(
     if (audience === undefined || !audience.has(scope)) continue;
     deliver(id);
   }
+  if (resolutionDiffers(node, rendered)) dispatch(REPAIR_WAKE);
+}
+
+/**
+ * The render-notify predicate: would re-rendering show this subscriber
+ * something different from what it rendered? Resolves in the world the
+ * subscriber RENDERED (its own reducer ids), so speculative activity in
+ * worlds it does not carry compares equal — that is what keeps a silent
+ * fold, a foreign transition's writes, and an equality-cutoff wave from
+ * costing renders, with no global suppression state anywhere.
+ *
+ * Async parity mirrors the unwrap rule: an error is always news; a
+ * suspension with settled history serves its stale value, so it wakes only
+ * when that stale value differs from what was rendered; a never-settled
+ * suspension is always news (the subscriber must suspend).
+ */
+export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResolution): boolean {
   const st = resolveState(node, worldOf(rendered.ids));
-  if ((st.flags & Flag.AsyncMask) === 0 && !Object.is(st.value, rendered.value)) {
-    dispatch(REPAIR_WAKE);
+  const asyncBits = st.flags & Flag.AsyncMask;
+  if (asyncBits === Flag.AsyncError) return true;
+  if (asyncBits === Flag.AsyncSuspended) {
+    if (isUninitialized(st.value)) return true;
+    return !Object.is(st.value, rendered.value);
   }
+  return !Object.is(st.value, rendered.value);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,40 +400,28 @@ export function registerProvider(p: ProviderRecord): () => void {
   };
 }
 
-/** True when every currently mounted scope carried this draft, i.e. every
- * scoped subscriber already received its values through render-pass worlds
- * and the fold needs no repairs. */
-function foldReachedEveryScope(id: DraftId): boolean {
-  const audience = draftAudience.get(id);
-  if (audience === undefined) return false;
-  for (const p of providers) {
-    if (!audience.has(p)) return false;
-  }
-  return true;
-}
-
 /** A provider committed a render pass whose world contained these drafts. */
 export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void {
   if (p.container !== null) setCommittedWorld(p.container, ids);
   // Per-root committed views changed; poke the draft watchers of every cell
-  // the committed drafts touched (the useValue crowd bails on equal
-  // snapshots, so this is cheap). No engine event exists for a root commit,
-  // so the poke carries no cause.
+  // the committed drafts touched (the useValue crowd bails via the notify
+  // predicate when its resolution is unchanged, so this is cheap). No
+  // engine event exists for a root commit, so the poke carries no cause.
   for (const draft of worldOf(ids).drafts) {
     for (const cell of draft.cells) pokeDraftWatchers(cell, NO_EVENT);
   }
   for (const id of ids) {
     const recipients = draftRecipients.get(id);
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
-      const silent = foldReachedEveryScope(id);
       forgetDraft(id);
-      // Fold loudness: silent when every mounted scope carried this draft —
-      // each scope's render passes already delivered the values, so no
-      // subscriber is owed a repair render. Loud otherwise: a scope that
-      // never carried the draft (mounted mid-transition) has subscribers
-      // still showing pre-draft values, and the fold's storeVersion bump is
-      // what re-renders them into the folded state.
-      retireDraft(id, { silent });
+      // Fold loudness is per subscriber now: the fold's writes notify every
+      // subscriber over the touched cells, and each one's render-notify
+      // predicate compares its rendered value against the folded
+      // resolution. Subscribers whose render passes carried the draft
+      // compare equal and stay quiet; subscribers under a scope that never
+      // carried it (mounted mid-transition) see the folded values as new
+      // and re-render into them.
+      retireDraft(id);
     }
   }
 }

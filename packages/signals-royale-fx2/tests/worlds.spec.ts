@@ -84,22 +84,25 @@ describe('draft visibility', () => {
     expect(read(a)).toBe(5);
   });
 
-  test('a silent fold keeps the store version still; a loud fold bumps it', () => {
-    // Fold loudness is the whole storeVersion contract: silent folds carry
-    // values that render-pass worlds already delivered to every subscriber,
-    // so the snapshot must not move (no repair-render storm at transition
-    // commit); loud folds are for drafts nothing rendered, so subscribers
-    // must re-render.
+  test('fold loudness is per subscriber: rendered-world resolutions decide who re-renders', () => {
+    // There is no global silent/loud fold state: at retire, the fold's
+    // writes notify subscribers, and each re-renders only if resolving its
+    // OWN rendered world now differs from what it rendered (the bindings'
+    // notify predicate). This pins the engine half of that contract: a
+    // carrier's world resolves the SAME value before and after the fold
+    // (retired ids normalize out), while the base world's resolution moves.
     const a = signal(1);
-    const silentId = inDraft(() => a.set(9));
-    const before = nodeOf(a).storeVersion;
-    retireDraft(silentId, { silent: true });
+    const id = inDraft(() => a.set(9));
+    // Before the fold: the carrier rendered 9 from its world; base shows 1.
+    expect(resolveState(nodeOf(a), worldOf([id])).value).toBe(9);
+    expect(resolveState(nodeOf(a), worldOf([])).value).toBe(1);
+    retireDraft(id);
     expect(read(a)).toBe(9); // the fold landed in base state
-    expect(nodeOf(a).storeVersion).toBe(before); // and the snapshot stayed still
-    const loudId = inDraft(() => a.set(11));
-    retireDraft(loudId);
-    expect(read(a)).toBe(11);
-    expect(nodeOf(a).storeVersion).toBeGreaterThan(before); // loud: re-render due
+    // Carrier's world still resolves 9 — equal to what it rendered: silent.
+    expect(resolveState(nodeOf(a), worldOf([id])).value).toBe(9);
+    // The base world resolves 9 ≠ the 1 an unaware subscriber rendered:
+    // that subscriber is owed a repair render.
+    expect(resolveState(nodeOf(a), worldOf([])).value).toBe(9);
   });
 });
 
@@ -140,7 +143,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     a.set(5); // equality cutoff: base state stays 5, no propagation
     expect(stateIn(a, [d.id])).toEqual(valueState(5)); // ...but the replay rebased
     expect(wakes).toEqual([d.id, d.id]); // and the audience heard about it
-    retireDraft(d.id, { silent: true });
+    retireDraft(d.id);
     expect(read(a)).toBe(5);
     unsub();
   });
@@ -217,7 +220,7 @@ describe('computeds across worlds', () => {
     expect(read(c)).toBe(2); // establish the watched a -> c edge
     const id = inDraft(() => a.set(9));
     expect(flips).toContain(true); // the append reached the probe
-    retireDraft(id, { silent: true });
+    retireDraft(id);
     expect(flips[flips.length - 1]).toBe(false); // and so did the fold
     expect(read(c)).toBe(18);
     unsub();

@@ -4,10 +4,11 @@
  * Design notes
  *
  * - Push-pull: writes push a small "dirty" wave through WATCHED edges only;
- *   reads pull values and validate caches by comparing per-edge version
- *   numbers. A computed recomputes only when some dependency's version
- *   actually advanced, which is what gives exact evaluation counts and
- *   equality cutoff.
+ *   reads pull values and validate caches by comparing clock readings.
+ *   A computed recomputes only when some dependency actually changed after
+ *   the computed's last validation (dep.changedAtGraphChange strictly
+ *   greater than sub.validAtGraphChange), which is what gives exact
+ *   evaluation counts and equality cutoff.
  * - Watched vs unwatched: a computed is linked into its dependencies'
  *   subscriber lists only while something observes it (an effect chain, a
  *   React subscription, or another watched computed). An unwatched computed
@@ -19,17 +20,19 @@
  *   the disposer without calling it; a FinalizationRegistry on the disposer
  *   reclaims those.
  *
- * Counter taxonomy — every numeric counter is one of three kinds, and the
+ * Counter taxonomy — every numeric counter is one of two kinds, and the
  * name says which:
  *
- * - …ChangeClock: monotone logical clock; readings are compared for
- *   currency (validAt<Clock> === clock means nothing relevant happened
- *   since).
+ * - …ChangeClock: monotone logical clock; ticks when its event class
+ *   happens. Records never hold private counters — they hold READINGS of a
+ *   clock: validAt<Clock> ("proven current as of") and changedAt<Clock>
+ *   ("last real change"). Every staleness question is one comparison:
+ *   dep.changedAt<Clock> > sub.validAt<Clock> means changed-since-validated
+ *   (strictly greater — equal readings mean that very validation already
+ *   consumed the change).
  * - …Pass: identity of a dynamic scope (an evaluation, a walk); saved and
  *   restored on nesting, so NEVER compare for order — equality means
  *   membership in the pass now running.
- * - valueVersion (node/link pair): per-record change counter compared
- *   record-to-record.
  */
 
 import type { ErrorBox, Suspension } from './asyncs.ts';
@@ -48,14 +51,10 @@ export type Brand<T, B extends string> = T & { readonly [brand]?: B };
 /** Monotone logical clock: ticks on every base-state change — writes AND
  * settlements. Validation shortcut for unwatched reads. */
 export type GraphChangeClock = Brand<number, 'GraphChangeClock'>;
-/** Per-node value generation; an edge is fresh while its snapshot matches. */
-export type NodeVersion = Brand<number, 'NodeVersion'>;
 export type TraceEventId = Brand<number, 'TraceEventId'>;
 /** Identity of one evaluation pass; monotonic, never reused (see
  * evalPassCounter). */
 export type EvalPass = Brand<number, 'EvalPass'>;
-/** The useSyncExternalStore snapshot (see ReactiveNode.storeVersion). */
-export type StoreVersion = Brand<number, 'StoreVersion'>;
 /** Identity of one poke walk; monotonic, never reused, so no per-walk
  * clearing is needed (same discipline as EvalPass). */
 export type PokePass = Brand<number, 'PokePass'>;
@@ -145,8 +144,6 @@ export type Flags = Brand<number, 'Flags'>;
 export interface Link {
   dep: ReactiveNode;
   sub: ReactiveNode;
-  /** dep.version captured when sub last used this edge's value. */
-  version: NodeVersion;
   nextDep: Link | undefined;
   prevSub: Link | undefined;
   nextSub: Link | undefined;
@@ -160,7 +157,17 @@ export interface Link {
 
 export interface ReactiveNode {
   flags: Flags;
-  version: NodeVersion;
+  /**
+   * Reading of graphChangeClock at this node's last REAL value change.
+   * Equality-cutoff recomputes do not advance it, and a batch net-revert
+   * restores it — so dep.changedAtGraphChange > sub.validAtGraphChange is
+   * exactly "changed since that subscriber last validated". Stamped with
+   * the CURRENT clock at change time (writes tick the clock first, then
+   * stamp; recomputes stamp without ticking — a recompute is not a base
+   * event, and any consumer with an older validAt reading still compares
+   * greater).
+   */
+  changedAtGraphChange: GraphChangeClock;
   /**
    * The value-plane companion to the AsyncError/AsyncSuspended flags:
    * the ErrorBox to rethrow or the Suspension being awaited; null in the
@@ -184,16 +191,6 @@ export interface ReactiveNode {
   label: string | undefined;
   /** World-resolution memos, managed by worlds.ts; null while quiescent. */
   worldMemos: Map<string, unknown> | null;
-  /**
-   * The useSyncExternalStore snapshot; bump = subscribers re-render.
-   * Advances exactly when store subscribers must re-render — urgent
-   * base-state changes, settlements, rollbacks. Draft folds advance it ONLY
-   * when no render pass carried the draft (see worlds.retireDraft): folds
-   * whose values were already delivered through render-pass worlds stay
-   * silent here, which is what keeps a transition commit from triggering a
-   * synchronous repair render of every subscriber.
-   */
-  storeVersion: StoreVersion;
   /** Reading of the last poke walk that reached this node; equality with
    * the running pokePass means that walk already visited it. */
   pokePass: PokePass;
@@ -275,6 +272,9 @@ export interface DerivedNode<T> extends ReactiveNode {
 }
 
 export interface WatcherNode extends ReactiveNode {
+  /** Reading at this watcher's last validation or run — the same currency
+   * gate deriveds use (see DerivedNode.validAtGraphChange). */
+  validAtGraphChange: GraphChangeClock;
   fn: (() => void | (() => void)) | undefined;
   cleanup: (() => void) | undefined;
   /** Owner scope; disposing the scope disposes the watcher. */
@@ -304,7 +304,7 @@ export function makeCell<T>(
   const lazyInit = typeof initial === 'function';
   return {
     flags: Flag.KindCell,
-    version: 1,
+    changedAtGraphChange: 0,
     throwable: null,
     subs: undefined,
     subsTail: undefined,
@@ -320,7 +320,6 @@ export function makeCell<T>(
     lifetimeCleanup: undefined,
     lifetimeActive: false,
     worldMemos: null,
-    storeVersion: 1,
     pokePass: 0,
   };
 }
@@ -331,7 +330,7 @@ export function makeDerived<T>(
 ): DerivedNode<T> {
   return {
     flags: Flag.KindDerived | Flag.StaleDirty,
-    version: 0,
+    changedAtGraphChange: 0,
     throwable: null,
     subs: undefined,
     subsTail: undefined,
@@ -345,7 +344,6 @@ export function makeDerived<T>(
     equals: opts?.equals ?? defaultEquals,
     validAtGraphChange: 0,
     worldMemos: null,
-    storeVersion: 1,
     pokePass: 0,
   };
 }
@@ -380,27 +378,41 @@ function unlinkFromSubs(link: Link): void {
 /**
  * Promote: first observer arrives. Links the dep closure depth-first (cycles
  * are impossible — dep edges exist only after an evaluation, and cyclic
- * evaluation throws) and version-validates each edge once, because the node
- * spent its unwatched span with no back-edges: writes moved dependency
- * versions without any push mark reaching it, so its Clean flags may be
- * lies. The version match alone is insufficient — a stale unwatched dep has
- * not recomputed, so its own version cannot have moved even when its inputs
- * did; the dep's post-promote staleness carries that information up. Where
- * some edge fails validation, a Clean node is seeded StaleCheck, restoring the
- * watched tier's invariant that flags are trustworthy (the stale-cover
- * invariant: for every watched edge, dep stale ⇒ sub stale or scheduled).
+ * evaluation throws) and reading-validates each dep once, because the node
+ * spent its unwatched span with no back-edges: dependencies changed without
+ * any push mark reaching it, so its Clean flags may be lies. The reading
+ * comparison alone is insufficient — a stale unwatched dep has not
+ * recomputed, so its changedAt reading cannot have moved even when its
+ * inputs did; the dep's post-promote staleness carries that information up.
+ * Where some dep fails validation, a Clean node is seeded StaleCheck,
+ * restoring the watched tier's invariant that flags are trustworthy (the
+ * stale-cover invariant: for every watched edge, dep stale ⇒ sub stale or
+ * scheduled).
  */
 export function addObserver(node: ReactiveNode): void {
   node.observerCount++;
   if (node.observerCount === 1) {
     node.flags |= Flag.Watched;
     if ((node.flags & Flag.KindDerived) !== 0) {
+      // A Computing node is promoted mid-evaluation (a consumer subscribed
+      // from inside the running body). Skip history validation: the
+      // watermark predates this evaluation, so deps the eval just re-read
+      // would compare as changed-since and seed a false StaleCheck. The
+      // running eval is the validator — its finally stamps fresh staleness
+      // and a current validAt reading.
+      const validate = (node.flags & Flag.Computing) === 0;
+      const validAt = (node as DerivedNode<unknown>).validAtGraphChange;
       let invalid = false;
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         linkIntoSubs(l);
         const dep = l.dep;
         addObserver(dep);
-        if (l.version !== dep.version || (dep.flags & Flag.StaleMask) !== 0) invalid = true;
+        if (
+          validate &&
+          (dep.changedAtGraphChange > validAt || (dep.flags & Flag.StaleMask) !== 0)
+        ) {
+          invalid = true;
+        }
       }
       if (invalid && (node.flags & Flag.StaleMask) === 0) node.flags |= Flag.StaleCheck;
     }
@@ -508,7 +520,7 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
     // land at the tail), so an evalPass match means the edge already exists and
     // is inside the kept prefix — return it instead of double-registering
     // the observer. Unwatched edges never enter subs lists, so unwatched
-    // re-reads keep the tolerated duplicate forward edges (version-
+    // re-reads keep the tolerated duplicate forward edges (reading-
     // consistent, forward-only garbage).
     const last = dep.subsTail;
     if (last !== undefined && last.sub === sub && last.evalPass === evalPass) return last;
@@ -516,7 +528,6 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
   const link: Link = {
     dep,
     sub,
-    version: 0,
     nextDep: next,
     prevSub: undefined,
     nextSub: undefined,
@@ -602,29 +613,6 @@ let renderNotifyCount = 0;
  * mid-iteration. */
 let spareRenderNotify: Array<ReactiveNode | undefined> | null = [];
 
-/** While true, base-state changes do not advance storeVersion (a silent
- * draft fold: render-pass worlds already delivered these values). */
-let storeVersionSuppressed = false;
-
-export function withSuppressedStoreVersion<T>(fn: () => T): T {
-  const prev = storeVersionSuppressed;
-  storeVersionSuppressed = true;
-  try {
-    return fn();
-  } finally {
-    storeVersionSuppressed = prev;
-  }
-}
-
-/** Advance the store version bypassing suppression. Suppression exists for
- * exactly one case — the silent draft fold, whose values every subscriber
- * already received through render-pass worlds. Thenable settlement and draft
- * rollback (the two callers) carry information no render pass has shown, so
- * a suppressed window must never swallow their bumps. */
-export function bumpStoreVersionLoud(node: ReactiveNode): void {
-  node.storeVersion++;
-}
-
 /** Route a watcher into its flush queue by capability bit. Scope anchors
  * carry neither bit and are never scheduled (they track no dependencies). */
 function scheduleWatcher(w: WatcherNode): void {
@@ -644,20 +632,26 @@ function scheduleWatcher(w: WatcherNode): void {
 // ---------------------------------------------------------------------------
 // The graph walks. Contract matrix:
 //
-//                  | marks       | bumps         | schedules | schedules   | dedup
-//                  | staleness?  | storeVersion? | effects?  | render      | mechanism
-//                  |             |               |           | subscribers?|
-// propagateWave    | StaleCheck  | deriveds, at  | yes       | yes         | the Clean→StaleCheck
-//                  | on Clean    | their mark,   |           |             | transition (already-
-//                  | nodes       | unless        |           |             | stale subtrees are
-//                  |             | suppressed    |           |             | covered, not re-walked)
-// pokeDraftWatchers| StaleCheck  | never (draft  | never     | WatchDraft  | per-node pokePass
-//                  | on poked    | activity is   |           | only        | reading vs the running
-//                  | watchers    | not a store   |           |             | walk's id (zero
-//                  | only        | change)       |           |             | allocation, no clearing)
+//                  | marks       | schedules | schedules   | dedup
+//                  | staleness?  | effects?  | render      | mechanism
+//                  |             |           | subscribers?|
+// propagateWave    | StaleCheck  | yes       | yes         | the Clean→StaleCheck
+//                  | on Clean    |           |             | transition (already-
+//                  | nodes       |           |             | stale subtrees are
+//                  |             |           |             | covered, not re-walked)
+// pokeDraftWatchers| StaleCheck  | never     | WatchDraft  | per-node pokePass
+//                  | on poked    |           | only        | reading vs the running
+//                  | watchers    |           |             | walk's id (zero
+//                  | only        |           |             | allocation, no clearing)
+//
+// Neither walk decides whether a subscriber RE-RENDERS: render-notify
+// delivery invokes the subscriber's callback, and the React layer compares
+// what it rendered against what it would resolve now (see hooks.ts) — a
+// per-subscriber value predicate, which is how silent draft folds cost no
+// renders without any global suppression state.
 //
 // propagateFrom and invalidateDerived are the wave's entry points: they add
-// the root node's version/clock movement, then run the wave.
+// the root node's changedAt/clock movement, then run the wave.
 // ---------------------------------------------------------------------------
 
 /** Suspended traversal positions for the iterative walks (heap, not the JS
@@ -671,9 +665,9 @@ interface WaveFrame {
  * The invalidation wave: push marks down the watched subs closure.
  *
  * Marks are always StaleCheck ("possibly stale"): consumers confirm against
- * dependency VERSIONS before recomputing or re-running. Versions — not
- * marks — are the recompute trigger, which is what makes write-then-revert
- * inside a batch a true no-op.
+ * dependency changedAt READINGS before recomputing or re-running. Readings —
+ * not marks — are the recompute trigger, which is what makes
+ * write-then-revert inside a batch a true no-op.
  *
  * Per-node visit rules (the wave's contract, also applied by any site that
  * installs a back-edge onto a stale dep — see observeNode):
@@ -682,8 +676,8 @@ interface WaveFrame {
  *    scheduled, so everything below is already marked);
  * 2. Clean → set StaleCheck (never StaleDirty) and record the causal event;
  * 3. Watching → schedule; watchers have no subscribers, so never descend;
- * 4. KindDerived → bump the store version exactly once per wave (the
- *    Clean→StaleCheck transition is the wave's visited test) and descend.
+ * 4. KindDerived → descend (the Clean→StaleCheck transition is the wave's
+ *    visited test).
  *
  * Iterative in alien-signals' shape: a link cursor, the pending sibling, and
  * an explicit stack of suspended positions — single-child descents reuse the
@@ -708,7 +702,6 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
       if ((flags & Flag.Watching) !== 0) {
         scheduleWatcher(sub as WatcherNode);
       } else if ((flags & Flag.KindDerived) !== 0) {
-        if (!storeVersionSuppressed) sub.storeVersion++;
         const subSubs = sub.subs;
         if (subSubs !== undefined) {
           cur = subSubs;
@@ -831,22 +824,27 @@ export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): voi
 
 /**
  * Invalidate a derived from outside the dependency graph (thenable
- * settlement). Treated exactly like a write: the version advances so
- * downstream validation re-pulls, subscribers get marked, effects run.
+ * settlement). Treated exactly like a write: the clock ticks and the node's
+ * changedAt reading advances so downstream validation re-pulls, subscribers
+ * get marked, effects run.
  */
 export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventId): void {
   graphChangeClock++;
   node.flags = (node.flags & ~Flag.StaleMask) | Flag.StaleDirty;
   node.causeEvent = cause;
-  node.version++;
-  bumpStoreVersionLoud(node);
+  // Invariant: changes are stamped with the CURRENT clock, after the tick.
+  node.changedAtGraphChange = graphChangeClock;
   propagateWave(node.subs, cause);
   if (batchDepth === 0) flush();
 }
 
 /** Cells written inside the current batch scope, with their pre-batch state:
- * a net-revert restores the version so consumers validate as unchanged. */
-const batchBase = new Map<CellNode<unknown>, { value: unknown; version: NodeVersion }>();
+ * a net-revert restores the changedAt reading so consumers validate as
+ * unchanged. */
+const batchBase = new Map<
+  CellNode<unknown>,
+  { value: unknown; changedAtGraphChange: GraphChangeClock }
+>();
 
 export function startBatch(): void {
   batchDepth++;
@@ -859,7 +857,12 @@ export function endBatch(): void {
     if (batchBase.size > 0) {
       for (const [cell, base] of batchBase) {
         if (cell.value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
-          if (cell.equals(cell.value, base.value)) cell.version = base.version;
+          // Invariant: a net-revert restores the changedAt reading — the
+          // batch produced no real change, so consumers must validate as
+          // unchanged (the clock still ticked; they pay one reading compare).
+          if (cell.equals(cell.value, base.value)) {
+            cell.changedAtGraphChange = base.changedAtGraphChange;
+          }
         }
       }
       batchBase.clear();
@@ -986,10 +989,7 @@ export function peekCell<T>(cell: CellNode<T>): T {
 
 export function readCell<T>(cell: CellNode<T>): T {
   materializeCell(cell);
-  if (activeConsumer !== null) {
-    const link = trackRead(cell, activeConsumer);
-    link.version = cell.version;
-  }
+  if (activeConsumer !== null) trackRead(cell, activeConsumer);
   return cell.value as T;
 }
 
@@ -1000,12 +1000,17 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
   materializeCell(cell);
   if (cell.equals(cell.value as T, next)) return false;
   if (batchDepth > 0 && !batchBase.has(cell as CellNode<unknown>)) {
-    batchBase.set(cell as CellNode<unknown>, { value: cell.value, version: cell.version });
+    batchBase.set(cell as CellNode<unknown>, {
+      value: cell.value,
+      changedAtGraphChange: cell.changedAtGraphChange,
+    });
   }
   cell.value = next;
-  cell.version++;
+  // Invariant: tick the clock FIRST, then stamp the change with the new
+  // reading — a change stamped at a pre-tick reading could compare equal to
+  // a subscriber that validated before this write.
   graphChangeClock++;
-  if (!storeVersionSuppressed) cell.storeVersion++;
+  cell.changedAtGraphChange = graphChangeClock;
   const cause = traceHook !== null ? traceHook('write', cell, currentCause) : NO_EVENT;
   propagateFrom(cell as CellNode<unknown>, cause);
   return true;
@@ -1072,7 +1077,12 @@ function recompute(node: DerivedNode<unknown>): void {
     node.flags &= ~Flag.Computing;
   }
   const changed = finishComputeImpl(node, { parked, error, hasError, value });
-  if (changed) node.version++;
+  // Invariant: only a REAL change advances the reading (equality cutoff
+  // keeps the old stamp, so downstream validAt comparisons stay equal).
+  // Stamped with the CURRENT clock, not the pre-eval reading: recomputes do
+  // not tick the clock, and any consumer that validated before this
+  // recompute holds a strictly older validAt reading.
+  if (changed) node.changedAtGraphChange = graphChangeClock;
   // A computed whose evaluation wrote state is self-affecting: its inputs
   // moved under it, so it never caches — every read re-evaluates.
   node.flags =
@@ -1093,26 +1103,29 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
     recompute(node);
     return;
   }
-  // StaleCheck state (or unwatched revalidation): confirm dependencies upward,
-  // in first-read order, recomputing only if some version truly advanced.
+  // StaleCheck state (or unwatched revalidation): confirm dependencies
+  // upward, in first-read order, recomputing only if some dependency truly
+  // changed after this node's last validation. Invariant: a dep is
+  // FRESHENED before its reading is compared — a lazy dep may recompute
+  // right here, stamping its changedAt with the current clock, and the
+  // strictly-greater test then reports it correctly.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
     const dep = l.dep;
     if ((dep.flags & Flag.KindDerived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
-    if (l.version !== dep.version) {
+    if (dep.changedAtGraphChange > node.validAtGraphChange) {
       recompute(node);
       return;
     }
   }
   node.flags &= ~Flag.StaleMask;
+  // Invariant: the watermark is stamped only AFTER every dep was freshened
+  // and compared (freshen-then-stamp order).
   node.validAtGraphChange = graphChangeClock;
 }
 
 export function readDerived<T>(node: DerivedNode<T>): T {
   ensureFresh(node as DerivedNode<unknown>);
-  if (activeConsumer !== null) {
-    const link = trackRead(node, activeConsumer);
-    link.version = node.version;
-  }
+  if (activeConsumer !== null) trackRead(node, activeConsumer);
   return node.value as T;
 }
 
@@ -1150,7 +1163,8 @@ function makeWatcher(
     // counting. Capability bits are creation-fixed: they route scheduling
     // for the watcher's whole life.
     flags: Flag.Watching | Flag.Watched | capabilities,
-    version: 0,
+    changedAtGraphChange: 0,
+    validAtGraphChange: 0,
     throwable: null,
     subs: undefined,
     subsTail: undefined,
@@ -1165,7 +1179,6 @@ function makeWatcher(
     onNotify: undefined,
     onDraftWake: undefined,
     worldMemos: null,
-    storeVersion: 1,
     pokePass: 0,
   };
 }
@@ -1182,13 +1195,16 @@ function runWatcher(w: WatcherNode): void {
       const dep = l.dep;
       if ((dep.flags & Flag.KindDerived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
       if ((w.flags & Flag.Watched) === 0) return; // disposed mid-validation
-      if (l.version !== dep.version) {
+      if (dep.changedAtGraphChange > w.validAtGraphChange) {
         changed = true;
         break;
       }
     }
     if (!changed) {
       w.flags &= ~Flag.StaleMask;
+      // Invariant: watermark stamped only after every dep was freshened and
+      // compared (freshen-then-stamp order) — same rule as ensureFresh.
+      w.validAtGraphChange = graphChangeClock;
       return;
     }
   }
@@ -1227,6 +1243,11 @@ function executeWatcher(w: WatcherNode): void {
   const myPass = newEvalPass();
   w.depsTail = undefined;
   const cause = traceHook !== null ? traceHook('effect-run', w, w.causeEvent) : NO_EVENT;
+  // The validation reading is taken at the PRE-run clock: if the body
+  // itself writes, its deps may have moved under it, and the wave its write
+  // pushed re-schedules this watcher — whose next validation must then see
+  // those deps as changed-since (their stamps exceed the pre-run reading).
+  const preGraphChange = graphChangeClock;
   const prevCause = setCurrentCause(cause);
   try {
     const ret = w.fn!();
@@ -1238,6 +1259,7 @@ function executeWatcher(w: WatcherNode): void {
     activeScope = prevScope;
     trimDeps(w);
     if (DEV_EVAL_CHECKS) assertDepsFromEval(w, myPass);
+    w.validAtGraphChange = preGraphChange;
   }
 }
 
@@ -1347,19 +1369,21 @@ export function observeNode(
     if ((node.flags & Flag.KindCell) !== 0) readCell(node as CellNode<unknown>);
     else if ((node.flags & Flag.KindDerived) !== 0) {
       // Subscribe to invalidation only; do not force evaluation here.
-      const link = trackRead(node, sub);
-      link.version = node.version;
+      trackRead(node, sub);
       // This installed a back-edge without a pull, so the stale-cover
       // invariant is on this site: a stale node means the staleness edge
       // this subscriber cares about already fired (or, for promote-seeded
       // StaleCheck, could never fire while unwatched) — apply the wave's
       // visit rules to the new subscriber so it hears it once. A pull
       // re-arms; edge-triggered semantics are preserved. Never-computed
-      // nodes (version 0) are exempt: they are born StaleDirty with no
-      // dependency edges, so no wave was ever swallowed and there is no
-      // missed edge — exactly the edge-triggered contract's "no Clean→stale
-      // transition happened yet".
-      if ((node.flags & Flag.StaleMask) !== 0 && node.version !== 0) {
+      // nodes are exempt: they are born StaleDirty with no dependency
+      // edges, so no wave was ever swallowed and there is no missed edge —
+      // exactly the edge-triggered contract's "no Clean→stale transition
+      // happened yet".
+      if (
+        (node.flags & Flag.StaleMask) !== 0 &&
+        (node as DerivedNode<unknown>).value !== UNINITIALIZED
+      ) {
         sub.flags |= Flag.StaleCheck;
         sub.causeEvent = node.causeEvent;
         scheduleWatcher(sub);

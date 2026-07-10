@@ -36,7 +36,6 @@ import {
   type GraphChangeClock,
   Flag,
   NO_EVENT,
-  bumpStoreVersionLoud,
   currentGraphChange,
   ensureFresh,
   peekCell,
@@ -46,7 +45,6 @@ import {
   endBatch,
   traceHook,
   untracked,
-  withSuppressedStoreVersion,
   writeCell,
 } from './graph.ts';
 import {
@@ -229,12 +227,13 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 /** Fold a draft into base state through the normal write path, then
  * let stale world sets resolve it as a no-op.
  *
- * `silent` folds keep store versions still: use it when render-pass
- * worlds already delivered the draft's values to every subscriber (a
- * committed transition), so the fold must not schedule repair renders.
- * A loud fold (the default) is for drafts nothing rendered — their values
- * become visible only through this fold, so subscribers re-render. */
-export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
+ * There is no silent/loud switch here: whether a subscriber re-renders is
+ * decided per subscriber by the render-notify predicate (the React layer
+ * compares what it rendered against what it would resolve now). A
+ * subscriber whose render passes already delivered the draft's values
+ * compares equal and stays quiet; one that never carried the draft sees the
+ * folded values as new and re-renders. */
+export function retireDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
   liveDrafts.delete(id);
@@ -265,8 +264,7 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
     }
   };
   try {
-    if (opts?.silent === true) withSuppressedStoreVersion(fold);
-    else fold();
+    fold();
   } finally {
     setCurrentCause(prevCause);
   }
@@ -275,8 +273,9 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
 }
 
 /** Roll back an abandoned draft: anyone who saw it re-resolves without it.
- * The storeVersion bump is deliberately loud — subscribers rendered the
- * draft's values, and the rollback is new information no render pass shows. */
+ * The poke reaches every subscriber over the draft's cells; those that
+ * rendered the draft's values now resolve base values, compare different,
+ * and re-render — the rollback is new information no render pass shows. */
 export function discardDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
@@ -285,7 +284,6 @@ export function discardDraft(id: DraftId): void {
   draftChangeClock++;
   const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT;
   for (const cell of draft.cells) {
-    bumpStoreVersionLoud(cell);
     pokeDraftWatchers(cell, evt);
   }
   releaseLogs(draft);

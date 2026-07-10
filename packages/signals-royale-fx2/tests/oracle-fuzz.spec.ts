@@ -39,14 +39,14 @@ import { observeNode } from '../src/graph.ts';
 /** The engine touch points the sabotage canaries below override, so the
  * oracle is proven to catch a broken engine rather than a broken harness. */
 interface EngineSeams {
-  retire(draft: Draft, opts: { silent: boolean }): void;
+  retire(draft: Draft): void;
   /** The draft-lane reducer channel: every wake a scoped subscriber receives
    * (write-time pokes and attach-time joins alike) flows through here. */
   deliverWake(join: (id: DraftId) => void, id: DraftId): void;
 }
 
 const realSeams: EngineSeams = {
-  retire: (draft, opts) => retireDraft(draft.id, opts),
+  retire: (draft) => retireDraft(draft.id),
   deliverWake: (join, id) => join(id),
 };
 
@@ -222,7 +222,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
   const engRead = (ref: Ref): number => ('cell' in ref ? read(engCells[ref.cell]) : read(engComps[ref.comp]));
 
   // Scoped subscribers: the (only) React hook shape. Subscribe with both
-  // channels of useValue — the store channel (snapshot the storeVersion,
+  // channels of useValue — the render-notify channel (predicate compare,
   // re-read on change: the useSyncExternalStore bail) and the draft-lane
   // channel (wakes deliver draft ids into a per-subscriber world, exactly
   // like the per-hook reducer; attach-time joins mirror correctSubscription
@@ -235,7 +235,6 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     ref: Ref;
     /** The reducer world: engine ids of drafts delivered to this sub. */
     ids: Set<DraftId>;
-    snap: number;
     view: unknown;
     /** Strong subs additionally carry model-side wake bookkeeping: the
      * model knows exactly which drafts wrote their cell, so a dropped wake
@@ -255,7 +254,6 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     const sub: ScopedSub = {
       ref,
       ids: new Set(),
-      snap: node.storeVersion,
       view: undefined,
       modelIds: strong ? new Set() : null,
       failure: null,
@@ -289,10 +287,11 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     sub.unsub = observeNode(
       node,
       () => {
-        const s = node.storeVersion;
-        if (s === sub.snap) return;
-        sub.snap = s;
-        rerender();
+        // The bindings' notify predicate, mirrored: re-render only when the
+        // resolution of THIS sub's world differs from what it shows.
+        const ids = [...sub.ids].filter((id) => isLiveDraft(id));
+        const st = resolveState(node, worldOf(ids));
+        if ((st.flags & Flag.AsyncMask) !== 0 || !Object.is(st.value, sub.view)) rerender();
       },
       (id) => seams.deliverWake(join, id),
     );
@@ -300,7 +299,6 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     // this node's sources; join them (correctSubscription's job in the
     // bindings), through the same sabotage seam as write-time wakes.
     for (const id of draftsAffecting(node)) seams.deliverWake(join, id);
-    sub.snap = node.storeVersion;
     rerender();
     scopedSubs.push(sub);
   };
@@ -422,7 +420,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
         case 'retire': {
           if (model.drafts.get(s.draft) !== 'live') break;
           model.drafts.set(s.draft, 'retired');
-          seams.retire(engDrafts.get(s.draft)!, { silent: s.silent });
+          seams.retire(engDrafts.get(s.draft)!);
           refreshExpectedEffect();
           break;
         }

@@ -203,7 +203,8 @@ Most signal bindings treat React as a display driver: the store changes, the
 binding forces components to re-render. That model collapses under
 concurrent rendering — React may be preparing several futures at once
 (transitions), and a store that changes mid-flight either tears or forces
-everything synchronous (the documented `useSyncExternalStore` fallback).
+everything synchronous (`useSyncExternalStore` renders every store change
+at sync priority, no matter where the write came from).
 
 These bindings invert the relationship. The engine never decides what a
 render pass may see; React does:
@@ -226,11 +227,26 @@ render pass may see; React does:
   them in dispatch order, which is how a counter at 1 with a pending "+2"
   transition shows 2 after an urgent doubling and settles at 6 — never a
   reorder, never a torn 3.
-- The `useSyncExternalStore` subscription underneath snapshots a per-node
-  store version — never a value. Transition drafts never touch that
-  snapshot, so React's transition machinery — holding, time slicing,
-  interruption, retries — keeps working; there is no synchronous fallback
-  and no tearing window.
+- Base-state changes travel the SAME channel: the engine notifies a
+  subscriber, and the hook dispatches into its own reducer only if
+  re-rendering would actually show the committed tree something different
+  (a per-subscriber compare — equal resolutions, foreign transitions, and
+  already-delivered folds all stay silent). There is no
+  `useSyncExternalStore` underneath and no store snapshot: subscriptions
+  attach in effects, and the gap between rendering and attaching is closed
+  by a commit-time repair.
+
+### Writes re-render with exactly `useState`'s urgency
+
+Because every wake is a reducer dispatch made in the write's own context,
+the re-render gets the lane React would give a `setState` from the same
+place: synchronous before paint from a click handler, default priority from
+a timeout, a promise, or a network callback (it may land after a paint —
+wrap the write in `flushSync` when you need the DOM updated immediately,
+exactly as for React state), and the owning transition's lanes for drafted
+writes. A signal write and a `setState` in the same async callback commit
+in ONE render. This deliberately diverges from `useSyncExternalStore`-based
+stores, which escalate every store change to sync priority.
 
 A draft retires when every root that received it has committed it; the
 engine then folds it into committed state, and passes still holding the id

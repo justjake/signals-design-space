@@ -438,3 +438,64 @@ describe('two-tier graph: render-notify delivery re-entrancy', () => {
     for (const stop of stops) stop();
   });
 });
+
+describe('watermark validation ordering (the changedAt/validAt discipline)', () => {
+  test('lazy chain: deps freshen before their readings are compared', () => {
+    // a → c1 → c2, all unwatched. After a write, reading c2 must freshen c1
+    // FIRST (whose recompute stamps changedAt with the current clock) and
+    // only then compare — stamp-before-freshen order would miss the change.
+    let c1Runs = 0;
+    let c2Runs = 0;
+    const a = makeCell(1);
+    const c1 = makeDerived(() => {
+      c1Runs++;
+      return readCell(a) * 10;
+    });
+    const c2 = makeDerived(() => {
+      c2Runs++;
+      return readDerived(c1) + 1;
+    });
+    expect(readDerived(c2)).toBe(11);
+    expect([c1Runs, c2Runs]).toEqual([1, 1]);
+    writeCell(a, 2);
+    expect(readDerived(c2)).toBe(21);
+    expect([c1Runs, c2Runs]).toEqual([2, 2]);
+  });
+
+  test('equality cutoff does not advance changedAt: downstream skips recompute', () => {
+    // c1 collapses distinct inputs; its recompute must NOT advance its
+    // changedAt reading, so c2 validates as unchanged and never re-runs.
+    let c1Runs = 0;
+    let c2Runs = 0;
+    const a = makeCell(1);
+    const c1 = makeDerived(() => {
+      c1Runs++;
+      return readCell(a) % 2;
+    });
+    const c2 = makeDerived(() => {
+      c2Runs++;
+      return readDerived(c1) * 100;
+    });
+    expect(readDerived(c2)).toBe(100);
+    writeCell(a, 3); // parity unchanged
+    expect(readDerived(c2)).toBe(100);
+    expect(c1Runs).toBe(2); // c1 had to confirm
+    expect(c2Runs).toBe(1); // c2 did not
+  });
+
+  test('batch net-revert restores changedAt: consumers validate as unchanged', () => {
+    let c1Runs = 0;
+    const a = makeCell(1);
+    const c1 = makeDerived(() => {
+      c1Runs++;
+      return readCell(a) * 10;
+    });
+    expect(readDerived(c1)).toBe(10);
+    batch(() => {
+      writeCell(a, 5);
+      writeCell(a, 1); // net-revert
+    });
+    expect(readDerived(c1)).toBe(10);
+    expect(c1Runs).toBe(1); // the reverted batch cost no recompute
+  });
+});
