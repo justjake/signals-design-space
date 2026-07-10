@@ -21,7 +21,6 @@ import {
 	type Draft,
 	type DraftId,
 	draftsAffecting,
-	isLiveDraft,
 	openDraft,
 	resolveState,
 	retireDraft,
@@ -47,16 +46,19 @@ export interface ReactSignalsHandle {
 }
 
 const providers = new Set<ProviderRecord>()
-/** Providers that received each draft's dispatch and have not committed it. */
-const draftRecipients = new Map<DraftId, Set<ProviderRecord>>()
-/** Everyone who EVER received each draft's dispatch. A scope mounted after
- * the broadcast is missing here: its passes never carried the draft, so a
- * silent fold would strand its subscribers — the retirement must be loud. */
-const draftAudience = new Map<DraftId, Set<ProviderRecord>>()
-/** The React transition object that owns each live draft. Late deliveries
- * (subscriber corrections, appends from plain contexts) restore it around
- * the dispatch so the update joins the owning transition's lanes. */
-const draftOwners = new Map<DraftId, object>()
+interface HostedDraft {
+	draft: Draft
+	/** The React transition that owns this draft. Late deliveries restore it
+	 * so their dispatches join the original transition's lanes. */
+	owner: object | null
+	/** Providers that received the draft and have not committed it. */
+	recipients: Set<ProviderRecord>
+	/** Every provider that received the draft. A scope mounted later is absent:
+	 * its subscribers need a loud retirement because no pass carried the draft. */
+	audience: Set<ProviderRecord>
+}
+
+const hostedDrafts = new Map<DraftId, HostedDraft>()
 
 let handle: ReactSignalsHandle | null = null
 
@@ -201,22 +203,8 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
 }
 
 // ---------------------------------------------------------------------------
-// Draft ownership and wake dispatch
+// Draft wake dispatch
 // ---------------------------------------------------------------------------
-
-function rememberOwner(id: DraftId): void {
-	// Sweep first so the map stays bounded by live drafts even when a draft
-	// is discarded engine-side without host involvement.
-	for (const known of [...draftOwners.keys()]) {
-		if (!isLiveDraft(known)) {
-			draftOwners.delete(known)
-		}
-	}
-	const T = sharedInternals().T
-	if (T != null) {
-		draftOwners.set(id, T)
-	}
-}
 
 /** Test-only counter of draft-lane dispatches that actually reached a
  * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads it. */
@@ -238,8 +226,8 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
 		dispatch(id)
 		return
 	}
-	const owner = draftOwners.get(id)
-	if (owner === undefined) {
+	const owner = hostedDrafts.get(id)?.owner
+	if (owner == null) {
 		dispatch(id)
 		return
 	}
@@ -317,8 +305,8 @@ export function correctSubscription(
 		if (rendered.ids.includes(id)) {
 			continue
 		}
-		const audience = draftAudience.get(id)
-		if (audience === undefined || !audience.has(scope)) {
+		const hosted = hostedDrafts.get(id)
+		if (hosted === undefined || !hosted.audience.has(scope)) {
 			continue
 		}
 		deliver(id)
@@ -375,7 +363,7 @@ function ambientClassifier(): Draft | null {
 	if (draft === undefined) {
 		draft = openDraft()
 		draftsByTransition.set(T, draft)
-		broadcastDraft(draft.id)
+		broadcastDraft(draft)
 	}
 	// A retired or discarded draft classifies as urgent (base state): its
 	// effects are already folded or rolled back, so a late write under the same
@@ -388,40 +376,43 @@ function ambientClassifier(): Draft | null {
  * audience: value subscribers are woken per drafted cell instead (see
  * dispatchDraftWake), so a transition re-renders each root's scope plus
  * exactly the subscribers its writes touch. */
-export function broadcastDraft(id: DraftId): void {
-	rememberOwner(id)
+export function broadcastDraft(draft: Draft): void {
+	// Engine-side discard can finish a draft without visiting the host.
+	for (const [id, hosted] of hostedDrafts) {
+		if (hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed') {
+			hostedDrafts.delete(id)
+		}
+	}
 	const recipients = new Set(providers)
-	draftRecipients.set(id, recipients)
-	draftAudience.set(id, new Set(recipients))
+	const hosted: HostedDraft = {
+		draft,
+		owner: sharedInternals().T ?? null,
+		recipients,
+		audience: new Set(recipients),
+	}
+	hostedDrafts.set(draft.id, hosted)
 	for (const p of recipients) {
-		p.dispatch(id)
+		p.dispatch(draft.id)
 	}
 	if (recipients.size === 0) {
 		// No mounted scope observes this draft; it retires as soon as the
 		// writing scope finishes (microtask keeps ops-append ordering).
 		queueMicrotask(() => {
-			if (draftRecipients.get(id)?.size === 0) {
-				forgetDraft(id)
-				retireDraft(id)
+			if (hostedDrafts.get(draft.id) === hosted && hosted.recipients.size === 0) {
+				hostedDrafts.delete(draft.id)
+				retireDraft(draft.id)
 			}
 		})
 	}
-}
-
-function forgetDraft(id: DraftId): void {
-	draftRecipients.delete(id)
-	draftAudience.delete(id)
-	draftOwners.delete(id)
 }
 
 export function registerProvider(p: ProviderRecord): () => void {
 	providers.add(p)
 	return () => {
 		providers.delete(p)
-		for (const [id, recipients] of draftRecipients) {
-			recipients.delete(p)
-			if (recipients.size === 0) {
-				forgetDraft(id)
+		for (const [id, hosted] of hostedDrafts) {
+			if (hosted.recipients.delete(p) && hosted.recipients.size === 0) {
+				hostedDrafts.delete(id)
 				retireDraft(id)
 			}
 		}
@@ -437,15 +428,26 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
 	// the committed drafts touched (the useValue crowd bails via the notify
 	// predicate when its resolution is unchanged, so this is cheap). No
 	// engine event exists for a root commit, so the poke carries no cause.
-	for (const draft of worldOf(ids).drafts) {
-		for (const cell of draft.cells) {
+	for (const id of ids) {
+		const hosted = hostedDrafts.get(id)
+		if (
+			hosted === undefined ||
+			(hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed')
+		) {
+			continue
+		}
+		for (const cell of hosted.draft.cells) {
 			pokeDraftWatchers(cell, NO_EVENT)
 		}
 	}
 	for (const id of ids) {
-		const recipients = draftRecipients.get(id)
-		if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
-			forgetDraft(id)
+		const hosted = hostedDrafts.get(id)
+		if (
+			hosted !== undefined &&
+			hosted.recipients.delete(p) &&
+			hosted.recipients.size === 0
+		) {
+			hostedDrafts.delete(id)
 			// Fold loudness is per subscriber now: the fold's writes notify every
 			// subscriber over the touched cells, and each one's render-notify
 			// predicate compares its rendered value against the folded
@@ -496,9 +498,7 @@ export function resetReactSignalsForTest(): void {
 	const wasRegistered = handle !== null
 	resetEngineForTest()
 	providers.clear()
-	draftRecipients.clear()
-	draftAudience.clear()
-	draftOwners.clear()
+	hostedDrafts.clear()
 	note = null
 	if (wasRegistered) {
 		// resetEngineForTest cleared the engine hooks; re-arm them.

@@ -4,8 +4,14 @@ import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { nodeOf, signal, read, type Signal } from 'signals-royale-fx2'
-import { liveDraftCount } from '../src/worlds.ts'
-import { registerReactSignals, startTransitionWrite, useValue } from 'signals-royale-fx2/react'
+import { liveDraftCount, openDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+import {
+	registerReactSignals,
+	resetReactSignalsForTest,
+	startTransitionWrite,
+	useValue,
+} from 'signals-royale-fx2/react'
+import { broadcastDraft, registerProvider } from '../src/react/host.ts'
 import { makeHarness, text } from './helpers.tsx'
 
 function subCount(x: Signal<number>): number {
@@ -26,6 +32,40 @@ describe('registration', () => {
 		const h1 = registerReactSignals()
 		const h2 = registerReactSignals()
 		expect(h1).toBe(h2)
+	})
+})
+
+describe('hosted draft lifetime', () => {
+	test('a draft with no providers retires after its writing scope', async () => {
+		resetReactSignalsForTest()
+		const a = signal(0)
+		const draft = openDraft()
+		broadcastDraft(draft)
+		runInDraft(draft, () => a.set(1))
+		sealDraft(draft)
+		expect(liveDraftCount()).toBe(1)
+		await Promise.resolve()
+		expect(liveDraftCount()).toBe(0)
+		expect(read(a)).toBe(1)
+	})
+
+	test('unregistering the last recipient retires its live drafts', () => {
+		resetReactSignalsForTest()
+		const delivered: number[] = []
+		const unregister = registerProvider({
+			container: null,
+			dispatch: (id) => delivered.push(id),
+		})
+		const a = signal(0)
+		const draft = openDraft()
+		broadcastDraft(draft)
+		runInDraft(draft, () => a.set(2))
+		sealDraft(draft)
+		expect(delivered).toEqual([draft.id])
+		expect(liveDraftCount()).toBe(1)
+		unregister()
+		expect(liveDraftCount()).toBe(0)
+		expect(read(a)).toBe(2)
 	})
 })
 

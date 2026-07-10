@@ -13,7 +13,7 @@ import { broadcastDraft } from './host.ts'
 
 function runDraftScope(scope: () => void): void {
 	const draft = openDraft()
-	broadcastDraft(draft.id)
+	broadcastDraft(draft)
 	try {
 		runInDraft(draft, scope)
 	} finally {

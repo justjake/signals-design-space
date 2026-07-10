@@ -275,7 +275,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		await act(() => {
 			React.startTransition(() => {
 				draft = openDraft()
-				broadcastDraft(draft.id)
+				broadcastDraft(draft)
 				runInDraft(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
@@ -414,7 +414,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		await act(() => {
 			React.startTransition(() => {
 				draft = openDraft()
-				broadcastDraft(draft.id)
+				broadcastDraft(draft)
 				runInDraft(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
@@ -460,7 +460,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		await act(() => {
 			React.startTransition(() => {
 				draft = openDraft()
-				broadcastDraft(draft.id)
+				broadcastDraft(draft)
 				runInDraft(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
