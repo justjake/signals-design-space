@@ -19,6 +19,7 @@ const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
 	'alt-a-react': () => import('./altAConcurrent.js'),
 	'alt-b-uses': () => import('./altB.js'),
 	'alt-b-react': () => import('./altBConcurrent.js'),
+	'fx2-react': () => import('./fx2.js'),
 };
 
 export async function loadContender(name: string): Promise<Contender> {

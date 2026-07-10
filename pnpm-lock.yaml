@@ -328,6 +328,9 @@ importers:
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
+      signals-royale-fx2:
+        specifier: workspace:*
+        version: link:../signals-royale-fx2
     devDependencies:
       '@types/node':
         specifier: 24.13.2

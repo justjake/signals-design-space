@@ -19,6 +19,7 @@
 		"cosignals-alt-a": "workspace:*",
 		"cosignals-alt-b": "workspace:*",
 		"dalien-signals": "link:../dalien-signals",
+		"signals-royale-fx2": "workspace:*",
 		"jsdom": "^26.1.0",
 		"react": "*",
 		"react-dom": "*"
