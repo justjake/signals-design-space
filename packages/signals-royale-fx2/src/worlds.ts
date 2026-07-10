@@ -516,6 +516,8 @@ export function classifyWrite(): Draft | null {
 // World resolution
 // ---------------------------------------------------------------------------
 
+/** The draft selection visible to one read, render pass, or committed root.
+ * It is a replay filter, not a graph copy or a React lane. */
 export interface World {
 	/** Live drafts, in creation order. */
 	drafts: readonly Draft[]
@@ -523,25 +525,6 @@ export interface World {
 }
 
 export const BASE_WORLD: World = { drafts: [], sig: '' }
-
-/** Normalize a render pass's draft-id set: retired and discarded drafts drop
- * out (their effects are already in base state / rolled back), order is
- * creation order regardless of arrival order. */
-export function makeWorld(ids: readonly DraftId[]): World {
-	if (ids.length === 0) {
-		return BASE_WORLD
-	}
-	const drafts: Draft[] = []
-	for (const [id, draft] of liveDrafts) {
-		if (ids.includes(id)) {
-			drafts.push(draft)
-		}
-	}
-	if (drafts.length === 0) {
-		return BASE_WORLD
-	}
-	return { drafts, sig: drafts.map((d) => d.id).join(',') }
-}
 
 /** The world an evaluation is running in; null means base state. */
 let currentWorld: World | null = null
@@ -575,7 +558,17 @@ export function worldOf(ids: readonly DraftId[]): World {
 	if (hit !== undefined && hit.validAtDraftChange === draftChangeClock) {
 		return hit.world
 	}
-	const world = makeWorld(ids)
+	// Normalize React's id set: dead drafts drop out, and Map iteration restores
+	// creation order regardless of dispatch arrival order.
+	const drafts: Draft[] = []
+	let sig = ''
+	for (const [id, draft] of liveDrafts) {
+		if (ids.includes(id)) {
+			drafts.push(draft)
+			sig = sig === '' ? String(id) : `${sig},${id}`
+		}
+	}
+	const world = drafts.length === 0 ? BASE_WORLD : { drafts, sig }
 	worldCache.set(ids, { validAtDraftChange: draftChangeClock, world })
 	return world
 }
