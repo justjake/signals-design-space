@@ -15,6 +15,9 @@ import { WriteForbiddenError } from '../../packages/signals-royale-fx2/src/graph
 
 const shimmed: FrameworkAdapter = {
 	...(adapter as unknown as FrameworkAdapter),
+	// Result rows must carry the harness slug ('fx2') so the ratio tables can
+	// join them; the package's own adapter self-identifies by its npm name.
+	name: 'fx2',
 	signal<T>(initialValue: T): AdapterSignal<T> {
 		const signal = (adapter as unknown as FrameworkAdapter).signal(initialValue);
 		return {
