@@ -557,7 +557,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'cell', init: 1 },
         { t: 'open' },
         { t: 'draftSet', draft: 0, cell: 0, v: 9 },
-        { t: 'retire', draft: 0, silent: true },
+        { t: 'retire', draft: 0 },
       ];
       expect(runSchedule(schedule, sabotaged)).not.toBeNull();
     } finally {

@@ -51,6 +51,7 @@ import {
   getCurrentPark,
   getCurrentWorld,
   latestWorld,
+  draftsAffecting,
   peekWorldMemo,
   pokeRebasedCell,
   resolveState,
@@ -226,16 +227,23 @@ export function isPending(x: AnyReadable): boolean {
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
   if ((node.flags & Flag.KindCell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
   if ((node.flags & Flag.KindDerived) === 0) return false;
-  if ((node.flags & Flag.AsyncSuspended) !== 0) return true;
+  // Pending means "stale data exists while newer data loads" (Solid 2.0's
+  // rule): a suspension with settled history is pending; a FIRST LOAD is
+  // not — it has no stale data to indicate over, and suspending is
+  // Suspense's job, not the indicator's.
+  if ((node.flags & Flag.AsyncSuspended) !== 0) {
+    return !isUninitialized((node as DerivedNode<unknown>).value);
+  }
   if (world !== null && world.drafts.length > 0) {
     const memo = peekWorldMemo(node, world.sig);
-    if (memo !== undefined && (memo.flags & Flag.AsyncSuspended) !== 0) return true;
+    if (memo !== undefined && (memo.flags & Flag.AsyncSuspended) !== 0) {
+      return !isUninitialized(memo.value);
+    }
   }
-  // A drafted input means this computed has newer data pending too.
-  for (let l = node.deps; l !== undefined; l = l.nextDep) {
-    if ((l.dep.flags & Flag.KindCell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
-  }
-  return false;
+  // A drafted input anywhere in the dependency closure means newer data is
+  // pending behind this computed's base value — transitive, like Solid's
+  // status forwarding: a computed over a pending source is itself pending.
+  return draftsAffecting(node).length > 0;
 }
 
 // ---------------------------------------------------------------------------

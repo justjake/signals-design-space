@@ -207,6 +207,22 @@ describe('computeds across worlds', () => {
     expect(read(c)).toBe(18);
   });
 
+  test('isPending is transitive through computeds (Solid 2.0 status forwarding)', () => {
+    // Solid 2.0's pending rule: a computed over a pending source is itself
+    // pending — status forwards through derivation. A drafted cell two
+    // levels down must surface at the top of the chain.
+    const a = signal(1);
+    const c1 = computed(() => a.get() * 10);
+    const c2 = computed(() => c1.get() + 1);
+    expect(read(c2)).toBe(11); // establish base-state deps a → c1 → c2
+    expect(isPending(c2)).toBe(false);
+    const id = inDraft(() => a.set(2));
+    expect(isPending(c1)).toBe(true); // direct input
+    expect(isPending(c2)).toBe(true); // transitive — through the computed
+    retireDraft(id);
+    expect(isPending(c2)).toBe(false);
+  });
+
   test('a draft append notifies subscribers of computeds over the cell', () => {
     // Pending probes subscribe to the node they probe, not to its inputs.
     // Draft activity on an input must therefore travel the watched edges
