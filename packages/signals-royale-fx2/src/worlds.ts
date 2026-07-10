@@ -87,6 +87,9 @@ export interface RebaseLog {
 export interface Draft {
   id: DraftId;
   state: DraftState;
+  /** Stable single-draft world used by the one-live-draft notification
+   * cutoff. Its draft array is allocated once with the draft. */
+  world: World;
   /** Cells this draft wrote (for fold, poke, and log teardown). */
   cells: Set<CellNode<unknown>>;
   openEvent: TraceEventId;
@@ -107,6 +110,9 @@ let draftChangeClock: DraftChangeClock = 1;
 const memoNodes = new Set<ReactiveNode>();
 /** Per-root committed draft sets, recorded by the bindings at root commits. */
 const committedWorlds = new WeakMap<object, readonly DraftId[]>();
+/** Set only around the synchronous one-live-draft poke. The stable callback
+ * avoids allocating one closure per intent. */
+let cutoffWorld: World | null = null;
 
 setOnSettlement(() => {
   draftChangeClock++;
@@ -121,14 +127,18 @@ export function liveDraftCount(): number {
 }
 
 export function openDraft(): Draft {
+  const id = nextDraftId++;
+  const drafts: Draft[] = [];
   const draft: Draft = {
-    id: nextDraftId++,
+    id,
     state: 'open',
+    world: { drafts, sig: String(id) },
     cells: new Set(),
     openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
     retireEvent: NO_EVENT,
     lastWriteEvent: NO_EVENT,
   };
+  drafts.push(draft);
   liveDrafts.set(draft.id, draft);
   draftChangeClock++;
   return draft;
@@ -176,7 +186,16 @@ export function appendDraftIntent(
     cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
     cell.causeEvent = cause;
   }
-  pokeDraftWatchers(cell, cause, draft.id);
+  if (liveDrafts.size === 1) {
+    cutoffWorld = draft.world;
+    try {
+      pokeDraftWatchers(cell, cause, draft.id, changedInCutoffWorld);
+    } finally {
+      cutoffWorld = null;
+    }
+  } else {
+    pokeDraftWatchers(cell, cause, draft.id);
+  }
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so
@@ -613,28 +632,47 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
   return true;
 }
 
+/** Whether two resolutions are indistinguishable under the node's policy. */
+function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState): boolean {
+  const asyncBits = right.flags & Flag.AsyncMask;
+  if ((left.flags & Flag.AsyncMask) !== asyncBits) return false;
+  if (asyncBits === 0) {
+    const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
+    return equals(left.value, right.value);
+  }
+  if (asyncBits === Flag.AsyncSuspended) {
+    return left.throwable === right.throwable && left.value === right.value;
+  }
+  return (left.throwable as ErrorBox).error === (right.throwable as ErrorBox).error;
+}
+
+/** Single-live-draft cutoff. The previous world memo is the last value this
+ * write path resolved for the draft; before the first touch, the draft world
+ * is identical to base. The graph calls this once per reached node. */
+function changedInCutoffWorld(node: ReactiveNode): boolean {
+  if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.WorldAware) === 0) return true;
+  const world = cutoffWorld!;
+  try {
+    const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD);
+    const next = resolveState(node, world);
+    return !statesEqual(node, previous, next);
+  } catch {
+    // Cutoff evaluation is advisory. An updater that is invalid only when
+    // replayed still appends successfully and throws at the ordinary read;
+    // do not move that error into the write path.
+    return true;
+  }
+}
+
 /** State identity stability: keep the previous state record when the fresh
  * resolution is indistinguishable, so subscribers comparing snapshots by
- * identity do not re-render for no reason. Value states compare with the
- * node's equals(); suspended states are the same span iff the suspension and
- * the stale value match; error states are the same span iff the box carries
- * the same reason reference. */
+ * identity do not re-render for no reason. */
 function reconcileStates(
   node: ReactiveNode,
   prev: DerivedState | undefined,
   next: DerivedState,
 ): DerivedState {
-  if (prev === undefined) return next;
-  const asyncBits = next.flags & Flag.AsyncMask;
-  if ((prev.flags & Flag.AsyncMask) !== asyncBits) return next;
-  if (asyncBits === 0) {
-    const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
-    return equals(prev.value, next.value) ? prev : next;
-  }
-  if (asyncBits === Flag.AsyncSuspended) {
-    return prev.throwable === next.throwable && prev.value === next.value ? prev : next;
-  }
-  return (prev.throwable as ErrorBox).error === (next.throwable as ErrorBox).error ? prev : next;
+  return prev !== undefined && statesEqual(node, prev, next) ? prev : next;
 }
 
 /** Resolve a node's value as seen by a world. The base world hits the

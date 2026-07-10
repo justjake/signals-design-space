@@ -118,6 +118,9 @@ export const enum Flag {
   Scheduled = 0b1000_0000_0000,
   /** Derived evaluation in progress (re-entry = a cycle). */
   Computing = 0b1_0000_0000_0000,
+  /** Derived reads route through the active draft world. Raw graph-level
+   * deriveds intentionally lack this capability. */
+  WorldAware = 0b10_0000_0000_0000,
 
   /** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
   StaleMask = StaleCheck | StaleDirty,
@@ -323,9 +326,10 @@ export function makeCell<T>(
 export function makeDerived<T>(
   fn: (use: UseFn, previous: T | undefined) => T,
   opts?: { equals?: EqualsFn<T>; label?: string },
+  worldAware = false,
 ): DerivedNode<T> {
   const node: DerivedNode<T> = {
-    flags: Flag.KindDerived | Flag.StaleDirty,
+    flags: Flag.KindDerived | Flag.StaleDirty | (worldAware ? Flag.WorldAware : 0),
     changedAtGraphChange: 0,
     throwable: null,
     subs: undefined,
@@ -639,6 +643,11 @@ interface WaveFrame {
   prev: WaveFrame | undefined;
 }
 
+interface PokeFrame extends WaveFrame {
+  changed: boolean;
+  prev: PokeFrame | undefined;
+}
+
 /**
  * The invalidation wave: push marks down the watched subs closure.
  *
@@ -732,20 +741,28 @@ let pokePass: PokePass = 0;
  *
  * `wake` requests draft-id delivery to the same frontier in this ONE walk
  * (intent appends need both jobs every time; retire/discard/commit call
- * sites poke without waking). The walk runs in the writer's ambient context,
- * so inside a React transition scope the wake dispatches ride that
- * transition's lanes. The notify flush still precedes wake delivery: the
- * flush's effects may dispose subscriptions, and a subscriber disposed by
- * them must not receive the draft id.
+ * sites poke without waking). `valueChanged`, when present, supplies the
+ * single-draft value cutoff for each producer: value hooks skip equal
+ * producers while value-independent probes still hear the poke. The walk
+ * runs in the writer's ambient context, so inside a React transition scope
+ * the wake dispatches ride that transition's lanes. The notify flush still
+ * precedes wake delivery: the flush's effects may dispose subscriptions,
+ * and a subscriber disposed by them must not receive the draft id.
  */
-export function pokeDraftWatchers(node: ReactiveNode, cause: TraceEventId, wake?: DraftId): void {
+export function pokeDraftWatchers(
+  node: ReactiveNode,
+  cause: TraceEventId,
+  wake?: DraftId,
+  valueChanged?: (node: ReactiveNode) => boolean,
+): void {
   const pass = ++pokePass;
   let wakes: WatcherNode[] | null = null;
+  let changed = valueChanged?.(node) ?? true;
   const first = node.subs;
   if (first !== undefined) {
     let cur: Link = first;
     let next: Link | undefined = cur.nextSub;
-    let stack: WaveFrame | undefined;
+    let stack: PokeFrame | undefined;
     top: do {
       const sub = cur.sub;
       if (sub.pokePass !== pass) {
@@ -753,18 +770,25 @@ export function pokeDraftWatchers(node: ReactiveNode, cause: TraceEventId, wake?
         const flags = sub.flags;
         if ((flags & Flag.WatchDraft) !== 0) {
           const w = sub as WatcherNode;
-          scheduleWatcher(w);
-          if ((w.flags & Flag.StaleMask) === 0) w.flags |= Flag.StaleCheck;
-          w.causeEvent = cause;
-          if (wake !== undefined && w.onDraftWake !== undefined) (wakes ??= []).push(w);
+          // Value hooks have a draft-lane callback and can use the optional
+          // computed cutoff. Probes carry no callback: they still need the
+          // poke because pendingness may change while the value stays equal.
+          if (w.onDraftWake === undefined || changed) {
+            scheduleWatcher(w);
+            if ((w.flags & Flag.StaleMask) === 0) w.flags |= Flag.StaleCheck;
+            w.causeEvent = cause;
+            if (wake !== undefined && w.onDraftWake !== undefined) (wakes ??= []).push(w);
+          }
         } else if ((flags & Flag.KindDerived) !== 0) {
           const subSubs = sub.subs;
           if (subSubs !== undefined) {
+            const subChanged = valueChanged?.(sub) ?? true;
             cur = subSubs;
             if (cur.nextSub !== undefined) {
-              stack = { value: next, prev: stack };
+              stack = { value: next, changed: subChanged, prev: stack };
               next = cur.nextSub;
             }
+            changed = subChanged;
             continue;
           }
         }
@@ -776,6 +800,7 @@ export function pokeDraftWatchers(node: ReactiveNode, cause: TraceEventId, wake?
       }
       while (stack !== undefined) {
         const resume = stack.value;
+        changed = stack.changed;
         stack = stack.prev;
         if (resume !== undefined) {
           cur = resume;

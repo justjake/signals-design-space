@@ -134,7 +134,7 @@ export class Computed<T> {
   /** @internal */
   readonly node: DerivedNode<T>;
   constructor(fn: (use: UseFn, previous: T | undefined) => T, opts?: ComputedOptions<T>) {
-    this.node = makeDerived(fn, opts);
+    this.node = makeDerived(fn, opts, true);
   }
   get(): T {
     const node = this.node;

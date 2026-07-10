@@ -226,6 +226,53 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 });
 
 describe('computeds across worlds', () => {
+  test('one live draft cuts off equal computed value wakes but still pokes probes', () => {
+    const a = signal(1);
+    const parity = computed(() => a.get() & 1);
+    expect(parity.get()).toBe(1);
+    const wakes: DraftId[] = [];
+    let probes = 0;
+    const offValue = observeNode(nodeOf(parity), () => {}, (id) => wakes.push(id));
+    const offProbe = observeNode(nodeOf(parity), () => probes++);
+    const d = openDraft();
+
+    runInDraft(d, () => a.set(3));
+    expect(wakes).toEqual([]); // parity stayed 1: no value-hook wake
+    expect(probes).toBe(1); // pendingness still changed
+
+    runInDraft(d, () => a.set(2));
+    expect(wakes).toEqual([d.id]); // parity changed 1 -> 0
+    expect(probes).toBe(2);
+    wakes.length = 0;
+    expect(stateIn(parity, [d.id])).toEqual(valueState(0)); // a held render observed 0
+
+    runInDraft(d, () => a.set(4));
+    expect(wakes).toEqual([]); // repeated append kept the draft-world value at 0
+    runInDraft(d, () => a.set(3));
+    expect(wakes).toEqual([d.id]); // returning to 1 must repair the held render
+
+    discardDraft(d.id);
+    offProbe();
+    offValue();
+  });
+
+  test('overlapping drafts retain conservative value wakes', () => {
+    const a = signal(1);
+    const parity = computed(() => a.get() & 1);
+    expect(parity.get()).toBe(1);
+    const wakes: DraftId[] = [];
+    const off = observeNode(nodeOf(parity), () => {}, (id) => wakes.push(id));
+    const first = openDraft();
+    const second = openDraft();
+
+    runInDraft(first, () => a.set(3));
+    expect(wakes).toEqual([first.id]); // overlap disables the node-level cutoff
+
+    discardDraft(first.id);
+    discardDraft(second.id);
+    off();
+  });
+
   test('a draft evaluation receives the last settled canonical value as previous', () => {
     const a = signal(1);
     const seen: Array<number | undefined> = [];
