@@ -28,31 +28,31 @@ const vendored = [
 	'harness/results/**',
 	'**/dist/**',
 	'**/*.md',
-];
+]
 
 export default {
 	test: {
 		// `vp test` at the repo root runs exactly these suites, each with its
 		// own existing vitest.config.ts (vitest 4 projects). Per-package
 		// `pnpm test` / `pnpm -C harness conformance` are unaffected.
-		projects: [
-			'./harness',
-			'./packages/cosignals-alt-a',
-			'./packages/cosignals-alt-b',
-		],
+		projects: ['./harness', './packages/cosignals-alt-a', './packages/cosignals-alt-b'],
 	},
 	fmt: {
-		// Match the prevailing repo style so `vp check` reports minimal drift.
+		// Tabs render at two columns; statements do not end in semicolons.
 		useTabs: true,
+		tabWidth: 2,
 		singleQuote: true,
-		semi: true,
+		semi: false,
 		ignorePatterns: vendored,
 	},
 	lint: {
 		ignorePatterns: vendored,
+		rules: {
+			curly: 'error',
+		},
 		options: {
 			typeAware: true,
 			typeCheck: true,
 		},
 	},
-};
+}
