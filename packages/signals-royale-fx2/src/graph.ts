@@ -1136,7 +1136,12 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 
 export function readDerived<T>(node: DerivedNode<T>): T {
   assertSignalReadAllowed();
-  ensureFresh(node as DerivedNode<unknown>);
+  // Watched + Clean is the hot steady state (push marks are trustworthy,
+  // nothing to validate) — skip the ensureFresh call entirely. Everything
+  // else (stale, or unwatched needing the currency check) takes the call.
+  if ((node.flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
+    ensureFresh(node as DerivedNode<unknown>);
+  }
   if (activeConsumer !== null) trackRead(node, activeConsumer);
   return node.value as T;
 }
