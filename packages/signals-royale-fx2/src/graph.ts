@@ -60,78 +60,64 @@ export type EvalPass = Brand<number, 'EvalPass'>;
 export type PokePass = Brand<number, 'PokePass'>;
 
 /**
- * Per-node flags word — the full bit layout, in groups:
- *
- * Kinds — exactly one set at creation, never changed:
- *   0b0000_0000_0001  KindCell        writable source
- *   0b0000_0000_0010  KindDerived     cached computed
- *   0b0000_0000_0100  Watching        subscriber (alien-signals' name): an
- *                                     effect, a store subscription, or a
- *                                     scope anchor
- *
- * Watcher capabilities — creation-fixed, Watching nodes only. Dispatch
- * routes on these bits, never on callback presence:
- *   0b0000_0000_1000  WatchRender     schedule into the render-notify
- *                                     queue; post-settle delivery; the
- *                                     uSES snapshot decides re-render
- *   0b0000_0001_0000  WatchRunEffect  schedule into the validated effect
- *                                     queue (runs the body)
- *   0b0000_0010_0000  WatchDraft      draft pings/wakes reach this
- *                                     watcher; ABSENT = base-state-only
- *                                     (all effects today)
- *   Component subscription = Watching|WatchRender|WatchDraft;
- *   engine effect = Watching|WatchRunEffect; scope anchor = Watching alone.
- *
- * Staleness — an exclusive pair; both clear is the Clean state:
- *   0b0000_0100_0000  StaleCheck      possibly stale; confirm dependency
- *                                     versions before recomputing
- *   0b0000_1000_0000  StaleDirty      must recompute on next pull
- *
- * Async value plane — an exclusive pair; both clear is the plain-value
- * state. Writes to either exclusive field clear the whole field before
- * setting, so a single-bit test reads the exact state:
- *   0b0001_0000_0000  AsyncError      latest evaluation threw; the ErrorBox
- *                                     to rethrow is in node.throwable
- *   0b0010_0000_0000  AsyncSuspended  latest evaluation parked; the
- *                                     Suspension is in node.throwable
- *
- * State bits:
- *   0b0100_0000_0000  Watched         double role by kind —
- *                                     cells/deriveds: mirror of
- *                                     observerCount > 0, set by promote
- *                                     (0→1), cleared by demote (1→0);
- *                                     observerCount stays authoritative,
- *                                     the flag is the one-load hot-path
- *                                     test. Watchers: ALIVE — set at
- *                                     creation, cleared at dispose, so
- *                                     disposal = Watching set, Watched
- *                                     clear.
- *   0b1000_0000_0000  Scheduled       watcher sits in a flush queue
- *   0b1_0000_0000_0000 Computing      derived evaluation in progress
- *                                     (re-entry = cycle)
- *
- * Naming: Flag is one bit, Flags is the stored word. The word stays a
- * branded number rather than a Flag-typed field because TS5 types const
- * enum unions as the enum, which would force a cast on every |= / &=
- * composition. The toolchain compiles TS everywhere (vitest/esbuild, tsc):
- * esbuild inlines Flag members within this file and compiles cross-file
- * consumers to object lookups — the same cost as a const object — while
- * tsc-compiled consumers inline everywhere.
+ * One flag bit. `Flag` names a bit; `Flags` (the stored word) stays a
+ * branded number because TS5 types const enum unions as the enum, which
+ * would force a cast on every |= / &= composition. esbuild inlines members
+ * within this file and compiles cross-file consumers to object lookups —
+ * the same cost as a const object — while tsc-compiled consumers inline
+ * everywhere.
  */
 export const enum Flag {
+  // Kinds: exactly one, set at creation, never changed.
+  /** Writable source. */
   KindCell = 0b0000_0000_0001,
+  /** Cached computed. */
   KindDerived = 0b0000_0000_0010,
+  /** Subscriber (alien-signals' name): an effect, a store subscription, or
+   * a scope anchor. */
   Watching = 0b0000_0000_0100,
+
+  // Watch capabilities: creation-fixed, Watching nodes only; dispatch
+  // routes on these bits, never on callback presence. Component
+  // subscription = Watching|WatchRender|WatchDraft; engine effect =
+  // Watching|WatchRunEffect; scope anchor = Watching alone.
+  /** Schedule into the render-notify queue, delivered after effects
+   * settle; the subscriber's notify predicate decides whether the delivery
+   * becomes a re-render. */
   WatchRender = 0b0000_0000_1000,
+  /** Schedule into the validated effect queue (runs the body). */
   WatchRunEffect = 0b0000_0001_0000,
+  /** Draft pings and wakes reach this watcher; absent = base-state-only
+   * (every engine effect today). */
   WatchDraft = 0b0000_0010_0000,
+
+  // Staleness: an exclusive pair; writes clear the whole field before
+  // setting, so a single-bit test reads the exact state.
+  /** Possibly stale: confirm dependency changedAt readings before
+   * recomputing. */
   StaleCheck = 0b0000_0100_0000,
+  /** Definitely stale: recompute on next pull. */
   StaleDirty = 0b0000_1000_0000,
+
+  // Async value plane: an exclusive pair; both clear = plain value.
+  /** Latest evaluation threw; node.throwable holds the ErrorBox to
+   * rethrow. */
   AsyncError = 0b0001_0000_0000,
+  /** Latest evaluation parked; node.throwable holds the Suspension. */
   AsyncSuspended = 0b0010_0000_0000,
+
+  // State.
+  /** Double role by kind. Cells/deriveds: mirror of observerCount > 0 —
+   * promote (0→1) sets it, demote (1→0) clears it; the count stays
+   * authoritative, the bit is the one-load hot-path test. Watchers: ALIVE —
+   * set at creation, cleared at dispose, so disposal = Watching set,
+   * Watched clear. */
   Watched = 0b0100_0000_0000,
+  /** Watcher sits in a flush queue. */
   Scheduled = 0b1000_0000_0000,
+  /** Derived evaluation in progress (re-entry = a cycle). */
   Computing = 0b1_0000_0000_0000,
+
   /** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
   StaleMask = StaleCheck | StaleDirty,
   /** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
@@ -558,28 +544,6 @@ function trimDeps(sub: ReactiveNode): void {
     }
     stale.nextDep = undefined;
     stale = next;
-  }
-}
-
-/** Dev-only invariant net: a node's deps list is exactly what its last
- * evaluation read, in read order. Evaluation is the only site that creates
- * or keeps dep edges, and every touch (re)marks with the pass in progress,
- * so after trimming every retained edge must carry a pass id from this eval
- * or a nested one — pass ids are monotonic and never reused, so `>= myPass`
- * is exact. Gated on a module const so bundler NODE_ENV replacement strips
- * the walk from production builds; unbundled production pays one
- * always-false branch per evaluation, never the walk. */
-const DEV_EVAL_CHECKS: boolean =
-  typeof process !== 'undefined' && process.env.NODE_ENV !== 'production';
-function assertDepsFromEval(sub: ReactiveNode, myPass: EvalPass): void {
-  for (let l = sub.deps; l !== undefined; l = l.nextDep) {
-    if (l.evalPass < myPass) {
-      throw new Error(
-        `invariant violation: a dependency edge survived trimming that the finished evaluation never read${
-          sub.label !== undefined ? ` (sub "${sub.label}")` : ''
-        }`,
-      );
-    }
   }
 }
 
@@ -1073,7 +1037,6 @@ function recompute(node: DerivedNode<unknown>): void {
     evalPass = myPass;
     activeConsumer = prevConsumer;
     trimDeps(node);
-    if (DEV_EVAL_CHECKS) assertDepsFromEval(node, myPass);
     node.flags &= ~Flag.Computing;
   }
   const changed = finishComputeImpl(node, { parked, error, hasError, value });
@@ -1258,7 +1221,6 @@ function executeWatcher(w: WatcherNode): void {
     activeConsumer = prevConsumer;
     activeScope = prevScope;
     trimDeps(w);
-    if (DEV_EVAL_CHECKS) assertDepsFromEval(w, myPass);
     w.validAtGraphChange = preGraphChange;
   }
 }

@@ -499,3 +499,39 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
     expect(c1Runs).toBe(1); // the reverted batch cost no recompute
   });
 });
+
+describe('deps-from-eval invariant (test-side check, was a shipped dev assertion)', () => {
+  /** The invariant: a derived's deps list is exactly what its last
+   * evaluation read, in read order — evaluation is the only site that
+   * creates or keeps dep edges. Checked from the test by walking the list,
+   * per the owner's rule that invariant nets live in tests, not the
+   * library. */
+  const depsOf = (node: { deps?: unknown }) => {
+    const out: unknown[] = [];
+    type L = { dep: { label?: string }; nextDep?: L };
+    for (let l = (node as { deps?: L }).deps; l !== undefined; l = l.nextDep) out.push(l.dep);
+    return out;
+  };
+
+  test('a branch switch leaves exactly the taken branch, in read order', () => {
+    const flag = makeCell(true, { label: 'flag' });
+    const x = makeCell(1, { label: 'x' });
+    const y = makeCell(2, { label: 'y' });
+    const d = makeDerived(() => (readCell(flag) ? readCell(x) : readCell(y)));
+    expect(readDerived(d)).toBe(1);
+    expect(depsOf(d)).toEqual([flag, x]);
+    writeCell(flag, false);
+    expect(readDerived(d)).toBe(2);
+    expect(depsOf(d)).toEqual([flag, y]); // x pruned, y appended, order = read order
+    writeCell(flag, true);
+    expect(readDerived(d)).toBe(1);
+    expect(depsOf(d)).toEqual([flag, x]);
+  });
+
+  test('repeat reads within one evaluation keep one edge', () => {
+    const x = makeCell(3, { label: 'x' });
+    const d = makeDerived(() => readCell(x) + readCell(x) + readCell(x));
+    expect(readDerived(d)).toBe(9);
+    expect(depsOf(d)).toEqual([x]);
+  });
+});

@@ -174,12 +174,7 @@ order.** Every edge is created or re-marked inside the evaluation that read
 it, and pass ids assigned during a pass (including by nested evals) are all
 `>= myPass` under the monotonic counter, so the invariant has a mechanical
 shadow: after `trimDeps`, every retained link satisfies
-`l.evalPass >= myPass`. A dev-gated assertion (`assertDepsFromEval`, run after
-the trim in `recompute` and `runWatcher`) enforces exactly that; the gate is
-a module const off `NODE_ENV`, so bundler builds strip the walk and
-unbundled production pays one always-false branch per evaluation.
-
-## 3. Flag bit allocation
+`l.evalPass >= myPass`. The invariant is checked from the test suite (a deps-list walk in graph-tiers.spec.ts) rather than by a shipped assertion, per the owner's rule that invariant nets live in tests. Flag bit allocation
 
 Exact constants, extending the documented layout at lines 30-57:
 
