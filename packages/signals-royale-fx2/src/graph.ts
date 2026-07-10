@@ -259,9 +259,6 @@ export interface DerivedNode<T> extends ReactiveNode {
   value: T | typeof UNINITIALIZED;
   fn: (use: UseFn, previous: T | undefined) => T;
   equals: EqualsFn<T>;
-  /** The use() argument recompute passes to fn. It closes over nothing but
-   * the node, so it is created once with the node rather than per recompute. */
-  useFn: UseFn;
   /** GraphChangeClock reading at last successful validation — the unwatched
    * tier's currency gate (validAtGraphChange === clock ⇒ nothing relevant
    * happened since; the read short-circuits O(1)). Deriveds only: cells and
@@ -328,7 +325,7 @@ export function makeDerived<T>(
   opts?: { equals?: EqualsFn<T>; label?: string },
   worldAware = false,
 ): DerivedNode<T> {
-  const node: DerivedNode<T> = {
+  return {
     flags: Flag.KindDerived | Flag.StaleDirty | (worldAware ? Flag.WorldAware : 0),
     changedAtGraphChange: 0,
     throwable: null,
@@ -342,14 +339,10 @@ export function makeDerived<T>(
     value: UNINITIALIZED,
     fn,
     equals: opts?.equals ?? defaultEquals,
-    useFn: undefined as never, // assigned below; needs the node reference
     validAtGraphChange: 0,
     worldMemos: null,
     pokePass: 0,
   };
-  node.useFn = ((t: PromiseLike<unknown>) =>
-    useImpl(t, node as DerivedNode<unknown>)) as UseFn;
-  return node;
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,6 +1077,20 @@ export function setUseImpl(impl: typeof useImpl): void {
   useImpl = impl;
 }
 
+/** The use() argument every base recompute passes to fn: one shared
+ * function, no per-node closure — the evaluating computed IS the
+ * activeConsumer at call time. (Draft evaluations pass their own worldUse
+ * instead; see worlds.ts.) A use() that escapes its evaluation — captured
+ * and called later, or called inside untracked() — finds no evaluating
+ * computed and throws rather than park the wrong node. */
+const evalUse: UseFn = (<U,>(t: PromiseLike<U>): U => {
+  const consumer = activeConsumer;
+  if (consumer === null || (consumer.flags & Flag.KindDerived) === 0) {
+    throw new Error('use() called outside a computed evaluation');
+  }
+  return useImpl(t, consumer as DerivedNode<unknown>) as U;
+}) as UseFn;
+
 /** Set by asyncs.ts: finish a recompute, folding parks into async state.
  * Positional outcome (parked, hasError, error, value) — this runs once per
  * recompute, so it must not cost an outcome-object allocation. */
@@ -1123,7 +1130,7 @@ function recompute(node: DerivedNode<unknown>): void {
   let error: unknown;
   let value: unknown;
   try {
-    value = node.fn(node.useFn, node.value === UNINITIALIZED ? undefined : node.value);
+    value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value);
   } catch (e) {
     if (e === PARKED) parked = true;
     else {
