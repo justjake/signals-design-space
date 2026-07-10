@@ -25,5 +25,8 @@
       "react-dom": "link:vendor/react/build/oss-experimental/react-dom",
       "scheduler": "link:vendor/react/build/oss-experimental/scheduler"
     }
+  },
+  "devDependencies": {
+    "mitata": "^1.0.34"
   }
 }
