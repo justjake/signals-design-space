@@ -1,17 +1,22 @@
 # Round <NN>: <slug>
 
-LOCKED: no
+## Before editing
 
 - Base SHA:
-- Candidate kind: deletion | convergence | hot-path flattening
-- Allowed source/test paths:
+- Candidate chosen by implementer:
 - Primary benchmark command:
 - Fixed repetitions:
 - Raw baseline output:
+- Causal performance hypothesis:
+- Measurement integrity boundary:
 
-## Problem
+The sections below may evolve during implementation but must be complete before
+handoff.
 
-Concrete comprehension or execution cost, with source/runtime evidence.
+## Opportunity
+
+Why this is the highest-leverage current comprehension and execution cost,
+with source/runtime evidence.
 
 ## Current model
 
@@ -20,33 +25,33 @@ Concrete comprehension or execution cost, with source/runtime evidence.
 - Representative operation, step by step:
 - Hot-path allocations, calls, branches, or indirections:
 
-## Proposed change
+## Chosen change
 
-- Concept/representation/operation removed:
+- Concept/representation/operation expected to disappear:
 - Ownership before -> after:
 - Code/control flow expected to disappear:
 - Things that must remain separate, and why:
 - New state or abstraction, if any, and why deletion alone cannot work:
 
-## Performance hypothesis
-
-One causal chain from deletion/convergence to the benchmark metric.
-
 ## Alternatives considered
 
-Every materially different approach or tool considered, with its tradeoff.
+Every materially different approach considered, with its tradeoff and why the
+chosen approach is stronger. This is the implementer's decision, not a request
+for controller approval.
 
-## Semantic coverage
+## Semantic boundary
 
 - Existing focused tests:
 - Tests to add/change:
 - Observable behavior that must remain identical:
+- Material edge cases and how the existing contract resolves them:
 
-## Edge decisions
+## Integrity checks
 
-Every material edge case and the human decision. Change `LOCKED` to `yes` only
-when none remain undecided.
+Why the selected benchmark exercises the changed path and why no observable
+work, timing boundary, configuration, or input is changing.
 
-## Stop rule
+## Abandon rule
 
-What result rejects this candidate without widening the hypothesis.
+What evidence should make the implementer replace or abandon this approach
+instead of adding compensating complexity.

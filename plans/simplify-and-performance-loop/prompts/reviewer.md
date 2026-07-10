@@ -3,10 +3,10 @@
 Review independently and read-only. Do not edit the candidate. This exact
 rubric is shared by Sol and Claude.
 
-Use the locked plan, complete diff, affected source/tests, and raw before/after
-results. The locked plan is authority for scope and decided semantics, but its
-claims about current behavior still require verification. READMEs, reports,
-older plans, benchmark summaries, and the implementer's prose are not authority.
+Use the implementer's candidate record, complete diff, affected source/tests,
+and raw before/after results. The record explains intent; it is not authority
+for claims about current behavior. READMEs, reports, older plans, benchmark
+summaries, and the implementer's prose are not authority.
 
 ## Review
 
@@ -33,7 +33,13 @@ older plans, benchmark summaries, and the implementer's prose are not authority.
 
 Also flag trivial one-caller helpers, avoidable intermediate representations,
 allocation-heavy collection construction, and any new generic `isRecord` guard.
-A material edge not decided by the locked plan requires `HUMAN_DECISION`.
+A material unresolved semantic edge requires `HUMAN_DECISION` only when the
+candidate cannot avoid it; otherwise require a revision or rejection.
+
+Ambition, cross-cutting scope, and diff size are not findings by themselves.
+Judge whether the result has one clearer model. Use `REVISE` when a concrete
+repair could meet the bar; reserve `REJECT` for a failed core direction or an
+integrity failure.
 
 ## Output
 
@@ -63,3 +69,10 @@ performance mechanism, comparable measurements, and no material regression as
 ### Required next step
 
 State the smallest next action.
+
+### Reusable lead
+
+For a non-approved candidate that measurably improved performance, state the
+specific fast mechanism worth remembering, why the current expression failed
+review, and what must be different before reuse. Write `none` when there is no
+honest reusable lead. Do not recommend retaining rejected code wholesale.
