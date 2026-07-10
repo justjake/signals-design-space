@@ -428,6 +428,8 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
 	// the committed drafts touched (the useValue crowd bails via the notify
 	// predicate when its resolution is unchanged, so this is cheap). No
 	// engine event exists for a root commit, so the poke carries no cause.
+	// Keep every poke before any retirement: pokes can flush synchronously,
+	// while retirement folds state and starts its own notification wave.
 	for (const id of ids) {
 		const hosted = hostedDrafts.get(id)
 		if (

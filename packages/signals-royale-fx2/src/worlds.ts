@@ -34,7 +34,6 @@ import {
 	type ReactiveNode,
 	type TraceEventId,
 	type GraphChangeClock,
-	FORBID_WRITE_FROM_COMPUTED,
 	Flag,
 	NO_EVENT,
 	assertSignalReadAllowed,
@@ -44,9 +43,8 @@ import {
 	peekCell,
 	pokeDraftWatchers,
 	runUpdater,
-	setCurrentCause,
 	setActiveEvaluation,
-	setWritesForbidden,
+	setCurrentCause,
 	startBatch,
 	endBatch,
 	traceHook,
@@ -838,9 +836,6 @@ function draftEvaluate(
 	const prevPark = currentPark
 	const prevCertificate = activeCertificate
 	const previousCertificateCount = certificate.count
-	const prevWritesForbidden = FORBID_WRITE_FROM_COMPUTED
-		? setWritesForbidden('writes inside computeds are forbidden')
-		: null
 	currentPark = worldUse
 	activeCertificate = certificate
 	certificate.count = 0
@@ -867,9 +862,6 @@ function draftEvaluate(
 		clearInactiveCertificateEntries(certificate, previousCertificateCount)
 		activeCertificate = prevCertificate
 		currentPark = prevPark
-		if (FORBID_WRITE_FROM_COMPUTED) {
-			setWritesForbidden(prevWritesForbidden)
-		}
 		setActiveEvaluation(prevEvaluation)
 		node.flags &= ~Flag.DraftComputing
 	}

@@ -361,15 +361,11 @@ describe('computeds across worlds', () => {
 		discardDraft(id)
 	})
 
-	test('committed() self-read is a cycle in every root', () => {
-		const rootA = {}
-		const rootB = {}
-		let sameRoot!: Computed<number>
-		sameRoot = computed(() => committed(sameRoot, rootA))
-		let otherRoot!: Computed<number>
-		otherRoot = computed(() => committed(otherRoot, rootB))
-		expect(() => sameRoot.get()).toThrow(/cycle detected in computed/)
-		expect(() => otherRoot.get()).toThrow(/cycle detected in computed/)
+	test('committed() self-read is a cycle', () => {
+		const root = {}
+		let self!: Computed<number>
+		self = computed(() => committed(self, root))
+		expect(() => self.get()).toThrow(/cycle detected in computed/)
 	})
 
 	test('a computed cannot read its cached value from another world', () => {

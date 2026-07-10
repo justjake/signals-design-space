@@ -121,7 +121,8 @@ export const enum Flag {
 	/** Derived reads route through the active draft world. Raw graph-level
 	 * deriveds intentionally lack this capability. */
 	WorldAware = 0b10_0000_0000_0000,
-	/** Draft-world derived evaluation in progress. */
+	/** Draft-world derived evaluation in progress. Separate because only a
+	 * canonical evaluation refreshes the graph-validation watermark. */
 	DraftComputing = 0b100_0000_0000_0000,
 
 	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
@@ -411,9 +412,9 @@ export function addObserver(node: ReactiveNode): void {
 	if (node.observerCount === 1) {
 		node.flags |= Flag.Watched
 		if ((node.flags & Flag.KindDerived) !== 0) {
-			// A Computing node is promoted mid-evaluation (a consumer subscribed
-			// from inside the running body). Skip history validation: the
-			// watermark predates this evaluation, so deps the eval just re-read
+			// A canonically Computing node was promoted from inside its running body.
+			// Skip history validation: its watermark predates this evaluation, so
+			// deps the eval just re-read
 			// would compare as changed-since and seed a false StaleCheck. The
 			// running eval is the validator — its finally stamps fresh staleness
 			// and a current validAt reading.
