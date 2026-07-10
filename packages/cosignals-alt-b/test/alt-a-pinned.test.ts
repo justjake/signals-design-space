@@ -6,9 +6,9 @@
 // Their write encoding: batch -1 = the current urgent event batch (retired by
 // closeEvent); UPDATE payloads are UPDATE_FNS indexes (0 = x+1, 1 = x*2%1000,
 // 2 = identity, 3 = x-3).
-import { describe, expect, it } from 'vitest';
-import { runScript } from './driver';
-import type { Op } from './driver';
+import { describe, expect, it } from 'vitest'
+import { runScript } from './driver'
+import type { Op } from './driver'
 
 const UNIVERSE: Op[] = [
 	{ t: 'atom', v: 1 }, // 0
@@ -18,7 +18,7 @@ const UNIVERSE: Op[] = [
 	{ t: 'branch', cond: 2, ifTrue: 0, ifFalse: 1 }, // 4
 	{ t: 'sum', deps: [0, 1] }, // 5
 	{ t: 'chain', dep: 4 }, // 6
-];
+]
 
 // Read every node in every reachable world at the end of a script, so value
 // agreement is asserted even for cases whose original assertions lived in
@@ -26,7 +26,7 @@ const UNIVERSE: Op[] = [
 const READ_ALL: Op[] = [0, 1, 2, 3, 4, 5, 6].flatMap((node): Op[] => [
 	{ t: 'read', node, ctx: 'newest' },
 	{ t: 'read', node, ctx: 'committed' },
-]);
+])
 
 const cases: Record<string, Op[]> = {
 	'rebase walkthrough (§10.7)': [
@@ -165,16 +165,16 @@ const cases: Record<string, Op[]> = {
 		{ t: 'read', node: 0, ctx: 'writer', batch: 0 },
 		{ t: 'retire', batch: 0, committed: true },
 	],
-};
+}
 
 describe("alt-a's pinned oracle danger cases (hosted)", () => {
 	for (const [name, ops] of Object.entries(cases)) {
 		it(name, () => {
-			const script = [...UNIVERSE, ...ops, ...READ_ALL];
-			const r = runScript(script);
+			const script = [...UNIVERSE, ...ops, ...READ_ALL]
+			const r = runScript(script)
 			if (r.failed) {
-				expect.fail(`diverged at op ${r.atOp}: ${String(r.error)}`);
+				expect.fail(`diverged at op ${r.atOp}: ${String(r.error)}`)
 			}
-		});
+		})
 	}
-});
+})

@@ -18,120 +18,131 @@
  * these pins with `S-A divergence: … arena-served <stale> ≠ memo-served
  * <fresh>` out of the boundary operation's epilogue.
  */
-import { describe, expect, it } from 'vitest';
-import { __TEST__ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/CosignalEngine.js';
-import { armArenaCheck } from './arena-checker.js';
+import { describe, expect, it } from 'vitest'
+import { __TEST__ctxUse, SuspendedRead } from '../src/index.js'
+import {
+	engine,
+	__TEST__resetEngine,
+	type AnyInternals,
+	type CosignalEngine,
+	type Reader,
+	type Value,
+} from '../src/CosignalEngine.js'
+import { armArenaCheck } from './arena-checker.js'
 
-const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
+const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0))
 
 function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
-	engine.discardAllWip();
+	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id);
-		else engine.retire(t.id);
+		if (t.parked) engine.settleAction(t.id)
+		else engine.retire(t.id)
 	}
-	__TEST__resetEngine();
-	const b = engine;
-	armArenaCheck(b);
-	return b;
+	__TEST__resetEngine()
+	const b = engine
+	armArenaCheck(b)
+	return b
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
 function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
-	const p = b.renderStart(root, []);
-	const w = b.mountWatcher(p.id, node, name);
-	b.renderEnd(p.id, 'commit');
-	return w;
+	const p = b.renderStart(root, [])
+	const w = b.mountWatcher(p.id, node, name)
+	b.renderEnd(p.id, 'commit')
+	return w
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
 function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): void {
-	const t = b.openBatch();
-	b.write(t.id, node as never, 0, value);
-	b.retire(t.id);
+	const t = b.openBatch()
+	b.write(t.id, node as never, 0, value)
+	b.retire(t.id)
 }
 
 /** The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
  * folds to the thenable's stable sentinel VALUE instead of unwinding. */
-function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyInternals {
+function suspending(
+	b: CosignalEngine,
+	name: string,
+	fn: (read: Reader, untracked: Reader) => Value,
+): AnyInternals {
 	return b.computed(name, (read, untracked) => {
 		try {
-			return fn(read, untracked);
+			return fn(read, untracked)
 		} catch (err) {
-			if (err instanceof SuspendedRead) return err;
-			throw err;
+			if (err instanceof SuspendedRead) return err
+			throw err
 		}
-	});
+	})
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-	let resolve!: (v: T) => void;
+	let resolve!: (v: T) => void
 	const promise = new Promise<T>((res) => {
-		resolve = res;
-	});
-	return { promise, resolve };
+		resolve = res
+	})
+	return { promise, resolve }
 }
 
 describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note)', () => {
 	it('ATOM cold base: top-first-created cone (lowest id serves first) refolds through a decay-evicted atom instead of stale-serving', () => {
-		const b = freshEngine();
+		const b = freshEngine()
 		// TOP FIRST — lowest node id; the fn closures resolve the handles
 		// declared below (bodies only run at evaluation time).
-		let mid!: AnyInternals;
-		let base!: AnyInternals;
-		const top = b.computed('top', (read) => read(mid));
-		mid = b.computed('mid', (read) => read(base));
-		base = b.atom('base', 2);
-		const w = mount(b, 'R', top, 'W');
-		expect(w.lastRenderedValue).toBe(2); // cone folded + validated at the mount commit
-		w.live = false; // unmount the only consumer (mid-episode: arena persists)
+		let mid!: AnyInternals
+		let base!: AnyInternals
+		const top = b.computed('top', (read) => read(mid))
+		mid = b.computed('mid', (read) => read(base))
+		base = b.atom('base', 2)
+		const w = mount(b, 'R', top, 'W')
+		expect(w.lastRenderedValue).toBe(2) // cone folded + validated at the mount commit
+		w.live = false // unmount the only consumer (mid-episode: arena persists)
 		// Committed write: the retirement fanout marks base DIRTY and the cone
 		// PENDING; no live consumer refolds; boundary decay then evicts
 		// base to COLD (MUTABLE kept, VALID cleared, value column dropped).
 		// The armed epilogue serves in node-id order — TOP first: its
 		// arenaCheckDirty walk must treat the cold base as dirt, or it clears the
 		// cone's PENDING and stale-serves 2 while the memo path serves 3.
-		commitWrite(b, base, 3);
-		expect(b.committedValue(top, 'R')).toBe(3);
-		expect(b.committedValue(mid, 'R')).toBe(3);
-	});
+		commitWrite(b, base, 3)
+		expect(b.committedValue(top, 'R')).toBe(3)
+		expect(b.committedValue(mid, 'R')).toBe(3)
+	})
 
 	it('COMPUTED cold base: a settlement-marked suspended leaf decays cold under an unwatched cone — the top-first walk must refold through it', async () => {
-		const b = freshEngine();
+		const b = freshEngine()
 		// TOP FIRST again; the suspending leaf and the atom get the highest ids.
-		let mid!: AnyInternals;
-		let leaf!: AnyInternals;
-		let k!: AnyInternals;
-		const top = b.computed('top', (read) => `${String(read(mid))}:${String(read(k))}`);
+		let mid!: AnyInternals
+		let leaf!: AnyInternals
+		let k!: AnyInternals
+		const top = b.computed('top', (read) => `${String(read(mid))}:${String(read(k))}`)
 		mid = b.computed('mid', (read) => {
-			const v = read(leaf);
-			return v instanceof SuspendedRead ? 'p' : v; // DERIVED from the sentinel (mid itself never box-suspends)
-		});
-		const gate = deferred<string>();
-		leaf = suspending(b, 'leaf', () => __TEST__ctxUse(leaf.ix, 'x', () => gate.promise));
-		k = b.atom('k', 0);
-		const w = mount(b, 'R', top, 'W');
-		expect(w.lastRenderedValue).toBe('p:0'); // leaf suspended; mid derives; cone cached
-		w.live = false; // unwatch BEFORE the settlement: nothing will consume the marks
+			const v = read(leaf)
+			return v instanceof SuspendedRead ? 'p' : v // DERIVED from the sentinel (mid itself never box-suspends)
+		})
+		const gate = deferred<string>()
+		leaf = suspending(b, 'leaf', () => __TEST__ctxUse(leaf.ix, 'x', () => gate.promise))
+		k = b.atom('k', 0)
+		const w = mount(b, 'R', top, 'W')
+		expect(w.lastRenderedValue).toBe('p:0') // leaf suspended; mid derives; cone cached
+		w.live = false // unwatch BEFORE the settlement: nothing will consume the marks
 		// Open the boundary batch BEFORE the settle so the first armed epilogue
 		// after the settlement is the retire itself (the boundary under test).
-		const t = b.openBatch();
-		b.write(t.id, k, 0, 1);
+		const t = b.openBatch()
+		b.write(t.id, k, 0, 1)
 		// Background settlement at rest: the drain marks leaf's shadow DIRTY
 		// (suspended-list scan), propagates PENDING up the unwatched cone, and
 		// evicts leaf's memo — no live watcher consumes anything.
-		gate.resolve('D');
-		await tick();
+		gate.resolve('D')
+		await tick()
 		// The retire advances committed truth (committedAdvance + k's fingerprint move, so
 		// the reference fold re-derives 'D:1'), fans k DIRTY, and decay drops
 		// BOTH unconsumed marks — the leaf COMPUTED and the k atom — to cold.
 		// The epilogue then serves TOP first: its walk descends mid (PENDING),
 		// must see the cold leaf as dirt (and the cold atom k after it), or it
 		// unwinds clearing PENDING and stale-serves 'p:0'.
-		b.retire(t.id);
-		expect(b.committedValue(top, 'R')).toBe('D:1');
-		expect(b.committedValue(mid, 'R')).toBe('D');
-	});
-});
+		b.retire(t.id)
+		expect(b.committedValue(top, 'R')).toBe('D:1')
+		expect(b.committedValue(mid, 'R')).toBe('D')
+	})
+})

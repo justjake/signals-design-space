@@ -1,9 +1,9 @@
 {
 	"name": "cosignals-react",
-	"private": true,
 	"version": "0.1.0",
-	"license": "MIT",
+	"private": true,
 	"description": "React bindings for cosignals: the useSignal, useComputed, useReducerAtom, and useSignalEffect hooks plus startSignalTransition, backed by an external-runtime bridge that keeps concurrent renders, transitions, and committed UI state consistent (tear-free).",
+	"license": "MIT",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {

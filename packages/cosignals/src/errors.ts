@@ -4,8 +4,8 @@
  * cycle (upstream alien-signals silently serves the stale cache instead). */
 export class CycleError extends Error {
 	constructor(message: string) {
-		super(message);
-		this.name = 'CycleError';
+		super(message)
+		this.name = 'CycleError'
 	}
 }
 
@@ -18,7 +18,7 @@ export class InvariantViolation extends Error {}
 
 /** Look up an id, or throw {@link ScheduleError} for an unknown one. */
 export function getOrThrow<K, V>(map: Map<K, V>, id: K, what: string): V {
-	const v = map.get(id);
-	if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`);
-	return v;
+	const v = map.get(id)
+	if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`)
+	return v
 }

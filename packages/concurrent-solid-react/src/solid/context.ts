@@ -1,13 +1,13 @@
-import { ContextNotFoundError, NoOwnerError } from "./error.js";
-import { getOwner } from "./owner.js";
-import type { Owner } from "./types.js";
+import { ContextNotFoundError, NoOwnerError } from './error.js'
+import { getOwner } from './owner.js'
+import type { Owner } from './types.js'
 
 export interface Context<T> {
-  readonly id: symbol;
-  readonly defaultValue: T | undefined;
+	readonly id: symbol
+	readonly defaultValue: T | undefined
 }
 
-export type ContextRecord = Record<string | symbol, unknown>;
+export type ContextRecord = Record<string | symbol, unknown>
 
 /**
  * Context provides a form of dependency injection. It is used to save from needing to pass
@@ -18,7 +18,7 @@ export type ContextRecord = Record<string | symbol, unknown>;
  * via a `setContext` call.
  */
 export function createContext<T>(defaultValue?: T, description?: string): Context<T> {
-  return { id: Symbol(description), defaultValue };
+	return { id: Symbol(description), defaultValue }
 }
 
 /**
@@ -32,19 +32,19 @@ export function createContext<T>(defaultValue?: T, description?: string): Contex
  * @internal
  */
 export function getContext<T>(context: Context<T>, owner: Owner | null = getOwner()): T {
-  if (!owner) {
-    throw new NoOwnerError();
-  }
+	if (!owner) {
+		throw new NoOwnerError()
+	}
 
-  const value = hasContext(context, owner)
-    ? (owner._context[context.id] as T)
-    : context.defaultValue;
+	const value = hasContext(context, owner)
+		? (owner._context[context.id] as T)
+		: context.defaultValue
 
-  if (isUndefined(value)) {
-    throw new ContextNotFoundError();
-  }
+	if (isUndefined(value)) {
+		throw new ContextNotFoundError()
+	}
 
-  return value;
+	return value
 }
 
 /**
@@ -57,22 +57,22 @@ export function getContext<T>(context: Context<T>, owner: Owner | null = getOwne
  * @internal
  */
 export function setContext<T>(context: Context<T>, value?: T, owner: Owner | null = getOwner()) {
-  if (!owner) {
-    throw new NoOwnerError();
-  }
+	if (!owner) {
+		throw new NoOwnerError()
+	}
 
-  // We're creating a new object to avoid child context values being exposed to parent owners. If
-  // we don't do this, everything will be a singleton and all hell will break lose.
-  owner._context = {
-    ...owner._context,
-    [context.id]: isUndefined(value) ? context.defaultValue : value
-  };
+	// We're creating a new object to avoid child context values being exposed to parent owners. If
+	// we don't do this, everything will be a singleton and all hell will break lose.
+	owner._context = {
+		...owner._context,
+		[context.id]: isUndefined(value) ? context.defaultValue : value,
+	}
 }
 
 function hasContext(context: Context<any>, owner: Owner): boolean {
-  return !isUndefined(owner?._context[context.id]);
+	return !isUndefined(owner?._context[context.id])
 }
 
 function isUndefined(value: any): value is undefined {
-  return typeof value === "undefined";
+	return typeof value === 'undefined'
 }

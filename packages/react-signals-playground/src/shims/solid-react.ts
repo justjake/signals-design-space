@@ -18,7 +18,7 @@
  * memo-subscribed components; that engine bug is fixed and the degradation
  * is gone.)
  */
-import * as React from 'react';
+import * as React from 'react'
 import {
 	createMemo,
 	createRoot,
@@ -29,10 +29,10 @@ import {
 	useSelector,
 	type Accessor,
 	type Setter,
-} from 'concurrent-solid-react';
-import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface';
+} from 'concurrent-solid-react'
+import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
-export const name = 'concurrent-solid-react';
+export const name = 'concurrent-solid-react'
 
 // Originally measured in the playground's Playwright suite: a foreign
 // promise thrown from a component inside a transition render did NOT hold
@@ -48,12 +48,12 @@ export const name = 'concurrent-solid-react';
 // machinery (async memos whose pending reads surface as node-held
 // thenables), not thenables thrown mid-render by app code; the battery
 // exercises both styles and pins the currently-working hold.
-export const transitionHoldStyle: TransitionHoldStyle = 'defer-write';
+export const transitionHoldStyle: TransitionHoldStyle = 'defer-write'
 
 export function register(): void {
 	// The handle is intentionally dropped: registration lives for the page,
 	// and dispose() only matters for tests that re-register.
-	registerConcurrentSolidReact();
+	registerConcurrentSolidReact()
 }
 
 /** Adapter from Solid's [get, set] accessor pair to the interface's object surface. */
@@ -63,22 +63,22 @@ class SolidAtom<T> implements WritableSignal<T> {
 		private readonly write: Setter<T>,
 	) {}
 	get state(): T {
-		return this.read();
+		return this.read()
 	}
 	set(next: T): void {
 		// Always hand the setter an updater: Solid setters treat a bare
 		// function argument as an updater, so a function-typed T would
 		// otherwise be called instead of stored.
-		this.write(() => next);
+		this.write(() => next)
 	}
 	update(fn: (current: T) => T): void {
-		this.write(fn);
+		this.write(fn)
 	}
 }
 
 export function createAtom<T>(initial: T, label?: string): WritableSignal<T> {
-	const [read, write] = createSignal<T>(initial as Exclude<T, Function>, { name: label });
-	return new SolidAtom<T>(read, write);
+	const [read, write] = createSignal<T>(initial as Exclude<T, Function>, { name: label })
+	return new SolidAtom<T>(read, write)
 }
 
 export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T> {
@@ -86,31 +86,31 @@ export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T
 	// unowned memo in this engine is lazy+autodispose: it tears down whenever
 	// its last subscriber leaves and refetches on revival, which is wasteful
 	// churn for module-scope deriveds that live as long as the page).
-	const accessor = createRoot(() => createMemo(fn, label ? { name: label } : undefined));
+	const accessor = createRoot(() => createMemo(fn, label ? { name: label } : undefined))
 	return {
 		get state(): T {
-			return accessor();
+			return accessor()
 		},
-	};
+	}
 }
 
 export function useSignal<T>(signal: ReadableSignal<T>): T {
 	// useSelector resolves the read in the current render pass's world
 	// (committed for urgent passes, staged for transition passes) and
 	// subscribes the component through the bridge's two-phase reader.
-	return useSelector(() => signal.state);
+	return useSelector(() => signal.state)
 }
 
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
 	// The package's component-owned memo: signal reads inside `fn` are
 	// tracked reactively (not part of `deps`); `deps` recreates the node
 	// like useMemo.
-	return packageUseComputed<T>(fn, [...deps]);
+	return packageUseComputed<T>(fn, [...deps])
 }
 
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
-	const fnRef = React.useRef(fn);
-	fnRef.current = fn;
+	const fnRef = React.useRef(fn)
+	fnRef.current = fn
 	// Same construction as the package's own useSignalEffect — a tracked
 	// effect (committed-world reads only; runs held while a transition is
 	// live, released at its commit) inside a disposable root — but keyed on
@@ -119,16 +119,16 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	React.useEffect(
 		() =>
 			createRoot((disposeRoot: () => void) => {
-				createTrackedEffect(() => fnRef.current());
-				return disposeRoot;
+				createTrackedEffect(() => fnRef.current())
+				return disposeRoot
 			}),
 		deps === undefined ? undefined : [...deps],
-	);
+	)
 }
 
 export function startSignalTransition(scope: () => void): void {
 	// Write-time classification: every engine write asks React for the
 	// current batch, so the plain React transition scope already routes the
 	// writes inside `scope` into a deferred Solid transition.
-	React.startTransition(scope);
+	React.startTransition(scope)
 }

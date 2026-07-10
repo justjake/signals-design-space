@@ -23,28 +23,28 @@
  *                      --lib <pkgDir> [--lib <pkgDir> ...]
  * Output: JSON { forkLoc, libLoc, perFile } on stdout.
  */
-import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, resolve, dirname, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import { join, resolve, dirname, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const args = process.argv.slice(2);
-const opts = { fork: undefined, base: undefined, head: 'HEAD', libs: [] };
+const args = process.argv.slice(2)
+const opts = { fork: undefined, base: undefined, head: 'HEAD', libs: [] }
 for (let i = 0; i < args.length; i++) {
-	const a = args[i];
-	if (a === '--fork') opts.fork = args[++i];
-	else if (a === '--base') opts.base = args[++i];
-	else if (a === '--head') opts.head = args[++i];
-	else if (a === '--lib') opts.libs.push(args[++i]);
+	const a = args[i]
+	if (a === '--fork') opts.fork = args[++i]
+	else if (a === '--base') opts.base = args[++i]
+	else if (a === '--head') opts.head = args[++i]
+	else if (a === '--lib') opts.libs.push(args[++i])
 	else {
-		console.error(`unknown argument: ${a}`);
-		process.exit(2);
+		console.error(`unknown argument: ${a}`)
+		process.exit(2)
 	}
 }
 if (opts.fork === undefined && opts.libs.length === 0) {
-	console.error('nothing to do: pass --fork <checkout> --base <sha> and/or --lib <pkgDir>');
-	process.exit(2);
+	console.error('nothing to do: pass --fork <checkout> --base <sha> and/or --lib <pkgDir>')
+	process.exit(2)
 }
 
 // ---- fork metric -----------------------------------------------------------------
@@ -54,20 +54,20 @@ function countFork(checkout, base, head) {
 		'git',
 		['-C', checkout, 'diff', '--numstat', `${base}..${head}`, '--', 'packages/'],
 		{ encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-	);
-	let total = 0;
-	const perFile = {};
+	)
+	let total = 0
+	const perFile = {}
 	for (const line of out.split('\n')) {
-		if (line.trim() === '') continue;
-		const [adds, dels, ...pathParts] = line.split('\t');
-		const path = pathParts.join('\t');
-		if (adds === '-' || dels === '-') continue; // binary
-		if (path.includes('__tests__')) continue; // test files are free
-		const n = Number(adds) + Number(dels);
-		total += n;
-		perFile[path] = n;
+		if (line.trim() === '') continue
+		const [adds, dels, ...pathParts] = line.split('\t')
+		const path = pathParts.join('\t')
+		if (adds === '-' || dels === '-') continue // binary
+		if (path.includes('__tests__')) continue // test files are free
+		const n = Number(adds) + Number(dels)
+		total += n
+		perFile[path] = n
 	}
-	return { total, perFile };
+	return { total, perFile }
 }
 
 // ---- library metric --------------------------------------------------------------
@@ -77,44 +77,44 @@ function countFork(checkout, base, head) {
 // are debug tooling — the incumbents' stated 4700/5000 baselines exclude
 // them). Required-feature code (e.g. the causality tracer) hidden under an
 // excluded segment is a scoring dodge — recount by hand if review finds it.
-const EXCLUDED_SEGMENTS = /^(tests?|__tests__|adapters?|tools?|docs?|debug)$/i;
-const EXCLUDED_FILE = /(\.d\.ts|\.test\.tsx?|\.spec\.tsx?|\.debug\.tsx?)$/;
+const EXCLUDED_SEGMENTS = /^(tests?|__tests__|adapters?|tools?|docs?|debug)$/i
+const EXCLUDED_FILE = /(\.d\.ts|\.test\.tsx?|\.spec\.tsx?|\.debug\.tsx?)$/
 
 function listSourceFiles(dir) {
-	const out = [];
+	const out = []
 	for (const name of readdirSync(dir)) {
-		const full = join(dir, name);
-		const st = statSync(full);
+		const full = join(dir, name)
+		const st = statSync(full)
 		if (st.isDirectory()) {
-			if (EXCLUDED_SEGMENTS.test(name)) continue;
-			out.push(...listSourceFiles(full));
+			if (EXCLUDED_SEGMENTS.test(name)) continue
+			out.push(...listSourceFiles(full))
 		} else if (/\.tsx?$/.test(name) && !EXCLUDED_FILE.test(name)) {
-			out.push(full);
+			out.push(full)
 		}
 	}
-	return out;
+	return out
 }
 
 async function loadPrettier() {
 	// Prefer a prettier already installed near this repo (the React checkout
 	// carries 3.x); fall back to any resolvable install from cwd.
-	const here = dirname(fileURLToPath(import.meta.url));
+	const here = dirname(fileURLToPath(import.meta.url))
 	const candidates = [
 		join(here, '..', '..', 'vendor', 'react', 'package.json'),
 		join(process.cwd(), 'package.json'),
 		join(here, 'package.json'),
-	];
+	]
 	for (const from of candidates) {
-		if (!existsSync(from)) continue;
+		if (!existsSync(from)) continue
 		try {
-			const req = createRequire(from);
-			const entry = req.resolve('prettier');
-			return await import(pathToFileURL(entry).href);
+			const req = createRequire(from)
+			const entry = req.resolve('prettier')
+			return await import(pathToFileURL(entry).href)
 		} catch {
 			/* try next */
 		}
 	}
-	throw new Error('prettier not resolvable; run `npm i -g prettier` or run from a repo that has it');
+	throw new Error('prettier not resolvable; run `npm i -g prettier` or run from a repo that has it')
 }
 
 /**
@@ -124,124 +124,161 @@ async function loadPrettier() {
  * replaced with spaces (line structure preserved), then blank lines drop.
  */
 function countCodeLines(src) {
-	const n = src.length;
-	const out = [];
-	let i = 0;
+	const n = src.length
+	const out = []
+	let i = 0
 	// What the previous significant character allows: a `/` after a value
 	// (identifier, literal close) is division; elsewhere it starts a regex.
-	let prevSignificant = '';
-	const templateDepth = []; // ${} nesting per open template literal
-	let inTemplate = false;
+	let prevSignificant = ''
+	const templateDepth = [] // ${} nesting per open template literal
+	let inTemplate = false
 	while (i < n) {
-		const c = src[i];
-		const c2 = src[i + 1];
+		const c = src[i]
+		const c2 = src[i + 1]
 		if (c === '/' && c2 === '/') {
-			while (i < n && src[i] !== '\n') { out.push(' '); i++; }
-			continue;
+			while (i < n && src[i] !== '\n') {
+				out.push(' ')
+				i++
+			}
+			continue
 		}
 		if (c === '/' && c2 === '*') {
-			out.push(' ', ' '); i += 2;
+			out.push(' ', ' ')
+			i += 2
 			while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
-				out.push(src[i] === '\n' ? '\n' : ' '); i++;
+				out.push(src[i] === '\n' ? '\n' : ' ')
+				i++
 			}
-			if (i < n) { out.push(' ', ' '); i += 2; }
-			continue;
+			if (i < n) {
+				out.push(' ', ' ')
+				i += 2
+			}
+			continue
 		}
 		if (c === '"' || c === "'") {
-			out.push(c); i++;
+			out.push(c)
+			i++
 			while (i < n && src[i] !== c) {
-				if (src[i] === '\\') { out.push(src[i], src[i + 1] ?? ''); i += 2; continue; }
-				out.push(src[i]); i++;
+				if (src[i] === '\\') {
+					out.push(src[i], src[i + 1] ?? '')
+					i += 2
+					continue
+				}
+				out.push(src[i])
+				i++
 			}
-			if (i < n) { out.push(c); i++; }
-			prevSignificant = c;
-			continue;
+			if (i < n) {
+				out.push(c)
+				i++
+			}
+			prevSignificant = c
+			continue
 		}
 		if (c === '`' || (inTemplate && c === '}' && templateDepth[templateDepth.length - 1] === 0)) {
 			// Enter (or re-enter after ${expr}) a template literal body.
-			if (c === '`') templateDepth.push(0);
-			else templateDepth[templateDepth.length - 1] = -1; // consumed the closing }
-			out.push(c); i++;
-			let closed = false;
+			if (c === '`') templateDepth.push(0)
+			else templateDepth[templateDepth.length - 1] = -1 // consumed the closing }
+			out.push(c)
+			i++
+			let closed = false
 			while (i < n && !closed) {
-				if (src[i] === '\\') { out.push(src[i], src[i + 1] ?? ''); i += 2; continue; }
-				if (src[i] === '`') { out.push('`'); i++; closed = true; break; }
-				if (src[i] === '$' && src[i + 1] === '{') {
-					out.push('$', '{'); i += 2;
-					templateDepth[templateDepth.length - 1] = 0;
-					break; // back to code scanning inside ${}
+				if (src[i] === '\\') {
+					out.push(src[i], src[i + 1] ?? '')
+					i += 2
+					continue
 				}
-				out.push(src[i] === '\n' ? '\n' : src[i]); i++;
+				if (src[i] === '`') {
+					out.push('`')
+					i++
+					closed = true
+					break
+				}
+				if (src[i] === '$' && src[i + 1] === '{') {
+					out.push('$', '{')
+					i += 2
+					templateDepth[templateDepth.length - 1] = 0
+					break // back to code scanning inside ${}
+				}
+				out.push(src[i] === '\n' ? '\n' : src[i])
+				i++
 			}
-			if (closed) templateDepth.pop();
-			inTemplate = templateDepth.length > 0;
-			prevSignificant = '`';
-			continue;
+			if (closed) templateDepth.pop()
+			inTemplate = templateDepth.length > 0
+			prevSignificant = '`'
+			continue
 		}
-		if (c === '{' && inTemplate) templateDepth[templateDepth.length - 1]++;
-		if (c === '}' && inTemplate) templateDepth[templateDepth.length - 1]--;
+		if (c === '{' && inTemplate) templateDepth[templateDepth.length - 1]++
+		if (c === '}' && inTemplate) templateDepth[templateDepth.length - 1]--
 		if (c === '/' && !/[\w)\]$'"`]/.test(prevSignificant)) {
 			// Regex literal: skip to the unescaped closing /, honoring classes.
-			out.push('/'); i++;
-			let inClass = false;
+			out.push('/')
+			i++
+			let inClass = false
 			while (i < n) {
-				if (src[i] === '\\') { out.push(src[i], src[i + 1] ?? ''); i += 2; continue; }
-				if (src[i] === '[') inClass = true;
-				if (src[i] === ']') inClass = false;
-				out.push(src[i]);
-				if (src[i] === '/' && !inClass) { i++; break; }
-				i++;
+				if (src[i] === '\\') {
+					out.push(src[i], src[i + 1] ?? '')
+					i += 2
+					continue
+				}
+				if (src[i] === '[') inClass = true
+				if (src[i] === ']') inClass = false
+				out.push(src[i])
+				if (src[i] === '/' && !inClass) {
+					i++
+					break
+				}
+				i++
 			}
-			prevSignificant = '/';
-			continue;
+			prevSignificant = '/'
+			continue
 		}
-		out.push(c);
-		if (!/\s/.test(c)) prevSignificant = c;
-		i++;
+		out.push(c)
+		if (!/\s/.test(c)) prevSignificant = c
+		i++
 	}
 	return out
 		.join('')
 		.split('\n')
-		.filter((line) => line.trim() !== '').length;
+		.filter((line) => line.trim() !== '').length
 }
 
 async function countLib(pkgDirs) {
-	const prettier = await loadPrettier();
-	const format = prettier.format ?? prettier.default.format;
-	let total = 0;
-	const perFile = {};
+	const prettier = await loadPrettier()
+	const format = prettier.format ?? prettier.default.format
+	let total = 0
+	const perFile = {}
 	for (const pkg of pkgDirs) {
-		const srcDir = join(resolve(pkg), 'src');
+		const srcDir = join(resolve(pkg), 'src')
 		if (!existsSync(srcDir)) {
-			console.error(`warning: ${pkg} has no src/ directory; skipped`);
-			continue;
+			console.error(`warning: ${pkg} has no src/ directory; skipped`)
+			continue
 		}
 		for (const file of listSourceFiles(srcDir)) {
-			const raw = readFileSync(file, 'utf8');
-			const formatted = await format(raw, { parser: 'typescript', printWidth: 100 });
-			const lines = countCodeLines(formatted);
-			total += lines;
-			perFile[file.split(sep).slice(-4).join('/')] = lines;
+			const raw = readFileSync(file, 'utf8')
+			const formatted = await format(raw, { parser: 'typescript', printWidth: 100 })
+			const lines = countCodeLines(formatted)
+			total += lines
+			perFile[file.split(sep).slice(-4).join('/')] = lines
 		}
 	}
-	return { total, perFile };
+	return { total, perFile }
 }
 
 // ---- main ------------------------------------------------------------------------
 
-const result = { forkLoc: null, libLoc: null, perFile: {} };
+const result = { forkLoc: null, libLoc: null, perFile: {} }
 if (opts.fork !== undefined) {
 	if (opts.base === undefined) {
-		console.error('--fork requires --base <sha>');
-		process.exit(2);
+		console.error('--fork requires --base <sha>')
+		process.exit(2)
 	}
-	const fork = countFork(resolve(opts.fork), opts.base, opts.head);
-	result.forkLoc = fork.total;
-	Object.assign(result.perFile, fork.perFile);
+	const fork = countFork(resolve(opts.fork), opts.base, opts.head)
+	result.forkLoc = fork.total
+	Object.assign(result.perFile, fork.perFile)
 }
 if (opts.libs.length > 0) {
-	const lib = await countLib(opts.libs);
-	result.libLoc = lib.total;
-	Object.assign(result.perFile, lib.perFile);
+	const lib = await countLib(opts.libs)
+	result.libLoc = lib.total
+	Object.assign(result.perFile, lib.perFile)
 }
-console.log(JSON.stringify(result, null, 2));
+console.log(JSON.stringify(result, null, 2))

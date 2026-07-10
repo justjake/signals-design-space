@@ -8,10 +8,10 @@
  * SkipTest from the operation (the package's own conformance spec does the
  * same conversion).
  */
-import { SkipTest } from 'reactive-framework-test-suite';
-import type { AdapterSignal, FrameworkAdapter } from './types';
-import adapter from '../../packages/signals-royale-fx2/royale/harness-adapter.ts';
-import { WriteForbiddenError } from '../../packages/signals-royale-fx2/src/graph.ts';
+import { SkipTest } from 'reactive-framework-test-suite'
+import type { AdapterSignal, FrameworkAdapter } from './types'
+import adapter from '../../packages/signals-royale-fx2/royale/harness-adapter.ts'
+import { WriteForbiddenError } from '../../packages/signals-royale-fx2/src/graph.ts'
 
 const shimmed: FrameworkAdapter = {
 	...(adapter as unknown as FrameworkAdapter),
@@ -19,24 +19,24 @@ const shimmed: FrameworkAdapter = {
 	// join them; the package's own adapter self-identifies by its npm name.
 	name: 'fx2',
 	signal<T>(initialValue: T): AdapterSignal<T> {
-		const signal = (adapter as unknown as FrameworkAdapter).signal(initialValue);
+		const signal = (adapter as unknown as FrameworkAdapter).signal(initialValue)
 		return {
 			read: signal.read,
 			write(value: T) {
 				try {
-					signal.write(value);
+					signal.write(value)
 				} catch (error) {
 					if (
 						error instanceof WriteForbiddenError &&
 						error.message === 'writes inside computeds are forbidden'
 					) {
-						throw new SkipTest('computed writes are disabled by policy');
+						throw new SkipTest('computed writes are disabled by policy')
 					}
-					throw error;
+					throw error
 				}
 			},
-		};
+		}
 	},
-};
+}
 
-export default shimmed;
+export default shimmed

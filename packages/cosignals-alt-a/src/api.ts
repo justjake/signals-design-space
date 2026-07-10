@@ -10,55 +10,65 @@
  * and the overlay's memo equality — treat an unchanged error/suspension as
  * "no change" (§11.2).
  */
-import type { ComputedHandle, CosignalEngine, Equality, SignalHandle } from './engine';
+import type { ComputedHandle, CosignalEngine, Equality, SignalHandle } from './engine'
 
 // ---- §11.3 sentinel boxes ---------------------------------------------------------
-export type ErrorBox = { kind: 'error'; error: unknown };
+export type ErrorBox = { kind: 'error'; error: unknown }
 export type SuspendedBox = {
-	kind: 'suspended';
-	thenable: PromiseLike<unknown>;
+	kind: 'suspended'
+	thenable: PromiseLike<unknown>
 	/** Solid's STATUS_UNINITIALIZED analog, inverted: true once a real value
 	 * has ever committed for this node — refresh-pending boxes carry it so
 	 * boundaries can serve stale content instead of falling back. */
-	hasLatest: boolean;
+	hasLatest: boolean
 	/** The last committed value (meaningful iff hasLatest). */
-	latest: unknown;
+	latest: unknown
 	/** What the REACT BOUNDARY throws: a per-box cached gate chained AFTER
 	 * the engine's settlement handler, so React's retry render is always
 	 * ordered after the settlement invalidate has landed (throwing the raw
 	 * thenable races: React can retry between resolution and the invalidate
 	 * microtask, re-suspend on an already-resolved thenable, and never
 	 * retry again). Identity-stable across retries (cached on the box). */
-	gate: PromiseLike<unknown>;
-};
+	gate: PromiseLike<unknown>
+}
 
-const BOX = Symbol('cosignal.box');
+const BOX = Symbol('cosignal.box')
 
-type Boxed = (ErrorBox | SuspendedBox) & { [BOX]: true };
+type Boxed = (ErrorBox | SuspendedBox) & { [BOX]: true }
 
 /** One brand check for the hot read path (unboxing discriminates after). */
 function isBox(v: unknown): v is Boxed {
-	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true;
+	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true
 }
 
 export function isErrorBox(v: unknown): v is ErrorBox {
-	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true && (v as ErrorBox).kind === 'error';
+	return (
+		typeof v === 'object' &&
+		v !== null &&
+		(v as Boxed)[BOX] === true &&
+		(v as ErrorBox).kind === 'error'
+	)
 }
 
 export function isSuspendedBox(v: unknown): v is SuspendedBox {
-	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true && (v as SuspendedBox).kind === 'suspended';
+	return (
+		typeof v === 'object' &&
+		v !== null &&
+		(v as Boxed)[BOX] === true &&
+		(v as SuspendedBox).kind === 'suspended'
+	)
 }
 
 function errorBox(error: unknown): ErrorBox {
-	return { [BOX]: true, kind: 'error', error } as Boxed & ErrorBox;
+	return { [BOX]: true, kind: 'error', error } as Boxed & ErrorBox
 }
 
 function suspendedBox(thenable: PromiseLike<unknown>, prev: unknown): SuspendedBox {
 	// Carry the latest settled value forward: from a real previous value, or
 	// through a chain of pending boxes (a refresh during a refresh).
-	const prevBox = isBox(prev);
-	const hasLatest = prev !== undefined && (!prevBox || (isSuspendedBox(prev) && prev.hasLatest));
-	const latest = prevBox ? (isSuspendedBox(prev) ? prev.latest : undefined) : prev;
+	const prevBox = isBox(prev)
+	const hasLatest = prev !== undefined && (!prevBox || (isSuspendedBox(prev) && prev.hasLatest))
+	const latest = prevBox ? (isSuspendedBox(prev) ? prev.latest : undefined) : prev
 	// The gate registers AFTER the engine's stamp handler (ctx.use stamped
 	// the thenable before any box holding it exists), so gate listeners —
 	// React's retry ping — run after the settlement microtask is queued;
@@ -67,8 +77,9 @@ function suspendedBox(thenable: PromiseLike<unknown>, prev: unknown): SuspendedB
 	const gate = thenable.then(
 		() => undefined,
 		() => undefined,
-	);
-	return { [BOX]: true, kind: 'suspended', thenable, hasLatest, latest, gate } as Boxed & SuspendedBox;
+	)
+	return { [BOX]: true, kind: 'suspended', thenable, hasLatest, latest, gate } as Boxed &
+		SuspendedBox
 }
 
 // ---- §12.3 thenable protocol -------------------------------------------------------
@@ -79,39 +90,39 @@ function suspendedBox(thenable: PromiseLike<unknown>, prev: unknown): SuspendedB
 // (observed: permanent fallback, no retry ping). Our tracking must be
 // invisible to React.
 type TrackedThenable<T> = PromiseLike<T> & {
-	csStatus?: 'pending' | 'fulfilled' | 'rejected';
-	csValue?: T;
-	csReason?: unknown;
-};
+	csStatus?: 'pending' | 'fulfilled' | 'rejected'
+	csValue?: T
+	csReason?: unknown
+}
 
 // Module-level default equality for boxed computeds (no per-instance
 // closure): identity semantics + §11.3 box reference rules. The `create`
 // shape showed the per-computed closure bundle in GC attribution.
 function defaultBoxedEq(a: unknown, b: unknown): boolean {
-	const ab = isBox(a);
-	const bb = isBox(b);
+	const ab = isBox(a)
+	const bb = isBox(b)
 	if (ab || bb) {
 		if (!ab || !bb) {
-			return false;
+			return false
 		}
-		const ba = a as Boxed;
-		const bx = b as Boxed;
+		const ba = a as Boxed
+		const bx = b as Boxed
 		if (ba.kind !== bx.kind) {
-			return false;
+			return false
 		}
 		return ba.kind === 'error'
 			? Object.is((ba as ErrorBox).error, (bx as ErrorBox).error)
-			: Object.is((ba as SuspendedBox).thenable, (bx as SuspendedBox).thenable);
+			: Object.is((ba as SuspendedBox).thenable, (bx as SuspendedBox).thenable)
 	}
-	return Object.is(a, b);
+	return Object.is(a, b)
 }
 
 // ---- public option/ctx types (§4) ---------------------------------------------------
 export type AtomCtx<T> = {
-	peek(): T;
-	set(next: T): void;
-	update(fn: (current: T) => T): void;
-};
+	peek(): T
+	set(next: T): void
+	update(fn: (current: T) => T): void
+}
 
 export type AtomOptions<T> = {
 	/**
@@ -128,51 +139,51 @@ export type AtomOptions<T> = {
 	 *
 	 * To STORE a function as state, wrap it: `state: () => fn`.
 	 */
-	state: T | (() => T);
-	effect?: (ctx: AtomCtx<T>) => (() => void) | void;
-	isEqual?: Equality<T>;
-	label?: string;
-};
+	state: T | (() => T)
+	effect?: (ctx: AtomCtx<T>) => (() => void) | void
+	isEqual?: Equality<T>
+	label?: string
+}
 
 export type ReducerAtomOptions<S, A> = {
 	/** Initial state, or a lazy initializer (same contract as AtomOptions.state). */
-	state: S | (() => S);
-	reducer: (state: S, action: A) => S;
-	isEqual?: Equality<S>;
-	label?: string;
-};
+	state: S | (() => S)
+	reducer: (state: S, action: A) => S
+	isEqual?: Equality<S>
+	label?: string
+}
 
 export type ComputedCtx<T> = {
-	use<U>(thenable: PromiseLike<U>): U;
-	readonly previous: T | undefined;
-};
+	use<U>(thenable: PromiseLike<U>): U
+	readonly previous: T | undefined
+}
 
 export type ComputedOptions<T> = {
-	fn: (ctx: ComputedCtx<T>) => T;
-	isEqual?: Equality<T>;
-	label?: string;
-};
+	fn: (ctx: ComputedCtx<T>) => T
+	isEqual?: Equality<T>
+	label?: string
+}
 
-export type CosignalAPI = ReturnType<typeof createAPI>;
+export type CosignalAPI = ReturnType<typeof createAPI>
 
 export function createAPI(engine: CosignalEngine) {
-	const readAtomById = engine.readAtomById;
-	const readComputedById = engine.readComputedById;
+	const readAtomById = engine.readAtomById
+	const readComputedById = engine.readComputedById
 
 	class Atom<T> {
-		private _handle: ReturnType<typeof engine.atom<T>> | undefined;
-		private id = 0; // 0 = unmaterialized (engine node ids are never 0)
-		private _init: (() => T) | undefined;
-		private _opts: AtomOptions<T> | undefined;
+		private _handle: ReturnType<typeof engine.atom<T>> | undefined
+		private id = 0 // 0 = unmaterialized (engine node ids are never 0)
+		private _init: (() => T) | undefined
+		private _opts: AtomOptions<T> | undefined
 		constructor(options: AtomOptions<T>) {
 			if (typeof options.state === 'function') {
 				// LAZY INITIALIZER (React useState convention; see
 				// AtomOptions.state): the engine node is minted at first
 				// materialization — the initializer runs there, once.
-				this._init = options.state as () => T;
-				this._opts = options;
+				this._init = options.state as () => T
+				this._opts = options
 			} else {
-				this.mint(options.state, options);
+				this.mint(options.state, options)
 			}
 		}
 		private mint(initial: T, options: AtomOptions<T>): ReturnType<typeof engine.atom<T>> {
@@ -182,31 +193,31 @@ export function createAPI(engine: CosignalEngine) {
 				observeEffect:
 					options.effect !== undefined
 						? (ctx) =>
-							options.effect!({
-								peek: () => ctx.peek() as T,
-								set: (v: T) => ctx.set(v),
-								update: (f: (c: T) => T) => ctx.update(f as (x: unknown) => unknown),
-							})
+								options.effect!({
+									peek: () => ctx.peek() as T,
+									set: (v: T) => ctx.set(v),
+									update: (f: (c: T) => T) => ctx.update(f as (x: unknown) => unknown),
+								})
 						: undefined,
-			});
-			this._handle = h;
-			this.id = h.id;
+			})
+			this._handle = h
+			this.id = h.id
 			// Cleared only on SUCCESS: a throwing initializer leaves the atom
 			// unmaterialized (the next access retries — React semantics).
-			this._init = undefined;
-			this._opts = undefined;
-			return h;
+			this._init = undefined
+			this._opts = undefined
+			return h
 		}
 		get handle(): ReturnType<typeof engine.atom<T>> {
 			// Materialization: fin-token minting, observe-lifecycle wiring and
 			// everything else happen HERE for lazy atoms (mint-time =
 			// materialization time). The initializer result is CANONICAL/BASE
 			// state regardless of the reading context's world.
-			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!);
+			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!)
 		}
 		/** Introspection (tests/oracle): has the engine node been minted? */
 		get materialized(): boolean {
-			return this._handle !== undefined;
+			return this._handle !== undefined
 		}
 		/** §13.8 SSR install: counts as materialization, the initializer is
 		 * SKIPPED — install transplants committed state, it is not a write
@@ -214,67 +225,70 @@ export function createAPI(engine: CosignalEngine) {
 		 * the equality-drop contract; SPEC-RESOLUTIONS). */
 		installState(v: T): void {
 			if (this._handle === undefined && this._init !== undefined) {
-				this.mint(v, this._opts!);
-				return;
+				this.mint(v, this._opts!)
+				return
 			}
-			this.handle.set(v);
+			this.handle.set(v)
 		}
 		get state(): T {
-			const id = this.id;
-			return readAtomById(id !== 0 ? id : this.handle.id) as T;
+			const id = this.id
+			return readAtomById(id !== 0 ? id : this.handle.id) as T
 		}
 		set(next: T): void {
-			this.handle.set(next);
+			this.handle.set(next)
 		}
 		update(fn: (current: T) => T): void {
-			this.handle.update(fn);
+			this.handle.update(fn)
 		}
 	}
 
 	class ReducerAtom<S, A> {
-		private _handle: ReturnType<typeof engine.reducerAtom<S, A>> | undefined;
-		private id = 0; // 0 = unmaterialized
-		private _init: (() => S) | undefined;
-		private _opts: ReducerAtomOptions<S, A> | undefined;
+		private _handle: ReturnType<typeof engine.reducerAtom<S, A>> | undefined
+		private id = 0 // 0 = unmaterialized
+		private _init: (() => S) | undefined
+		private _opts: ReducerAtomOptions<S, A> | undefined
 		constructor(options: ReducerAtomOptions<S, A>) {
 			if (typeof options.state === 'function') {
-				this._init = options.state as () => S;
-				this._opts = options;
+				this._init = options.state as () => S
+				this._opts = options
 			} else {
-				this.mint(options.state, options);
+				this.mint(options.state, options)
 			}
 		}
-		private mint(initial: S, options: ReducerAtomOptions<S, A>): ReturnType<typeof engine.reducerAtom<S, A>> {
+		private mint(
+			initial: S,
+			options: ReducerAtomOptions<S, A>,
+		): ReturnType<typeof engine.reducerAtom<S, A>> {
 			const h = engine.reducerAtom<S, A>(initial, options.reducer, {
 				isEqual: options.isEqual,
 				label: options.label,
-			});
-			this._handle = h;
-			this.id = h.id;
-			this._init = undefined;
-			this._opts = undefined;
-			return h;
+			})
+			this._handle = h
+			this.id = h.id
+			this._init = undefined
+			this._opts = undefined
+			return h
 		}
 		get handle(): ReturnType<typeof engine.reducerAtom<S, A>> {
-			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!);
+			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!)
 		}
 		get materialized(): boolean {
-			return this._handle !== undefined;
+			return this._handle !== undefined
 		}
 		/** §13.8 SSR install — same contract as Atom.installState. */
 		installState(v: S): void {
 			if (this._handle === undefined && this._init !== undefined) {
-				this.mint(v, this._opts!);
-				return;
+				this.mint(v, this._opts!)
+				return
 			}
-			(this.handle as unknown as { set(v: S): void }).set(v);
+			;(this.handle as unknown as { set(v: S): void }).set(v)
 		}
 		get state(): S {
-			const id = this.id;
-			return readAtomById(id !== 0 ? id : this.handle.id) as S;
+			const id = this.id
+			return readAtomById(id !== 0 ? id : this.handle.id) as S
 		}
 		dispatch(action: A): void {
-			this.handle.dispatch(action); // materializes: the reducer folds over the initializer result
+			this.handle.dispatch(action) // materializes: the reducer folds over the initializer result
 		}
 	}
 
@@ -294,28 +308,28 @@ export function createAPI(engine: CosignalEngine) {
 	//
 	// Evaluation frames: one per active policy evaluation, pooled (the frame
 	// allocation would otherwise be the kairo-deep regression all over again).
-	type EvalFrame = { pending: PromiseLike<unknown>[]; usedCanonSlots: boolean };
+	type EvalFrame = { pending: PromiseLike<unknown>[]; usedCanonSlots: boolean }
 	// Preallocated indexed stack (profiled: pool-array push/pop per recompute
 	// cost kairo-deep ~85% — recomputes are the hot loop, frames must be an
 	// index bump + two resets).
-	const frameStack: EvalFrame[] = [];
-	let frameSp = 0;
+	const frameStack: EvalFrame[] = []
+	let frameSp = 0
 
 	function pushFrame(): EvalFrame {
-		let f = frameStack[frameSp];
+		let f = frameStack[frameSp]
 		if (f === undefined) {
-			frameStack[frameSp] = f = { pending: [], usedCanonSlots: false };
+			frameStack[frameSp] = f = { pending: [], usedCanonSlots: false }
 		}
 		if (f.pending.length !== 0) {
-			f.pending.length = 0;
+			f.pending.length = 0
 		}
-		f.usedCanonSlots = false;
-		++frameSp;
-		return f;
+		f.usedCanonSlots = false
+		++frameSp
+		return f
 	}
 
 	function popFrame(): void {
-		--frameSp;
+		--frameSp
 	}
 
 	// Ultimate SOURCE SETS of join thenables (module-level: joins from one
@@ -327,24 +341,24 @@ export function createAPI(engine: CosignalEngine) {
 	// arriving both directly and inside a sibling's join made two worlds'
 	// identical wait sets look different, a spurious pending→pending
 	// broadcast).
-	const joinSources = new WeakMap<PromiseLike<unknown>, PromiseLike<unknown>[]>();
+	const joinSources = new WeakMap<PromiseLike<unknown>, PromiseLike<unknown>[]>()
 
 	/** Forward a pending dep into the active evaluation, if one is open.
 	 * Returns true when forwarded (the reader continues with undefined). */
 	function forwardPending(th: PromiseLike<unknown>): boolean {
 		if (frameSp === 0) {
-			return false;
+			return false
 		}
-		const f = frameStack[frameSp - 1];
+		const f = frameStack[frameSp - 1]
 		if (!f.pending.includes(th)) {
-			f.pending.push(th);
+			f.pending.push(th)
 		}
-		return true;
+		return true
 	}
 
 	class Computed<T> {
-		readonly handle: ComputedHandle<unknown>;
-		private readonly id: number;
+		readonly handle: ComputedHandle<unknown>
+		private readonly id: number
 		// Thenable slots per node×world (the §12.3 adaptation): positions are
 		// stable for the node's life within one world key, so re-evaluations
 		// and Suspense retries re-see the SAME store-held thenable. Canonical
@@ -352,105 +366,108 @@ export function createAPI(engine: CosignalEngine) {
 		// dirty-gated, so the next evaluation is a REAL input change → fresh
 		// fetch, Solid's latest-wins); world keys stay first-wins (overlay
 		// re-evaluation is conservative and must not thrash fetches).
-		private useSlots: Map<string, TrackedThenable<unknown>[]> | undefined;
-		private useIndex = 0;
+		private useSlots: Map<string, TrackedThenable<unknown>[]> | undefined
+		private useIndex = 0
 		// Canonical joins per SOURCE SET: the same set of pending thenables
 		// always yields the same joined object (broadcast cutoffs and memo
 		// equality then key on the true wait-set, not join allocation order).
-		private pendingJoins: Array<{ parts: PromiseLike<unknown>[]; joined: PromiseLike<unknown> }> | undefined;
-		private ctxLazy: ComputedCtx<T> | undefined;
+		private pendingJoins:
+			| Array<{ parts: PromiseLike<unknown>[]; joined: PromiseLike<unknown> }>
+			| undefined
+		private ctxLazy: ComputedCtx<T> | undefined
 
 		private get ctx(): ComputedCtx<T> {
-			const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
+			const self = this // eslint-disable-line @typescript-eslint/no-this-alias
 			return (this.ctxLazy ??= {
 				get previous(): T | undefined {
-					const prev = engine.policy.canonicalValue(self.handle);
-					return isBox(prev) ? undefined : (prev as T | undefined);
+					const prev = engine.policy.canonicalValue(self.handle)
+					return isBox(prev) ? undefined : (prev as T | undefined)
 				},
 				use<U>(thenable: PromiseLike<U>): U {
-					return self.useThenable(thenable);
+					return self.useThenable(thenable)
 				},
-			});
+			})
 		}
 
 		constructor(options: ComputedOptions<T>) {
-			const userEq = options.isEqual;
-			const eq: Equality<unknown> = userEq === undefined
-				? defaultBoxedEq
-				: (a, b) => {
-					const ab = isBox(a);
-					const bb = isBox(b);
-					if (ab || bb) {
-						return defaultBoxedEq(a, b);
-					}
-					return userEq(a as T, b as T);
-				};
+			const userEq = options.isEqual
+			const eq: Equality<unknown> =
+				userEq === undefined
+					? defaultBoxedEq
+					: (a, b) => {
+							const ab = isBox(a)
+							const bb = isBox(b)
+							if (ab || bb) {
+								return defaultBoxedEq(a, b)
+							}
+							return userEq(a as T, b as T)
+						}
 
-			const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
-			const fn = options.fn;
+			const self = this // eslint-disable-line @typescript-eslint/no-this-alias
+			const fn = options.fn
 			// The shared evaluation body: run under a frame; a throw is §11.3
 			// error state; recorded pendings make the result a SuspendedBox
 			// holding the node's (joined) thenable.
 			const evaluate = (prevForBoxes: unknown): unknown => {
-				self.useIndex = 0;
-				const frame = pushFrame();
-				let next: unknown;
+				self.useIndex = 0
+				const frame = pushFrame()
+				let next: unknown
 				try {
-					next = fn(self.ctx);
+					next = fn(self.ctx)
 				} catch (e) {
-					popFrame();
+					popFrame()
 					return isErrorBox(prevForBoxes) && Object.is(prevForBoxes.error, e)
 						? prevForBoxes
-						: errorBox(e);
+						: errorBox(e)
 				}
-				const pendingCount = frame.pending.length;
-				const usedCanon = frame.usedCanonSlots;
+				const pendingCount = frame.pending.length
+				const usedCanon = frame.usedCanonSlots
 				if (pendingCount !== 0) {
-					const th = self.joinPending(frame.pending);
-					popFrame();
+					const th = self.joinPending(frame.pending)
+					popFrame()
 					return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th)
 						? prevForBoxes
-						: suspendedBox(th, prevForBoxes);
+						: suspendedBox(th, prevForBoxes)
 				}
-				popFrame();
+				popFrame()
 				if (usedCanon) {
 					// Settled completion consumed the canonical slots: the next
 					// canonical evaluation is a real input change (exact pull
 					// counts) → fresh fetches (latest-wins).
-					self.useSlots?.delete('canon');
+					self.useSlots?.delete('canon')
 				}
-				return next;
-			};
+				return next
+			}
 			// Raw overlay-evaluation fn (§10.5): box stability via the canonical
 			// cache (overlay evaluations carry no kernel prev).
-			const evalFn = (): unknown => evaluate(engine.policy.canonicalValue(self.handle));
+			const evalFn = (): unknown => evaluate(engine.policy.canonicalValue(self.handle))
 			// Slim specialization: zero-arity fn (cannot reach ctx) + no custom
 			// equality. It can still READ pending deps, so it still runs under a
 			// frame — but skips ctx/slot bookkeeping entirely.
 			if (options.fn.length === 0 && userEq === undefined) {
-				const plainFn = options.fn as unknown as () => unknown;
+				const plainFn = options.fn as unknown as () => unknown
 				const slimBody = (prevForBoxes: unknown): unknown => {
-					const frame = pushFrame();
-					let next: unknown;
+					const frame = pushFrame()
+					let next: unknown
 					try {
-						next = plainFn();
+						next = plainFn()
 					} catch (e) {
-						popFrame();
+						popFrame()
 						return isErrorBox(prevForBoxes) && Object.is(prevForBoxes.error, e)
 							? prevForBoxes
-							: errorBox(e);
+							: errorBox(e)
 					}
-					const pendingCount = frame.pending.length;
+					const pendingCount = frame.pending.length
 					if (pendingCount !== 0) {
-						const th = self.joinPending(frame.pending);
-						popFrame();
+						const th = self.joinPending(frame.pending)
+						popFrame()
 						return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th)
 							? prevForBoxes
-							: suspendedBox(th, prevForBoxes);
+							: suspendedBox(th, prevForBoxes)
 					}
-					popFrame();
-					return next;
-				};
+					popFrame()
+					return next
+				}
 				this.handle = engine.computed<unknown>(
 					() => slimBody(engine.policy.canonicalValue(self.handle)),
 					{
@@ -458,24 +475,28 @@ export function createAPI(engine: CosignalEngine) {
 						label: options.label,
 						kernelFn: (prev?: unknown): unknown => slimBody(prev),
 					},
-				);
-				this.id = this.handle.id;
-				instancesByHandle.set(this.handle, this as Computed<unknown>);
-				return;
+				)
+				this.id = this.handle.id
+				instancesByHandle.set(this.handle, this as Computed<unknown>)
+				return
 			}
 			// Fused kernel wrapper: canonical evaluations carry the kernel's
 			// prev for box reference-stability and equality (§11.2/§11.3).
 			const kernelFn = (prev?: unknown): unknown => {
-				const next = evaluate(prev);
+				const next = evaluate(prev)
 				if (isBox(next)) {
-					return next;
+					return next
 				}
-				return prev !== undefined && eq(prev, next) ? prev : next;
-			};
+				return prev !== undefined && eq(prev, next) ? prev : next
+			}
 
-			this.handle = engine.computed<unknown>(evalFn, { isEqual: eq, label: options.label, kernelFn });
-			this.id = this.handle.id;
-			instancesByHandle.set(this.handle, this as Computed<unknown>);
+			this.handle = engine.computed<unknown>(evalFn, {
+				isEqual: eq,
+				label: options.label,
+				kernelFn,
+			})
+			this.id = this.handle.id
+			instancesByHandle.set(this.handle, this as Computed<unknown>)
 		}
 
 		/** refresh() support: drop every world's thenable slots so the next
@@ -485,7 +506,7 @@ export function createAPI(engine: CosignalEngine) {
 		 * a new join for an identical set, a pending→pending identity change
 		 * that would spuriously re-broadcast (caught by the oracle fuzz). */
 		clearUseSlots(): void {
-			this.useSlots = undefined;
+			this.useSlots = undefined
 		}
 
 		/** One thenable identity per evaluation outcome: the single pending
@@ -493,49 +514,49 @@ export function createAPI(engine: CosignalEngine) {
 		 * object even with parallel fetches). */
 		private joinPending(parts: PromiseLike<unknown>[]): PromiseLike<unknown> {
 			// FLATTEN to the ultimate source set (see joinSources).
-			let flat: PromiseLike<unknown>[];
+			let flat: PromiseLike<unknown>[]
 			if (parts.length === 1 && joinSources.get(parts[0]) === undefined) {
-				return parts[0]; // raw singleton: pass through (hot path)
+				return parts[0] // raw singleton: pass through (hot path)
 			}
-			flat = [];
+			flat = []
 			for (const p of parts) {
-				const src = joinSources.get(p);
+				const src = joinSources.get(p)
 				if (src === undefined) {
 					if (!flat.includes(p)) {
-						flat.push(p);
+						flat.push(p)
 					}
 				} else {
 					for (const u of src) {
 						if (!flat.includes(u)) {
-							flat.push(u);
+							flat.push(u)
 						}
 					}
 				}
 			}
 			if (flat.length === 1) {
-				return flat[0];
+				return flat[0]
 			}
 			// Pass-through: an immediate part already waiting on EXACTLY this
 			// set is the join (keeps forwarded identity stable across worlds).
 			for (const p of parts) {
-				const src = joinSources.get(p);
+				const src = joinSources.get(p)
 				if (src !== undefined && src.length === flat.length && flat.every((t) => src.includes(t))) {
-					return p;
+					return p
 				}
 			}
-			const joins = (this.pendingJoins ??= []);
+			const joins = (this.pendingJoins ??= [])
 			for (const cached of joins) {
 				if (
-					cached.parts.length === flat.length
-					&& flat.every((t) => cached.parts.includes(t)) // set equality
+					cached.parts.length === flat.length &&
+					flat.every((t) => cached.parts.includes(t)) // set equality
 				) {
-					return cached.joined;
+					return cached.joined
 				}
 			}
-			const joined = Promise.all(flat).then(() => undefined) as PromiseLike<unknown>;
-			joinSources.set(joined, flat);
-			joins.push({ parts: flat, joined });
-			return joined;
+			const joined = Promise.all(flat).then(() => undefined) as PromiseLike<unknown>
+			joinSources.set(joined, flat)
+			joins.push({ parts: flat, joined })
+			return joined
 		}
 
 		/** §12.3 (adapted): record-pending-and-return. Never throws mid-eval
@@ -543,26 +564,26 @@ export function createAPI(engine: CosignalEngine) {
 		 * before pending surfaces on the node. */
 		private useThenable<U>(thenable: PromiseLike<U>): U {
 			if (frameSp === 0) {
-				throw new Error('cosignal: ctx.use may only run inside a computed evaluation');
+				throw new Error('cosignal: ctx.use may only run inside a computed evaluation')
 			}
-			const frame = frameStack[frameSp - 1];
-			const key = engine.policy.useCacheKey();
-			const slots = (this.useSlots ??= new Map());
-			let arr = slots.get(key);
+			const frame = frameStack[frameSp - 1]
+			const key = engine.policy.useCacheKey()
+			const slots = (this.useSlots ??= new Map())
+			let arr = slots.get(key)
 			if (arr === undefined) {
-				slots.set(key, (arr = []));
+				slots.set(key, (arr = []))
 			}
-			const i = this.useIndex++;
+			const i = this.useIndex++
 			if (key === 'canon') {
 				// Mark EVERY canonical slot access: a settled completion then
 				// clears the canonical slots, so the next dirty-gated canonical
 				// evaluation (a real input change — exact pull counts) fetches
 				// fresh (latest-wins).
-				frame.usedCanonSlots = true;
+				frame.usedCanonSlots = true
 			}
-			let th = arr[i] as TrackedThenable<U> | undefined;
+			let th = arr[i] as TrackedThenable<U> | undefined
 			if (th === undefined) {
-				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>;
+				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>
 			} else if (th.csStatus === 'pending' && !Object.is(th, thenable)) {
 				// LATEST-WINS while pending (the Solid rule): re-evaluations are
 				// dirty/cert-gated, so a different incoming thenable at a pending
@@ -572,36 +593,36 @@ export function createAPI(engine: CosignalEngine) {
 				// layers make the replace a no-op.) The superseded promise still
 				// settles harmlessly — its onSettle no-ops once the node's box
 				// no longer holds it.
-				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>;
+				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>
 			}
 			if (th.csStatus === undefined) {
-				th.csStatus = 'pending';
+				th.csStatus = 'pending'
 				th.then(
 					(v) => {
-						th!.csStatus = 'fulfilled';
-						th!.csValue = v;
-						this.onSettle(th!);
+						th!.csStatus = 'fulfilled'
+						th!.csValue = v
+						this.onSettle(th!)
 					},
 					(r) => {
-						th!.csStatus = 'rejected';
-						th!.csReason = r;
-						this.onSettle(th!);
+						th!.csStatus = 'rejected'
+						th!.csReason = r
+						this.onSettle(th!)
 					},
-				);
+				)
 			}
 			if (th.csStatus === 'fulfilled') {
-				return th.csValue as U;
+				return th.csValue as U
 			}
 			if (th.csStatus === 'rejected') {
-				throw th.csReason;
+				throw th.csReason
 			}
 			if (!frame.pending.includes(th)) {
-				frame.pending.push(th);
+				frame.pending.push(th)
 			}
 			// The evaluation continues (its result is discarded — the node
 			// evaluates-to-pending); undefined is the documented in-flight
 			// stand-in a pending read produces.
-			return undefined as U;
+			return undefined as U
 		}
 
 		private onSettle(th: PromiseLike<unknown>): void {
@@ -610,32 +631,32 @@ export function createAPI(engine: CosignalEngine) {
 				// value still holds a pending box containing this thenable
 				// (directly or via a join), commit the resumption through
 				// invalidate → propagate.
-				const cached = engine.policy.canonicalValue(this.handle);
+				const cached = engine.policy.canonicalValue(this.handle)
 				if (
-					isSuspendedBox(cached)
-					&& (Object.is(cached.thenable, th)
-						|| this.pendingJoins?.some((j) =>
-							Object.is(j.joined, cached.thenable) && j.parts.some((p) => Object.is(p, th)),
+					isSuspendedBox(cached) &&
+					(Object.is(cached.thenable, th) ||
+						this.pendingJoins?.some(
+							(j) => Object.is(j.joined, cached.thenable) && j.parts.some((p) => Object.is(p, th)),
 						) === true)
 				) {
-					engine.policy.invalidate(this.handle);
+					engine.policy.invalidate(this.handle)
 				}
 				// A settlement moves no atom's tape: bump the overlay epoch so
 				// world memos holding the pending box re-validate.
-				engine.policy.bumpOverlayEpoch();
-			});
+				engine.policy.bumpOverlayEpoch()
+			})
 		}
 
 		get state(): T {
-			const v = readComputedById(this.id);
+			const v = readComputedById(this.id)
 			if (isBox(v)) {
 				if (v.kind === 'error') {
-					throw v.error; // error state surfaces at read sites (§11.3)
+					throw v.error // error state surfaces at read sites (§11.3)
 				}
 				// Pending: inside an evaluation, FORWARD (status propagates as
 				// graph state).
 				if (forwardPending(v.thenable)) {
-					return undefined as T;
+					return undefined as T
 				}
 				// Top-level read — the CONTEXT-SENSITIVE two-level rule (owner
 				// amendment): (a) inside a TRANSITION render pass, always hand
@@ -646,28 +667,28 @@ export function createAPI(engine: CosignalEngine) {
 				// straight through (no fallback flash); (c) never-settled
 				// suspends everywhere.
 				if ((v as SuspendedBox).hasLatest && !engine.policy.inTransitionRender()) {
-					return (v as SuspendedBox).latest as T;
+					return (v as SuspendedBox).latest as T
 				}
-				throw (v as SuspendedBox).gate;
+				throw (v as SuspendedBox).gate
 			}
-			return v as T;
+			return v as T
 		}
 
 		/** Non-throwing read: the value or its §11.3 status box. */
 		get boxed(): T | ErrorBox | SuspendedBox {
-			return readComputedById(this.id) as T | ErrorBox | SuspendedBox;
+			return readComputedById(this.id) as T | ErrorBox | SuspendedBox
 		}
 	}
 
 	// ---- Solid-2.0 async API set (owner brief; research/solid2-async-model.md §7) ----
 
 	/** Computed instances by handle (refresh needs the slot owner). */
-	const instancesByHandle = new WeakMap<object, Computed<unknown>>();
+	const instancesByHandle = new WeakMap<object, Computed<unknown>>()
 	/** Lazily-created cached isPending probe per node (§3 helper-node analog). */
-	const pendingProbes = new WeakMap<object, Computed<boolean>>();
+	const pendingProbes = new WeakMap<object, Computed<boolean>>()
 
 	function handleOfSource(x: { handle: SignalHandle } | SignalHandle): SignalHandle {
-		return 'handle' in x ? (x as { handle: SignalHandle }).handle : (x as SignalHandle);
+		return 'handle' in x ? (x as { handle: SignalHandle }).handle : (x as SignalHandle)
 	}
 
 	/**
@@ -682,7 +703,7 @@ export function createAPI(engine: CosignalEngine) {
 	 * reads the cached box, §8 "probes don't refetch").
 	 */
 	function isPending(source: { handle: SignalHandle } | SignalHandle): boolean {
-		return pendingProbe(source).state;
+		return pendingProbe(source).state
 	}
 
 	/**
@@ -698,25 +719,25 @@ export function createAPI(engine: CosignalEngine) {
 	/** The node's isPending probe computed (created if needed) — hooks
 	 * subscribe to it like any signal. */
 	function pendingProbe(source: { handle: SignalHandle } | SignalHandle): Computed<boolean> {
-		const h = handleOfSource(source);
-		let probe = pendingProbes.get(h);
+		const h = handleOfSource(source)
+		let probe = pendingProbes.get(h)
 		if (probe === undefined) {
 			probe = new Computed<boolean>({
 				fn: () => isSuspendedBox(engine.readComputedRaw(h.id)),
-			});
-			pendingProbes.set(h, probe);
+			})
+			pendingProbes.set(h, probe)
 		}
-		return probe;
+		return probe
 	}
 
 	function refresh(source: { handle: SignalHandle } | SignalHandle): void {
-		const h = handleOfSource(source);
-		const inst = instancesByHandle.get(h);
+		const h = handleOfSource(source)
+		const inst = instancesByHandle.get(h)
 		if (inst === undefined) {
-			return; // plain signal / foreign node: no-op
+			return // plain signal / foreign node: no-op
 		}
-		inst.clearUseSlots();
-		engine.policy.invalidate(h);
+		inst.clearUseSlots()
+		engine.policy.invalidate(h)
 	}
 
 	/**
@@ -738,15 +759,17 @@ export function createAPI(engine: CosignalEngine) {
 	 * per-world). Tracked callers still subscribe to the node.
 	 */
 	function latest<T>(source: { handle: SignalHandle } | SignalHandle): T | undefined {
-		const h = handleOfSource(source);
-		const v = engine.latestValue(h.id);
+		const h = handleOfSource(source)
+		const v = engine.latestValue(h.id)
 		if (isBox(v)) {
 			if (v.kind === 'error') {
-				throw v.error;
+				throw v.error
 			}
-			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as T | undefined;
+			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as
+				| T
+				| undefined
 		}
-		return v as T;
+		return v as T
 	}
 
 	/**
@@ -767,19 +790,21 @@ export function createAPI(engine: CosignalEngine) {
 		source: { handle: SignalHandle } | SignalHandle,
 		container?: unknown,
 	): T | undefined {
-		const h = handleOfSource(source);
-		const v = engine.readCommitted(h, container);
+		const h = handleOfSource(source)
+		const v = engine.readCommitted(h, container)
 		if (isBox(v)) {
 			if (v.kind === 'error') {
-				throw v.error;
+				throw v.error
 			}
-			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as T | undefined;
+			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as
+				| T
+				| undefined
 		}
-		return v as T;
+		return v as T
 	}
 
-	type Serializable = { handle: SignalHandle } | SignalHandle;
-	const handleOf = (x: Serializable): SignalHandle => ('handle' in x ? x.handle : x);
+	type Serializable = { handle: SignalHandle } | SignalHandle
+	const handleOf = (x: Serializable): SignalHandle => ('handle' in x ? x.handle : x)
 
 	/** §13.8 Server: capture committed leaf values. Keys are app-supplied
 	 * strings — debug labels are not identity, creation order is not stable. */
@@ -787,12 +812,12 @@ export function createAPI(engine: CosignalEngine) {
 		atoms: Record<string, Serializable>,
 		replacer?: (key: string, value: unknown) => unknown,
 	): string {
-		const out: Record<string, unknown> = {};
+		const out: Record<string, unknown> = {}
 		for (const [key, a] of Object.entries(atoms)) {
-			const v = engine.readCommitted(handleOf(a));
-			out[key] = replacer !== undefined ? replacer(key, v) : v;
+			const v = engine.readCommitted(handleOf(a))
+			out[key] = replacer !== undefined ? replacer(key, v) : v
 		}
-		return JSON.stringify(out);
+		return JSON.stringify(out)
 	}
 
 	/** §13.8 Client: install serialized values into matching atoms. MUST run
@@ -803,23 +828,23 @@ export function createAPI(engine: CosignalEngine) {
 		atoms: Record<string, { handle: { set(v: never): void } } | { set(v: never): void }>,
 		reviver?: (key: string, value: unknown) => unknown,
 	): void {
-		const data = JSON.parse(json) as Record<string, unknown>;
+		const data = JSON.parse(json) as Record<string, unknown>
 		for (const [key, raw] of Object.entries(data)) {
-			const target = atoms[key];
+			const target = atoms[key]
 			if (target === undefined) {
-				console.warn(`cosignal: initializeAtomState: unknown key "${key}"`);
-				continue;
+				console.warn(`cosignal: initializeAtomState: unknown key "${key}"`)
+				continue
 			}
-			const v = reviver !== undefined ? reviver(key, raw) : raw;
+			const v = reviver !== undefined ? reviver(key, raw) : raw
 			// Lazy class atoms install WITHOUT running the initializer (the
 			// server's committed value replaces it — install ≠ write).
-			const installable = target as { installState?: (x: unknown) => void };
+			const installable = target as { installState?: (x: unknown) => void }
 			if (typeof installable.installState === 'function') {
-				installable.installState(v);
-				continue;
+				installable.installState(v)
+				continue
 			}
-			const settable = ('handle' in target ? target.handle : target) as { set(x: unknown): void };
-			settable.set(v);
+			const settable = ('handle' in target ? target.handle : target) as { set(x: unknown): void }
+			settable.set(v)
 		}
 	}
 
@@ -840,5 +865,5 @@ export function createAPI(engine: CosignalEngine) {
 		serializeAtomState,
 		initializeAtomState,
 		engine,
-	};
+	}
 }

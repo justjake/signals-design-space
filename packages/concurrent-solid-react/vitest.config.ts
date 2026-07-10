@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
 	// The vendored Solid core reads the __DEV__ compile-time flag. Tests run
@@ -11,4 +11,4 @@ export default defineConfig({
 		watch: false,
 		pool: 'forks',
 	},
-});
+})

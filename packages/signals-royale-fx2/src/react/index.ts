@@ -7,18 +7,14 @@
  * rebase, per-root committed views, and suspense behavior all ride public
  * React semantics (state updates, context, effects).
  */
+export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
+export { SignalScope, wrapCreateRoot, ScopeContext } from './scope.ts'
 export {
-  registerReactSignals,
-  resetReactSignalsForTest,
-  type ReactSignalsHandle,
-} from './host.ts';
-export { SignalScope, wrapCreateRoot, ScopeContext } from './scope.ts';
-export {
-  useValue,
-  useComputed,
-  useSignalEffect,
-  useIsPending,
-  useCommitted,
-  useAtom,
-} from './hooks.ts';
-export { startTransitionWrite, useSignalTransition } from './transitions.ts';
+	useValue,
+	useComputed,
+	useSignalEffect,
+	useIsPending,
+	useCommitted,
+	useAtom,
+} from './hooks.ts'
+export { startTransitionWrite, useSignalTransition } from './transitions.ts'

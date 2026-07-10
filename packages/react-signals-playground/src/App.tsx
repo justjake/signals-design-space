@@ -12,7 +12,7 @@
  * urgent updates (counter, clock, filter) can be interleaved against a
  * pending transition deliberately and watched on the timeline strip.
  */
-import * as React from 'react';
+import * as React from 'react'
 import {
 	createAtom,
 	createComputed,
@@ -24,24 +24,24 @@ import {
 	useComputed,
 	useSignal,
 	useSignalEffect,
-} from '#concurrent-signals-shim';
-import { maybeWrapThenable, recordFetch, registerAppHandles, TEST_MODE, TestPanel } from './testkit';
+} from '#concurrent-signals-shim'
+import { maybeWrapThenable, recordFetch, registerAppHandles, TEST_MODE, TestPanel } from './testkit'
 
 // ---- module-level store -----------------------------------------------------------
 // Created at module init, before main.tsx calls register(): every engine
 // allocates signal records without touching React, so creation-time order is
 // safe. Shared by every component below.
 
-const count = createAtom(0, 'count');
-const doubled = createComputed(() => count.state * 2, 'doubled');
-const parity = createComputed(() => (count.state % 2 === 0 ? 'even' : 'odd'), 'parity');
+const count = createAtom(0, 'count')
+const doubled = createComputed(() => count.state * 2, 'doubled')
+const parity = createComputed(() => (count.state % 2 === 0 ? 'even' : 'odd'), 'parity')
 
 // The urgent clock: an interval-driven signal. Its continued ticking while a
 // transition is held open is direct visual proof the committed tree stays
 // live and keeps committing urgent updates.
-const CLOCK_TICK_MS = 100;
-const clockMs = createAtom(0, 'clockMs');
-window.setInterval(() => clockMs.set(Math.round(performance.now())), CLOCK_TICK_MS);
+const CLOCK_TICK_MS = 100
+const clockMs = createAtom(0, 'clockMs')
+window.setInterval(() => clockMs.set(Math.round(performance.now())), CLOCK_TICK_MS)
 
 // ---- inner navigation (the mini-browser) -------------------------------------------
 // Every navigation gets a fresh epoch. The target pair is written urgently
@@ -52,20 +52,20 @@ window.setInterval(() => clockMs.set(Math.round(performance.now())), CLOCK_TICK_
 // pending flag: the useTransition-equivalent state, derived from the shim
 // surface alone so it works identically on every implementation.
 
-type RouteName = 'dashboard' | 'table' | 'detail';
-const ROUTES: readonly RouteName[] = ['dashboard', 'table', 'detail'];
+type RouteName = 'dashboard' | 'table' | 'detail'
+const ROUTES: readonly RouteName[] = ['dashboard', 'table', 'detail']
 
-const targetRoute = createAtom<RouteName>('dashboard', 'targetRoute');
-const targetEpoch = createAtom(0, 'targetEpoch');
-const currentRoute = createAtom<RouteName>('dashboard', 'currentRoute');
-const routeEpoch = createAtom(0, 'routeEpoch');
-const navPending = createComputed(() => targetEpoch.state !== routeEpoch.state, 'navPending');
+const targetRoute = createAtom<RouteName>('dashboard', 'targetRoute')
+const targetEpoch = createAtom(0, 'targetEpoch')
+const currentRoute = createAtom<RouteName>('dashboard', 'currentRoute')
+const routeEpoch = createAtom(0, 'routeEpoch')
+const navPending = createComputed(() => targetEpoch.state !== routeEpoch.state, 'navPending')
 
-const histEntries = createAtom<readonly RouteName[]>(['dashboard'], 'histEntries');
-const histIndex = createAtom(0, 'histIndex');
+const histEntries = createAtom<readonly RouteName[]>(['dashboard'], 'histEntries')
+const histIndex = createAtom(0, 'histIndex')
 
 function addressOf(route: RouteName): string {
-	return `app://lab/${route}`;
+	return `app://lab/${route}`
 }
 
 // ---- navigation data resources -------------------------------------------------------
@@ -77,42 +77,42 @@ function addressOf(route: RouteName): string {
 // latency knob controls resolution; 'hold' parks the resource until the
 // RELEASE button settles it.
 
-type NavLatency = 0 | 250 | 1000 | 3000 | 'hold';
+type NavLatency = 0 | 250 | 1000 | 3000 | 'hold'
 const NAV_LATENCIES: readonly { value: NavLatency; label: string }[] = [
 	{ value: 0, label: 'instant' },
 	{ value: 250, label: '250 ms' },
 	{ value: 1000, label: '1 s' },
 	{ value: 3000, label: '3 s' },
 	{ value: 'hold', label: 'hold' },
-];
-const navLatency = createAtom<NavLatency>(250, 'navLatency');
-const heldCount = createAtom(0, 'heldCount');
+]
+const navLatency = createAtom<NavLatency>(250, 'navLatency')
+const heldCount = createAtom(0, 'heldCount')
 
 interface RouteResource {
-	readonly epoch: number;
-	readonly route: RouteName;
-	status: 'pending' | 'ready';
+	readonly epoch: number
+	readonly route: RouteName
+	status: 'pending' | 'ready'
 	/** Fetch duration, filled at settle. */
-	arrivedInMs: number;
-	readonly startedAt: number;
-	readonly promise: Promise<void>;
+	arrivedInMs: number
+	readonly startedAt: number
+	readonly promise: Promise<void>
 	/**
 	 * What a pending read throws. Normally the promise itself; in the
 	 * battery's foreign-thenable mode a non-Promise thenable wrapping it —
 	 * created once here so re-renders re-throw the same reference.
 	 */
-	readonly thrown: PromiseLike<void>;
-	settle(): void;
+	readonly thrown: PromiseLike<void>
+	settle(): void
 }
 
-const resources = new Map<number, RouteResource>();
-let heldResources: RouteResource[] = [];
+const resources = new Map<number, RouteResource>()
+let heldResources: RouteResource[] = []
 
 function createRouteResource(epoch: number, route: RouteName, latency: NavLatency): void {
-	let resolvePromise!: () => void;
+	let resolvePromise!: () => void
 	const promise = new Promise<void>((resolve) => {
-		resolvePromise = resolve;
-	});
+		resolvePromise = resolve
+	})
 	const resource: RouteResource = {
 		epoch,
 		route,
@@ -122,49 +122,49 @@ function createRouteResource(epoch: number, route: RouteName, latency: NavLatenc
 		promise,
 		thrown: maybeWrapThenable(promise),
 		settle() {
-			if (resource.status === 'ready') return;
-			resource.status = 'ready';
-			resource.arrivedInMs = Math.round(performance.now() - resource.startedAt);
-			recordFetch(epoch, route, 'settle');
-			resolvePromise();
+			if (resource.status === 'ready') return
+			resource.status = 'ready'
+			resource.arrivedInMs = Math.round(performance.now() - resource.startedAt)
+			recordFetch(epoch, route, 'settle')
+			resolvePromise()
 		},
-	};
-	resources.set(epoch, resource);
-	recordFetch(epoch, route, 'create');
+	}
+	resources.set(epoch, resource)
+	recordFetch(epoch, route, 'create')
 	if (latency === 'hold') {
-		heldResources.push(resource);
-		heldCount.update((n) => n + 1);
+		heldResources.push(resource)
+		heldCount.update((n) => n + 1)
 	} else if (latency === 0) {
-		resource.settle(); // ready before any render sees it: pure sync-weight mode
+		resource.settle() // ready before any render sees it: pure sync-weight mode
 	} else {
-		window.setTimeout(() => resource.settle(), latency);
+		window.setTimeout(() => resource.settle(), latency)
 	}
 }
 
 // The initial route's data is part of the initial page: first paint never suspends.
-createRouteResource(0, 'dashboard', 0);
+createRouteResource(0, 'dashboard', 0)
 
 function releaseHeld(): void {
-	const held = heldResources;
-	heldResources = [];
-	heldCount.set(0);
-	for (const resource of held) resource.settle();
+	const held = heldResources
+	heldResources = []
+	heldCount.set(0)
+	for (const resource of held) resource.settle()
 }
 
 /** Render-phase read of a navigation's data; throws the promise while pending (Suspense). */
 function readRouteData(epoch: number): RouteResource {
-	const resource = resources.get(epoch);
+	const resource = resources.get(epoch)
 	if (resource === undefined) {
-		throw new Error(`react-signals-playground: no data resource for navigation #${epoch}`);
+		throw new Error(`react-signals-playground: no data resource for navigation #${epoch}`)
 	}
-	if (resource.status === 'pending') throw resource.thrown;
-	return resource;
+	if (resource.status === 'pending') throw resource.thrown
+	return resource
 }
 
 /** Committed navigations can never be read again; drop everything older. */
 function pruneResources(settledEpoch: number): void {
 	for (const epoch of resources.keys()) {
-		if (epoch < settledEpoch) resources.delete(epoch);
+		if (epoch < settledEpoch) resources.delete(epoch)
 	}
 }
 
@@ -175,61 +175,68 @@ function pruneResources(settledEpoch: number): void {
 // live bar; settled records keep the last few.
 
 interface NavRecord {
-	readonly epoch: number;
-	readonly route: RouteName;
-	readonly startedAt: number;
+	readonly epoch: number
+	readonly route: RouteName
+	readonly startedAt: number
 	/** null while the navigation is still pending. */
-	readonly durationMs: number | null;
+	readonly durationMs: number | null
 	/** True when a newer navigation replaced this one before it settled. */
-	readonly superseded: boolean;
+	readonly superseded: boolean
 	/** ms offsets from startedAt of urgent commits that landed while pending. */
-	readonly ticks: readonly number[];
+	readonly ticks: readonly number[]
 }
 
-const NAV_LOG_LINES = 5;
-const activeNav = createAtom<NavRecord | null>(null, 'activeNav');
-const navLog = createAtom<readonly NavRecord[]>([], 'navLog');
+const NAV_LOG_LINES = 5
+const activeNav = createAtom<NavRecord | null>(null, 'activeNav')
+const navLog = createAtom<readonly NavRecord[]>([], 'navLog')
 
 function recordUrgentTick(): void {
-	const record = activeNav.state;
-	if (record === null) return;
-	const offset = Math.round(performance.now() - record.startedAt);
-	activeNav.update((r) => (r === null ? r : { ...r, ticks: [...r.ticks, offset] }));
+	const record = activeNav.state
+	if (record === null) return
+	const offset = Math.round(performance.now() - record.startedAt)
+	activeNav.update((r) => (r === null ? r : { ...r, ticks: [...r.ticks, offset] }))
 }
 
 function closeNavRecord(record: NavRecord, superseded: boolean): void {
-	const durationMs = Math.round(performance.now() - record.startedAt);
-	navLog.update((log) => [...log, { ...record, durationMs, superseded }].slice(-NAV_LOG_LINES));
+	const durationMs = Math.round(performance.now() - record.startedAt)
+	navLog.update((log) => [...log, { ...record, durationMs, superseded }].slice(-NAV_LOG_LINES))
 }
 
 // ---- navigate -----------------------------------------------------------------------------
 
-let navSeq = 0;
+let navSeq = 0
 
 function navigate(route: RouteName, pushHistory: boolean): void {
-	const epoch = ++navSeq;
-	createRouteResource(epoch, route, navLatency.state);
-	const superseded = activeNav.state;
-	if (superseded !== null) closeNavRecord(superseded, true);
+	const epoch = ++navSeq
+	createRouteResource(epoch, route, navLatency.state)
+	const superseded = activeNav.state
+	if (superseded !== null) closeNavRecord(superseded, true)
 	if (pushHistory) {
-		const index = histIndex.state;
-		histEntries.update((entries) => [...entries.slice(0, index + 1), route]);
-		histIndex.set(index + 1);
+		const index = histIndex.state
+		histEntries.update((entries) => [...entries.slice(0, index + 1), route])
+		histIndex.set(index + 1)
 	}
 	// Urgent: the chrome answers now — address bar, pending flag, timeline.
-	targetRoute.set(route);
-	targetEpoch.set(epoch);
-	activeNav.set({ epoch, route, startedAt: performance.now(), durationMs: null, superseded: false, ticks: [] });
+	targetRoute.set(route)
+	targetEpoch.set(epoch)
+	activeNav.set({
+		epoch,
+		route,
+		startedAt: performance.now(),
+		durationMs: null,
+		superseded: false,
+		ticks: [],
+	})
 	const commitNavigation = (): void => {
 		startSignalTransition(() => {
-			currentRoute.set(route);
-			routeEpoch.set(epoch);
-		});
-	};
+			currentRoute.set(route)
+			routeEpoch.set(epoch)
+		})
+	}
 	if (transitionHoldStyle === 'suspense') {
 		// The destination suspends on its resource inside this transition, so
 		// the transition itself stays open until the data arrives.
-		commitNavigation();
+		commitNavigation()
 	} else {
 		// defer-write: this implementation cannot hold a transition on a
 		// thrown promise, so wait for the data and only then run the
@@ -239,36 +246,36 @@ function navigate(route: RouteName, pushHistory: boolean): void {
 		void resources.get(epoch)!.promise.then(() => {
 			// A newer navigation superseded this one while its data was in
 			// flight; committing it now would navigate backwards.
-			if (targetEpoch.state !== epoch) return;
-			commitNavigation();
-		});
+			if (targetEpoch.state !== epoch) return
+			commitNavigation()
+		})
 	}
 }
 
 function goBack(): void {
-	const index = histIndex.state;
-	if (index <= 0) return;
-	histIndex.set(index - 1);
-	navigate(histEntries.state[index - 1]!, false);
+	const index = histIndex.state
+	if (index <= 0) return
+	histIndex.set(index - 1)
+	navigate(histEntries.state[index - 1]!, false)
 }
 
 function goForward(): void {
-	const index = histIndex.state;
-	const entries = histEntries.state;
-	if (index >= entries.length - 1) return;
-	histIndex.set(index + 1);
-	navigate(entries[index + 1]!, false);
+	const index = histIndex.state
+	const entries = histEntries.state
+	if (index >= entries.length - 1) return
+	histIndex.set(index + 1)
+	navigate(entries[index + 1]!, false)
 }
 
 // ---- table data ---------------------------------------------------------------------
 
-const INITIAL_ROWS = 3000;
-const ROW_STEP = 500;
-const rowCount = createAtom(INITIAL_ROWS, 'rowCount');
-const tableSeed = createAtom(1, 'tableSeed');
-const filterText = createAtom('', 'filterText');
-const selectedRow = createAtom(0, 'selectedRow');
-const markEvens = createAtom(false, 'markEvens');
+const INITIAL_ROWS = 3000
+const ROW_STEP = 500
+const rowCount = createAtom(INITIAL_ROWS, 'rowCount')
+const tableSeed = createAtom(1, 'tableSeed')
+const filterText = createAtom('', 'filterText')
+const selectedRow = createAtom(0, 'selectedRow')
+const markEvens = createAtom(false, 'markEvens')
 
 // Sync render weight, as distinct from the async data hold above: extra hash
 // rounds per row derivation make every table render pass proportionally more
@@ -278,43 +285,43 @@ const CPU_WORK: readonly { rounds: number; label: string }[] = [
 	{ rounds: 64, label: 'light' },
 	{ rounds: 1024, label: 'medium' },
 	{ rounds: 8192, label: 'heavy' },
-];
-const cpuRounds = createAtom(64, 'cpuRounds');
+]
+const cpuRounds = createAtom(64, 'cpuRounds')
 
 /** Deterministic per-row hash: every seed change visibly changes every row,
  * so one reseed re-derives the whole table. `rounds` is the CPU-work knob. */
 function rowValue(seed: number, index: number, rounds: number): number {
-	let h = Math.imul(seed ^ 0x9e3779b1, 0x85ebca6b) ^ Math.imul(index + 1, 0xc2b2ae35);
+	let h = Math.imul(seed ^ 0x9e3779b1, 0x85ebca6b) ^ Math.imul(index + 1, 0xc2b2ae35)
 	for (let round = 0; round < rounds; round++) {
-		h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) ^ round;
+		h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) ^ round
 	}
-	return (h >>> 0) % 100000;
+	return (h >>> 0) % 100000
 }
 
 /** Fixed-width row text: filtering matches what the chip displays, and equal
  * widths keep the table grid from shifting as values change. */
 function rowText(value: number): string {
-	return String(value).padStart(5, '0');
+	return String(value).padStart(5, '0')
 }
 
 function visibleRowsOf(seed: number, total: number, filter: string, rounds: number): number[] {
-	const out: number[] = [];
+	const out: number[] = []
 	for (let index = 0; index < total; index++) {
-		if (rowText(rowValue(seed, index, rounds)).includes(filter)) out.push(index);
+		if (rowText(rowValue(seed, index, rounds)).includes(filter)) out.push(index)
 	}
-	return out;
+	return out
 }
 
 const visibleRows = createComputed(
 	() => visibleRowsOf(tableSeed.state, rowCount.state, filterText.state, cpuRounds.state),
 	'visibleRows',
-);
+)
 // The same question derived independently from the same atoms: any render
 // that mixes worlds (rows from one write, count from another) disagrees.
 const visibleCount = createComputed(
 	() => visibleRowsOf(tableSeed.state, rowCount.state, filterText.state, cpuRounds.state).length,
 	'visibleCount',
-);
+)
 
 // Engine-internal coherence oracle: one computation reads several signals
 // that must always agree, so a single evaluation can never observe a mix.
@@ -324,9 +331,9 @@ const consistency = createComputed(
 			? 'consistent'
 			: 'TORN',
 	'consistency',
-);
+)
 
-const tornCommits = createAtom(0, 'tornCommits');
+const tornCommits = createAtom(0, 'tornCommits')
 
 // The battery's label registry: every shared atom the tests read or write
 // from outside any render (window.__store) is registered once, here.
@@ -351,22 +358,22 @@ registerAppHandles({
 	visibleCount,
 	consistency,
 	tornCommits,
-});
+})
 
 // ---- error strip ----------------------------------------------------------------------
 
-const ERROR_LINES = 5;
-const errorLog = createAtom<readonly string[]>([], 'errorLog');
+const ERROR_LINES = 5
+const errorLog = createAtom<readonly string[]>([], 'errorLog')
 
 function logError(line: string): void {
-	errorLog.update((log) => [...log, line].slice(-ERROR_LINES));
+	errorLog.update((log) => [...log, line].slice(-ERROR_LINES))
 }
 
 // Module init runs once per page: page-level failures land in the strip.
-window.addEventListener('error', (event) => logError(`error: ${event.message}`));
+window.addEventListener('error', (event) => logError(`error: ${event.message}`))
 window.addEventListener('unhandledrejection', (event) =>
 	logError(`unhandled rejection: ${String(event.reason)}`),
-);
+)
 
 // ---- committed-render tally --------------------------------------------------------
 // Passive effects only run for renders React committed, so an every-render
@@ -376,29 +383,29 @@ window.addEventListener('unhandledrejection', (event) =>
 // clock deliberately does not tally — 10 commits/s would drown the
 // interaction signal this tile exists to show.
 
-let committedRenders = 0;
-let committedRendersEl: HTMLElement | null = null;
+let committedRenders = 0
+let committedRendersEl: HTMLElement | null = null
 
 function useCommittedRenderTally(): void {
 	React.useEffect(() => {
-		committedRenders += 1;
-		if (committedRendersEl !== null) committedRendersEl.textContent = String(committedRenders);
-	});
+		committedRenders += 1
+		if (committedRendersEl !== null) committedRendersEl.textContent = String(committedRenders)
+	})
 }
 
 /** Drops a tick on the live timeline bar when a commit lands while a
  * navigation is pending and any of `deps` changed in it — called by the
  * interactive urgent widgets, so the ticks are the interleaving evidence. */
 function useUrgentCommitTick(deps: readonly unknown[]): void {
-	const first = React.useRef(true);
+	const first = React.useRef(true)
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	React.useEffect(() => {
 		if (first.current) {
-			first.current = false;
-			return;
+			first.current = false
+			return
 		}
-		recordUrgentTick();
-	}, deps);
+		recordUrgentTick()
+	}, deps)
 }
 
 // ---- consistency (render-level) ------------------------------------------------------
@@ -411,13 +418,13 @@ function useUrgentCommitTick(deps: readonly unknown[]): void {
  * render passes the oracle and fails here.
  */
 function useConsistencyVerdict(): 'consistent' | 'TORN' {
-	const value = useSignal(count);
-	const twice = useSignal(doubled);
-	const rows = useSignal(visibleRows);
-	const expected = useSignal(visibleCount);
-	const oracle = useSignal(consistency);
-	const agree = twice === value * 2 && rows.length === expected && oracle === 'consistent';
-	return agree ? 'consistent' : 'TORN';
+	const value = useSignal(count)
+	const twice = useSignal(doubled)
+	const rows = useSignal(visibleRows)
+	const expected = useSignal(visibleCount)
+	const oracle = useSignal(consistency)
+	const agree = twice === value * 2 && rows.length === expected && oracle === 'consistent'
+	return agree ? 'consistent' : 'TORN'
 }
 
 // ---- chrome ---------------------------------------------------------------------------
@@ -438,68 +445,64 @@ function ImplTabs(): React.ReactElement {
 				</a>
 			))}
 		</nav>
-	);
+	)
 }
 
-function Stat(props: {
-	id: string;
-	label: string;
-	children: React.ReactNode;
-}): React.ReactElement {
+function Stat(props: { id: string; label: string; children: React.ReactNode }): React.ReactElement {
 	return (
 		<div className="stat" id={props.id}>
 			<span>{props.children}</span>
 			<label>{props.label}</label>
 		</div>
-	);
+	)
 }
 
 /** Its own component so the 10 Hz clock re-renders this tile alone, not the panel. */
 function ClockTile(): React.ReactElement {
-	const now = useSignal(clockMs);
+	const now = useSignal(clockMs)
 	return (
 		<Stat id="stat-clock" label="urgent clock">
 			<span className="now" data-testid="clock">
 				{(now / 1000).toFixed(1)}s
 			</span>
 		</Stat>
-	);
+	)
 }
 
 function StatsPanel(): React.ReactElement {
-	useCommittedRenderTally();
-	const route = useSignal(currentRoute);
-	const target = useSignal(targetRoute);
-	const pending = useSignal(navPending);
-	const log = useSignal(navLog);
-	const verdict = useConsistencyVerdict();
-	const torn = useSignal(tornCommits);
-	const lastSettled = [...log].reverse().find((record) => !record.superseded);
+	useCommittedRenderTally()
+	const route = useSignal(currentRoute)
+	const target = useSignal(targetRoute)
+	const pending = useSignal(navPending)
+	const log = useSignal(navLog)
+	const verdict = useConsistencyVerdict()
+	const torn = useSignal(tornCommits)
+	const lastSettled = [...log].reverse().find((record) => !record.superseded)
 
 	// Committed-world side effects: the title and the timeline settle
 	// tracking follow what the user actually sees, so they lag pending
 	// transitions instead of revealing them early.
 	useSignalEffect(() => {
-		document.title = `${name} · ${currentRoute.state}`;
-	}, []);
+		document.title = `${name} · ${currentRoute.state}`
+	}, [])
 	useSignalEffect(() => {
-		const settledEpoch = routeEpoch.state; // tracked: fires when a navigation commits
-		const record = activeNav.state;
+		const settledEpoch = routeEpoch.state // tracked: fires when a navigation commits
+		const record = activeNav.state
 		if (record !== null && record.epoch <= settledEpoch) {
-			closeNavRecord(record, false);
-			activeNav.set(null);
+			closeNavRecord(record, false)
+			activeNav.set(null)
 		}
-		pruneResources(settledEpoch);
-	}, []);
+		pruneResources(settledEpoch)
+	}, [])
 
 	// A TORN verdict on committed UI is an integrity failure: latch it (the
 	// tile survives the frame that tore) and put it in the error strip.
 	React.useEffect(() => {
 		if (verdict === 'TORN') {
-			tornCommits.update((n) => n + 1);
-			logError(`torn commit: cross-hook reads disagreed while showing "${route}"`);
+			tornCommits.update((n) => n + 1)
+			logError(`torn commit: cross-hook reads disagreed while showing "${route}"`)
 		}
-	}, [verdict, route]);
+	}, [verdict, route])
 
 	return (
 		<section id="hud" aria-label="instrumentation">
@@ -532,8 +535,8 @@ function StatsPanel(): React.ReactElement {
 					className="now"
 					data-testid="renders-committed"
 					ref={(el) => {
-						committedRendersEl = el;
-						if (el !== null) el.textContent = String(committedRenders);
+						committedRendersEl = el
+						if (el !== null) el.textContent = String(committedRenders)
 					}}
 				/>
 			</Stat>
@@ -549,7 +552,7 @@ function StatsPanel(): React.ReactElement {
 				</span>
 			</Stat>
 		</section>
-	);
+	)
 }
 
 // ---- urgent controls ------------------------------------------------------------------
@@ -557,12 +560,12 @@ function StatsPanel(): React.ReactElement {
 // these must commit immediately even while a navigation is held open.
 
 function Controls(): React.ReactElement {
-	useCommittedRenderTally();
-	const value = useSignal(count);
-	const evens = useSignal(markEvens);
-	const filter = useSignal(filterText);
-	const total = useSignal(rowCount);
-	useUrgentCommitTick([value, evens, filter, total]);
+	useCommittedRenderTally()
+	const value = useSignal(count)
+	const evens = useSignal(markEvens)
+	const filter = useSignal(filterText)
+	const total = useSignal(rowCount)
+	useUrgentCommitTick([value, evens, filter, total])
 
 	return (
 		<section id="controls" aria-label="urgent controls">
@@ -614,15 +617,15 @@ function Controls(): React.ReactElement {
 				{total} rows
 			</span>
 		</section>
-	);
+	)
 }
 
 // ---- transition lab -----------------------------------------------------------------
 
 function LabPanel(): React.ReactElement {
-	useCommittedRenderTally();
-	const latency = useSignal(navLatency);
-	const rounds = useSignal(cpuRounds);
+	useCommittedRenderTally()
+	const latency = useSignal(navLatency)
+	const rounds = useSignal(cpuRounds)
 	return (
 		<section className="lab" aria-label="transition lab">
 			<div className="knob">
@@ -658,25 +661,24 @@ function LabPanel(): React.ReactElement {
 				</span>
 			</div>
 			<p className="hint">
-				Latency delays each navigation's fake fetch — the destination suspends inside the
-				transition until the data arrives, and "hold" parks it until RELEASE. Row work adds
-				hash rounds per derived row instead: sync render weight, applied in a transition of
-				its own.
+				Latency delays each navigation's fake fetch — the destination suspends inside the transition
+				until the data arrives, and "hold" parks it until RELEASE. Row work adds hash rounds per
+				derived row instead: sync render weight, applied in a transition of its own.
 			</p>
 		</section>
-	);
+	)
 }
 
 // ---- the mini-browser -----------------------------------------------------------------
 
 function BrowserChrome(): React.ReactElement {
-	useCommittedRenderTally();
-	const route = useSignal(currentRoute);
-	const target = useSignal(targetRoute);
-	const pending = useSignal(navPending);
-	const held = useSignal(heldCount);
-	const index = useSignal(histIndex);
-	const entries = useSignal(histEntries);
+	useCommittedRenderTally()
+	const route = useSignal(currentRoute)
+	const target = useSignal(targetRoute)
+	const pending = useSignal(navPending)
+	const held = useSignal(heldCount)
+	const index = useSignal(histIndex)
+	const entries = useSignal(histEntries)
 
 	return (
 		<section className="browser" aria-label="mini browser">
@@ -719,7 +721,7 @@ function BrowserChrome(): React.ReactElement {
 			</div>
 			<nav className="bookmarks" aria-label="bookmarks">
 				{ROUTES.map((r) => {
-					const cls = route === r ? 'on' : pending && target === r ? 'pending' : undefined;
+					const cls = route === r ? 'on' : pending && target === r ? 'pending' : undefined
 					return (
 						<button
 							key={r}
@@ -730,7 +732,7 @@ function BrowserChrome(): React.ReactElement {
 						>
 							{r}
 						</button>
-					);
+					)
 				})}
 			</nav>
 			<div className={pending ? 'browser-page stale' : 'browser-page'}>
@@ -739,46 +741,45 @@ function BrowserChrome(): React.ReactElement {
 				</React.Suspense>
 			</div>
 		</section>
-	);
+	)
 }
 
 function PageArea(): React.ReactElement {
-	useCommittedRenderTally();
-	const route = useSignal(currentRoute);
-	const epoch = useSignal(routeEpoch);
+	useCommittedRenderTally()
+	const route = useSignal(currentRoute)
+	const epoch = useSignal(routeEpoch)
 	// Suspends while this navigation's data is in flight: inside a transition
 	// render that means the transition itself stays open (committed UI keeps
 	// the previous page); on a cold mount it means the Suspense fallback.
-	const data = readRouteData(epoch);
+	const data = readRouteData(epoch)
 	return (
 		<div data-testid="view-panel" data-view={route}>
 			<p className="pagemeta">
-				<span data-testid="data-epoch">nav #{epoch}</span> · data arrived in {data.arrivedInMs}{' '}
-				ms
+				<span data-testid="data-epoch">nav #{epoch}</span> · data arrived in {data.arrivedInMs} ms
 			</p>
 			{route === 'dashboard' ? <Dashboard /> : route === 'table' ? <TableView /> : <DetailView />}
 		</div>
-	);
+	)
 }
 
 // ---- pages ------------------------------------------------------------------------------
 
 function Dashboard(): React.ReactElement {
-	useCommittedRenderTally();
-	const value = useSignal(count);
-	const twice = useSignal(doubled);
-	const parityText = useSignal(parity);
-	const [factor, setFactor] = React.useState(3);
+	useCommittedRenderTally()
+	const value = useSignal(count)
+	const twice = useSignal(doubled)
+	const parityText = useSignal(parity)
+	const [factor, setFactor] = React.useState(3)
 	// Component-scoped derived value: `factor` is ordinary React state, so it
 	// belongs in deps; the count read is tracked by the engine, not by deps.
-	const scaled = useComputed(() => count.state * factor, [factor]);
+	const scaled = useComputed(() => count.state * factor, [factor])
 
 	return (
 		<div>
 			<p className="viewlede">
-				Counter deriveds, all reading the shared <code>count</code> atom. The urgent and
-				transition increment buttons live in the controls strip so they stay reachable while
-				any page is loading.
+				Counter deriveds, all reading the shared <code>count</code> atom. The urgent and transition
+				increment buttons live in the controls strip so they stay reachable while any page is
+				loading.
 			</p>
 			<div className="cells">
 				<div className="cell">
@@ -804,12 +805,12 @@ function Dashboard(): React.ReactElement {
 				</button>
 			</div>
 		</div>
-	);
+	)
 }
 
 function Row({ index }: { index: number }): React.ReactElement {
-	const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index]);
-	const selected = useComputed(() => selectedRow.state === index, [index]);
+	const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index])
+	const selected = useComputed(() => selectedRow.state === index, [index])
 	return (
 		<li
 			className={selected ? 'rowchip sel' : 'rowchip'}
@@ -818,21 +819,21 @@ function Row({ index }: { index: number }): React.ReactElement {
 		>
 			{rowText(value)}
 		</li>
-	);
+	)
 }
 
 function TableView(): React.ReactElement {
-	useCommittedRenderTally();
-	const rows = useSignal(visibleRows);
-	const total = useSignal(rowCount);
-	const seed = useSignal(tableSeed);
-	const evens = useSignal(markEvens);
+	useCommittedRenderTally()
+	const rows = useSignal(visibleRows)
+	const total = useSignal(rowCount)
+	const seed = useSignal(tableSeed)
+	const evens = useSignal(markEvens)
 	return (
 		<div>
 			<p className="viewlede">
 				<span data-testid="row-visible">{rows.length}</span> of {total} rows visible · seed{' '}
-				<span data-testid="seed">{seed}</span> · every row is its own derived subscriber, and
-				the row-work knob multiplies what each derivation costs.
+				<span data-testid="seed">{seed}</span> · every row is its own derived subscriber, and the
+				row-work knob multiplies what each derivation costs.
 			</p>
 			<div className="actions">
 				<button
@@ -856,47 +857,47 @@ function TableView(): React.ReactElement {
 				))}
 			</ol>
 		</div>
-	);
+	)
 }
 
-const DETAIL_SEED_LOOKAHEAD = 12;
-const DETAIL_NEIGHBORS = 12; // each side of the selected row
+const DETAIL_SEED_LOOKAHEAD = 12
+const DETAIL_NEIGHBORS = 12 // each side of the selected row
 
 function DetailView(): React.ReactElement {
-	useCommittedRenderTally();
-	const index = useSignal(selectedRow);
-	const total = useSignal(rowCount);
-	const seed = useSignal(tableSeed);
-	useUrgentCommitTick([index]);
-	const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index]);
+	useCommittedRenderTally()
+	const index = useSignal(selectedRow)
+	const total = useSignal(rowCount)
+	const seed = useSignal(tableSeed)
+	useUrgentCommitTick([index])
+	const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index])
 	// A window of neighbors and a look-ahead across future seeds: enough
 	// derived cells to make this page mid-weight (heavier than the dashboard,
 	// far lighter than the table).
 	const neighbors = useComputed(() => {
-		const from = Math.max(0, index - DETAIL_NEIGHBORS);
-		const to = Math.min(total - 1, index + DETAIL_NEIGHBORS);
-		const out: { index: number; value: number }[] = [];
+		const from = Math.max(0, index - DETAIL_NEIGHBORS)
+		const to = Math.min(total - 1, index + DETAIL_NEIGHBORS)
+		const out: { index: number; value: number }[] = []
 		for (let i = from; i <= to; i++) {
-			out.push({ index: i, value: rowValue(tableSeed.state, i, cpuRounds.state) });
+			out.push({ index: i, value: rowValue(tableSeed.state, i, cpuRounds.state) })
 		}
-		return out;
-	}, [index, total]);
+		return out
+	}, [index, total])
 	const lookahead = useComputed(() => {
-		const out: { seed: number; value: number }[] = [];
+		const out: { seed: number; value: number }[] = []
 		for (let k = 0; k < DETAIL_SEED_LOOKAHEAD; k++) {
 			out.push({
 				seed: tableSeed.state + k,
 				value: rowValue(tableSeed.state + k, index, cpuRounds.state),
-			});
+			})
 		}
-		return out;
-	}, [index]);
+		return out
+	}, [index])
 
 	return (
 		<div>
 			<p className="viewlede">
-				One row up close: its value under the current seed, its neighbors, and what it becomes
-				under the next {DETAIL_SEED_LOOKAHEAD} seeds.
+				One row up close: its value under the current seed, its neighbors, and what it becomes under
+				the next {DETAIL_SEED_LOOKAHEAD} seeds.
 			</p>
 			<div className="cells">
 				<div className="cell">
@@ -941,25 +942,25 @@ function DetailView(): React.ReactElement {
 				))}
 			</ol>
 		</div>
-	);
+	)
 }
 
 // ---- transition timeline strip -----------------------------------------------------------
 
-const TIMELINE_WINDOW_MS = 5000;
+const TIMELINE_WINDOW_MS = 5000
 
 function timelineWidthPct(ms: number): number {
-	return Math.min(ms / TIMELINE_WINDOW_MS, 1) * 100;
+	return Math.min(ms / TIMELINE_WINDOW_MS, 1) * 100
 }
 
 function TimelineBar(props: {
-	route: RouteName;
-	elapsedMs: number;
-	ticks: readonly number[];
-	live: boolean;
-	superseded: boolean;
+	route: RouteName
+	elapsedMs: number
+	ticks: readonly number[]
+	live: boolean
+	superseded: boolean
 }): React.ReactElement {
-	const fillClass = props.live ? 't-fill live' : props.superseded ? 't-fill superseded' : 't-fill';
+	const fillClass = props.live ? 't-fill live' : props.superseded ? 't-fill superseded' : 't-fill'
 	return (
 		<div className="t-row" data-testid={props.live ? 'timeline-live' : 'timeline-record'}>
 			<span className="t-route">{props.route}</span>
@@ -973,14 +974,14 @@ function TimelineBar(props: {
 				{props.elapsedMs} ms · {props.ticks.length} urgent{props.superseded ? ' · superseded' : ''}
 			</span>
 		</div>
-	);
+	)
 }
 
 /** Its own component: the 10 Hz clock grows only the live bar, not the history. */
 function TimelineLiveBar(): React.ReactElement | null {
-	const record = useSignal(activeNav);
-	const now = useSignal(clockMs);
-	if (record === null) return null;
+	const record = useSignal(activeNav)
+	const now = useSignal(clockMs)
+	if (record === null) return null
 	return (
 		<TimelineBar
 			route={record.route}
@@ -989,16 +990,19 @@ function TimelineLiveBar(): React.ReactElement | null {
 			live
 			superseded={false}
 		/>
-	);
+	)
 }
 
 function TimelineStrip(): React.ReactElement {
-	useCommittedRenderTally();
-	const log = useSignal(navLog);
+	useCommittedRenderTally()
+	const log = useSignal(navLog)
 	return (
 		<section className="timeline" aria-label="transition timeline">
 			<h3>
-				transition timeline <span className="hint-inline">bar = pending window (5 s scale) · amber ticks = urgent commits that landed inside it</span>
+				transition timeline{' '}
+				<span className="hint-inline">
+					bar = pending window (5 s scale) · amber ticks = urgent commits that landed inside it
+				</span>
 			</h3>
 			<TimelineLiveBar />
 			{[...log].reverse().map((record) => (
@@ -1012,19 +1016,19 @@ function TimelineStrip(): React.ReactElement {
 				/>
 			))}
 		</section>
-	);
+	)
 }
 
 function ErrorStrip(): React.ReactElement | null {
-	const lines = useSignal(errorLog);
-	if (lines.length === 0) return null;
+	const lines = useSignal(errorLog)
+	if (lines.length === 0) return null
 	return (
 		<section id="errors" aria-label="errors" data-testid="errors">
 			{lines.map((line, i) => (
 				<div key={i}>{line}</div>
 			))}
 		</section>
-	);
+	)
 }
 
 export function App(): React.ReactElement {
@@ -1035,8 +1039,8 @@ export function App(): React.ReactElement {
 				<h1>react-signals-playground</h1>
 				<p>
 					One app, one reactive surface, four engines. Navigate the mini-browser inside a
-					transition, hold the navigation open from the lab panel, and poke the urgent
-					controls while it loads — the HUD and timeline report what actually committed.
+					transition, hold the navigation open from the lab panel, and poke the urgent controls
+					while it loads — the HUD and timeline report what actually committed.
 				</p>
 			</header>
 			<StatsPanel />
@@ -1047,5 +1051,5 @@ export function App(): React.ReactElement {
 			<ErrorStrip />
 			{TEST_MODE ? <TestPanel /> : null}
 		</main>
-	);
+	)
 }

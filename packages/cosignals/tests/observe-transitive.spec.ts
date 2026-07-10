@@ -16,172 +16,179 @@
  * pre-existing K0 behavior the overlay now matches) FAILS without the
  * observation index in src/CosignalEngine.ts.
  */
-import { describe, expect, it } from 'vitest';
-import { engine, __TEST__resetEngine, Atom, Computed, effect, type CosignalEngine } from '../src/index.js';
+import { describe, expect, it } from 'vitest'
+import {
+	engine,
+	__TEST__resetEngine,
+	Atom,
+	Computed,
+	effect,
+	type CosignalEngine,
+} from '../src/index.js'
 
-const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
+const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res))
 
 function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
-	const log: string[] = [];
+	const log: string[] = []
 	const atom = new Atom(initial, {
 		effect: () => {
-			log.push('observe');
-			return () => log.push('unobserve');
+			log.push('observe')
+			return () => log.push('unobserve')
 		},
-	});
-	return { atom, log };
+	})
+	return { atom, log }
 }
 
 /** A fresh engine reset (production posture; quiet arms by the production derivation). */
 function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
-	engine.discardAllWip();
+	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id);
-		else engine.retire(t.id);
+		if (t.parked) engine.settleAction(t.id)
+		else engine.retire(t.id)
 	}
-	__TEST__resetEngine();
-	return engine;
+	__TEST__resetEngine()
+	return engine
 }
 
 describe('transitive observation through derived nodes', () => {
 	it('two watchers sharing one derived node: created ≠ observed, ONE observe at first liveness, release after the LAST leaves', async () => {
-		const b = freshEngine();
-		const { atom, log } = observedAtom(0);
-		const node = b.internalsForAtom(atom as Atom<unknown>);
-		const oc = b.computed('oc', (read) => read(node));
-		const p1 = b.renderStart('A', []);
-		const w1 = b.mountWatcher(p1.id, oc, 'W1');
-		await tick();
-		expect(log).toEqual([]); // created, not live: a render alone observes nothing
-		b.renderEnd(p1.id, 'commit');
-		await tick();
-		expect(log).toEqual(['observe']); // the closure atom observes through the derived node
-		const p2 = b.renderStart('A', []);
-		const w2 = b.mountWatcher(p2.id, oc, 'W2');
-		b.renderEnd(p2.id, 'commit');
-		await tick();
-		expect(log).toEqual(['observe']); // second watcher on the SAME node: interior transition
-		w1.live = false;
-		await tick();
-		expect(log).toEqual(['observe']); // one watcher remains
-		w2.live = false;
-		await tick();
-		expect(log).toEqual(['observe', 'unobserve']);
-	});
+		const b = freshEngine()
+		const { atom, log } = observedAtom(0)
+		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const oc = b.computed('oc', (read) => read(node))
+		const p1 = b.renderStart('A', [])
+		const w1 = b.mountWatcher(p1.id, oc, 'W1')
+		await tick()
+		expect(log).toEqual([]) // created, not live: a render alone observes nothing
+		b.renderEnd(p1.id, 'commit')
+		await tick()
+		expect(log).toEqual(['observe']) // the closure atom observes through the derived node
+		const p2 = b.renderStart('A', [])
+		const w2 = b.mountWatcher(p2.id, oc, 'W2')
+		b.renderEnd(p2.id, 'commit')
+		await tick()
+		expect(log).toEqual(['observe']) // second watcher on the SAME node: interior transition
+		w1.live = false
+		await tick()
+		expect(log).toEqual(['observe']) // one watcher remains
+		w2.live = false
+		await tick()
+		expect(log).toEqual(['observe', 'unobserve'])
+	})
 
 	it('dep-flip moves the retain to the branch the re-evaluation took; a same-tick flip-flap coalesces', async () => {
-		const b = freshEngine();
-		const { atom: atomA, log: logA } = observedAtom(10);
-		const { atom: atomB, log: logB } = observedAtom(20);
-		const na = b.internalsForAtom(atomA as Atom<unknown>);
-		const nb = b.internalsForAtom(atomB as Atom<unknown>);
-		const flag = b.atom('flag', 1);
-		const oc = b.computed('oc', (read) => ((read(flag) as number) ? read(na) : read(nb)));
-		const p = b.renderStart('A', []);
-		const w = b.mountWatcher(p.id, oc, 'W');
-		b.renderEnd(p.id, 'commit');
-		await tick();
-		expect(logA).toEqual(['observe']); // the taken branch is retained…
-		expect(logB).toEqual([]); // …the untaken one is not
-		const t = b.openBatch();
-		b.write(t.id, flag, 0, 0);
-		b.retire(t.id); // durable drain re-evaluates the watched computed
-		await tick();
-		expect(logA).toEqual(['observe', 'unobserve']); // the retain MOVED with the edge set
-		expect(logB).toEqual(['observe']);
+		const b = freshEngine()
+		const { atom: atomA, log: logA } = observedAtom(10)
+		const { atom: atomB, log: logB } = observedAtom(20)
+		const na = b.internalsForAtom(atomA as Atom<unknown>)
+		const nb = b.internalsForAtom(atomB as Atom<unknown>)
+		const flag = b.atom('flag', 1)
+		const oc = b.computed('oc', (read) => ((read(flag) as number) ? read(na) : read(nb)))
+		const p = b.renderStart('A', [])
+		const w = b.mountWatcher(p.id, oc, 'W')
+		b.renderEnd(p.id, 'commit')
+		await tick()
+		expect(logA).toEqual(['observe']) // the taken branch is retained…
+		expect(logB).toEqual([]) // …the untaken one is not
+		const t = b.openBatch()
+		b.write(t.id, flag, 0, 0)
+		b.retire(t.id) // durable drain re-evaluates the watched computed
+		await tick()
+		expect(logA).toEqual(['observe', 'unobserve']) // the retain MOVED with the edge set
+		expect(logB).toEqual(['observe'])
 		// Flip A→B→A within one tick: the microtask flush nets both shifts out.
-		const t2 = b.openBatch();
-		b.write(t2.id, flag, 0, 1);
-		b.retire(t2.id); // re-eval reads a again (retain a, release b)…
-		const t3 = b.openBatch();
-		b.write(t3.id, flag, 0, 0);
-		b.retire(t3.id); // …and back (retain b, release a), same tick
-		await tick();
-		expect(logA).toEqual(['observe', 'unobserve']); // no flap
-		expect(logB).toEqual(['observe']); // no flap
-		w.live = false;
-		await tick();
-		expect(logB).toEqual(['observe', 'unobserve']);
-	});
+		const t2 = b.openBatch()
+		b.write(t2.id, flag, 0, 1)
+		b.retire(t2.id) // re-eval reads a again (retain a, release b)…
+		const t3 = b.openBatch()
+		b.write(t3.id, flag, 0, 0)
+		b.retire(t3.id) // …and back (retain b, release a), same tick
+		await tick()
+		expect(logA).toEqual(['observe', 'unobserve']) // no flap
+		expect(logB).toEqual(['observe']) // no flap
+		w.live = false
+		await tick()
+		expect(logB).toEqual(['observe', 'unobserve'])
+	})
 
 	it('depth-2 chain retains the leaf atom; removeWatcher releases the whole closure', async () => {
-		const b = freshEngine();
-		const { atom, log } = observedAtom(3);
-		const na = b.internalsForAtom(atom as Atom<unknown>);
-		const cB = b.computed('cB', (read) => (read(na) as number) * 2);
-		const cA = b.computed('cA', (read) => (read(cB) as number) + 1);
-		const p = b.renderStart('A', []);
-		const w = b.mountWatcher(p.id, cA, 'W');
-		b.renderEnd(p.id, 'commit');
-		await tick();
-		expect(log).toEqual(['observe']); // watcher → cA → cB → atom
-		b.removeWatcher(w.id); // the grind-3 unsubscribe surface
-		await tick();
-		expect(log).toEqual(['observe', 'unobserve']); // the whole closure released in one call
-		expect(b.watchers.size).toBe(0);
-	});
+		const b = freshEngine()
+		const { atom, log } = observedAtom(3)
+		const na = b.internalsForAtom(atom as Atom<unknown>)
+		const cB = b.computed('cB', (read) => (read(na) as number) * 2)
+		const cA = b.computed('cA', (read) => (read(cB) as number) + 1)
+		const p = b.renderStart('A', [])
+		const w = b.mountWatcher(p.id, cA, 'W')
+		b.renderEnd(p.id, 'commit')
+		await tick()
+		expect(log).toEqual(['observe']) // watcher → cA → cB → atom
+		b.removeWatcher(w.id) // the grind-3 unsubscribe surface
+		await tick()
+		expect(log).toEqual(['observe', 'unobserve']) // the whole closure released in one call
+		expect(b.watchers.size).toBe(0)
+	})
 
 	it('quiesce: the K1 bulk-reset produces NO unobserve/reobserve flap while a watcher stays live', async () => {
-		const b = freshEngine();
-		const { atom, log } = observedAtom(0);
-		const na = b.internalsForAtom(atom as Atom<unknown>);
-		const oc = b.computed('oc', (read) => read(na));
-		const p = b.renderStart('A', []);
-		const w = b.mountWatcher(p.id, oc, 'W');
-		b.renderEnd(p.id, 'commit');
-		await tick();
-		expect(log).toEqual(['observe']);
-		const epochBefore = b.epoch;
-		b.quiesce(); // episode reset: per-episode state drops, refresh re-records the cone
-		expect(b.epoch).toBe(epochBefore + 1); // the reset really ran
-		await tick();
-		expect(log).toEqual(['observe']); // retains survived the reset — not even a coalesced flap
-		w.live = false;
-		await tick();
-		expect(log).toEqual(['observe', 'unobserve']); // and still release cleanly afterwards
-	});
+		const b = freshEngine()
+		const { atom, log } = observedAtom(0)
+		const na = b.internalsForAtom(atom as Atom<unknown>)
+		const oc = b.computed('oc', (read) => read(na))
+		const p = b.renderStart('A', [])
+		const w = b.mountWatcher(p.id, oc, 'W')
+		b.renderEnd(p.id, 'commit')
+		await tick()
+		expect(log).toEqual(['observe'])
+		const epochBefore = b.epoch
+		b.quiesce() // episode reset: per-episode state drops, refresh re-records the cone
+		expect(b.epoch).toBe(epochBefore + 1) // the reset really ran
+		await tick()
+		expect(log).toEqual(['observe']) // retains survived the reset — not even a coalesced flap
+		w.live = false
+		await tick()
+		expect(log).toEqual(['observe', 'unobserve']) // and still release cleanly afterwards
+	})
 
 	it('CONTRAST (kernel chain, pre-existing behavior): a K0 computed chain already retains transitively', async () => {
-		const { atom, log } = observedAtom(1);
-		const kc = new Computed(() => (atom.state as number) + 1);
-		const kc2 = new Computed(() => kc.state + 1);
+		const { atom, log } = observedAtom(1)
+		const kc = new Computed(() => (atom.state as number) + 1)
+		const kc2 = new Computed(() => kc.state + 1)
 		const dispose = effect(() => {
-			void kc2.state;
-		});
-		await tick();
-		expect(log).toEqual(['observe']); // K0 links are structural subscriptions
-		dispose();
-		await tick();
-		expect(log).toEqual(['observe', 'unobserve']);
-	});
+			void kc2.state
+		})
+		await tick()
+		expect(log).toEqual(['observe']) // K0 links are structural subscriptions
+		dispose()
+		await tick()
+		expect(log).toEqual(['observe', 'unobserve'])
+	})
 
 	it('a computed that THROWS after reading some atoms retains exactly the deps read up to the throw', async () => {
-		const b = freshEngine();
-		const { atom: atomA, log: logA } = observedAtom(0);
-		const { atom: atomB, log: logB } = observedAtom(0);
-		const na = b.internalsForAtom(atomA as Atom<unknown>);
-		const nb = b.internalsForAtom(atomB as Atom<unknown>);
+		const b = freshEngine()
+		const { atom: atomA, log: logA } = observedAtom(0)
+		const { atom: atomB, log: logB } = observedAtom(0)
+		const na = b.internalsForAtom(atomA as Atom<unknown>)
+		const nb = b.internalsForAtom(atomB as Atom<unknown>)
 		const oc = b.computed('oc', (read) => {
-			const bv = read(nb) as number; // read FIRST — stays retained through the throw
-			if (bv > 0) throw new Error('boom');
-			return read(na);
-		});
-		const p = b.renderStart('A', []);
-		const w = b.mountWatcher(p.id, oc, 'W');
-		b.renderEnd(p.id, 'commit');
-		await tick();
-		expect(logA).toEqual(['observe']); // healthy evaluation reads both
-		expect(logB).toEqual(['observe']);
-		const t = b.openBatch();
-		b.write(t.id, nb, 0, 1); // pending write; newest sees it
-		expect(() => b.newestValue(oc)).toThrow('boom'); // re-evaluation dies after reading b
-		await tick();
-		expect(logA).toEqual(['observe', 'unobserve']); // unread past the throw → released
-		expect(logB).toEqual(['observe']); // read before the throw → still retained (its arena link delivers)
-		w.live = false;
-		await tick();
-		expect(logB).toEqual(['observe', 'unobserve']);
-		b.retire(t.id);
-	});
-});
+			const bv = read(nb) as number // read FIRST — stays retained through the throw
+			if (bv > 0) throw new Error('boom')
+			return read(na)
+		})
+		const p = b.renderStart('A', [])
+		const w = b.mountWatcher(p.id, oc, 'W')
+		b.renderEnd(p.id, 'commit')
+		await tick()
+		expect(logA).toEqual(['observe']) // healthy evaluation reads both
+		expect(logB).toEqual(['observe'])
+		const t = b.openBatch()
+		b.write(t.id, nb, 0, 1) // pending write; newest sees it
+		expect(() => b.newestValue(oc)).toThrow('boom') // re-evaluation dies after reading b
+		await tick()
+		expect(logA).toEqual(['observe', 'unobserve']) // unread past the throw → released
+		expect(logB).toEqual(['observe']) // read before the throw → still retained (its arena link delivers)
+		w.live = false
+		await tick()
+		expect(logB).toEqual(['observe', 'unobserve'])
+		b.retire(t.id)
+	})
+})

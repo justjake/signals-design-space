@@ -23,69 +23,64 @@
  * produce a fresh state object, so React re-renders the transition's passes
  * against the completed batch — a pass never commits half a batch.
  */
-import * as React from 'react';
-import { NO_EVENT } from '../graph.ts';
-import { isLiveDraft, type DraftId } from '../worlds.ts';
-import { getActiveTracer } from '../tracer.ts';
-import {
-  confirmCommit,
-  noteRenderWorld,
-  registerProvider,
-  type ProviderRecord,
-} from './host.ts';
+import * as React from 'react'
+import { NO_EVENT } from '../graph.ts'
+import { isLiveDraft, type DraftId } from '../worlds.ts'
+import { getActiveTracer } from '../tracer.ts'
+import { confirmCommit, noteRenderWorld, registerProvider, type ProviderRecord } from './host.ts'
 
 export interface WorldState {
-  ids: readonly DraftId[];
-  rev: number;
+	ids: readonly DraftId[]
+	rev: number
 }
 
-export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
+export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 }
 
 /** Shared by the scope and every useValue hook: accumulate live draft ids,
  * prune dead ones (retired and discarded drafts resolve to base state anyway,
  * and a long-lived subscriber must not grow history forever), and always
  * return a fresh object so a re-dispatched id still restarts the pass. */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-  const live = prev.ids.filter((d) => isLiveDraft(d));
-  const add = isLiveDraft(id) && !live.includes(id);
-  if (add) live.push(id);
-  const ids = !add && live.length === prev.ids.length ? prev.ids : live;
-  return { ids, rev: prev.rev + 1 };
+	const live = prev.ids.filter((d) => isLiveDraft(d))
+	const add = isLiveDraft(id) && !live.includes(id)
+	if (add) live.push(id)
+	const ids = !add && live.length === prev.ids.length ? prev.ids : live
+	return { ids, rev: prev.rev + 1 }
 }
 
 /** The scope's identity-stable record, or null outside any SignalScope.
  * Scope-consuming hooks throw on null — there is no mode without a scope
  * (see hooks.ts requireScope). */
-export const ScopeContext = React.createContext<ProviderRecord | null>(null);
+export const ScopeContext = React.createContext<ProviderRecord | null>(null)
 
 export interface SignalScopeProps {
-  container?: object;
-  children?: React.ReactNode;
+	container?: object
+	children?: React.ReactNode
 }
 
 export function SignalScope(props: SignalScopeProps): React.ReactElement {
-  const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD);
-  const container = props.container ?? null;
-  const record = React.useMemo<ProviderRecord>(
-    () => ({ dispatch, container }),
-    [dispatch, container],
-  );
-  // Note this pass's world. Every pass that carries drafts re-renders this
-  // scope (the drafts live in its reducer state), so the note lands at the
-  // top of the pass, in tree order, before any component can read.
-  noteRenderWorld(record, world.ids);
-  React.useLayoutEffect(() => registerProvider(record), [record]);
-  React.useLayoutEffect(() => {
-    // Runs exactly at this root's commits of world-carrying passes.
-    getActiveTracer()?.emit('root-commit', null, NO_EVENT, { world: world.ids });
-    confirmCommit(record, world.ids);
-  }, [record, world]);
-  return React.createElement(ScopeContext.Provider, { value: record }, props.children);
+	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
+	const container = props.container ?? null
+	const record = React.useMemo<ProviderRecord>(
+		() => ({ dispatch, container }),
+		[dispatch, container],
+	)
+	// Note this pass's world. Every pass that carries drafts re-renders this
+	// scope (the drafts live in its reducer state), so the note lands at the
+	// top of the pass, in tree order, before any component can read.
+	noteRenderWorld(record, world.ids)
+	React.useLayoutEffect(() => registerProvider(record), [record])
+	React.useLayoutEffect(() => {
+		// Runs exactly at this root's commits of world-carrying passes.
+		getActiveTracer()?.emit('root-commit', null, NO_EVENT, { world: world.ids })
+		confirmCommit(record, world.ids)
+	}, [record, world])
+	return React.createElement(ScopeContext.Provider, { value: record }, props.children)
 }
 
 export interface WrappedRoot {
-  render(node: unknown): void;
-  unmount(): void;
+	render(node: unknown): void
+	unmount(): void
 }
 
 /**
@@ -94,19 +89,17 @@ export interface WrappedRoot {
  * worlds and per-root committed views without composing anything.
  */
 export function wrapCreateRoot(
-  createRoot: (el: Element, opts?: unknown) => { render(node: unknown): void; unmount(): void },
+	createRoot: (el: Element, opts?: unknown) => { render(node: unknown): void; unmount(): void },
 ): (el: Element, opts?: unknown) => WrappedRoot {
-  return (el, opts) => {
-    const root = createRoot(el, opts);
-    return {
-      render(node: unknown) {
-        root.render(
-          React.createElement(SignalScope, { container: el }, node as React.ReactNode),
-        );
-      },
-      unmount() {
-        root.unmount();
-      },
-    };
-  };
+	return (el, opts) => {
+		const root = createRoot(el, opts)
+		return {
+			render(node: unknown) {
+				root.render(React.createElement(SignalScope, { container: el }, node as React.ReactNode))
+			},
+			unmount() {
+				root.unmount()
+			},
+		}
+	}
 }

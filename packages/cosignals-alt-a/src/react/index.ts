@@ -1,5 +1,5 @@
 /** cosignals-alt-a/react — real-React bindings (§4.5/§13 over the §6 bridge). */
-export { attachReactBridge, assertForkPresent, type ReactBridgeHandle } from './bridge';
+export { attachReactBridge, assertForkPresent, type ReactBridgeHandle } from './bridge'
 export {
 	registerAltAReact,
 	useSignal,
@@ -12,4 +12,4 @@ export {
 	useSignalTransition,
 	type AltAReactHandle,
 	type SignalSource,
-} from './hooks';
+} from './hooks'

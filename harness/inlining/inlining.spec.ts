@@ -18,27 +18,27 @@
  * V8-version-sensitive: trace formats and inlining heuristics move
  * between majors. CI pins Node 24; the suite skips elsewhere.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { steadyEagerDeopts, traceOptimization, type OptTrace } from '../util/inline-probe';
-import { bundleChild } from '../util/cli';
-import { expectations } from './expects';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { steadyEagerDeopts, traceOptimization, type OptTrace } from '../util/inline-probe'
+import { bundleChild } from '../util/cli'
+import { expectations } from './expects'
 
-const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
-const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const NODE_MAJOR = Number(process.versions.node.split('.')[0])
+const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const cleanups: Array<() => void> = [];
+const cleanups: Array<() => void> = []
 afterAll(() => {
-	for (const cleanup of cleanups) cleanup();
-});
+	for (const cleanup of cleanups) cleanup()
+})
 
 async function probeFramework(framework: string): Promise<OptTrace> {
-	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-`));
-	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-	const entry = path.join(dir, `${framework}.ts`);
+	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-`))
+	cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+	const entry = path.join(dir, `${framework}.ts`)
 	writeFileSync(
 		entry,
 		[
@@ -47,47 +47,47 @@ async function probeFramework(framework: string): Promise<OptTrace> {
 			'runSmoke(adapter);',
 			'',
 		].join('\n'),
-	);
-	const bundle = await bundleChild(entry);
-	cleanups.push(bundle.cleanup);
-	return traceOptimization({ script: bundle.script });
+	)
+	const bundle = await bundleChild(entry)
+	cleanups.push(bundle.cleanup)
+	return traceOptimization({ script: bundle.script })
 }
 
 describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () => {
 	for (const { framework, minInlinedPairs, mustOptimize } of expectations) {
 		describe(framework, () => {
-			let trace: OptTrace;
+			let trace: OptTrace
 			beforeAll(async () => {
-				trace = await probeFramework(framework);
-			}, 180_000);
+				trace = await probeFramework(framework)
+			}, 180_000)
 
 			test(`inlines at least ${minInlinedPairs} distinct named pairs`, () => {
 				const pairs = new Set(
 					trace.inlined
 						.filter((e) => e.callee !== '(anonymous)' && e.into !== '(anonymous)')
 						.map((e) => `${e.callee} -> ${e.into}`),
-				);
+				)
 				expect(
 					pairs.size,
 					`distinct named inlined pairs:\n${[...pairs].sort().join('\n')}`,
-				).toBeGreaterThanOrEqual(minInlinedPairs);
-			});
+				).toBeGreaterThanOrEqual(minInlinedPairs)
+			})
 
 			test(`optimizes ${mustOptimize.join(', ')}`, () => {
-				const missing = mustOptimize.filter((name) => !trace.optimized.has(name));
+				const missing = mustOptimize.filter((name) => !trace.optimized.has(name))
 				expect(
 					missing,
 					`never completed a TURBOFAN_JS compile; optimized set: ${[...trace.optimized].sort().join(', ')}`,
-				).toEqual([]);
-			});
+				).toEqual([])
+			})
 
 			test('steady state is free of eager deopts', () => {
-				const bad = steadyEagerDeopts(trace);
+				const bad = steadyEagerDeopts(trace)
 				expect(
 					bad.map((d) => `${d.fn}: ${d.reason}`),
 					'eager deopts inside the steady bracket — a deopt loop under unchanged graph shapes',
-				).toEqual([]);
-			});
-		});
+				).toEqual([])
+			})
+		})
 	}
-});
+})

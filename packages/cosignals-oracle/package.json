@@ -1,9 +1,9 @@
 {
 	"name": "@lab/cosignals-oracle",
-	"private": true,
 	"version": "0.0.0",
-	"type": "module",
+	"private": true,
 	"description": "Naive, obviously-correct executable reference model and randomized referee harness for the cosignals package's concurrent semantics.",
+	"type": "module",
 	"scripts": {
 		"test": "vitest run",
 		"typecheck": "tsc -p tsconfig.json"

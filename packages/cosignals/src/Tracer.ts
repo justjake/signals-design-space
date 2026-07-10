@@ -156,7 +156,7 @@ import type {
 	Value,
 	Watcher,
 	World,
-} from './CosignalEngine.js';
+} from './CosignalEngine.js'
 
 // ---- record layout ---------------------------------------------------------------
 // Same-file const enums: esbuild-based toolchains inline the members as
@@ -165,19 +165,19 @@ import type {
 
 // ---- semantic number types (plain aliases; zero runtime cost) ----
 /** Dense, monotonic trace event id (from 0; also locates the record). */
-type TraceEventId = number;
+type TraceEventId = number
 /** A kind code — one of the `K` values (the low 6 bits of the KIND field). */
-type TraceKindCode = number;
+type TraceKindCode = number
 /** A record's full KIND field: TraceKindCode | KindBits flag bits. */
-type KindWord = number;
+type KindWord = number
 /** Interned label-table id (0 reserved = no label). */
-type LabelId = number;
+type LabelId = number
 /** Absolute ref-ring index for a captured object payload (-1 = capture disabled). */
-type RefId = number;
+type RefId = number
 /** A microsecond clock reading or duration. */
-type Microseconds = number;
+type Microseconds = number
 /** The packed world encoding for eval records (see WorldPack). */
-type PackedWorld = number;
+type PackedWorld = number
 
 /** Field offsets within one packed trace record. */
 const enum TraceField {
@@ -217,187 +217,247 @@ const enum WorldPack {
 	PAYLOAD_SHIFT = 1,
 }
 
-const MAX_I32 = 0x7fffffff;
+const MAX_I32 = 0x7fffffff
 
 /** Kind codes (record form). Public decoded events carry the NAME, not the
  * code. Codes are append-only — existing recordings decode forever, and the
  * decoder accepts every listed code, including any the current engine never
  * emits. */
 const K = {
-	write: 1, writeDropped: 2, batchOpen: 3, batchSettle: 4, batchRetire: 5,
-	slotClaim: 6, slotRelease: 7, slotReleaseDeferred: 8, slotBackstop: 9,
-	renderStart: 10, renderYield: 11, renderResume: 12, renderEnd: 13,
-	rootCommit: 14, delivery: 15, suppressed: 16, evalDone: 17,
-	mountCorrective: 18, runMountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
-	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
-	clockSync: 25, truncation: 26, quietWrite: 27,
-	reactEffectCleanup: 28, renderCommitted: 29, renderDiscarded: 30,
+	write: 1,
+	writeDropped: 2,
+	batchOpen: 3,
+	batchSettle: 4,
+	batchRetire: 5,
+	slotClaim: 6,
+	slotRelease: 7,
+	slotReleaseDeferred: 8,
+	slotBackstop: 9,
+	renderStart: 10,
+	renderYield: 11,
+	renderResume: 12,
+	renderEnd: 13,
+	rootCommit: 14,
+	delivery: 15,
+	suppressed: 16,
+	evalDone: 17,
+	mountCorrective: 18,
+	runMountFixup: 19,
+	mountCorrection: 20,
+	reconcileCorrection: 21,
+	coreEffectRun: 22,
+	reactEffectRun: 23,
+	epochReset: 24,
+	clockSync: 25,
+	truncation: 26,
+	quietWrite: 27,
+	reactEffectCleanup: 28,
+	renderCommitted: 29,
+	renderDiscarded: 30,
 	batchDisposition: 31,
-} as const;
+} as const
 
 const KIND_NAMES = [
-	'', 'write', 'write-dropped', 'batch-open', 'batch-settle', 'batch-retire',
-	'slot-claim', 'slot-release', 'slot-release-deferred', 'slot-backstop-release',
-	'render-start', 'render-yield', 'render-resume', 'render-end',
-	'root-commit', 'delivery', 'suppressed', 'eval',
-	'mount-corrective', 'mount-fixup', 'mount-correction', 'reconcile-correction',
-	'core-effect-run', 'react-effect-run', 'epoch-reset',
-	'clock-sync', 'truncation', 'quiet-write',
-	'react-effect-cleanup', 'render-committed', 'render-discarded',
+	'',
+	'write',
+	'write-dropped',
+	'batch-open',
+	'batch-settle',
+	'batch-retire',
+	'slot-claim',
+	'slot-release',
+	'slot-release-deferred',
+	'slot-backstop-release',
+	'render-start',
+	'render-yield',
+	'render-resume',
+	'render-end',
+	'root-commit',
+	'delivery',
+	'suppressed',
+	'eval',
+	'mount-corrective',
+	'mount-fixup',
+	'mount-correction',
+	'reconcile-correction',
+	'core-effect-run',
+	'react-effect-run',
+	'epoch-reset',
+	'clock-sync',
+	'truncation',
+	'quiet-write',
+	'react-effect-cleanup',
+	'render-committed',
+	'render-discarded',
 	'batch-disposition',
-] as const;
+] as const
 
-export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
+export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>
 
 /** Kinds that claim the causality register (operation provokers). */
 const CAUSE_SETTING = new Set<TraceKindCode>([
-	K.write, K.writeDropped, K.batchSettle, K.batchRetire,
-	K.renderStart, K.renderYield, K.renderResume, K.renderEnd, K.rootCommit, K.epochReset,
-]);
+	K.write,
+	K.writeDropped,
+	K.batchSettle,
+	K.batchRetire,
+	K.renderStart,
+	K.renderYield,
+	K.renderResume,
+	K.renderEnd,
+	K.rootCommit,
+	K.epochReset,
+])
 
-const OP_NAMES = ['set', 'update'] as const;
+const OP_NAMES = ['set', 'update'] as const
 /** Index 1 ('fast-out-covered') is decode-only: no engine emit site
  * produces it; recordings that contain it still decode. */
-const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const;
+const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
-export const REF_DROPPED: unique symbol = Symbol('cosignals.trace.ref-dropped');
+export const REF_DROPPED: unique symbol = Symbol('cosignals.trace.ref-dropped')
 
 // ---- public types ----------------------------------------------------------------
 
 export type TracerOptions = {
 	/** 'ring' (flight recorder, default) or 'session' (lossless up to maxBytes). */
-	mode?: 'ring' | 'session';
+	mode?: 'ring' | 'session'
 	/** RING record capacity; rounded up to a power of two. Default 2^16 (2 MiB). */
-	capacity?: number;
+	capacity?: number
 	/** SESSION records per chunk; rounded up to a power of two. Default 2^14. */
-	chunkSize?: number;
+	chunkSize?: number
 	/** SESSION lossless budget in bytes of record storage. Default 128 MiB. */
-	maxBytes?: number;
+	maxBytes?: number
 	/** Ref-ring capacity for object payloads; 0 disables capture. Default 256. */
-	refCapacity?: number;
+	refCapacity?: number
 	/** Microsecond clock; injectable for deterministic tests. Default performance.now()·1000. */
-	now?: () => number;
-};
+	now?: () => number
+}
 
 /** The structured (tool-facing) event: a lazy decode of one packed record. */
 export type TraceRecord = {
-	id: TraceEventId;
-	kind: TraceKind;
+	id: TraceEventId
+	kind: TraceKind
 	/** µs since the previous recorded event (0 for the first). */
-	dt: number;
+	dt: number
 	/** Provoking event id (walkable while retained), or undefined for operation roots. */
-	cause: TraceEventId | undefined;
+	cause: TraceEventId | undefined
 	/** Kind-specific fields; see the vocabulary table in the module doc. */
-	data: Record<string, unknown>;
-};
+	data: Record<string, unknown>
+}
 
 export type TraceStats = {
-	mode: 'ring' | 'session';
-	attached: boolean;
+	mode: 'ring' | 'session'
+	attached: boolean
 	/** Total events ever recorded (the next id). */
-	recorded: number;
+	recorded: number
 	/** Events currently decodable. */
-	retained: number;
+	retained: number
 	/** Lowest decodable id (0 iff nothing has been lost). */
-	firstRetained: number;
+	firstRetained: number
 	/** recorded − retained (ring overwrites; session pre-truncation history is never dropped). */
-	dropped: number;
+	dropped: number
 	/** SESSION only: the maxBytes budget was crossed (capture marked partial). */
-	truncated: boolean;
-	chunks: number;
+	truncated: boolean
+	chunks: number
 	/** Record-storage bytes allocated. */
-	bytes: number;
-	refsCaptured: number;
-};
+	bytes: number
+	refsCaptured: number
+}
 
 /** Floor for the pow2-rounded capacities (ring, session chunk, ref ring). */
-const POW2_CAPACITY_FLOOR = 8;
+const POW2_CAPACITY_FLOOR = 8
 
 function roundUpToPowerOfTwo(n: number, min: number): number {
-	let c = min;
-	while (c < n) c *= 2;
-	return c;
+	let c = min
+	while (c < n) c *= 2
+	return c
 }
 
 function defaultNow(): number {
-	return performance.now() * 1000;
+	return performance.now() * 1000
 }
 
 /** Depth (entries) of the preallocated eval-pairing stacks — the three stack
  * columns below must stay equal; overflow degrades gracefully. */
-const EVAL_STACK_DEPTH = 1024;
+const EVAL_STACK_DEPTH = 1024
 
 // ---- the tracer ------------------------------------------------------------------
 
 export class Tracer implements TraceHooks {
-	private readonly engine: CosignalEngine;
-	private readonly mode: 'ring' | 'session';
-	private readonly cap: number; // ring capacity or session chunk size (records)
-	private readonly capMask: number;
-	private readonly capLog: number;
-	private readonly maxBytes: number;
-	private readonly now: () => number;
-	private chunks: Int32Array[] = [];
-	private head: TraceEventId = 0; // next event id (dense, monotonic from 0)
-	private truncatedFlag = false;
-	private causeReg = 0; // current cause id + 1; 0 = at an operation boundary
-	private lastUs: Microseconds;
+	private readonly engine: CosignalEngine
+	private readonly mode: 'ring' | 'session'
+	private readonly cap: number // ring capacity or session chunk size (records)
+	private readonly capMask: number
+	private readonly capLog: number
+	private readonly maxBytes: number
+	private readonly now: () => number
+	private chunks: Int32Array[] = []
+	private head: TraceEventId = 0 // next event id (dense, monotonic from 0)
+	private truncatedFlag = false
+	private causeReg = 0 // current cause id + 1; 0 = at an operation boundary
+	private lastUs: Microseconds
 	// label interning: id 0 reserved (= no label)
-	private labels: string[] = [''];
-	private labelIds = new Map<string, LabelId>();
+	private labels: string[] = ['']
+	private labelIds = new Map<string, LabelId>()
 	// ref-ring for rare object payloads (absolute indices detect overwrite)
-	private readonly refCap: number;
-	private refs: unknown[];
-	private refHead: RefId = 0;
+	private readonly refCap: number
+	private refs: unknown[]
+	private refHead: RefId = 0
 	// eval pairing stack (preallocated; overflow degrades gracefully)
-	private evalSubj = new Int32Array(EVAL_STACK_DEPTH);
-	private evalWorld = new Int32Array(EVAL_STACK_DEPTH);
-	private evalT0: Microseconds[] = new Array<number>(EVAL_STACK_DEPTH).fill(0);
-	private evalSp = 0;
-	private evalOverflow = 0;
+	private evalSubj = new Int32Array(EVAL_STACK_DEPTH)
+	private evalWorld = new Int32Array(EVAL_STACK_DEPTH)
+	private evalT0: Microseconds[] = new Array<number>(EVAL_STACK_DEPTH).fill(0)
+	private evalSp = 0
+	private evalOverflow = 0
 
 	constructor(engine: CosignalEngine, opts?: TracerOptions) {
-		this.engine = engine;
-		this.mode = opts?.mode ?? 'ring';
-		this.cap = this.mode === 'ring'
-			? roundUpToPowerOfTwo(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
-			: roundUpToPowerOfTwo(opts?.chunkSize ?? 1 << 14, POW2_CAPACITY_FLOOR);
-		this.capMask = this.cap - 1;
-		this.capLog = Math.log2(this.cap);
-		this.maxBytes = opts?.maxBytes ?? 128 * 1024 * 1024;
-		this.refCap = opts?.refCapacity === undefined ? 256 : roundUpToPowerOfTwo(Math.max(opts.refCapacity, 0), opts.refCapacity === 0 ? 0 : POW2_CAPACITY_FLOOR);
-		this.refs = new Array<unknown>(this.refCap);
-		this.now = opts?.now ?? defaultNow;
-		this.lastUs = this.now();
-		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
+		this.engine = engine
+		this.mode = opts?.mode ?? 'ring'
+		this.cap =
+			this.mode === 'ring'
+				? roundUpToPowerOfTwo(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
+				: roundUpToPowerOfTwo(opts?.chunkSize ?? 1 << 14, POW2_CAPACITY_FLOOR)
+		this.capMask = this.cap - 1
+		this.capLog = Math.log2(this.cap)
+		this.maxBytes = opts?.maxBytes ?? 128 * 1024 * 1024
+		this.refCap =
+			opts?.refCapacity === undefined
+				? 256
+				: roundUpToPowerOfTwo(
+						Math.max(opts.refCapacity, 0),
+						opts.refCapacity === 0 ? 0 : POW2_CAPACITY_FLOOR,
+					)
+		this.refs = new Array<unknown>(this.refCap)
+		this.now = opts?.now ?? defaultNow
+		this.lastUs = this.now()
+		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE))
 	}
 
 	/** Detach from the engine: recording stops, the capture stays decodable. */
 	stop(): void {
-		if (this.engine.trace === this) this.engine.trace = undefined;
+		if (this.engine.trace === this) this.engine.trace = undefined
 	}
 
 	get attached(): boolean {
-		return this.engine.trace === this;
+		return this.engine.trace === this
 	}
 
 	// ------------------------------------------------------------ emit core
 
 	private label(s: string): LabelId {
-		const got = this.labelIds.get(s);
-		if (got !== undefined) return got;
-		const id = this.labels.length;
-		this.labels.push(s);
-		this.labelIds.set(s, id);
-		return id;
+		const got = this.labelIds.get(s)
+		if (got !== undefined) return got
+		const id = this.labels.length
+		this.labels.push(s)
+		this.labelIds.set(s, id)
+		return id
 	}
 
 	private ref(v: unknown): RefId {
-		if (this.refCap === 0) return -1;
-		const idx = this.refHead & (this.refCap - 1);
-		this.refs[idx] = v;
-		return this.refHead++;
+		if (this.refCap === 0) return -1
+		const idx = this.refHead & (this.refCap - 1)
+		this.refs[idx] = v
+		return this.refHead++
 	}
 
 	/**
@@ -406,64 +466,80 @@ export class Tracer implements TraceHooks {
 	 * path allocates nothing.
 	 */
 	private bufFor(id: TraceEventId): Int32Array {
-		if (this.mode === 'ring') return this.chunks[0]!;
-		const chunkIndex = id >> this.capLog;
+		if (this.mode === 'ring') return this.chunks[0]!
+		const chunkIndex = id >> this.capLog
 		if (this.truncatedFlag || chunkIndex < this.chunks.length) {
-			return this.chunks[this.truncatedFlag ? this.chunks.length - 1 : chunkIndex]!;
+			return this.chunks[this.truncatedFlag ? this.chunks.length - 1 : chunkIndex]!
 		}
 		// chunk boundary: seal the current chunk, append the next — unless the
 		// budget is crossed, in which case degrade to ring over the final chunk.
-		const nextBytes = (this.chunks.length + 1) * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD;
+		const nextBytes =
+			(this.chunks.length + 1) * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD
 		if (nextBytes > this.maxBytes) {
-			this.truncatedFlag = true;
-			return this.chunks[this.chunks.length - 1]!;
+			this.truncatedFlag = true
+			return this.chunks[this.chunks.length - 1]!
 		}
-		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
-		return this.chunks[this.chunks.length - 1]!;
+		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE))
+		return this.chunks[this.chunks.length - 1]!
 	}
 
 	/** The one write path: id creation, time delta, cause register, 8 integer stores. */
-	private rec(kindFlags: KindWord, subject: number, world: number, a0: number, a1: number, a2: number): TraceEventId {
-		const t = this.now();
-		let dt = Math.round(t - this.lastUs);
-		this.lastUs = t;
+	private rec(
+		kindFlags: KindWord,
+		subject: number,
+		world: number,
+		a0: number,
+		a1: number,
+		a2: number,
+	): TraceEventId {
+		const t = this.now()
+		let dt = Math.round(t - this.lastUs)
+		this.lastUs = t
 		if (dt > MAX_I32 || dt < 0) {
-			dt = 0;
-			const abs = Math.round(t);
-			this.recRaw(K.clockSync, 0, 0, 0, Math.floor(abs / MAX_I32), abs % MAX_I32, 0);
+			dt = 0
+			const abs = Math.round(t)
+			this.recRaw(K.clockSync, 0, 0, 0, Math.floor(abs / MAX_I32), abs % MAX_I32, 0)
 		}
-		return this.recRaw(kindFlags, subject, world, dt, a0, a1, a2);
+		return this.recRaw(kindFlags, subject, world, dt, a0, a1, a2)
 	}
 
-	private recRaw(kindFlags: KindWord, subject: number, world: number, dt: number, a0: number, a1: number, a2: number): TraceEventId {
+	private recRaw(
+		kindFlags: KindWord,
+		subject: number,
+		world: number,
+		dt: number,
+		a0: number,
+		a1: number,
+		a2: number,
+	): TraceEventId {
 		// SESSION truncation boundary: mark loudly before the event that crossed it.
-		const preTrunc = this.truncatedFlag;
-		const id = this.head++;
-		const buf = this.bufFor(id);
-		const at = (id & this.capMask) * TraceRec.STRIDE;
+		const preTrunc = this.truncatedFlag
+		const id = this.head++
+		const buf = this.bufFor(id)
+		const at = (id & this.capMask) * TraceRec.STRIDE
 		if (this.mode === 'session' && this.truncatedFlag && !preTrunc) {
 			// the budget check inside slotFor flipped the flag for THIS id: record
 			// the boundary marker here, then re-emit the caller's event after it.
-			buf[at] = K.truncation;
-			buf[at + TraceField.CAUSE] = 0;
-			buf[at + TraceField.SUBJECT] = 0;
-			buf[at + TraceField.WORLD] = 0;
-			buf[at + TraceField.DT] = dt;
-			buf[at + TraceField.ARG0] = id | 0;
-			buf[at + TraceField.ARG1] = 0;
-			buf[at + TraceField.ARG2] = 0;
-			return this.recRaw(kindFlags, subject, world, 0, a0, a1, a2);
+			buf[at] = K.truncation
+			buf[at + TraceField.CAUSE] = 0
+			buf[at + TraceField.SUBJECT] = 0
+			buf[at + TraceField.WORLD] = 0
+			buf[at + TraceField.DT] = dt
+			buf[at + TraceField.ARG0] = id | 0
+			buf[at + TraceField.ARG1] = 0
+			buf[at + TraceField.ARG2] = 0
+			return this.recRaw(kindFlags, subject, world, 0, a0, a1, a2)
 		}
-		buf[at] = kindFlags | 0;
-		buf[at + TraceField.CAUSE] = this.causeReg | 0;
-		buf[at + TraceField.SUBJECT] = subject | 0;
-		buf[at + TraceField.WORLD] = world | 0;
-		buf[at + TraceField.DT] = dt | 0;
-		buf[at + TraceField.ARG0] = a0 | 0;
-		buf[at + TraceField.ARG1] = a1 | 0;
-		buf[at + TraceField.ARG2] = a2 | 0;
-		if (CAUSE_SETTING.has(kindFlags & KindBits.KIND_MASK)) this.causeReg = id + 1;
-		return id;
+		buf[at] = kindFlags | 0
+		buf[at + TraceField.CAUSE] = this.causeReg | 0
+		buf[at + TraceField.SUBJECT] = subject | 0
+		buf[at + TraceField.WORLD] = world | 0
+		buf[at + TraceField.DT] = dt | 0
+		buf[at + TraceField.ARG0] = a0 | 0
+		buf[at + TraceField.ARG1] = a1 | 0
+		buf[at + TraceField.ARG2] = a2 | 0
+		if (CAUSE_SETTING.has(kindFlags & KindBits.KIND_MASK)) this.causeReg = id + 1
+		return id
 	}
 
 	/**
@@ -472,10 +548,14 @@ export class Tracer implements TraceHooks {
 	 */
 	private worldCode(world: World): PackedWorld {
 		switch (world.kind) {
-			case 'newest': return 0;
-			case 'render': return world.render.id << WorldPack.PAYLOAD_SHIFT;
-			case 'committed': return -(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT;
-			case 'mountFix': return (-(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT) | WorldPack.MOUNT_FIX_BIT;
+			case 'newest':
+				return 0
+			case 'render':
+				return world.render.id << WorldPack.PAYLOAD_SHIFT
+			case 'committed':
+				return -(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT
+			case 'mountFix':
+				return (-(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT) | WorldPack.MOUNT_FIX_BIT
 		}
 	}
 
@@ -487,7 +567,7 @@ export class Tracer implements TraceHooks {
 	// decode-compatible across the migration.
 
 	writeDropped(node: AtomInternals, batch: BatchId): void {
-		this.rec(K.writeDropped, this.label(node.name), batch, 0, 0, 0);
+		this.rec(K.writeDropped, this.label(node.name), batch, 0, 0, 0)
 	}
 
 	quietWrite(node: AtomInternals, seq: Seq): void {
@@ -495,22 +575,26 @@ export class Tracer implements TraceHooks {
 		// not have. Deliberately NOT a cause-claiming kind: the quiet fold's
 		// operation does not emit an opEnd, so claiming the register here
 		// would chain unrelated later operations to it.
-		this.rec(K.quietWrite, this.label(node.name), 0, seq, 0, 0);
+		this.rec(K.quietWrite, this.label(node.name), 0, seq, 0, 0)
 	}
 
 	delivery(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq, interleaved: boolean): void {
 		this.rec(
 			K.delivery | (interleaved ? KindBits.FLAG_A : 0),
-			this.label(w.name), batch, slot, seq, 0,
-		);
+			this.label(w.name),
+			batch,
+			slot,
+			seq,
+			0,
+		)
 	}
 
 	suppressed(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq): void {
-		this.rec(K.suppressed, this.label(w.name), batch, slot, seq, 0);
+		this.rec(K.suppressed, this.label(w.name), batch, slot, seq, 0)
 	}
 
 	coreEffectRun(effect: string, value: Value): void {
-		this.rec(K.coreEffectRun, this.label(effect), 0, this.ref(value), 0, 0);
+		this.rec(K.coreEffectRun, this.label(effect), 0, this.ref(value), 0, 0)
 	}
 
 	/** ARG1 stores ref(values)+1 — 0 means "not captured", so recordings made
@@ -518,48 +602,65 @@ export class Tracer implements TraceHooks {
 	 * array is the one payload an emit site allocates (tracer-attached only):
 	 * the model-comparison suites compare it entry by entry. */
 	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void {
-		this.rec(K.reactEffectRun, this.label(effect), this.label(root), this.ref(value), this.ref(values) + 1, 0);
+		this.rec(
+			K.reactEffectRun,
+			this.label(effect),
+			this.label(root),
+			this.ref(value),
+			this.ref(values) + 1,
+			0,
+		)
 	}
 
 	reactEffectCleanup(effect: string, root: RootId): void {
-		this.rec(K.reactEffectCleanup, this.label(effect), this.label(root), 0, 0, 0);
+		this.rec(K.reactEffectCleanup, this.label(effect), this.label(root), 0, 0, 0)
 	}
 
-	reconcileCorrection(w: Watcher, root: RootId, from: Value, to: Value, perRootCommit: boolean): void {
+	reconcileCorrection(
+		w: Watcher,
+		root: RootId,
+		from: Value,
+		to: Value,
+		perRootCommit: boolean,
+	): void {
 		this.rec(
 			K.reconcileCorrection | (perRootCommit ? KindBits.FLAG_A : 0),
-			this.label(w.name), this.label(root), this.ref(from), this.ref(to), 0,
-		);
+			this.label(w.name),
+			this.label(root),
+			this.ref(from),
+			this.ref(to),
+			0,
+		)
 	}
 
 	mountCorrective(w: Watcher, batch: BatchId, slot: BatchSlot): void {
-		this.rec(K.mountCorrective, this.label(w.name), batch, slot, 0, 0);
+		this.rec(K.mountCorrective, this.label(w.name), batch, slot, 0, 0)
 	}
 
 	mountCorrection(w: Watcher, from: Value, to: Value): void {
-		this.rec(K.mountCorrection, this.label(w.name), 0, this.ref(from), this.ref(to), 0);
+		this.rec(K.mountCorrection, this.label(w.name), 0, this.ref(from), this.ref(to), 0)
 	}
 
 	/** The site passes the root's generation (already bumped) — the tracer no
 	 * longer reads engine state to enrich the record. */
 	perRootCommit(root: RootId, batch: BatchId, commitGen: CommitGen): void {
-		this.rec(K.rootCommit, batch, this.label(root), commitGen, 0, 0);
+		this.rec(K.rootCommit, batch, this.label(root), commitGen, 0, 0)
 	}
 
 	retired(batch: BatchId, retiredSeq: Seq): void {
-		this.rec(K.batchRetire, batch, 0, retiredSeq, 0, 0);
+		this.rec(K.batchRetire, batch, 0, retiredSeq, 0, 0)
 	}
 
 	slotClaimed(slot: BatchSlot, batch: BatchId): void {
-		this.rec(K.slotClaim, slot, batch, 0, 0, 0);
+		this.rec(K.slotClaim, slot, batch, 0, 0, 0)
 	}
 
 	slotReleased(slot: BatchSlot, batch: BatchId): void {
-		this.rec(K.slotRelease, slot, batch, 0, 0, 0);
+		this.rec(K.slotRelease, slot, batch, 0, 0, 0)
 	}
 
 	slotBackstopReleased(slot: BatchSlot, batch: BatchId): void {
-		this.rec(K.slotBackstop, slot, batch, 0, 0, 0);
+		this.rec(K.slotBackstop, slot, batch, 0, 0, 0)
 	}
 
 	/** Post-consequence checkpoint markers (unlike `renderEnd`, which fires before
@@ -567,28 +668,35 @@ export class Tracer implements TraceHooks {
 	 * every retirement fold / lock-in / drain / fixup of the render end landed —
 	 * the stream position the reference model emits its render events at. */
 	renderCommitted(p: RenderPass): void {
-		this.rec(K.renderCommitted, p.id, this.label(p.root), 0, 0, 0);
+		this.rec(K.renderCommitted, p.id, this.label(p.root), 0, 0, 0)
 	}
 
 	renderDiscarded(p: RenderPass): void {
-		this.rec(K.renderDiscarded, p.id, this.label(p.root), 0, 0, 0);
+		this.rec(K.renderDiscarded, p.id, this.label(p.root), 0, 0, 0)
 	}
 
 	epochReset(epoch: Epoch): void {
-		this.rec(K.epochReset, epoch, 0, 0, 0, 0);
+		this.rec(K.epochReset, epoch, 0, 0, 0, 0)
 	}
 
 	logEntry(node: AtomInternals, entry: WriteLogEntry): void {
-		const op = OP_NAMES.indexOf(entry.op.kind); // encoder and decoder share OP_NAMES (cold path)
-		this.rec(K.write, this.label(node.name), entry.batch, entry.slot, entry.seq, op);
+		const op = OP_NAMES.indexOf(entry.op.kind) // encoder and decoder share OP_NAMES (cold path)
+		this.rec(K.write, this.label(node.name), entry.batch, entry.slot, entry.seq, op)
 	}
 
 	batchOpen(t: Batch): void {
-		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, 0, 0, 0);
+		this.rec(
+			K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0),
+			t.id,
+			0,
+			0,
+			0,
+			0,
+		)
 	}
 
 	batchSettle(t: Batch): void {
-		this.rec(K.batchSettle, t.id, 0, 0, 0, 0);
+		this.rec(K.batchSettle, t.id, 0, 0, 0, 0)
 	}
 
 	/** The bindings' committed/abandoned report, created at its source (the
@@ -596,210 +704,269 @@ export class Tracer implements TraceHooks {
 	 * Not a cause-claiming kind: the retirement operation it precedes roots
 	 * its own chain, exactly as it did when the flag rode the engine call. */
 	batchDisposition(batch: BatchId, committed: boolean): void {
-		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), batch, 0, 0, 0, 0);
+		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), batch, 0, 0, 0, 0)
 	}
 
 	renderStart(p: RenderPass): void {
-		this.rec(K.renderStart, p.id, this.label(p.root), p.pin, p.maskBatches.size, 0);
+		this.rec(K.renderStart, p.id, this.label(p.root), p.pin, p.maskBatches.size, 0)
 	}
 
 	renderYield(p: RenderPass): void {
-		this.rec(K.renderYield, p.id, this.label(p.root), 0, 0, 0);
+		this.rec(K.renderYield, p.id, this.label(p.root), 0, 0, 0)
 	}
 
 	renderResume(p: RenderPass): void {
-		this.rec(K.renderResume, p.id, this.label(p.root), 0, 0, 0);
+		this.rec(K.renderResume, p.id, this.label(p.root), 0, 0, 0)
 	}
 
 	renderEnd(p: RenderPass, kind: 'commit' | 'discard'): void {
-		this.rec(K.renderEnd | (kind === 'commit' ? KindBits.FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
+		this.rec(
+			K.renderEnd | (kind === 'commit' ? KindBits.FLAG_A : 0),
+			p.id,
+			this.label(p.root),
+			0,
+			0,
+			0,
+		)
 	}
 
 	evalStart(node: ComputedInternals, world: World): void {
 		if (this.evalSp >= this.evalSubj.length) {
-			this.evalOverflow++; // deeper than the preallocated stack: skip, stay paired
-			return;
+			this.evalOverflow++ // deeper than the preallocated stack: skip, stay paired
+			return
 		}
-		this.evalSubj[this.evalSp] = this.label(node.name);
-		this.evalWorld[this.evalSp] = this.worldCode(world);
-		this.evalT0[this.evalSp] = this.now();
-		this.evalSp++;
+		this.evalSubj[this.evalSp] = this.label(node.name)
+		this.evalWorld[this.evalSp] = this.worldCode(world)
+		this.evalT0[this.evalSp] = this.now()
+		this.evalSp++
 	}
 
 	evalEnd(): void {
 		if (this.evalOverflow > 0) {
-			this.evalOverflow--;
-			return;
+			this.evalOverflow--
+			return
 		}
-		if (this.evalSp === 0) return; // attached mid-evaluation: nothing to pair
-		this.evalSp--;
-		const packed: PackedWorld = this.evalWorld[this.evalSp]!;
-		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]!), MAX_I32);
+		if (this.evalSp === 0) return // attached mid-evaluation: nothing to pair
+		this.evalSp--
+		const packed: PackedWorld = this.evalWorld[this.evalSp]!
+		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]!), MAX_I32)
 		this.rec(
 			K.evalDone | ((packed & WorldPack.MOUNT_FIX_BIT) !== 0 ? KindBits.FLAG_A : 0),
-			this.evalSubj[this.evalSp]!, packed >> WorldPack.PAYLOAD_SHIFT, dur, this.evalSp, 0,
-		);
+			this.evalSubj[this.evalSp]!,
+			packed >> WorldPack.PAYLOAD_SHIFT,
+			dur,
+			this.evalSp,
+			0,
+		)
 	}
 
 	slotReleaseDeferred(slot: BatchSlot, batch: BatchId): void {
-		this.rec(K.slotReleaseDeferred, slot, batch, 0, 0, 0);
+		this.rec(K.slotReleaseDeferred, slot, batch, 0, 0, 0)
 	}
 
-	runMountFixup(w: Watcher, disposition: 'fast-out' | 'compare-clean' | 'corrected', correctives: number): void {
-		this.rec(K.runMountFixup, this.label(w.name), this.label(w.root), DISPOSITION_NAMES.indexOf(disposition), correctives, 0);
+	runMountFixup(
+		w: Watcher,
+		disposition: 'fast-out' | 'compare-clean' | 'corrected',
+		correctives: number,
+	): void {
+		this.rec(
+			K.runMountFixup,
+			this.label(w.name),
+			this.label(w.root),
+			DISPOSITION_NAMES.indexOf(disposition),
+			correctives,
+			0,
+		)
 	}
 
 	opEnd(): void {
-		this.causeReg = 0;
+		this.causeReg = 0
 	}
 
 	// -------------------------------------------------- retention and decode
 
 	/** Lowest id still decodable. */
 	private firstRetained(): TraceEventId {
-		if (this.mode === 'ring') return Math.max(0, this.head - this.cap);
-		return 0; // session: the sealed prefix is never dropped
+		if (this.mode === 'ring') return Math.max(0, this.head - this.cap)
+		return 0 // session: the sealed prefix is never dropped
 	}
 
 	private isRetained(id: TraceEventId): boolean {
-		if (id < 0 || id >= this.head) return false;
-		if (this.mode === 'ring') return id >= this.head - this.cap;
-		if (!this.truncatedFlag) return true;
-		const sealedEnd = (this.chunks.length - 1) * this.cap;
-		return id < sealedEnd || id >= this.head - this.cap;
+		if (id < 0 || id >= this.head) return false
+		if (this.mode === 'ring') return id >= this.head - this.cap
+		if (!this.truncatedFlag) return true
+		const sealedEnd = (this.chunks.length - 1) * this.cap
+		return id < sealedEnd || id >= this.head - this.cap
 	}
 
 	/** Read a raw record field without decoding (queries walk records this way). */
 	private peek(id: TraceEventId, field: TraceField): number {
-		const buf = this.mode === 'ring'
-			? this.chunks[0]!
-			: this.chunks[this.truncatedFlag && id >= (this.chunks.length - 1) * this.cap ? this.chunks.length - 1 : id >> this.capLog]!;
-		return buf[(id & this.capMask) * TraceRec.STRIDE + field]!;
+		const buf =
+			this.mode === 'ring'
+				? this.chunks[0]!
+				: this.chunks[
+						this.truncatedFlag && id >= (this.chunks.length - 1) * this.cap
+							? this.chunks.length - 1
+							: id >> this.capLog
+					]!
+		return buf[(id & this.capMask) * TraceRec.STRIDE + field]!
 	}
 
 	private refValue(refId: RefId): unknown {
-		if (refId < 0 || this.refHead - refId > this.refCap) return REF_DROPPED;
-		return this.refs[refId & (this.refCap - 1)];
+		if (refId < 0 || this.refHead - refId > this.refCap) return REF_DROPPED
+		return this.refs[refId & (this.refCap - 1)]
 	}
 
 	private labelOf(id: LabelId): string {
-		return this.labels[id] ?? `?label:${id}`;
+		return this.labels[id] ?? `?label:${id}`
 	}
 
 	private worldName(code: number, mountFix: boolean): string {
-		if (code === 0) return 'newest';
-		if (code > 0) return `render:${code}`;
-		const root = this.labelOf(-code - 1);
-		return mountFix ? `mount-fix:${root}` : `committed:${root}`;
+		if (code === 0) return 'newest'
+		if (code > 0) return `render:${code}`
+		const root = this.labelOf(-code - 1)
+		return mountFix ? `mount-fix:${root}` : `committed:${root}`
 	}
 
 	/** Decode one event; undefined once overwritten (RING) or never recorded. */
 	decode(id: TraceEventId): TraceRecord | undefined {
-		if (!this.isRetained(id)) return undefined;
-		const kf = this.peek(id, TraceField.KIND);
-		const kind: TraceKindCode = kf & KindBits.KIND_MASK;
-		const a = (kf & KindBits.FLAG_A) !== 0;
-		const b = (kf & KindBits.FLAG_B) !== 0;
-		const cause = this.peek(id, TraceField.CAUSE);
-		const subject = this.peek(id, TraceField.SUBJECT);
-		const world = this.peek(id, TraceField.WORLD);
-		const a0 = this.peek(id, TraceField.ARG0);
-		const a1 = this.peek(id, TraceField.ARG1);
-		const a2 = this.peek(id, TraceField.ARG2);
-		let data: Record<string, unknown>;
+		if (!this.isRetained(id)) return undefined
+		const kf = this.peek(id, TraceField.KIND)
+		const kind: TraceKindCode = kf & KindBits.KIND_MASK
+		const a = (kf & KindBits.FLAG_A) !== 0
+		const b = (kf & KindBits.FLAG_B) !== 0
+		const cause = this.peek(id, TraceField.CAUSE)
+		const subject = this.peek(id, TraceField.SUBJECT)
+		const world = this.peek(id, TraceField.WORLD)
+		const a0 = this.peek(id, TraceField.ARG0)
+		const a1 = this.peek(id, TraceField.ARG1)
+		const a2 = this.peek(id, TraceField.ARG2)
+		let data: Record<string, unknown>
 		switch (kind) {
 			case K.write:
-				data = { node: this.labelOf(subject), op: OP_NAMES[a2], batch: world, slot: a0, seq: a1 };
-				break;
+				data = { node: this.labelOf(subject), op: OP_NAMES[a2], batch: world, slot: a0, seq: a1 }
+				break
 			case K.writeDropped:
-				data = { node: this.labelOf(subject), batch: world };
-				break;
+				data = { node: this.labelOf(subject), batch: world }
+				break
 			case K.quietWrite:
-				data = { node: this.labelOf(subject), seq: a0 };
-				break;
+				data = { node: this.labelOf(subject), seq: a0 }
+				break
 			case K.batchOpen:
-				data = { batch: subject, action: a, ambient: b };
-				break;
+				data = { batch: subject, action: a, ambient: b }
+				break
 			case K.batchSettle:
 				// (a FLAG_A bit here is a legacy committed flag from older
 				// recordings — ignored; see batch-disposition.)
-				data = { batch: subject };
-				break;
+				data = { batch: subject }
+				break
 			case K.batchRetire:
-				data = { batch: subject, retiredSeq: a0 }; // legacy FLAG_A ignored, as above
-				break;
+				data = { batch: subject, retiredSeq: a0 } // legacy FLAG_A ignored, as above
+				break
 			case K.batchDisposition:
-				data = { batch: subject, committed: a };
-				break;
+				data = { batch: subject, committed: a }
+				break
 			case K.slotClaim:
 			case K.slotRelease:
 			case K.slotReleaseDeferred:
 			case K.slotBackstop:
-				data = { slot: subject, batch: world };
-				break;
+				data = { slot: subject, batch: world }
+				break
 			case K.renderStart:
-				data = { renderPass: subject, root: this.labelOf(world), pin: a0, maskSize: a1 };
-				break;
+				data = { renderPass: subject, root: this.labelOf(world), pin: a0, maskSize: a1 }
+				break
 			case K.renderYield:
 			case K.renderResume:
-				data = { renderPass: subject, root: this.labelOf(world) };
-				break;
+				data = { renderPass: subject, root: this.labelOf(world) }
+				break
 			case K.renderEnd:
-				data = { renderPass: subject, root: this.labelOf(world), disposition: a ? 'commit' : 'discard' };
-				break;
+				data = {
+					renderPass: subject,
+					root: this.labelOf(world),
+					disposition: a ? 'commit' : 'discard',
+				}
+				break
 			case K.rootCommit:
-				data = { root: this.labelOf(world), batch: subject, commitGen: a0 };
-				break;
+				data = { root: this.labelOf(world), batch: subject, commitGen: a0 }
+				break
 			case K.delivery:
-				data = { watcher: this.labelOf(subject), batch: world, slot: a0, seq: a1, mode: a ? 'interleaved' : 'fresh' };
-				break;
+				data = {
+					watcher: this.labelOf(subject),
+					batch: world,
+					slot: a0,
+					seq: a1,
+					mode: a ? 'interleaved' : 'fresh',
+				}
+				break
 			case K.suppressed:
-				data = { watcher: this.labelOf(subject), batch: world, slot: a0, seq: a1, reason: 'dedup-pending-fold' };
-				break;
+				data = {
+					watcher: this.labelOf(subject),
+					batch: world,
+					slot: a0,
+					seq: a1,
+					reason: 'dedup-pending-fold',
+				}
+				break
 			case K.evalDone:
-				data = { node: this.labelOf(subject), world: this.worldName(world, a), durationUs: a0, depth: a1 };
-				break;
+				data = {
+					node: this.labelOf(subject),
+					world: this.worldName(world, a),
+					durationUs: a0,
+					depth: a1,
+				}
+				break
 			case K.mountCorrective:
-				data = { watcher: this.labelOf(subject), batch: world, slot: a0 };
-				break;
+				data = { watcher: this.labelOf(subject), batch: world, slot: a0 }
+				break
 			case K.runMountFixup:
-				data = { watcher: this.labelOf(subject), root: this.labelOf(world), disposition: DISPOSITION_NAMES[a0], correctives: a1 };
-				break;
+				data = {
+					watcher: this.labelOf(subject),
+					root: this.labelOf(world),
+					disposition: DISPOSITION_NAMES[a0],
+					correctives: a1,
+				}
+				break
 			case K.mountCorrection:
-				data = { watcher: this.labelOf(subject), from: this.refValue(a0), to: this.refValue(a1) };
-				break;
+				data = { watcher: this.labelOf(subject), from: this.refValue(a0), to: this.refValue(a1) }
+				break
 			case K.reconcileCorrection:
 				data = {
-					watcher: this.labelOf(subject), root: this.labelOf(world),
-					from: this.refValue(a0), to: this.refValue(a1),
+					watcher: this.labelOf(subject),
+					root: this.labelOf(world),
+					from: this.refValue(a0),
+					to: this.refValue(a1),
 					cause: a ? 'per-root-commit' : 'retirement',
-				};
-				break;
+				}
+				break
 			case K.coreEffectRun:
-				data = { effect: this.labelOf(subject), value: this.refValue(a0) };
-				break;
+				data = { effect: this.labelOf(subject), value: this.refValue(a0) }
+				break
 			case K.reactEffectRun:
-				data = { effect: this.labelOf(subject), root: this.labelOf(world), value: this.refValue(a0) };
-				if (a1 !== 0) data['values'] = this.refValue(a1 - 1); // 0 = recorded before dep-value capture
-				break;
+				data = {
+					effect: this.labelOf(subject),
+					root: this.labelOf(world),
+					value: this.refValue(a0),
+				}
+				if (a1 !== 0) data['values'] = this.refValue(a1 - 1) // 0 = recorded before dep-value capture
+				break
 			case K.reactEffectCleanup:
-				data = { effect: this.labelOf(subject), root: this.labelOf(world) };
-				break;
+				data = { effect: this.labelOf(subject), root: this.labelOf(world) }
+				break
 			case K.renderCommitted:
 			case K.renderDiscarded:
-				data = { renderPass: subject, root: this.labelOf(world) };
-				break;
+				data = { renderPass: subject, root: this.labelOf(world) }
+				break
 			case K.epochReset:
-				data = { epoch: subject };
-				break;
+				data = { epoch: subject }
+				break
 			case K.clockSync:
-				data = { absoluteUs: a0 * MAX_I32 + a1 };
-				break;
+				data = { absoluteUs: a0 * MAX_I32 + a1 }
+				break
 			case K.truncation:
-				data = { boundaryId: a0 };
-				break;
+				data = { boundaryId: a0 }
+				break
 			default:
-				return undefined;
+				return undefined
 		}
 		return {
 			id,
@@ -807,45 +974,53 @@ export class Tracer implements TraceHooks {
 			dt: this.peek(id, TraceField.DT),
 			cause: cause === 0 ? undefined : cause - 1,
 			data,
-		};
+		}
 	}
 
 	/** All retained events, oldest first (optionally one kind). The tool-facing view. */
 	events(kind?: TraceKind): TraceRecord[] {
-		const out: TraceRecord[] = [];
+		const out: TraceRecord[] = []
 		for (let id = this.firstRetained(); id < this.head; id++) {
-			if (!this.isRetained(id)) continue;
-			if (kind !== undefined && KIND_NAMES[this.peek(id, TraceField.KIND) & KindBits.KIND_MASK] !== kind) continue;
-			const e = this.decode(id);
-			if (e !== undefined) out.push(e);
+			if (!this.isRetained(id)) continue
+			if (
+				kind !== undefined &&
+				KIND_NAMES[this.peek(id, TraceField.KIND) & KindBits.KIND_MASK] !== kind
+			)
+				continue
+			const e = this.decode(id)
+			if (e !== undefined) out.push(e)
 		}
-		return out;
+		return out
 	}
 
 	// ------------------------------------------------------ causality queries
 
 	/** The event and its provokers, event first, walking CAUSE to the operation root. */
 	causeChain(id: TraceEventId): TraceRecord[] {
-		const out: TraceRecord[] = [];
-		let cur: number | undefined = id;
+		const out: TraceRecord[] = []
+		let cur: number | undefined = id
 		while (cur !== undefined) {
-			const e = this.decode(cur);
-			if (e === undefined) break; // fell off the retained window
-			out.push(e);
-			cur = e.cause;
+			const e = this.decode(cur)
+			if (e === undefined) break // fell off the retained window
+			out.push(e)
+			cur = e.cause
 		}
-		return out;
+		return out
 	}
 
 	/** Newest retained event of `kind` whose subject label is `name` (packed scan). */
 	private lastBySubject(kinds: TraceKindCode[], name: string): TraceEventId | undefined {
-		const label = this.labelIds.get(name);
-		if (label === undefined) return undefined;
+		const label = this.labelIds.get(name)
+		if (label === undefined) return undefined
 		for (let id = this.head - 1; id >= this.firstRetained(); id--) {
-			if (!this.isRetained(id)) continue;
-			if (kinds.includes(this.peek(id, TraceField.KIND) & KindBits.KIND_MASK) && this.peek(id, TraceField.SUBJECT) === label) return id;
+			if (!this.isRetained(id)) continue
+			if (
+				kinds.includes(this.peek(id, TraceField.KIND) & KindBits.KIND_MASK) &&
+				this.peek(id, TraceField.SUBJECT) === label
+			)
+				return id
 		}
-		return undefined;
+		return undefined
 	}
 
 	/** Why did this watcher last re-render (or get suppressed/corrected)? The cause chain. */
@@ -853,43 +1028,49 @@ export class Tracer implements TraceHooks {
 		const id = this.lastBySubject(
 			[K.delivery, K.suppressed, K.mountCorrective, K.mountCorrection, K.reconcileCorrection],
 			watcher,
-		);
-		return id === undefined ? [] : this.causeChain(id);
+		)
+		return id === undefined ? [] : this.causeChain(id)
 	}
 
 	/** Why did this effect last run? The cause chain. */
 	whyEffectRan(effect: string): TraceRecord[] {
-		const id = this.lastBySubject([K.coreEffectRun, K.reactEffectRun], effect);
-		return id === undefined ? [] : this.causeChain(id);
+		const id = this.lastBySubject([K.coreEffectRun, K.reactEffectRun], effect)
+		return id === undefined ? [] : this.causeChain(id)
 	}
 
 	/** Retained run count for an effect label (packed scan; decodes nothing). */
 	effectRunCount(effect: string): number {
-		const label = this.labelIds.get(effect);
-		if (label === undefined) return 0;
-		let n = 0;
+		const label = this.labelIds.get(effect)
+		if (label === undefined) return 0
+		let n = 0
 		for (let id = this.firstRetained(); id < this.head; id++) {
-			if (!this.isRetained(id)) continue;
-			const k = this.peek(id, TraceField.KIND) & KindBits.KIND_MASK;
-			if ((k === K.coreEffectRun || k === K.reactEffectRun) && this.peek(id, TraceField.SUBJECT) === label) n++;
+			if (!this.isRetained(id)) continue
+			const k = this.peek(id, TraceField.KIND) & KindBits.KIND_MASK
+			if (
+				(k === K.coreEffectRun || k === K.reactEffectRun) &&
+				this.peek(id, TraceField.SUBJECT) === label
+			)
+				n++
 		}
-		return n;
+		return n
 	}
 
 	// ---------------------------------------------------------------- stats
 
 	/** SESSION losslessness proof: dense ids from 0 with no truncation marker. */
 	verifyComplete(): { complete: boolean; from: number; to: number } {
-		const from = this.firstRetained();
-		return { complete: from === 0 && !this.truncatedFlag, from, to: this.head - 1 };
+		const from = this.firstRetained()
+		return { complete: from === 0 && !this.truncatedFlag, from, to: this.head - 1 }
 	}
 
 	stats(): TraceStats {
-		const retained = this.mode === 'ring'
-			? Math.min(this.head, this.cap)
-			: this.truncatedFlag
-				? (this.chunks.length - 1) * this.cap + Math.min(this.head - (this.chunks.length - 1) * this.cap, this.cap)
-				: this.head;
+		const retained =
+			this.mode === 'ring'
+				? Math.min(this.head, this.cap)
+				: this.truncatedFlag
+					? (this.chunks.length - 1) * this.cap +
+						Math.min(this.head - (this.chunks.length - 1) * this.cap, this.cap)
+					: this.head
 		return {
 			mode: this.mode,
 			attached: this.attached,
@@ -901,7 +1082,7 @@ export class Tracer implements TraceHooks {
 			chunks: this.chunks.length,
 			bytes: this.chunks.length * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD,
 			refsCaptured: Math.min(this.refHead, this.refCap),
-		};
+		}
 	}
 }
 
@@ -915,11 +1096,13 @@ export class Tracer implements TraceHooks {
  */
 export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Tracer {
 	if (engine.trace !== undefined) {
-		throw new Error('cosignals/trace: a tracer is already attached to this engine (stop() it first)');
+		throw new Error(
+			'cosignals/trace: a tracer is already attached to this engine (stop() it first)',
+		)
 	}
-	const tracer = new Tracer(engine, opts);
-	engine.trace = tracer;
-	return tracer;
+	const tracer = new Tracer(engine, opts)
+	engine.trace = tracer
+	return tracer
 }
 
 // ---- human formatting ---------------------------------------------------------------
@@ -927,9 +1110,9 @@ export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Trac
 /** One value formatter, two faces: subjects render unquoted (they are
  * labels); data values quote strings that would not scan as one word. */
 function formatValue(v: unknown, subject = false): string {
-	if (v === REF_DROPPED) return '«dropped»';
-	if (typeof v === 'string') return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
-	return String(v);
+	if (v === REF_DROPPED) return '«dropped»'
+	if (typeof v === 'string') return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v)
+	return String(v)
 }
 
 /**
@@ -938,15 +1121,18 @@ function formatValue(v: unknown, subject = false): string {
  * Δt varies run to run under the real clock.
  */
 export function formatTraceRecord(e: TraceRecord): string {
-	const entries = Object.entries(e.data);
+	const entries = Object.entries(e.data)
 	// the first field is the subject, rendered inside the parens
-	const head = entries.length > 0 ? formatValue(entries[0]![1], true) : '';
-	const rest = entries.slice(1).map(([k, v]) => `${k}=${formatValue(v)}`).join(' ');
-	const cause = e.cause === undefined ? '' : ` <- #${e.cause}`;
-	return `#${e.id} +${e.dt}µs ${e.kind}(${head})${rest.length > 0 ? ` ${rest}` : ''}${cause}`;
+	const head = entries.length > 0 ? formatValue(entries[0]![1], true) : ''
+	const rest = entries
+		.slice(1)
+		.map(([k, v]) => `${k}=${formatValue(v)}`)
+		.join(' ')
+	const cause = e.cause === undefined ? '' : ` <- #${e.cause}`
+	return `#${e.id} +${e.dt}µs ${e.kind}(${head})${rest.length > 0 ? ` ${rest}` : ''}${cause}`
 }
 
 /** The whole capture (or any decoded slice), one line per event. */
 export function formatTrace(events: TraceRecord[]): string {
-	return events.map(formatTraceRecord).join('\n');
+	return events.map(formatTraceRecord).join('\n')
 }

@@ -14,4 +14,4 @@ export default {
 		sourcemap: true,
 		outDir: 'dist',
 	},
-};
+}

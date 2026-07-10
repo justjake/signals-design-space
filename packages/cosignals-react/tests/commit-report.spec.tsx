@@ -17,79 +17,79 @@
  * `onRootCommitted` handler while a REAL transition batch is live and not
  * yet locked in.
  */
-import { describe, expect, test, afterEach } from 'vitest';
-import * as React from 'react';
-import { Atom, __TEST__internalsById, type AtomInternals } from 'cosignals';
-import { useSignal } from '../src/index.js';
-import { makeHarness, act, text, type Harness } from './helpers.js';
+import { describe, expect, test, afterEach } from 'vitest'
+import * as React from 'react'
+import { Atom, __TEST__internalsById, type AtomInternals } from 'cosignals'
+import { useSignal } from '../src/index.js'
+import { makeHarness, act, text, type Harness } from './helpers.js'
 
 /** The shim internals this suite drives directly (private in production). */
 type ShimPrivate = {
-	rootsByContainer: Map<unknown, { id: string }>;
-	engineToRegistry: Map<number, number>;
-	handleRootCommitted(container: unknown, committedBatches: readonly number[]): void;
-};
+	rootsByContainer: Map<unknown, { id: string }>
+	engineToRegistry: Map<number, number>
+	handleRootCommitted(container: unknown, committedBatches: readonly number[]): void
+}
 
-let h: Harness;
+let h: Harness
 afterEach(async () => {
-	await h.cleanup();
-});
+	await h.cleanup()
+})
 
 describe('root-commit report reconciliation (W11)', () => {
 	test("report names a live batch render-end didn't lock in — committed world includes its writes", async () => {
-		h = makeHarness();
-		const a = new Atom(0);
+		h = makeHarness()
+		const a = new Atom(0)
 		function Reader() {
-			return <span>v:{useSignal(a)};</span>;
+			return <span>v:{useSignal(a)};</span>
 		}
-		const { container } = await h.mount(<Reader />);
-		expect(text(container)).toBe('v:0;');
+		const { container } = await h.mount(<Reader />)
+		expect(text(container)).toBe('v:0;')
 
-		const shim = h.handle.shim as unknown as ShimPrivate;
-		expect(shim.rootsByContainer.size).toBe(1);
-		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!;
-		const node = __TEST__internalsById(a._id) as AtomInternals;
+		const shim = h.handle.shim as unknown as ShimPrivate
+		expect(shim.rootsByContainer.size).toBe(1)
+		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!
+		const node = __TEST__internalsById(a._id) as AtomInternals
 
 		await act(async () => {
 			// A real registry batch: the transition write classifies into it and
 			// it stays live — no render has rendered or committed it yet, so
 			// render-end has NOT locked it into the root's committed table.
-			React.startTransition(() => a.set(7));
-			const batch = h.bridge.liveBatches().find((t) => !t.ambient);
-			expect(batch).toBeDefined();
-			const tid = batch!.id;
-			const token = shim.engineToRegistry.get(tid);
-			expect(token).toBeDefined();
-			const root = h.bridge.root(rec.id);
-			expect(root.committedBatches.has(tid)).toBe(false); // render-end never saw it
-			const genBefore = root.commitGen;
-			expect(h.bridge.committedValue(node, rec.id)).toBe(0); // still pending for this root
+			React.startTransition(() => a.set(7))
+			const batch = h.bridge.liveBatches().find((t) => !t.ambient)
+			expect(batch).toBeDefined()
+			const tid = batch!.id
+			const token = shim.engineToRegistry.get(tid)
+			expect(token).toBeDefined()
+			const root = h.bridge.root(rec.id)
+			expect(root.committedBatches.has(tid)).toBe(false) // render-end never saw it
+			const genBefore = root.commitGen
+			expect(h.bridge.committedValue(node, rec.id)).toBe(0) // still pending for this root
 
 			// React's report names the live batch render-end didn't lock in.
-			shim.handleRootCommitted(rootContainer, [token!]);
+			shim.handleRootCommitted(rootContainer, [token!])
 
 			// The COMPLETE lock-in, not the half-job: committed-world reads for
 			// this root now include the batch's writes...
-			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
+			expect(h.bridge.committedValue(node, rec.id)).toBe(7)
 			// ...because the committed-batch set and the bit mask the visibility
 			// check reads moved TOGETHER, with the generation.
-			expect(root.committedBatches.has(tid)).toBe(true);
-			const slot = h.bridge.idToBatch.get(tid)!.slot;
-			expect(slot).toBeDefined();
-			expect((root.committedBits >>> slot!) & 1).toBe(1);
-			expect(root.commitGen).toBe(genBefore + 1);
+			expect(root.committedBatches.has(tid)).toBe(true)
+			const slot = h.bridge.idToBatch.get(tid)!.slot
+			expect(slot).toBeDefined()
+			expect((root.committedBits >>> slot!) & 1).toBe(1)
+			expect(root.commitGen).toBe(genBefore + 1)
 
 			// Re-reporting the same batch is an idempotent set-add: no-op.
-			shim.handleRootCommitted(rootContainer, [token!]);
-			expect(root.commitGen).toBe(genBefore + 1);
-			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
-		});
+			shim.handleRootCommitted(rootContainer, [token!])
+			expect(root.commitGen).toBe(genBefore + 1)
+			expect(h.bridge.committedValue(node, rec.id)).toBe(7)
+		})
 
 		// The act flush lets the transition render, commit, and retire through
 		// the REAL protocol events: render-end's own sweep sees the batch already
 		// committed (the other caller of the same idempotent operation), and the
 		// screen settles on the batch's value.
-		expect(text(container)).toBe('v:7;');
-		expect(h.bridge.committedValue(node, rec.id)).toBe(7);
-	});
-});
+		expect(text(container)).toBe('v:7;')
+		expect(h.bridge.committedValue(node, rec.id)).toBe(7)
+	})
+})

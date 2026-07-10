@@ -18,8 +18,8 @@
  * agree.
  */
 
-import { CosignalModel, type ModelEvent, type Value } from './model.js';
-import { applyOneOp, buildTopology, type ScheduleOp } from './schedule.js';
+import { CosignalModel, type ModelEvent, type Value } from './model.js'
+import { applyOneOp, buildTopology, type ScheduleOp } from './schedule.js'
 
 /** Event kinds an engine must reproduce 1:1, in order. Others are model-internal.
  * 'quiet-write' is compared so the harness referees the quiet-vs-log entry
@@ -37,47 +37,47 @@ const COMPARED_EVENTS: ModelEvent['type'][] = [
 	'core-effect-run',
 	'react-effect-run',
 	'react-effect-cleanup',
-];
+]
 
 export type ObservableSnapshot = {
 	/** node name → value, for newest and committed-per-root worlds. */
-	newest: Record<string, Value>;
-	committed: Record<string, Record<string, Value>>; // root → node → value
+	newest: Record<string, Value>
+	committed: Record<string, Record<string, Value>> // root → node → value
 	/** open render pass id → node → value. */
-	renderPasses: Record<string, Record<string, Value>>;
-};
+	renderPasses: Record<string, Record<string, Value>>
+}
 
 export type EngineAdapter = {
 	/** Apply one schedule op. Throwing a ScheduleError-equivalent skips it (must match the model's legality). */
-	apply(op: ScheduleOp): 'applied' | 'skipped';
+	apply(op: ScheduleOp): 'applied' | 'skipped'
 	/** The observable world values right now. */
-	snapshot(): ObservableSnapshot;
+	snapshot(): ObservableSnapshot
 	/** Comparable events emitted since the last call (same shapes as ModelEvent). */
-	drainEvents(): ModelEvent[];
-};
+	drainEvents(): ModelEvent[]
+}
 
 export function snapshotModel(m: CosignalModel): ObservableSnapshot {
-	const newest: Record<string, Value> = {};
-	const committed: Record<string, Record<string, Value>> = {};
-	const renderPasses: Record<string, Record<string, Value>> = {};
-	for (const n of m.idToNode.values()) newest[n.name] = m.newestValue(n);
+	const newest: Record<string, Value> = {}
+	const committed: Record<string, Record<string, Value>> = {}
+	const renderPasses: Record<string, Record<string, Value>> = {}
+	for (const n of m.idToNode.values()) newest[n.name] = m.newestValue(n)
 	for (const root of m.roots.keys()) {
-		committed[root] = {};
-		for (const n of m.idToNode.values()) committed[root]![n.name] = m.committedValue(n, root);
+		committed[root] = {}
+		for (const n of m.idToNode.values()) committed[root]![n.name] = m.committedValue(n, root)
 	}
 	for (const p of m.idToRenderPass.values()) {
-		if (p.state === 'ended') continue;
-		renderPasses[String(p.id)] = {};
-		for (const n of m.idToNode.values()) renderPasses[String(p.id)]![n.name] = m.renderValue(n, p);
+		if (p.state === 'ended') continue
+		renderPasses[String(p.id)] = {}
+		for (const n of m.idToNode.values()) renderPasses[String(p.id)]![n.name] = m.renderValue(n, p)
 	}
-	return { newest, committed, renderPasses };
+	return { newest, committed, renderPasses }
 }
 
 export function comparableEvents(events: ModelEvent[]): ModelEvent[] {
-	return events.filter((e) => COMPARED_EVENTS.includes(e.type));
+	return events.filter((e) => COMPARED_EVENTS.includes(e.type))
 }
 
-export type DiffResult = { seed: number | undefined; step: number; message: string } | undefined;
+export type DiffResult = { seed: number | undefined; step: number; message: string } | undefined
 
 /**
  * Replay `ops` into the engine and the naive model side by side; return the
@@ -93,34 +93,46 @@ export type DiffResult = { seed: number | undefined; step: number; message: stri
  * interleaved is observationally identical to replaying the whole
  * schedule through the model first.)
  */
-export function diffAgainstModel(engine: EngineAdapter, ops: ScheduleOp[], seed?: number): DiffResult {
-	const m = new CosignalModel();
-	buildTopology(m);
-	let drained = 0;
+export function diffAgainstModel(
+	engine: EngineAdapter,
+	ops: ScheduleOp[],
+	seed?: number,
+): DiffResult {
+	const m = new CosignalModel()
+	buildTopology(m)
+	let drained = 0
 	for (let step = 0; step < ops.length; step++) {
 		// The model's step: capture legality, then the step's comparable
 		// events, then the observable snapshot (snapshotting evaluates nodes,
 		// which records dependency edges — it must run in the same position
 		// relative to the model's ops that the comparison assumes).
-		const expectedApplied = applyOneOp(m, ops[step]!) ? 'applied' : 'skipped';
-		const expectedEvents = JSON.stringify(comparableEvents(m.events.slice(drained)));
-		drained = m.events.length;
-		const expectedSnapshot = JSON.stringify(snapshotModel(m));
+		const expectedApplied = applyOneOp(m, ops[step]!) ? 'applied' : 'skipped'
+		const expectedEvents = JSON.stringify(comparableEvents(m.events.slice(drained)))
+		drained = m.events.length
+		const expectedSnapshot = JSON.stringify(snapshotModel(m))
 		// The engine's step, compared immediately.
-		const applied = engine.apply(ops[step]!);
+		const applied = engine.apply(ops[step]!)
 		if (applied !== expectedApplied) {
-			return { seed, step, message: `legality diverged: engine ${applied}, model ${expectedApplied}` };
+			return {
+				seed,
+				step,
+				message: `legality diverged: engine ${applied}, model ${expectedApplied}`,
+			}
 		}
-		const snap = JSON.stringify(engine.snapshot());
+		const snap = JSON.stringify(engine.snapshot())
 		if (snap !== expectedSnapshot) {
-			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnapshot}` };
+			return {
+				seed,
+				step,
+				message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnapshot}`,
+			}
 		}
-		const events = JSON.stringify(comparableEvents(engine.drainEvents()));
+		const events = JSON.stringify(comparableEvents(engine.drainEvents()))
 		if (events !== expectedEvents) {
-			return { seed, step, message: `events diverged:\nengine ${events}\nmodel  ${expectedEvents}` };
+			return { seed, step, message: `events diverged:\nengine ${events}\nmodel  ${expectedEvents}` }
 		}
 	}
-	return undefined;
+	return undefined
 }
 
 /**
@@ -129,16 +141,16 @@ export function diffAgainstModel(engine: EngineAdapter, ops: ScheduleOp[], seed?
  * (and is the template a real engine adapter replaces).
  */
 export function modelAsEngine(): EngineAdapter {
-	const m = new CosignalModel();
-	buildTopology(m);
-	let drained = 0;
+	const m = new CosignalModel()
+	buildTopology(m)
+	let drained = 0
 	return {
 		apply: (op) => (applyOneOp(m, op) ? 'applied' : 'skipped'),
 		snapshot: () => snapshotModel(m),
 		drainEvents() {
-			const out = comparableEvents(m.events.slice(drained));
-			drained = m.events.length;
-			return out;
+			const out = comparableEvents(m.events.slice(drained))
+			drained = m.events.length
+			return out
 		},
-	};
+	}
 }

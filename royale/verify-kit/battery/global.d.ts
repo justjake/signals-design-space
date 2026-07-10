@@ -3,12 +3,12 @@
 // — pulling React types here would tie the battery to one React's typings.
 declare namespace JSX {
 	interface IntrinsicElements {
-		[elemName: string]: any;
+		[elemName: string]: any
 	}
-	type Element = any;
+	type Element = any
 	interface ElementChildrenAttribute {
-		children: {};
+		children: {}
 	}
 }
 
-declare var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+declare var IS_REACT_ACT_ENVIRONMENT: boolean | undefined

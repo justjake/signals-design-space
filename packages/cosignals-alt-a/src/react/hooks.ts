@@ -11,21 +11,27 @@
  * watcher callbacks inside registry batch scopes, so the hook's
  * setState lands in the writing batch's own lanes automatically.
  */
-import * as React from 'react';
-import type { Container, CosignalEngine, SignalHandle, WatcherHandle } from '../engine';
-import { isErrorBox, isSuspendedBox, type AtomOptions, type ComputedCtx, type CosignalAPI } from '../api';
-import { attachReactBridge, type ReactBridgeHandle } from './bridge';
+import * as React from 'react'
+import type { Container, CosignalEngine, SignalHandle, WatcherHandle } from '../engine'
+import {
+	isErrorBox,
+	isSuspendedBox,
+	type AtomOptions,
+	type ComputedCtx,
+	type CosignalAPI,
+} from '../api'
+import { attachReactBridge, type ReactBridgeHandle } from './bridge'
 
 // ---- registration -----------------------------------------------------------------
 
 export type AltAReactHandle = {
-	api: CosignalAPI;
-	engine: CosignalEngine;
-	bridge: ReactBridgeHandle;
-	dispose(): void;
-};
+	api: CosignalAPI
+	engine: CosignalEngine
+	bridge: ReactBridgeHandle
+	dispose(): void
+}
 
-let active: AltAReactHandle | undefined;
+let active: AltAReactHandle | undefined
 
 /**
  * Activates the bindings for one engine composition: attaches the real-React
@@ -35,38 +41,40 @@ let active: AltAReactHandle | undefined;
  */
 export function registerAltAReact(api: CosignalAPI, react?: unknown): AltAReactHandle {
 	if (active !== undefined) {
-		throw new Error('cosignals-alt-a/react: already registered — dispose the previous registration first.');
+		throw new Error(
+			'cosignals-alt-a/react: already registered — dispose the previous registration first.',
+		)
 	}
-	const bridge = attachReactBridge(api.engine, react);
+	const bridge = attachReactBridge(api.engine, react)
 	const handle: AltAReactHandle = {
 		api,
 		engine: api.engine,
 		bridge,
 		dispose(): void {
-			bridge.dispose();
+			bridge.dispose()
 			if (active === handle) {
-				active = undefined;
+				active = undefined
 			}
 		},
-	};
-	active = handle;
-	return handle;
+	}
+	active = handle
+	return handle
 }
 
 function requireActive(): AltAReactHandle {
 	if (active === undefined) {
-		throw new Error('cosignals-alt-a/react: registerAltAReact() must run before using the hooks.');
+		throw new Error('cosignals-alt-a/react: registerAltAReact() must run before using the hooks.')
 	}
-	return active;
+	return active
 }
 
 // ---- sources ---------------------------------------------------------------------
 
 /** Anything readable: the §4 classes (with `.handle`) or a raw engine handle. */
-export type SignalSource<T> = { readonly state: T } & ({ handle: SignalHandle } | { id: number });
+export type SignalSource<T> = { readonly state: T } & ({ handle: SignalHandle } | { id: number })
 
 function handleOf(source: SignalSource<unknown>): SignalHandle {
-	return 'handle' in source ? source.handle : (source as SignalHandle);
+	return 'handle' in source ? source.handle : (source as SignalHandle)
 }
 
 /** Read for render: §4 class getters already unbox (throw errors, suspend on
@@ -83,27 +91,27 @@ function readForRender<T>(source: SignalSource<T>, isTransitionRender: () => boo
 	//      the indicator opt-in) — no fallback flash;
 	//  (c) never-settled → suspend everywhere.
 	// §4 class getters implement the same rule; raw engine handles unbox here.
-	const v = source.state;
+	const v = source.state
 	if (isErrorBox(v)) {
-		throw v.error;
+		throw v.error
 	}
 	if (isSuspendedBox(v)) {
 		if (v.hasLatest && !isTransitionRender()) {
-			return v.latest as T;
+			return v.latest as T
 		}
-		throw v.gate; // settlement-ordered, identity-stable (see SuspendedBox.gate)
+		throw v.gate // settlement-ordered, identity-stable (see SuspendedBox.gate)
 	}
-	return v;
+	return v
 }
 
 // ---- useSignal --------------------------------------------------------------------
 
 type WatchRec = {
-	handleId: number;
-	watcher: WatcherHandle | undefined;
-	pendingUnsub: boolean;
-	rendered: { pin: number; tokens: readonly number[]; value: unknown; container?: Container };
-};
+	handleId: number
+	watcher: WatcherHandle | undefined
+	pendingUnsub: boolean
+	rendered: { pin: number; tokens: readonly number[]; value: unknown; container?: Container }
+}
 
 /**
  * Subscribes the component to a signal and returns its value for the current
@@ -115,17 +123,17 @@ type WatchRec = {
  * corrective re-renders into still-pending batches).
  */
 export function useSignal<T>(source: SignalSource<T>): T {
-	const { engine } = requireActive();
-	const h = handleOf(source as SignalSource<unknown>);
-	const [, force] = React.useReducer((c: number) => c + 1, 0);
-	const ref = React.useRef<{ current: WatchRec | null; retired: WatchRec[] } | null>(null);
+	const { engine } = requireActive()
+	const h = handleOf(source as SignalSource<unknown>)
+	const [, force] = React.useReducer((c: number) => c + 1, 0)
+	const ref = React.useRef<{ current: WatchRec | null; retired: WatchRec[] } | null>(null)
 	if (ref.current === null) {
-		ref.current = { current: null, retired: [] };
+		ref.current = { current: null, retired: [] }
 	}
-	const state = ref.current;
+	const state = ref.current
 	if (state.current !== null && state.current.handleId !== h.id) {
-		state.retired.push(state.current);
-		state.current = null;
+		state.retired.push(state.current)
+		state.current = null
 	}
 	if (state.current === null) {
 		state.current = {
@@ -133,66 +141,69 @@ export function useSignal<T>(source: SignalSource<T>): T {
 			watcher: undefined,
 			pendingUnsub: false,
 			rendered: { pin: 0, tokens: [], value: undefined },
-		};
+		}
 	}
-	const rec = state.current;
+	const rec = state.current
 
-	const value = readForRender(source, engine.policy.inTransitionRender);
+	const value = readForRender(source, engine.policy.inTransitionRender)
 	// Remember the rendered world for the commit-edge fixup (§13.2).
-	const info = engine.renderInfo();
-	rec.rendered = info !== undefined
-		? { pin: info.pin, tokens: info.tokens, value, container: info.container }
-		: { pin: engine.debug.seqCounter(), tokens: [], value };
+	const info = engine.renderInfo()
+	rec.rendered =
+		info !== undefined
+			? { pin: info.pin, tokens: info.tokens, value, container: info.container }
+			: { pin: engine.debug.seqCounter(), tokens: [], value }
 
 	React.useLayoutEffect(() => {
-		rec.pendingUnsub = false;
+		rec.pendingUnsub = false
 		for (const old of state.retired.splice(0)) {
-			old.watcher?.dispose();
-			old.watcher = undefined;
+			old.watcher?.dispose()
+			old.watcher = undefined
 		}
 		if (rec.watcher === undefined) {
 			// The engine runs the fixup and entangles corrections itself; the
 			// callback only bumps (already inside the right runInBatch scope).
-			rec.watcher = engine.subscribeWithFixup(h, rec.rendered, () => force());
+			rec.watcher = engine.subscribeWithFixup(h, rec.rendered, () => force())
 		}
 		return () => {
 			// Microtask-debounced unsubscribe: StrictMode's synchronous
 			// unmount+remount pair nets to one live watcher.
-			rec.pendingUnsub = true;
+			rec.pendingUnsub = true
 			queueMicrotask(() => {
 				if (rec.pendingUnsub) {
-					rec.watcher?.dispose();
-					rec.watcher = undefined;
-					rec.pendingUnsub = false;
+					rec.watcher?.dispose()
+					rec.watcher = undefined
+					rec.pendingUnsub = false
 				}
-			});
-		};
-	}, [engine, rec, h.id]);
+			})
+		}
+	}, [engine, rec, h.id])
 
-	return value;
+	return value
 }
 
 // ---- useAtom / useReducerAtom ------------------------------------------------------
 
 /** Component-owned atom (§4.5): like useState but the value is a signal any
  * computed can read. Created on mount, reclaimed after unmount. */
-export function useAtom<T>(options: AtomOptions<T>): InstanceType<CosignalAPI['Atom']> & { state: T } {
-	const { api, engine } = requireActive();
-	const [atom] = React.useState(() => new api.Atom<T>(options));
+export function useAtom<T>(
+	options: AtomOptions<T>,
+): InstanceType<CosignalAPI['Atom']> & { state: T } {
+	const { api, engine } = requireActive()
+	const [atom] = React.useState(() => new api.Atom<T>(options))
 	React.useEffect(
 		() => () => {
 			queueMicrotask(() => {
 				// A never-materialized lazy atom has no engine node: reclaiming
 				// would RUN the initializer just to mint-and-free. Skip it.
 				if ((atom as { materialized?: boolean }).materialized === false) {
-					return;
+					return
 				}
-				engine.reclaim(atom.handle); // after StrictMode settles
-			});
+				engine.reclaim(atom.handle) // after StrictMode settles
+			})
 		},
 		[engine, atom],
-	);
-	return atom as InstanceType<CosignalAPI['Atom']> & { state: T };
+	)
+	return atom as InstanceType<CosignalAPI['Atom']> & { state: T }
 }
 
 /** Component-owned reducer atom (§4.5): [value, dispatch] with useReducer
@@ -201,13 +212,13 @@ export function useReducerAtom<S, A>(
 	reducer: (state: S, action: A) => S,
 	initial: S,
 ): [S, (action: A) => void] {
-	const { api } = requireActive();
+	const { api } = requireActive()
 	const [record] = React.useState(() => ({
 		atom: new api.ReducerAtom<S, A>({ state: initial, reducer }),
-	}));
-	const value = useSignal<S>(record.atom as SignalSource<S>);
-	const dispatch = React.useCallback((action: A) => record.atom.dispatch(action), [record]);
-	return [value, dispatch];
+	}))
+	const value = useSignal<S>(record.atom as SignalSource<S>)
+	const dispatch = React.useCallback((action: A) => record.atom.dispatch(action), [record])
+	return [value, dispatch]
 }
 
 // ---- useComputed ------------------------------------------------------------------
@@ -224,22 +235,22 @@ export function useComputed<T>(
 	deps: readonly unknown[],
 	options?: { isEqual?: (a: T, b: T) => boolean; label?: string },
 ): T {
-	const { api, engine } = requireActive();
+	const { api, engine } = requireActive()
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	const computed = React.useMemo(
 		() => new api.Computed<T>({ fn, isEqual: options?.isEqual, label: options?.label }),
 		[api, ...deps],
-	);
-	const prevRef = React.useRef<{ handle: SignalHandle } | null>(null);
+	)
+	const prevRef = React.useRef<{ handle: SignalHandle } | null>(null)
 	React.useEffect(() => {
-		const prev = prevRef.current;
-		prevRef.current = computed;
+		const prev = prevRef.current
+		prevRef.current = computed
 		if (prev !== null && prev !== computed) {
-			engine.reclaim(prev.handle); // superseded node: deterministic reclaim (§14.2)
+			engine.reclaim(prev.handle) // superseded node: deterministic reclaim (§14.2)
 		}
-		return undefined;
-	}, [engine, computed]);
-	return useSignal<T>(computed as SignalSource<T>);
+		return undefined
+	}, [engine, computed])
+	return useSignal<T>(computed as SignalSource<T>)
 }
 
 // ---- useSignalEffect ---------------------------------------------------------------
@@ -251,17 +262,17 @@ export function useComputed<T>(
  * state. `deps` changes re-run it through React's own machinery.
  */
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
-	const { engine, bridge } = requireActive();
-	const containerRef = React.useRef<Container>(undefined);
-	const ctx = (bridge.engine === engine ? engine.renderInfo() : undefined);
+	const { engine, bridge } = requireActive()
+	const containerRef = React.useRef<Container>(undefined)
+	const ctx = bridge.engine === engine ? engine.renderInfo() : undefined
 	if (ctx !== undefined) {
-		containerRef.current = ctx.container;
+		containerRef.current = ctx.container
 	}
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	React.useEffect(
 		() => engine.committedEffect(containerRef.current, fn),
 		deps === undefined ? undefined : [engine, ...deps],
-	);
+	)
 }
 
 // ---- useCommitted -------------------------------------------------------------------
@@ -274,15 +285,15 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
  * latest, or undefined before first settlement).
  */
 export function useCommitted<T>(source: SignalSource<T>): T | undefined {
-	const { api, engine, bridge } = requireActive();
-	const h = handleOf(source as SignalSource<unknown>);
-	const containerRef = React.useRef<Container>(undefined);
-	const ctx = (bridge.engine === engine ? engine.renderInfo() : undefined);
+	const { api, engine, bridge } = requireActive()
+	const h = handleOf(source as SignalSource<unknown>)
+	const containerRef = React.useRef<Container>(undefined)
+	const ctx = bridge.engine === engine ? engine.renderInfo() : undefined
 	if (ctx !== undefined) {
-		containerRef.current = ctx.container;
+		containerRef.current = ctx.container
 	}
-	const [, force] = React.useReducer((c: number) => c + 1, 0);
-	const value = api.committed<T>(h, containerRef.current);
+	const [, force] = React.useReducer((c: number) => c + 1, 0)
+	const value = api.committed<T>(h, containerRef.current)
 	// Two subscriptions close the loop:
 	//  - a W0 effect DRIVES renders when the value changes (a lone
 	//    useCommitted consumer otherwise never re-renders — no watcher, no
@@ -292,32 +303,32 @@ export function useCommitted<T>(source: SignalSource<T>): T | undefined {
 	//    the PRE-commit view — "on screen" trails by exactly one commit).
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	React.useEffect(() => {
-		let first = true;
+		let first = true
 		const disposeW0 = engine.effect(() => {
-			void (h as { state?: unknown }).state; // raw read: boxes never throw
+			void (h as { state?: unknown }).state // raw read: boxes never throw
 			if (first) {
-				return; // the mount run
+				return // the mount run
 			}
-			force();
-		});
-		first = false;
-		let firstCommitted = true;
+			force()
+		})
+		first = false
+		let firstCommitted = true
 		const disposeCommitted = engine.committedEffect(containerRef.current, () => {
 			// Tracked committed read: registers the leaf dependency set the
 			// recheck watches.
-			void (h as { state?: unknown }).state;
+			void (h as { state?: unknown }).state
 			if (firstCommitted) {
-				firstCommitted = false;
-				return;
+				firstCommitted = false
+				return
 			}
-			force();
-		});
+			force()
+		})
 		return () => {
-			disposeW0();
-			disposeCommitted();
-		};
-	}, [engine, h.id]);
-	return value;
+			disposeW0()
+			disposeCommitted()
+		}
+	}, [engine, h.id])
+	return value
 }
 
 // ---- useIsPending -------------------------------------------------------------------
@@ -325,12 +336,12 @@ export function useCommitted<T>(source: SignalSource<T>): T | undefined {
 /** Reactive pending indicator: flips only on pending↔settled transitions of
  * the source (the api.isPending probe subscribed like any signal). */
 export function useIsPending(source: SignalSource<unknown>): boolean {
-	const { api } = requireActive();
+	const { api } = requireActive()
 	const probe = React.useMemo(
 		() => api.pendingProbe(handleOf(source as SignalSource<unknown>)),
 		[api, source],
-	);
-	return useSignal<boolean>(probe as unknown as SignalSource<boolean>);
+	)
+	return useSignal<boolean>(probe as unknown as SignalSource<boolean>)
 }
 
 // ---- transitions --------------------------------------------------------------------
@@ -345,31 +356,31 @@ export function useIsPending(source: SignalSource<unknown>): boolean {
  * startTransition works — this is the throughput helper.
  */
 export function startSignalTransition(scope: () => unknown): void {
-	const { api } = requireActive();
+	const { api } = requireActive()
 	React.startTransition((): void => {
-		let result: unknown;
+		let result: unknown
 		api.batch(() => {
-			result = scope();
-		});
-		return result as undefined; // a thenable keeps the action pending
-	});
+			result = scope()
+		})
+		return result as undefined // a thenable keeps the action pending
+	})
 }
 
 /** `useTransition` wrapped the same way; `isPending` is React's own. */
 export function useSignalTransition(): [boolean, (scope: () => unknown) => void] {
-	const { api } = requireActive();
-	const [isPending, start] = React.useTransition();
+	const { api } = requireActive()
+	const [isPending, start] = React.useTransition()
 	const startSignal = React.useCallback(
 		(scope: () => unknown) => {
 			start((): void => {
-				let result: unknown;
+				let result: unknown
 				api.batch(() => {
-					result = scope();
-				});
-				return result as undefined;
-			});
+					result = scope()
+				})
+				return result as undefined
+			})
 		},
 		[api, start],
-	);
-	return [isPending, startSignal];
+	)
+	return [isPending, startSignal]
 }

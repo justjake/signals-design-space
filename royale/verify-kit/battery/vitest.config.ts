@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
 	// The battery never imports 'react': JSX compiles to React.createElement
@@ -21,4 +21,4 @@ export default defineConfig({
 		// scheduler and needs wall-clock headroom.
 		testTimeout: 30_000,
 	},
-});
+})

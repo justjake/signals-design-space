@@ -6,8 +6,8 @@
  * contender would contaminate the measurement. The isolated runner spawns
  * one child per contender per round; the child resolves one loader here.
  */
-import { contenderNames, type ContenderName } from './names.js';
-import type { Contender } from './types.js';
+import { contenderNames, type ContenderName } from './names.js'
+import type { Contender } from './types.js'
 
 const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
 	'cosignals-react': () => import('./cosignals.js'),
@@ -20,12 +20,12 @@ const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
 	'alt-b-uses': () => import('./altB.js'),
 	'alt-b-react': () => import('./altBConcurrent.js'),
 	'fx2-react': () => import('./fx2.js'),
-};
+}
 
 export async function loadContender(name: string): Promise<Contender> {
 	if (!(contenderNames as readonly string[]).includes(name)) {
-		throw new Error(`unknown contender: ${name}; available: ${contenderNames.join(', ')}`);
+		throw new Error(`unknown contender: ${name}; available: ${contenderNames.join(', ')}`)
 	}
-	const mod = await loaders[name as ContenderName]();
-	return mod.default;
+	const mod = await loaders[name as ContenderName]()
+	return mod.default
 }

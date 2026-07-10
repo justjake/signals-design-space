@@ -1,107 +1,107 @@
-import type { NOT_PENDING } from "./constants.js";
-import type { OptimisticLane } from "./lanes.js";
-import type { IQueue, Transition } from "./scheduler.js";
+import type { NOT_PENDING } from './constants.js'
+import type { OptimisticLane } from './lanes.js'
+import type { IQueue, Transition } from './scheduler.js'
 
 export interface Disposable {
-  (): void;
+	(): void
 }
 export interface Link {
-  _dep: Signal<unknown> | Computed<unknown>;
-  _sub: Computed<unknown>;
-  _nextDep: Link | null;
-  _prevSub: Link | null;
-  _nextSub: Link | null;
-  // True when the link was created by an `isPending` read. Such a link observes
-  // the dep's pending state only: `notifyStatus` re-runs the subscriber on a
-  // real (non-NotReadyError) error instead of propagating the error through it,
-  // matching the synchronous `isPending` read which swallows such errors.
-  _pendingObserver?: boolean;
+	_dep: Signal<unknown> | Computed<unknown>
+	_sub: Computed<unknown>
+	_nextDep: Link | null
+	_prevSub: Link | null
+	_nextSub: Link | null
+	// True when the link was created by an `isPending` read. Such a link observes
+	// the dep's pending state only: `notifyStatus` re-runs the subscriber on a
+	// real (non-NotReadyError) error instead of propagating the error through it,
+	// matching the synchronous `isPending` read which swallows such errors.
+	_pendingObserver?: boolean
 }
 
 export interface NodeOptions<T> {
-  id?: string;
-  name?: string;
-  transparent?: boolean;
-  equals?: ((prev: T, next: T) => boolean) | false;
-  ownedWrite?: boolean;
-  /** Exclude this signal from snapshot capture (internal — not part of public API) */
-  _noSnapshot?: boolean;
-  unobserved?: () => void;
-  lazy?: boolean;
-  sync?: boolean;
+	id?: string
+	name?: string
+	transparent?: boolean
+	equals?: ((prev: T, next: T) => boolean) | false
+	ownedWrite?: boolean
+	/** Exclude this signal from snapshot capture (internal — not part of public API) */
+	_noSnapshot?: boolean
+	unobserved?: () => void
+	lazy?: boolean
+	sync?: boolean
 }
 
 export interface RawSignal<T> {
-  _subs: Link | null;
-  _subsTail: Link | null;
-  _value: T;
-  _snapshotValue?: any;
-  _name?: string;
-  _equals: false | ((a: T, b: T) => boolean);
-  _config: number;
-  _unobserved?: () => void;
-  _time: number;
-  _transition: Transition | null;
-  _pendingValue: T | typeof NOT_PENDING;
-  _overrideValue?: T | typeof NOT_PENDING;
-  _optimisticLane?: OptimisticLane;
-  _pendingSignal?: Signal<boolean>; // Lazy signal for isPending()
-  _latestValueComputed?: Computed<T>; // Lazy computed for latest()
-  _parentSource?: Signal<any> | Computed<any>; // Back-reference for parent-child lane relationship
+	_subs: Link | null
+	_subsTail: Link | null
+	_value: T
+	_snapshotValue?: any
+	_name?: string
+	_equals: false | ((a: T, b: T) => boolean)
+	_config: number
+	_unobserved?: () => void
+	_time: number
+	_transition: Transition | null
+	_pendingValue: T | typeof NOT_PENDING
+	_overrideValue?: T | typeof NOT_PENDING
+	_optimisticLane?: OptimisticLane
+	_pendingSignal?: Signal<boolean> // Lazy signal for isPending()
+	_latestValueComputed?: Computed<T> // Lazy computed for latest()
+	_parentSource?: Signal<any> | Computed<any> // Back-reference for parent-child lane relationship
 }
 
 export interface FirewallSignal<T> extends RawSignal<T> {
-  _firewall: Computed<any>;
-  _nextChild: FirewallSignal<unknown> | null;
+	_firewall: Computed<any>
+	_nextChild: FirewallSignal<unknown> | null
 }
 
-export type Signal<T> = RawSignal<T> | FirewallSignal<T>;
+export type Signal<T> = RawSignal<T> | FirewallSignal<T>
 export interface Owner {
-  id?: string;
-  _config: number;
-  _snapshotScope?: boolean;
-  _disposal: Disposable | Disposable[] | null;
-  _parent: Owner | null;
-  _context: Record<symbol | string, unknown>;
-  _childCount: number;
-  _queue: IQueue;
-  _firstChild: Owner | null;
-  _nextSibling: Owner | null;
-  _prevSibling: Owner | null;
-  _pendingDisposal: Disposable | Disposable[] | null;
-  _pendingFirstChild: Owner | null;
+	id?: string
+	_config: number
+	_snapshotScope?: boolean
+	_disposal: Disposable | Disposable[] | null
+	_parent: Owner | null
+	_context: Record<symbol | string, unknown>
+	_childCount: number
+	_queue: IQueue
+	_firstChild: Owner | null
+	_nextSibling: Owner | null
+	_prevSibling: Owner | null
+	_pendingDisposal: Disposable | Disposable[] | null
+	_pendingFirstChild: Owner | null
 }
 
 export interface Computed<T> extends RawSignal<T>, Owner {
-  _deps: Link | null;
-  _depsTail: Link | null;
-  _flags: number;
-  _blocked?: boolean;
-  _pendingSource?: Computed<any>;
-  _pendingSources?: Set<Computed<any>>;
-  _error?: unknown;
-  _statusFlags: number;
-  _height: number;
-  _nextHeap: Computed<any> | undefined;
-  _prevHeap: Computed<any>;
-  _fn: (prev?: T) => T;
-  _inFlight: PromiseLike<T> | AsyncIterable<T> | null;
-  _child: FirewallSignal<any> | null;
-  _notifyStatus?: (status?: number, error?: any) => void;
-  // [react-adapt E9] world inheritance mark: the transition whose staged
-  // write dirtied this node; consumed (and cleared) by the next recompute.
-  _reentryWorld?: Transition;
-  // [react-adapt E11] one-shot settle hook: the React bridge resolves the
-  // node's stable Suspense thenable from here (fires when pending status
-  // clears or turns into a real error).
-  _onStatusSettled?: () => void;
-  // [react-adapt E10] the transition currently holding a forced re-run for
-  // this tracked effect (dedup for world-split effect delivery).
-  _heldBy?: Transition;
+	_deps: Link | null
+	_depsTail: Link | null
+	_flags: number
+	_blocked?: boolean
+	_pendingSource?: Computed<any>
+	_pendingSources?: Set<Computed<any>>
+	_error?: unknown
+	_statusFlags: number
+	_height: number
+	_nextHeap: Computed<any> | undefined
+	_prevHeap: Computed<any>
+	_fn: (prev?: T) => T
+	_inFlight: PromiseLike<T> | AsyncIterable<T> | null
+	_child: FirewallSignal<any> | null
+	_notifyStatus?: (status?: number, error?: any) => void
+	// [react-adapt E9] world inheritance mark: the transition whose staged
+	// write dirtied this node; consumed (and cleared) by the next recompute.
+	_reentryWorld?: Transition
+	// [react-adapt E11] one-shot settle hook: the React bridge resolves the
+	// node's stable Suspense thenable from here (fires when pending status
+	// clears or turns into a real error).
+	_onStatusSettled?: () => void
+	// [react-adapt E10] the transition currently holding a forced re-run for
+	// this tracked effect (dedup for world-split effect delivery).
+	_heldBy?: Transition
 }
 
 export interface Root extends Owner {
-  _root: true;
-  _parentComputed: Computed<any> | null;
-  dispose(self?: boolean): void;
+	_root: true
+	_parentComputed: Computed<any> | null
+	dispose(self?: boolean): void
 }

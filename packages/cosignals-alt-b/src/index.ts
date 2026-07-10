@@ -24,7 +24,7 @@ export {
 	refresh,
 	__debug,
 	__resetEngineForTests,
-} from './engine';
+} from './engine'
 export type {
 	AtomOptions,
 	AtomCtx,
@@ -36,6 +36,6 @@ export type {
 	SignalLike,
 	WatcherHandle,
 	WorldSpec,
-} from './engine';
-export { ForkDouble } from './fork';
-export type { Container, ExternalRuntimeListener, EntangleRecord } from './fork';
+} from './engine'
+export { ForkDouble } from './fork'
+export type { Container, ExternalRuntimeListener, EntangleRecord } from './fork'

@@ -1,7 +1,7 @@
 {
 	"name": "reack-strata",
-	"private": true,
 	"version": "0.1.0",
+	"private": true,
 	"license": "MIT",
 	"type": "module",
 	"main": "./src/index.ts",
@@ -17,10 +17,10 @@
 		"build:react": "./build.sh"
 	},
 	"dependencies": {
-		"strata-signals": "workspace:*",
 		"react": "link:./react-build/react",
 		"react-dom": "link:./react-build/react-dom",
-		"scheduler": "link:./react-build/scheduler"
+		"scheduler": "link:./react-build/scheduler",
+		"strata-signals": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",

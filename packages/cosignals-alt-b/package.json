@@ -1,9 +1,9 @@
 {
 	"name": "cosignals-alt-b",
-	"private": true,
 	"version": "0.1.0",
-	"license": "MIT",
+	"private": true,
 	"description": "Variant B of the cosignal-arena spec (react-concurrent-signals-arena-alt-b.md): quiescence write gate, documented loose contract, strictLanes option. Milestones M0-M3: fork test double, arena kernel, write-log tapes, world overlay + randomized replay oracle.",
+	"license": "MIT",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {
@@ -23,13 +23,13 @@
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",
-		"typescript": "6.0.3",
-		"vitest": "4.1.6",
-		"reactive-framework-test-suite": "0.0.2",
-		"react": "*",
-		"react-dom": "*",
 		"@types/react": "^19.1.8",
 		"@types/react-dom": "^19.1.6",
-		"jsdom": "^26.1.0"
+		"jsdom": "^26.1.0",
+		"react": "*",
+		"react-dom": "*",
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
 	}
 }

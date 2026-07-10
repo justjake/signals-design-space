@@ -5,17 +5,17 @@
  * at once, so the loader and the navigation can never disagree about what
  * exists.
  */
-import type { ConcurrentSignalsShim } from './interface';
+import type { ConcurrentSignalsShim } from './interface'
 
 export interface Implementation {
 	/** First URL path segment that selects this implementation; '' is the root entry. */
-	readonly segment: string;
+	readonly segment: string
 	/** Short tab text. */
-	readonly label: string;
+	readonly label: string
 	/** The shim's exported `name` — the tab bar marks the active tab by comparing against it. */
-	readonly name: string;
+	readonly name: string
 	/** Typed loader: the import() namespace is checked against the shim interface here. */
-	readonly load: () => Promise<ConcurrentSignalsShim>;
+	readonly load: () => Promise<ConcurrentSignalsShim>
 }
 
 export const implementations: readonly Implementation[] = [
@@ -28,9 +28,9 @@ export const implementations: readonly Implementation[] = [
 		name: 'concurrent-solid-react',
 		load: () => import('./solid-react'),
 	},
-];
+]
 
 /** The entry URL for an implementation; segments map to directory entries served with a trailing slash. */
 export function implementationHref(impl: Implementation): string {
-	return impl.segment === '' ? '/' : `/${impl.segment}/`;
+	return impl.segment === '' ? '/' : `/${impl.segment}/`
 }

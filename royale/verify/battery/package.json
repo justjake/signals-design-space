@@ -1,9 +1,9 @@
 {
 	"name": "royale-battery",
-	"private": true,
 	"version": "0.0.0",
-	"type": "module",
+	"private": true,
 	"description": "Shared cross-entrant Real-React gate battery for Signals Royale. See README.md: the orchestrator rewrites the link: targets below to point at the entry under test before installing.",
+	"type": "module",
 	"scripts": {
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit -p tsconfig.json"

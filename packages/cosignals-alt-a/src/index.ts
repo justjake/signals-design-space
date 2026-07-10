@@ -19,7 +19,7 @@ export {
 	type WorldSelector,
 	type EngineOptions,
 	type Equality,
-} from './engine';
+} from './engine'
 export {
 	createForkDouble,
 	type ForkDouble,
@@ -28,7 +28,7 @@ export {
 	type PassScript,
 	type Container,
 	type ExternalRuntimeListener,
-} from './fork-double';
+} from './fork-double'
 export {
 	createTracer,
 	TraceKind,
@@ -36,7 +36,7 @@ export {
 	type Tracer,
 	type TracerMode,
 	type TraceEvent,
-} from './tracing';
+} from './tracing'
 export {
 	createAPI,
 	isErrorBox,
@@ -49,36 +49,36 @@ export {
 	type ComputedOptions,
 	type ErrorBox,
 	type SuspendedBox,
-} from './api';
+} from './api'
 
-import { createCosignalEngine as _create } from './engine';
-import { createAPI as _createAPI, type CosignalAPI as _API } from './api';
+import { createCosignalEngine as _create } from './engine'
+import { createAPI as _createAPI, type CosignalAPI as _API } from './api'
 
 /** The module-singleton engine + API (browser shape). */
-export const defaultEngine = _create();
-const defaultAPI = _createAPI(defaultEngine);
+export const defaultEngine = _create()
+const defaultAPI = _createAPI(defaultEngine)
 /** The full default-engine API bundle (what registerAltAReact consumes). */
-export const defaultApi = defaultAPI;
-export const Atom = defaultAPI.Atom;
-export const ReducerAtom = defaultAPI.ReducerAtom;
-export const Computed = defaultAPI.Computed;
-export const effect = defaultAPI.effect;
-export const effectScope = defaultAPI.effectScope;
-export const batch = defaultAPI.batch;
+export const defaultApi = defaultAPI
+export const Atom = defaultAPI.Atom
+export const ReducerAtom = defaultAPI.ReducerAtom
+export const Computed = defaultAPI.Computed
+export const effect = defaultAPI.effect
+export const effectScope = defaultAPI.effectScope
+export const batch = defaultAPI.batch
 /** Low-level batch surface (adapter/bindings plumbing; prefer batch()). */
-export const startBatch = defaultEngine.startBatch;
-export const endBatch = defaultEngine.endBatch;
-export const untracked = defaultAPI.untracked;
-export const configure = defaultAPI.configure;
+export const startBatch = defaultEngine.startBatch
+export const endBatch = defaultEngine.endBatch
+export const untracked = defaultAPI.untracked
+export const configure = defaultAPI.configure
 /** The READ FAMILY (alt-family visibility rule, SPEC-RESOLUTIONS):
  * `.state` = real (W0), latest() = intent (Wn incl. drafts),
  * committed() = on screen, isPending() = loading. */
-export const latest = defaultAPI.latest;
-export const committed = defaultAPI.committed;
-export const isPending = defaultAPI.isPending;
-export const refresh = defaultAPI.refresh;
+export const latest = defaultAPI.latest
+export const committed = defaultAPI.committed
+export const isPending = defaultAPI.isPending
+export const refresh = defaultAPI.refresh
 
 /** §13.8: one isolated engine per server request. */
 export function createServerEngine(options?: import('./engine').EngineOptions): _API {
-	return _createAPI(_create(options));
+	return _createAPI(_create(options))
 }

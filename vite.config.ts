@@ -9,9 +9,8 @@
 // the typed `defineConfig` form.
 
 // Vendored code, git submodules, generated results, and prose that Vite+
-// tooling must never touch. This is a shared working tree: `vp check --fix`
-// or `vp fmt` (write mode) must not be run wholesale — use `vp check`
-// (check-only) instead.
+// tooling must never touch. Whole-repo format and lint passes operate only on
+// the remaining first-party source.
 const vendored = [
 	'vendor/**',
 	'upstream-alien-signals/**',

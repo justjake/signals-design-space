@@ -2,42 +2,41 @@
 // model on every read, every retirement fold, and every broadcast drain,
 // across randomized schedules. Failures print their seed and the shrunk
 // minimal script; shrunk failures get pinned below before the fix lands.
-import { describe, expect, it } from 'vitest';
-import { genScript, runScript, shrink } from './driver';
-import type { Op } from './driver';
+import { describe, expect, it } from 'vitest'
+import { genScript, runScript, shrink } from './driver'
+import type { Op } from './driver'
 
 // ---- the fuzz --------------------------------------------------------------------------
 // Seed count and step length are env-tunable for long offline sweeps:
 //   FUZZ_SEEDS=200 FUZZ_STEPS=500 vitest run test/oracle.test.ts
-const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-	?.env;
-const SEED_COUNT = Number(env?.FUZZ_SEEDS ?? 40);
-const SEEDS = Array.from({ length: SEED_COUNT }, (_, i) => i + 1);
-const STEPS = Number(env?.FUZZ_STEPS ?? 350);
+const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+const SEED_COUNT = Number(env?.FUZZ_SEEDS ?? 40)
+const SEEDS = Array.from({ length: SEED_COUNT }, (_, i) => i + 1)
+const STEPS = Number(env?.FUZZ_STEPS ?? 350)
 
 describe('randomized replay oracle (§17.2)', () => {
 	it.each(SEEDS.map((s) => [s] as const))('seed %i agrees with the oracle', (seed) => {
-		const script = genScript(seed, STEPS);
-		const result = runScript(script);
+		const script = genScript(seed, STEPS)
+		const result = runScript(script)
 		if (result.failed) {
-			const minimal = shrink(script);
-			const minResult = runScript(minimal);
+			const minimal = shrink(script)
+			const minResult = runScript(minimal)
 			expect.fail(
-				`seed ${seed} diverged at op ${result.atOp}: ${String(result.error)}\n`
-					+ `minimal script (${minimal.length} ops): ${JSON.stringify(minimal)}\n`
-					+ `minimal failure: ${minResult.failed ? String((minResult as { error: unknown }).error) : '??'}`,
-			);
+				`seed ${seed} diverged at op ${result.atOp}: ${String(result.error)}\n` +
+					`minimal script (${minimal.length} ops): ${JSON.stringify(minimal)}\n` +
+					`minimal failure: ${minResult.failed ? String((minResult as { error: unknown }).error) : '??'}`,
+			)
 		}
-	});
-});
+	})
+})
 
 // ---- pinned deterministic scripts (the §17.2 danger list, as oracle ops) ---------------
 
 describe('pinned oracle regressions', () => {
 	function expectClean(script: Op[]): void {
-		const result = runScript(script);
+		const result = runScript(script)
 		if (result.failed) {
-			expect.fail(`pinned script diverged at op ${result.atOp}: ${String(result.error)}`);
+			expect.fail(`pinned script diverged at op ${result.atOp}: ${String(result.error)}`)
 		}
 	}
 
@@ -56,8 +55,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'read', node: 0, ctx: 'writer', batch: 0 },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('equal urgent SET over a pending transition (the receipt that must not drop)', () => {
 		expectClean([
@@ -72,8 +71,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('divergent-dep follow-up write with the atom unlogged at first read (T1 shape)', () => {
 		expectClean([
@@ -91,8 +90,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'read', node: 3, ctx: 'committed' },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 3, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('urgent write flips a branch onto a pending world (the urgent-drain expansion case)', () => {
 		expectClean([
@@ -111,8 +110,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 3, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('a pass pinned across two retirements (retention)', () => {
 		expectClean([
@@ -133,8 +132,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'read', node: 0, ctx: 'newest' },
 			{ t: 'retire', batch: 2, committed: false },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('functional replay over a moved base (sweep + late writer)', () => {
 		expectClean([
@@ -148,8 +147,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'read', node: 0, ctx: 'writer', batch: 1 },
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' }, // 1 + 10 + 100
-		]);
-	});
+		])
+	})
 
 	// ---- shrunk fuzz failures, pinned before their fixes landed --------------
 
@@ -169,8 +168,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('shrunk seed 38: truncation re-notifies the truncated world', () => {
 		expectClean([
@@ -182,8 +181,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'write', w: { batch: 0, node: 0, op: 'set', v: 7 } },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it("shrunk seed 36: a W0 no-op retirement still changes other pending worlds' folds", () => {
 		expectClean([
@@ -199,8 +198,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 2, committed: true }, // W0 fold no-op; world 1 → 7+... reorders
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('shrunk seed 17: equal-value urgent write onto a logged atom shifts pending folds', () => {
 		expectClean([
@@ -215,8 +214,8 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 1, committed: true },
 			{ t: 'retire', batch: 0, committed: true },
 			{ t: 'read', node: 0, ctx: 'newest' },
-		]);
-	});
+		])
+	})
 
 	it('shrunk seed 30: revalidation snapshots old values before broadcast decisions re-memoize', () => {
 		expectClean([
@@ -250,6 +249,6 @@ describe('pinned oracle regressions', () => {
 			{ t: 'retire', batch: 4, committed: true },
 			{ t: 'retire', batch: 5, committed: true },
 			{ t: 'read', node: 4, ctx: 'newest' },
-		]);
-	});
-});
+		])
+	})
+})

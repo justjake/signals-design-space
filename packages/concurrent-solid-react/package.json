@@ -1,9 +1,9 @@
 {
 	"name": "concurrent-solid-react",
-	"private": true,
 	"version": "0.1.0",
-	"license": "MIT",
+	"private": true,
 	"description": "Concurrent React signals built as a minimum evolution of Solid 2.0's reactive core: the vendored solid-signals engine plus a bridge that maps React fork batch tokens onto Solid transitions and NotReadyError onto stable Suspense thenables.",
+	"license": "MIT",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {

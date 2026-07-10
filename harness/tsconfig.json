@@ -6,12 +6,5 @@
 		"lib": ["ESNext", "DOM"],
 		"types": ["node"]
 	},
-	"include": [
-		"adapters",
-		"bench",
-		"conformance",
-		"memory",
-		"util",
-		"vitest.config.ts"
-	]
+	"include": ["adapters", "bench", "conformance", "memory", "util", "vitest.config.ts"]
 }

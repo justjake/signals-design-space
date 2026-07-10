@@ -7,39 +7,39 @@
  * transition context is detected through the ambient classifier in host.ts,
  * which opens and broadcasts a draft on the spot.
  */
-import * as React from 'react';
-import { openDraft, runInDraft, sealDraft } from '../worlds.ts';
-import { broadcastDraft } from './host.ts';
+import * as React from 'react'
+import { openDraft, runInDraft, sealDraft } from '../worlds.ts'
+import { broadcastDraft } from './host.ts'
 
 function runDraftScope(scope: () => void): void {
-  const draft = openDraft();
-  broadcastDraft(draft.id);
-  try {
-    runInDraft(draft, scope);
-  } finally {
-    sealDraft(draft);
-  }
+	const draft = openDraft()
+	broadcastDraft(draft.id)
+	try {
+		runInDraft(draft, scope)
+	} finally {
+		sealDraft(draft)
+	}
 }
 
 /** Run writes as one transition batch: invisible to base-state readers and
  * the committed DOM until React commits the transition. */
 export function startTransitionWrite(scope: () => void): void {
-  React.startTransition(() => {
-    runDraftScope(scope);
-  });
+	React.startTransition(() => {
+		runDraftScope(scope)
+	})
 }
 
 /** useTransition married to an engine batch: isPending covers the batch's
  * whole lifetime, including renders it holds open. */
 export function useSignalTransition(): [boolean, (scope: () => void) => void] {
-  const [isPending, startTransition] = React.useTransition();
-  const start = React.useCallback(
-    (scope: () => void) => {
-      startTransition(() => {
-        runDraftScope(scope);
-      });
-    },
-    [startTransition],
-  );
-  return [isPending, start];
+	const [isPending, startTransition] = React.useTransition()
+	const start = React.useCallback(
+		(scope: () => void) => {
+			startTransition(() => {
+				runDraftScope(scope)
+			})
+		},
+		[startTransition],
+	)
+	return [isPending, start]
 }

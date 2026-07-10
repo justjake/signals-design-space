@@ -10,9 +10,17 @@
  * React lane. Suspense evaluation remains entirely engine-owned.
  */
 
-import * as React from 'react';
-import { ReactBatchRegistry } from 'react-signals-utils';
-import { BATCH_NONE, Computed, ReducerAtom, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignals';
+import * as React from 'react'
+import { ReactBatchRegistry } from 'react-signals-utils'
+import {
+	BATCH_NONE,
+	Computed,
+	ReducerAtom,
+	SuspendedRead,
+	attachDriver,
+	engine,
+	type ComputedCtx,
+} from 'cosignals'
 import type {
 	AnyInternals,
 	Atom,
@@ -25,7 +33,7 @@ import type {
 	BatchId,
 	Value,
 	Watcher,
-} from 'cosignals';
+} from 'cosignals'
 
 // ---- fork detection --------------------------------------------------------------
 
@@ -34,14 +42,14 @@ export function assertForkPresent(): void {
 	const channel = (
 		React as unknown as {
 			__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
-				E?: { forkProtocolVersion?: unknown } | null;
-			};
+				E?: { forkProtocolVersion?: unknown } | null
+			}
 		}
-	).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.E;
+	).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.E
 	if (channel?.forkProtocolVersion !== 1) {
 		throw new Error(
 			'cosignals-react requires the patched React signals protocol; stock React is unsupported.',
-		);
+		)
 	}
 }
 
@@ -52,44 +60,44 @@ export function assertForkPresent(): void {
  * the owning component. */
 export type WatcherTarget = {
 	/** Schedules a re-render of the owning component (a setState bump). */
-	bump: () => void;
-	live: boolean;
-};
+	bump: () => void
+	live: boolean
+}
 
 type RootRec = {
-	id: RootId;
+	id: RootId
 	/** The open engine render mirroring the protocol host's in-progress render, if any. */
-	renderPass: RenderPass | undefined;
+	renderPass: RenderPass | undefined
 	/** Watcher ids created during the current/most recent render, for the orphan sweep. */
-	created: Set<number>;
-};
+	created: Set<number>
+}
 
 /** Fallback root id for effects/watchers created outside any tracked
  * render (defensive paths; both packages name it through this one
  * constant). */
-export const ROOT_UNKNOWN: RootId = 'root-unknown';
+export const ROOT_UNKNOWN: RootId = 'root-unknown'
 
-let nextRootSerial = 1;
+let nextRootSerial = 1
 
 /** The one active shim (module registry; hooks.ts manages activation). */
-let activeShim: Shim | undefined;
+let activeShim: Shim | undefined
 
 export function setActiveShim(shim: Shim): void {
-	activeShim = shim;
+	activeShim = shim
 }
 
 /** Clears the active-shim slot only if it still points at `shim` — a
  * disposed predecessor's late unregister must never clobber a successor's
  * registration. */
 export function unregisterShim(shim: Shim): void {
-	if (activeShim === shim) activeShim = undefined;
+	if (activeShim === shim) activeShim = undefined
 }
 
 /** The active shim if it is still live. (A shim disposed directly — without
  * its handle's dispose, which unregisters it — can linger in the slot; the
  * liveness filter keeps it from being served or from blocking re-registration.) */
 export function getActiveShim(): Shim | undefined {
-	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined;
+	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined
 }
 
 // ---- the shim --------------------------------------------------------------------
@@ -99,40 +107,40 @@ export class Shim {
 	 * or the per-request instance passed to registerCosignalReact() for
 	 * synchronous SSR. The field keeps the bindings' historical name to spare
 	 * every call site. */
-	readonly bridge: CosignalEngine;
+	readonly bridge: CosignalEngine
 	/** The bound instance's public Computed/ReducerAtom classes (the default
 	 * instance's when none was passed). The creating hooks (useComputed,
 	 * useReducerAtom) create handles from THESE so a per-instance-bound shim never
 	 * produces a handle owned by a different engine than it routes through. */
-	readonly Computed: typeof Computed;
-	readonly ReducerAtom: typeof ReducerAtom;
+	readonly Computed: typeof Computed
+	readonly ReducerAtom: typeof ReducerAtom
 	/** Enables unreachable-state checks and the post-await write warning. */
-	readonly devChecks: boolean;
-	disposed = false;
+	readonly devChecks: boolean
+	disposed = false
 	/** Listener/translation errors (recorded, not thrown across React's commit). */
-	errors: unknown[] = [];
+	errors: unknown[] = []
 	/** Dev warnings surfaced (shim-local heuristics; console-warned once per message). */
-	devWarnings: string[] = [];
-	private warned = new Set<string>();
+	devWarnings: string[] = []
+	private warned = new Set<string>()
 
-	private readonly registry: ReactBatchRegistry;
-	private readonly registryToEngine = new Map<number, BatchId>();
-	private readonly engineToRegistry = new Map<BatchId, number>();
-	private unsubscribe: () => void;
-	private rootsByContainer = new Map<unknown, RootRec>();
+	private readonly registry: ReactBatchRegistry
+	private readonly registryToEngine = new Map<number, BatchId>()
+	private readonly engineToRegistry = new Map<BatchId, number>()
+	private unsubscribe: () => void
+	private rootsByContainer = new Map<unknown, RootRec>()
 	/** watcher id -> delivery target (registered at render, claimed at layout). */
-	targets = new Map<number, WatcherTarget>();
+	targets = new Map<number, WatcherTarget>()
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
-	claimed = new Set<number>();
+	claimed = new Set<number>()
 	/** SignalEffect id -> its hook-owned stable cleanup/body runner. */
-	private effectRunners = new Map<number, () => void>();
+	private effectRunners = new Map<number, () => void>()
 	constructor(instance?: Cosignals) {
-		this.bridge = instance?.engine ?? engine;
-		this.Computed = (instance?.Computed ?? Computed) as typeof Computed;
-		this.ReducerAtom = (instance?.ReducerAtom ?? ReducerAtom) as typeof ReducerAtom;
-		this.devChecks = this.bridge.devChecks;
-		assertForkPresent();
-		this.registry = new ReactBatchRegistry(React);
+		this.bridge = instance?.engine ?? engine
+		this.Computed = (instance?.Computed ?? Computed) as typeof Computed
+		this.ReducerAtom = (instance?.ReducerAtom ?? ReducerAtom) as typeof ReducerAtom
+		this.devChecks = this.bridge.devChecks
+		assertForkPresent()
+		this.registry = new ReactBatchRegistry(React)
 		// Install the engine driver before subscribing to React so a duplicate
 		// attachment cannot leave a registry subscription behind.
 		const driver: EngineDriver = {
@@ -149,11 +157,11 @@ export class Shim {
 			// mechanism), and the engine consults its own frame before this
 			// provider.
 			worldFor: () => {
-				const rendering = this.renderingRoot();
+				const rendering = this.renderingRoot()
 				if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
-					return { kind: 'render', render: rendering.renderPass };
+					return { kind: 'render', render: rendering.renderPass }
 				}
-				return undefined;
+				return undefined
 			},
 			// Direct listeners — the load-bearing consumption surface. The
 			// engine's trace stream stays a test/tracing artifact (it does not
@@ -172,109 +180,110 @@ export class Shim {
 			// engine state, so React's batch registry drops its slot tenancy
 			// while the engine composition those ids point into still exists.
 			protocolReset: () => {
-				this.registry.reset();
-				this.registryToEngine.clear();
-				this.engineToRegistry.clear();
+				this.registry.reset()
+				this.registryToEngine.clear()
+				this.engineToRegistry.clear()
 			},
-		};
+		}
 		try {
-			(instance?.attachDriver ?? attachDriver)(driver);
+			;(instance?.attachDriver ?? attachDriver)(driver)
 		} catch (error) {
-			this.registry.dispose();
-			throw error;
+			this.registry.dispose()
+			throw error
 		}
 		this.unsubscribe = this.registry.subscribe({
 			onBatchOpened: (registryBatch) =>
 				this.guard(() => {
-					const batch = this.bridge.openBatch({ deferred: (registryBatch & 1) !== 0 });
-					this.registryToEngine.set(registryBatch, batch.id);
-					this.engineToRegistry.set(batch.id, registryBatch);
+					const batch = this.bridge.openBatch({ deferred: (registryBatch & 1) !== 0 })
+					this.registryToEngine.set(registryBatch, batch.id)
+					this.engineToRegistry.set(batch.id, registryBatch)
 				}),
 			onRenderPassStart: (container, includedBatches) =>
 				this.guard(() => this.handleRenderStart(container, includedBatches)),
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
 			onRenderPassResume: (container) => this.guard(() => this.handleResume(container)),
-			onRenderPassEnd: (container, committed) => this.guard(() => this.handleRenderEnd(container, committed)),
+			onRenderPassEnd: (container, committed) =>
+				this.guard(() => this.handleRenderEnd(container, committed)),
 			onBatchRetired: (registryBatch, committed) =>
 				this.guard(() => this.handleBatchRetired(registryBatch, committed)),
 			onRootCommitted: (container, committedBatches) =>
 				this.guard(() => this.handleRootCommitted(container, committedBatches)),
-		});
+		})
 	}
 
 	/** Releases the registry subscription and all shim-owned references. */
 	dispose(): void {
-		this.disposed = true;
-		this.unsubscribe();
-		this.registry.dispose();
-		this.registryToEngine.clear();
-		this.engineToRegistry.clear();
-		this.targets.clear();
-		this.effectRunners.clear();
+		this.disposed = true
+		this.unsubscribe()
+		this.registry.dispose()
+		this.registryToEngine.clear()
+		this.engineToRegistry.clear()
+		this.targets.clear()
+		this.effectRunners.clear()
 	}
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
 	private guard(fn: () => void): void {
-		if (this.disposed) return;
+		if (this.disposed) return
 		try {
-			fn();
+			fn()
 		} catch (error) {
-			this.errors.push(error);
+			this.errors.push(error)
 		}
 	}
 
 	/** Errors recorded since the last call (tests assert this stays empty). */
 	takeErrors(): unknown[] {
-		const out = this.errors;
-		this.errors = [];
-		return out;
+		const out = this.errors
+		this.errors = []
+		return out
 	}
 
 	private devWarn(message: string): void {
-		this.devWarnings.push(message);
+		this.devWarnings.push(message)
 		if (!this.warned.has(message)) {
-			this.warned.add(message);
+			this.warned.add(message)
 			// eslint-disable-next-line no-console
-			console.warn(`cosignals: ${message}`);
+			console.warn(`cosignals: ${message}`)
 		}
 	}
 
 	// ---- roots and batches ----------------------------------------------------
 
 	rootRec(container: unknown): RootRec {
-		let rec = this.rootsByContainer.get(container);
+		let rec = this.rootsByContainer.get(container)
 		if (rec === undefined) {
 			rec = {
 				id: `root-${nextRootSerial++}`,
 				renderPass: undefined,
 				created: new Set(),
-			};
-			this.rootsByContainer.set(container, rec);
-			this.bridge.root(rec.id); // materialize the per-root committed table
+			}
+			this.rootsByContainer.set(container, rec)
+			this.bridge.root(rec.id) // materialize the per-root committed table
 		}
-		return rec;
+		return rec
 	}
 
 	/** Keeps an existing live engine batch pending until its action settles. */
 	upgradeToAction(batchId: BatchId): void {
-		const t = this.bridge.idToBatch.get(batchId);
+		const t = this.bridge.idToBatch.get(batchId)
 		if (t !== undefined && t.state === 'live') {
-			t.action = true;
-			t.parked = true;
+			t.action = true
+			t.parked = true
 		}
 	}
 
 	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
-		const ctx = this.registry.getRenderContext();
-		if (ctx === null) return undefined;
-		return this.rootsByContainer.get(ctx.container);
+		const ctx = this.registry.getRenderContext()
+		if (ctx === null) return undefined
+		return this.rootsByContainer.get(ctx.container)
 	}
 
 	// ---- protocol listener -> bridge --------------------------------------------
 
 	private handleRenderStart(container: unknown, includedBatches: readonly number[]): void {
-		const rec = this.rootRec(container);
+		const rec = this.rootRec(container)
 		if (rec.renderPass !== undefined && rec.renderPass.state !== 'ended') {
 			// The protocol host closes a render frame (onRenderPassEnd) before
 			// restarting the root, so a still-open render here means the two
@@ -282,51 +291,51 @@ export class Shim {
 			if (this.devChecks) {
 				throw new Error(
 					`cosignals-react: protocol violation — render pass started on ${rec.id} while its previous render is still open`,
-				);
+				)
 			}
 			// Defined fall-through: discard the stale render. A discarded render
 			// contributes nothing to committed truth (its batch set never locks
 			// into the root's committed table; render-owned mounts die), so this
 			// cannot double-account — while leaving it open would pin the
 			// engine's pending window forever.
-			this.bridge.renderEnd(rec.renderPass.id, 'discard');
+			this.bridge.renderEnd(rec.renderPass.id, 'discard')
 		}
-		const known: BatchId[] = [];
+		const known: BatchId[] = []
 		for (const registryBatch of includedBatches) {
-			const batchId = this.registryToEngine.get(registryBatch);
+			const batchId = this.registryToEngine.get(registryBatch)
 			if (batchId !== undefined && this.bridge.idToBatch.get(batchId)?.state === 'live') {
-				known.push(batchId);
+				known.push(batchId)
 			}
 		}
-		rec.renderPass = this.bridge.renderStart(rec.id, known);
-		rec.created = new Set();
+		rec.renderPass = this.bridge.renderStart(rec.id, known)
+		rec.created = new Set()
 	}
 
 	private handleYield(container: unknown): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		this.bridge.renderYield(rec.renderPass.id);
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		this.bridge.renderYield(rec.renderPass.id)
 	}
 
 	private handleResume(container: unknown): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		this.bridge.renderResume(rec.renderPass.id);
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		this.bridge.renderResume(rec.renderPass.id)
 	}
 
 	private handleRenderEnd(container: unknown, committed: boolean): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		const render = rec.renderPass;
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return
+		const render = rec.renderPass
 		if (!committed) {
 			// Discard: render-owned mounts die in the bridge; drop their targets too.
-			this.bridge.renderEnd(render.id, 'discard');
+			this.bridge.renderEnd(render.id, 'discard')
 			for (const wid of rec.created) {
-				if (!this.claimed.has(wid)) this.targets.delete(wid);
+				if (!this.claimed.has(wid)) this.targets.delete(wid)
 			}
-			rec.created = new Set();
-			rec.renderPass = undefined;
-			return;
+			rec.created = new Set()
+			rec.renderPass = undefined
+			return
 		}
 		// The end(commit) event is where the bridge captures its baseline:
 		// bridge.renderEnd snapshots committed state and the root's commit
@@ -336,8 +345,8 @@ export class Shim {
 		// for watchers created this render runs inside renderEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
 		// (delivered at the operation boundary, inside this call).
-		this.bridge.renderEnd(render.id, 'commit');
-		rec.renderPass = undefined;
+		this.bridge.renderEnd(render.id, 'commit')
+		rec.renderPass = undefined
 		// (ctx.previous cells update inside bridge.renderEnd — the
 		// cells live on the engine's computed nodes, beside their ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
@@ -346,30 +355,30 @@ export class Shim {
 		// effects run synchronously inside the commit, so by the time this
 		// microtask runs every claim has happened — any watcher created by this
 		// render and still unclaimed is dead.
-		const created = rec.created;
-		rec.created = new Set();
+		const created = rec.created
+		rec.created = new Set()
 		queueMicrotask(() => {
-			if (this.disposed) return;
+			if (this.disposed) return
 			for (const wid of created) {
-				if (this.claimed.has(wid)) continue;
+				if (this.claimed.has(wid)) continue
 				// removeWatcher, never a bare watchers.delete: the engine keeps a
 				// per-node watcher index next to the id map, and a map-only delete
 				// strands the index entry (dead watchers then seed the engine's
 				// sweeps and quiescence refreshes forever).
-				this.bridge.removeWatcher(wid);
-				this.targets.delete(wid);
+				this.bridge.removeWatcher(wid)
+				this.targets.delete(wid)
 			}
-		});
+		})
 	}
 
 	private handleBatchRetired(registryBatch: number, committed: boolean): void {
-		const batchId = this.registryToEngine.get(registryBatch);
-		if (batchId === undefined) return;
-		const t = this.bridge.idToBatch.get(batchId);
+		const batchId = this.registryToEngine.get(registryBatch)
+		if (batchId === undefined) return
+		const t = this.bridge.idToBatch.get(batchId)
 		if (t === undefined || t.state !== 'live') {
-			this.registryToEngine.delete(registryBatch);
-			this.engineToRegistry.delete(batchId);
-			return;
+			this.registryToEngine.delete(registryBatch)
+			this.engineToRegistry.delete(batchId)
+			return
 		}
 		// The committed/abandoned fact is BORN here — React's own report about
 		// its batch. Retirement is disposition-blind (recorded writes never
@@ -377,18 +386,19 @@ export class Shim {
 		// record, created straight into the bridge's tracer when one is
 		// attached. Batches with no protocol report (the engine-side ambient
 		// batch) create none.
-		const tr = this.bridge.trace;
-		if (tr !== undefined) tr.batchDisposition(batchId, committed);
+		const tr = this.bridge.trace
+		if (tr !== undefined) tr.batchDisposition(batchId, committed)
 		// Retirement/settlement flush dirty SignalEffect terminals and deliver
 		// their runner requests at this operation boundary.
-		if (t.parked) this.bridge.settleAction(batchId); // async action reached settlement
-		else this.bridge.retire(batchId); // batch done everywhere: its writes become permanent history
-		this.registryToEngine.delete(registryBatch);
-		this.engineToRegistry.delete(batchId);
+		if (t.parked)
+			this.bridge.settleAction(batchId) // async action reached settlement
+		else this.bridge.retire(batchId) // batch done everywhere: its writes become permanent history
+		this.registryToEngine.delete(registryBatch)
+		this.engineToRegistry.delete(batchId)
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[]): void {
-		const rec = this.rootRec(container);
+		const rec = this.rootRec(container)
 		// The bridge already locked the committing render's batch set into the
 		// root's committed table at renderEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
@@ -400,14 +410,14 @@ export class Shim {
 		// bit mask, generation, commit clock, arena fan-out, drain — never a
 		// partial table write from here). Defensive: for React batches with
 		// engine batches the render's set already covers the delta by construction.
-		const reported: BatchId[] = [];
+		const reported: BatchId[] = []
 		for (const registryBatch of committedBatches) {
-			const batchId = this.registryToEngine.get(registryBatch);
+			const batchId = this.registryToEngine.get(registryBatch)
 			if (batchId !== undefined && this.bridge.idToBatch.get(batchId)?.state === 'live') {
-				reported.push(batchId);
+				reported.push(batchId)
 			}
 		}
-		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
+		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported)
 		// commitBatches is itself a boundary operation: when the report
 		// actually moved committed truth, the engine re-checked that root's
 		// committed SignalEffects inside the call.
@@ -424,10 +434,11 @@ export class Shim {
 
 	/** Schedules a re-render in the batch's lane, or urgently if it is gone. */
 	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
-		const target = this.targets.get(watcherId);
-		if (target === undefined || !target.live) return;
-		const registryBatch = batchId === undefined ? BATCH_NONE : (this.engineToRegistry.get(batchId) ?? BATCH_NONE);
-		this.registry.runInBatch(registryBatch, () => target.bump());
+		const target = this.targets.get(watcherId)
+		if (target === undefined || !target.live) return
+		const registryBatch =
+			batchId === undefined ? BATCH_NONE : (this.engineToRegistry.get(batchId) ?? BATCH_NONE)
+		this.registry.runInBatch(registryBatch, () => target.bump())
 	}
 
 	// ---- the write context ----------------------------------------------------
@@ -444,17 +455,19 @@ export class Shim {
 	 * per-root commit), never mid-write. */
 	currentBatch(): BatchId {
 		if (this.registry.getRenderContext() !== null) {
-			throw new Error('cosignals: signal write during render — write from an event handler or effect instead');
+			throw new Error(
+				'cosignals: signal write during render — write from an event handler or effect instead',
+			)
 		}
-		const registryBatch = this.registry.getCurrentWriteBatch();
-		const batchId = this.registryToEngine.get(registryBatch) ?? BATCH_NONE;
+		const registryBatch = this.registry.getCurrentWriteBatch()
+		const batchId = this.registryToEngine.get(registryBatch) ?? BATCH_NONE
 		// Once the renderer installs its taps, every write context has a
 		// registry batch with a close edge. Keep the no-context fall-through
 		// for production builds with development checks disabled.
 		if (this.devChecks && batchId === BATCH_NONE) {
 			throw new Error(
 				'cosignals: protocol violation — signal write with no batch context after the renderer installed its signals taps',
-			);
+			)
 		}
 		if (this.devChecks) {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
@@ -467,21 +480,23 @@ export class Shim {
 			// batch from a timer's ambient one, so this lint can over-trigger
 			// on genuine handler writes during someone else's action —
 			// accepted imprecision for a dev-only warning.
-			const t = this.bridge.idToBatch.get(batchId);
-			let parked = false;
+			const t = this.bridge.idToBatch.get(batchId)
+			let parked = false
 			if (t !== undefined && !t.action && !t.deferred) {
 				for (const live of this.bridge.liveBatches()) {
 					if (live.parked) {
-						parked = true;
-						break;
+						parked = true
+						break
 					}
 				}
 			}
 			if (parked) {
-				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
+				this.devWarn(
+					'a signal write after await landed outside the action — wrap it in startTransition',
+				)
 			}
 		}
-		return batchId;
+		return batchId
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------
@@ -490,25 +505,25 @@ export class Shim {
 	// here is React closure and passive-effect ownership.
 
 	registerEffect(root: RootId, refire: () => void): number {
-		this.bridge.root(root); // materialize the per-root committed table (as before)
-		const effect = this.bridge.mountSignalEffect(root, `effect@${root}`);
-		this.effectRunners.set(effect.id, refire);
-		return effect.id;
+		this.bridge.root(root) // materialize the per-root committed table (as before)
+		const effect = this.bridge.mountSignalEffect(root, `effect@${root}`)
+		this.effectRunners.set(effect.id, refire)
+		return effect.id
 	}
 
 	renderSignalEffect(renderPassId: number, id: number, willRun: boolean): void {
-		this.bridge.renderSignalEffect(renderPassId, id, willRun);
+		this.bridge.renderSignalEffect(renderPassId, id, willRun)
 	}
 
 	unregisterEffect(id: number): void {
-		this.effectRunners.delete(id);
-		if (this.bridge.idToSignalEffect.has(id)) this.bridge.removeSignalEffect(id);
+		this.effectRunners.delete(id)
+		if (this.bridge.idToSignalEffect.has(id)) this.bridge.removeSignalEffect(id)
 	}
 
 	/** Runs an effect body while its committed graph terminal retracks. */
 	captureEffectRun(id: number, body: () => void): void {
-		if (!this.bridge.idToSignalEffect.has(id)) return; // torn down between queue and run
-		this.bridge.captureSignalEffectRun(id, body);
+		if (!this.bridge.idToSignalEffect.has(id)) return // torn down between queue and run
+		this.bridge.captureSignalEffectRun(id, body)
 	}
 
 	// ---- node resolution --------------------------------------------------------
@@ -521,7 +536,7 @@ export class Shim {
 	 * Kept as a method so the hooks and the suites name one resolution point.
 	 */
 	internalsForAtom(atom: Atom<unknown>): AtomInternals {
-		return this.bridge.internalsForAtom(atom);
+		return this.bridge.internalsForAtom(atom)
 	}
 
 	// ---- suspense translation ----------------------------------------------------------
@@ -537,81 +552,98 @@ export class Shim {
 	 * folding it to a sentinel value, and a SuspendedRead carrier unwraps to
 	 * its thenable so React suspends the component. */
 	hookRead(fn: () => Value): Value {
-		this.bridge.suspendDepth++;
+		this.bridge.suspendDepth++
 		try {
-			return fn();
+			return fn()
 		} catch (err) {
-			if (err instanceof SuspendedRead) throw err.thenable;
-			throw err;
+			if (err instanceof SuspendedRead) throw err.thenable
+			throw err
 		} finally {
-			this.bridge.suspendDepth--;
+			this.bridge.suspendDepth--
 		}
 	}
 
 	/** Register a watcher created during the current render (orphan-sweep set). */
 	noteCreated(rootRec: RootRec, watcherId: number): void {
-		rootRec.created.add(watcherId);
+		rootRec.created.add(watcherId)
 	}
 
 	// ---- watcher claim / unsubscribe ------------------------------------------------
 
 	/** Layout-effect claim: the committed hook instance owns this watcher. */
-	claimWatcher(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean; root: RootId | undefined; lastValue: unknown }): void {
-		rec.pendingUnsub = false;
-		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
+	claimWatcher(rec: {
+		node: AnyInternals
+		watcherId: number | undefined
+		target: WatcherTarget
+		pendingUnsub: boolean
+		root: RootId | undefined
+		lastValue: unknown
+	}): void {
+		rec.pendingUnsub = false
+		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId)
 		if (w === undefined) {
 			// Reveal without a re-render (React bailed out) or a swept
 			// subscription: create a fresh watcher outside any React render and take
 			// the conservative reveal path — compare what the committed DOM shows
 			// against committed truth, and fix urgently, before paint.
-			this.resubscribeAtLayout(rec);
-			return;
+			this.resubscribeAtLayout(rec)
+			return
 		}
-		this.claimed.add(w.id);
-		rec.target.live = true;
-		this.targets.set(w.id, rec.target);
+		this.claimed.add(w.id)
+		rec.target.live = true
+		this.targets.set(w.id, rec.target)
 	}
 
-	private resubscribeAtLayout(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
-		const root = rec.root ?? ROOT_UNKNOWN;
-		const render = this.bridge.renderStart(root, []);
-		let created: Watcher | undefined;
+	private resubscribeAtLayout(rec: {
+		node: AnyInternals
+		watcherId: number | undefined
+		target: WatcherTarget
+		root: RootId | undefined
+		lastValue: unknown
+	}): void {
+		const root = rec.root ?? ROOT_UNKNOWN
+		const render = this.bridge.renderStart(root, [])
+		let created: Watcher | undefined
 		try {
-			created = this.bridge.mountWatcher(render.id, rec.node, 'w?');
-			created.name = `w${created.id}`;
-			this.bridge.deferMountEffects(created.id); // keep it out of the degenerate render
+			created = this.bridge.mountWatcher(render.id, rec.node, 'w?')
+			created.name = `w${created.id}`
+			this.bridge.deferMountEffects(created.id) // keep it out of the degenerate render
 		} finally {
-			this.bridge.renderEnd(render.id, 'discard');
+			this.bridge.renderEnd(render.id, 'discard')
 		}
-		if (created === undefined) return;
-		created.live = true;
-		created.lastRenderedValue = rec.lastValue; // what the committed DOM shows
-		rec.watcherId = created.id;
-		this.claimed.add(created.id);
-		rec.target.live = true;
-		this.targets.set(created.id, rec.target);
+		if (created === undefined) return
+		created.live = true
+		created.lastRenderedValue = rec.lastValue // what the committed DOM shows
+		rec.watcherId = created.id
+		this.claimed.add(created.id)
+		rec.target.live = true
+		this.targets.set(created.id, rec.target)
 		// Conservative reveal compare: fix any drift urgently, pre-paint.
-		const now = this.bridge.committedValue(rec.node, root);
-		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(created.id, undefined);
+		const now = this.bridge.committedValue(rec.node, root)
+		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(created.id, undefined)
 	}
 
 	/** Debounce-finalized unsubscription (or immediate teardown for retired recs). */
-	finalizeUnsub(rec: { watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean }): void {
-		rec.pendingUnsub = false;
-		rec.target.live = false;
-		const wid = rec.watcherId;
-		if (wid === undefined) return;
-		rec.watcherId = undefined;
-		this.claimed.delete(wid);
-		this.targets.delete(wid);
+	finalizeUnsub(rec: {
+		watcherId: number | undefined
+		target: WatcherTarget
+		pendingUnsub: boolean
+	}): void {
+		rec.pendingUnsub = false
+		rec.target.live = false
+		const wid = rec.watcherId
+		if (wid === undefined) return
+		rec.watcherId = undefined
+		this.claimed.delete(wid)
+		this.targets.delete(wid)
 		// One engine call retires the watcher from every store it lives in
 		// (liveness/observation retain, id map, per-node walk index, open
 		// mounted lists) — see the engine's removeWatcher.
-		this.bridge.removeWatcher(wid);
+		this.bridge.removeWatcher(wid)
 	}
 }
 
 /** The evaluation context bound computed functions receive — the core's
  * ComputedCtx verbatim (`previous` hint + the two-form `ctx.use`), served
  * over the bound node's own state. */
-export type BoundCtx<T> = ComputedCtx<T>;
+export type BoundCtx<T> = ComputedCtx<T>

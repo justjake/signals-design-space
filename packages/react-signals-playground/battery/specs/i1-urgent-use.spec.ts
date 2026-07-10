@@ -9,27 +9,27 @@
  * row pins the working browser behavior — an urgent suspension resolves and
  * the retry ping paints the content — guarding the fork's retry path.
  */
-import { expect, test } from '../fixtures';
-import { applyExpectation } from '../expectations';
-import { clockTicks, gotoApp } from '../helpers';
+import { expect, test } from '../fixtures'
+import { applyExpectation } from '../expectations'
+import { clockTicks, gotoApp } from '../helpers'
 
 test('FIND-URGENT-USE: urgent React.use suspension retries and paints on resolve', async ({
 	page,
 	entry,
 }) => {
-	applyExpectation(test, 'FIND-URGENT-USE', entry);
-	await gotoApp(page, entry);
-	await expect(page.getByTestId('use-probe')).toHaveText('idle');
+	applyExpectation(test, 'FIND-URGENT-USE', entry)
+	await gotoApp(page, entry)
+	await expect(page.getByTestId('use-probe')).toHaveText('idle')
 
 	// Arm on the urgent lane: the epoch write is a plain (non-transition)
 	// write, so the suspension lands urgently and its boundary shows the
 	// fallback (no transition to hold the old content).
-	await page.evaluate(() => window.__store.armUseProbe());
-	await expect(page.getByTestId('use-probe-fallback')).toBeVisible();
-	expect(await clockTicks(page), 'page froze on an urgent suspension').toBe(true);
+	await page.evaluate(() => window.__store.armUseProbe())
+	await expect(page.getByTestId('use-probe-fallback')).toBeVisible()
+	expect(await clockTicks(page), 'page froze on an urgent suspension').toBe(true)
 
 	// Settlement must ping the retry: content replaces the fallback.
-	await page.evaluate(() => window.__store.settleUseProbe());
-	await expect(page.getByTestId('use-probe')).toHaveText('settled');
-	await expect(page.getByTestId('use-probe-fallback')).toHaveCount(0);
-});
+	await page.evaluate(() => window.__store.settleUseProbe())
+	await expect(page.getByTestId('use-probe')).toHaveText('settled')
+	await expect(page.getByTestId('use-probe-fallback')).toHaveCount(0)
+})

@@ -14,6 +14,6 @@ export const contenderNames = [
 	'alt-b-uses',
 	'alt-b-react',
 	'fx2-react',
-] as const;
+] as const
 
-export type ContenderName = (typeof contenderNames)[number];
+export type ContenderName = (typeof contenderNames)[number]

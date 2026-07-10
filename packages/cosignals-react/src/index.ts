@@ -16,8 +16,8 @@ export {
 	startSignalTransition,
 	type CosignalReactHandle,
 	type SignalSource,
-} from './hooks.js';
-export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js';
+} from './hooks.js'
+export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js'
 
 // Curated re-export of the engine surface an app using these bindings
 // actually consumes: the signal constructors the hooks accept (kernel
@@ -43,4 +43,4 @@ export {
 	type ComputedOptions,
 	type ReducerAtomOptions,
 	type CosignalEngine,
-} from 'cosignals';
+} from 'cosignals'

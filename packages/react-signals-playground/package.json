@@ -1,9 +1,9 @@
 {
 	"name": "react-signals-playground",
-	"private": true,
 	"version": "0.0.0",
-	"license": "MIT",
+	"private": true,
 	"description": "Vite + React playground that renders one shared App under four entrypoints, each backed by a different concurrent-signals implementation. App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+	"license": "MIT",
 	"type": "module",
 	"imports": {
 		"#concurrent-signals-shim": "./src/shims/index.ts"

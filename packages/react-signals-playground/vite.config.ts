@@ -1,8 +1,8 @@
-import { fileURLToPath } from 'node:url';
-import react from '@vitejs/plugin-react';
-import { defineConfig, type Connect, type Plugin } from 'vite';
+import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
+import { defineConfig, type Connect, type Plugin } from 'vite'
 
-const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
+const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
 
 /**
  * Static hosts serve a directory's index.html at both `/dir` and `/dir/`
@@ -12,24 +12,24 @@ const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.
  */
 function redirectDirEntries(dirs: readonly string[]): Plugin {
 	const middleware: Connect.NextHandleFunction = (req, res, next) => {
-		const [path = '', query] = (req.url ?? '').split('?');
+		const [path = '', query] = (req.url ?? '').split('?')
 		if (dirs.includes(path)) {
-			res.statusCode = 301;
-			res.setHeader('Location', `${path}/${query === undefined ? '' : `?${query}`}`);
-			res.end();
-			return;
+			res.statusCode = 301
+			res.setHeader('Location', `${path}/${query === undefined ? '' : `?${query}`}`)
+			res.end()
+			return
 		}
-		next();
-	};
+		next()
+	}
 	return {
 		name: 'playground:redirect-dir-entries',
 		configureServer(server) {
-			server.middlewares.use(middleware);
+			server.middlewares.use(middleware)
 		},
 		configurePreviewServer(server) {
-			server.middlewares.use(middleware);
+			server.middlewares.use(middleware)
 		},
-	};
+	}
 }
 
 export default defineConfig(({ mode }) => ({
@@ -70,4 +70,4 @@ export default defineConfig(({ mode }) => ({
 			},
 		},
 	},
-}));
+}))
