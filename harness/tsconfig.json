@@ -1,6 +1,7 @@
 {
 	"extends": "../tsconfig.base.json",
 	"compilerOptions": {
+		"allowImportingTsExtensions": true,
 		// DOM matches milomg-reactivity-benchmark's own tsconfig; its bench
 		// sources rely on the DOM console.assert signature.
 		"lib": ["ESNext", "DOM"],
