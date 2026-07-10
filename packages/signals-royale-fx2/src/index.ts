@@ -90,7 +90,12 @@ export class Signal<T> {
   /** Base-state read (tracked inside computations); in a draft evaluation,
    * resolves that evaluation's own world. */
   get(): T {
-    return readValue(this) as T;
+    const world = getCurrentWorld();
+    if (world !== null) {
+      // Inside a draft evaluation every read resolves that world.
+      return unwrapForEval(resolveState(this.node, world), getCurrentPark()!) as T;
+    }
+    return readCell(this.node);
   }
   set(value: T): void {
     writeSignal(this, value);
@@ -132,7 +137,17 @@ export class Computed<T> {
     this.node = makeDerived(fn, opts);
   }
   get(): T {
-    return readValue(this) as T;
+    const node = this.node;
+    const world = getCurrentWorld();
+    if (world !== null) {
+      // Inside a draft evaluation every read resolves that world.
+      return unwrapForEval(resolveState(node, world), getCurrentPark()!) as T;
+    }
+    const value = readDerived(node);
+    if ((node.flags & Flag.AsyncMask) !== 0) {
+      return unwrapAsyncRead(node as DerivedNode<unknown>) as T;
+    }
+    return value;
   }
   peek(): T {
     return graphUntracked(() => this.get());
@@ -165,28 +180,19 @@ export function nodeOf(x: AnyReadable): ReactiveNode {
 // Reads
 // ---------------------------------------------------------------------------
 
-function readValue(x: AnyReadable): unknown {
-  const node = nodeOf(x);
-  const world = getCurrentWorld();
-  if (world !== null) {
-    // Inside a draft evaluation every read resolves that world.
-    return unwrapForEval(resolveState(node, world), getCurrentPark()!);
+/** Cold tail of a computed read that is in an async state: rethrow errors,
+ * park an evaluating consumer on the suspension, serve stale data when a
+ * settled value exists, otherwise suspend (first load). */
+function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
+  if ((node.flags & Flag.AsyncError) !== 0) throw (node.throwable as ErrorBox).error;
+  const suspension = node.throwable as Suspension;
+  const consumer = getActiveConsumer();
+  if (consumer !== null && (consumer.flags & Flag.KindDerived) !== 0) {
+    // Pending forwards: park the evaluating computed on this suspension.
+    useImpl(suspension.promise, consumer as DerivedNode<unknown>);
   }
-  if ((node.flags & Flag.KindCell) !== 0) return readCell(node as CellNode<unknown>);
-  const value = readDerived(node as DerivedNode<unknown>);
-  const flags = node.flags;
-  if ((flags & Flag.AsyncMask) !== 0) {
-    if ((flags & Flag.AsyncError) !== 0) throw (node.throwable as ErrorBox).error;
-    const suspension = node.throwable as Suspension;
-    const consumer = getActiveConsumer();
-    if (consumer !== null && (consumer.flags & Flag.KindDerived) !== 0) {
-      // Pending forwards: park the evaluating computed on this suspension.
-      useImpl(suspension.promise, consumer as DerivedNode<unknown>);
-    }
-    if (!isUninitialized((node as DerivedNode<unknown>).value)) return value; // stale serves
-    throw suspension.promise; // never settled: suspend
-  }
-  return value;
+  if (!isUninitialized(node.value)) return node.value; // stale serves
+  throw suspension.promise; // never settled: suspend
 }
 
 /** The value slot of a state view, sentinel normalized: a suspended state
@@ -326,7 +332,8 @@ export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
 }
 
 export function read<T>(x: Readable<T>): T {
-  return readValue(x) as T;
+  nodeOf(x); // validate the handle before dispatching to its read method
+  return x.get();
 }
 
 // ---------------------------------------------------------------------------

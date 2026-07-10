@@ -1122,7 +1122,15 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
   // strictly-greater test then reports it correctly.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
     const dep = l.dep;
-    if ((dep.flags & Flag.KindDerived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
+    // Same watched-Clean skip as readDerived: such a dep has nothing to
+    // validate, so don't pay a call to find that out.
+    const dflags = dep.flags;
+    if (
+      (dflags & Flag.KindDerived) !== 0 &&
+      (dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
+    ) {
+      ensureFresh(dep as DerivedNode<unknown>);
+    }
     if (dep.changedAtGraphChange > node.validAtGraphChange) {
       recompute(node);
       return;
@@ -1210,8 +1218,16 @@ function runWatcher(w: WatcherNode): void {
     let changed = false;
     for (let l = w.deps; l !== undefined; l = l.nextDep) {
       const dep = l.dep;
-      if ((dep.flags & Flag.KindDerived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
-      if ((w.flags & Flag.Watched) === 0) return; // disposed mid-validation
+      // Same watched-Clean skip as readDerived: such a dep has nothing to
+      // validate, so don't pay a call to find that out.
+      const dflags = dep.flags;
+      if (
+        (dflags & Flag.KindDerived) !== 0 &&
+        (dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
+      ) {
+        ensureFresh(dep as DerivedNode<unknown>);
+        if ((w.flags & Flag.Watched) === 0) return; // disposed mid-validation
+      }
       if (dep.changedAtGraphChange > w.validAtGraphChange) {
         changed = true;
         break;
