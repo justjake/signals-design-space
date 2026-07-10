@@ -87,6 +87,9 @@ export interface RebaseLog {
 export interface Draft {
   id: DraftId;
   state: DraftState;
+  /** The base clock at which this draft opened alone. Zero permanently
+   * disables producer-side wake cutoffs after overlap. */
+  cutoffAtGraphChange: GraphChangeClock;
   /** Stable single-draft world used by the one-live-draft notification
    * cutoff. Its draft array is allocated once with the draft. */
   world: World;
@@ -129,9 +132,14 @@ export function liveDraftCount(): number {
 export function openDraft(): Draft {
   const id = nextDraftId++;
   const drafts: Draft[] = [];
+  const alone = liveDrafts.size === 0;
+  if (!alone) {
+    for (const live of liveDrafts.values()) live.cutoffAtGraphChange = 0;
+  }
   const draft: Draft = {
     id,
     state: 'open',
+    cutoffAtGraphChange: alone ? currentGraphChange() : 0,
     world: { drafts, sig: String(id) },
     cells: new Set(),
     openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
@@ -186,7 +194,7 @@ export function appendDraftIntent(
     cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
     cell.causeEvent = cause;
   }
-  if (liveDrafts.size === 1) {
+  if (draft.cutoffAtGraphChange === currentGraphChange()) {
     cutoffWorld = draft.world;
     try {
       pokeDraftWatchers(cell, cause, draft.id, changedInCutoffWorld);

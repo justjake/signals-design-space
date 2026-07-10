@@ -206,6 +206,32 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     unsub();
   });
 
+  test('[oracle seed 653] base movement after draft open disables the producer cutoff', () => {
+    const a = signal(7);
+    const ids: DraftId[] = [];
+    let view = a.get();
+    const render = () => {
+      view = resolveState(nodeOf(a), worldOf(ids)).value as number;
+    };
+    const off = observeNode(nodeOf(a), render, (id) => {
+      ids.push(id);
+      render();
+    });
+    const d = openDraft();
+
+    a.set(18);
+    expect(latest(a)).toBe(18); // seeds the draft-world memo at 18
+    a.set(14);
+    a.update((value) => value + 2);
+    expect(view).toBe(16); // urgent delivery advanced the subscriber, not that memo
+
+    runInDraft(d, () => a.update((value) => value + 2));
+    expect(view).toBe(18); // the draft wake must not cut off against stale 18
+
+    discardDraft(d.id);
+    off();
+  });
+
   test('two drafts interleaved with urgent writes replay in dispatch order', () => {
     const a = signal(1);
     const d1 = inDraft(() => a.update((x) => x + 1)); // seq1
@@ -256,7 +282,7 @@ describe('computeds across worlds', () => {
     offValue();
   });
 
-  test('overlapping drafts retain conservative value wakes', () => {
+  test('a draft that ever overlapped retains conservative value wakes', () => {
     const a = signal(1);
     const parity = computed(() => a.get() & 1);
     expect(parity.get()).toBe(1);
@@ -264,12 +290,12 @@ describe('computeds across worlds', () => {
     const off = observeNode(nodeOf(parity), () => {}, (id) => wakes.push(id));
     const first = openDraft();
     const second = openDraft();
+    discardDraft(second.id);
 
     runInDraft(first, () => a.set(3));
-    expect(wakes).toEqual([first.id]); // overlap disables the node-level cutoff
+    expect(wakes).toEqual([first.id]); // cutoff stays disabled after overlap ends
 
     discardDraft(first.id);
-    discardDraft(second.id);
     off();
   });
 
