@@ -58,6 +58,7 @@ export type EvalPass = Brand<number, 'EvalPass'>;
 /** Identity of one poke walk; monotonic, never reused, so no per-walk
  * clearing is needed (same discipline as EvalPass). */
 export type PokePass = Brand<number, 'PokePass'>;
+export type BatchPass = Brand<number, 'BatchPass'>;
 
 /**
  * One flag bit. `Flag` names a bit; `Flags` (the stored word) stays a
@@ -241,6 +242,11 @@ export interface CellNode<T> extends ReactiveNode {
   value: T | typeof UNINITIALIZED;
   initializer: (() => T) | undefined;
   equals: EqualsFn<T>;
+  /** Reading of the batch pass whose base state this cell already saved —
+   * equality with the running batchPass means the batchBase entry exists, so
+   * repeat writes in the same batch skip the map probe (same convention as
+   * pokePass: the record holds the reading of the last pass that touched it). */
+  batchPass: BatchPass;
   lifetime: ((ctx: { get(): T; set(v: T): void }) => void | (() => void)) | undefined;
   lifetimeCleanup: (() => void) | undefined;
   lifetimeActive: boolean;
@@ -305,6 +311,7 @@ export function makeCell<T>(
     value: lazyInit ? UNINITIALIZED : (initial as T),
     initializer: lazyInit ? (initial as () => T) : undefined,
     equals: opts?.equals ?? defaultEquals,
+    batchPass: 0,
     lifetime: opts?.onObserved,
     lifetimeCleanup: undefined,
     lifetimeActive: false,
@@ -817,7 +824,13 @@ const batchBase = new Map<
   { value: unknown; changedAtGraphChange: GraphChangeClock }
 >();
 
+/** Identity of the current top-level batch scope; ticks when a batch opens
+ * at depth 0 (nested batches join the enclosing pass, matching batchBase's
+ * lifetime). Cells store their reading in cell.batchPass. */
+let batchPass: BatchPass = 0;
+
 export function startBatch(): void {
+  if (batchDepth === 0) batchPass++;
   batchDepth++;
 }
 
@@ -1015,7 +1028,10 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
   // arrives before the first read still runs the initializer.
   materializeCell(cell);
   if (cell.equals(cell.value as T, next)) return false;
-  if (batchDepth > 0 && !batchBase.has(cell as CellNode<unknown>)) {
+  if (batchDepth > 0 && cell.batchPass !== batchPass) {
+    // First write to this cell in this batch pass: save the pre-batch state.
+    // The pass stamp stands in for a batchBase.has probe on repeat writes.
+    cell.batchPass = batchPass;
     batchBase.set(cell as CellNode<unknown>, {
       value: cell.value,
       changedAtGraphChange: cell.changedAtGraphChange,
