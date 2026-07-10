@@ -19,6 +19,8 @@ import {
   type ReactiveNode,
   type UseFn,
   Flag,
+  assertSignalReadAllowed,
+  assertSignalWriteAllowed,
   flushLifetimeTransitions,
   getActiveConsumer,
   isUninitialized,
@@ -29,6 +31,7 @@ import {
   peekCell,
   readCell,
   readDerived,
+  runUpdater,
   startBatch as graphStartBatch,
   endBatch as graphEndBatch,
   batch as graphBatch,
@@ -103,10 +106,29 @@ export class Signal<T> {
   }
 }
 
+/** A signal whose dispatches replay through one reducer fixed at creation. */
+export class ReducerAtom<S, A> extends Signal<S> {
+  readonly reduce: (state: S, action: A) => S;
+
+  constructor(
+    reduce: (state: S, action: A) => S,
+    initial: S | (() => S),
+    opts?: SignalOptions<S>,
+  ) {
+    super(initial, opts);
+    this.reduce = reduce;
+  }
+
+  dispatch(action: A): void {
+    const reduce = this.reduce;
+    this.update((state) => reduce(state, action));
+  }
+}
+
 export class Computed<T> {
   /** @internal */
   readonly node: DerivedNode<T>;
-  constructor(fn: (use: UseFn) => T, opts?: ComputedOptions<T>) {
+  constructor(fn: (use: UseFn, previous: T | undefined) => T, opts?: ComputedOptions<T>) {
     this.node = makeDerived(fn, opts);
   }
   get(): T {
@@ -125,7 +147,10 @@ export function signal<T>(initial: T | (() => T), opts?: SignalOptions<T>): Sign
   return new Signal(initial, opts);
 }
 
-export function computed<T>(fn: (use: UseFn) => T, opts?: ComputedOptions<T>): Computed<T> {
+export function computed<T>(
+  fn: (use: UseFn, previous: T | undefined) => T,
+  opts?: ComputedOptions<T>,
+): Computed<T> {
   return new Computed(fn, opts);
 }
 
@@ -225,6 +250,7 @@ export function isPending(x: AnyReadable): boolean {
 /** Node-level pendingness probe; `world` scopes the suspended-memo check
  * (null = ambient). The React bindings' useIsPending snapshot. */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
+  assertSignalReadAllowed();
   if ((node.flags & Flag.KindCell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
   if ((node.flags & Flag.KindDerived) === 0) return false;
   // Pending means "stale data exists while newer data loads" (Solid 2.0's
@@ -260,6 +286,7 @@ function guardRenderWrite(): void {
 }
 
 function writeSignal<T>(x: Signal<T>, value: T): void {
+  assertSignalWriteAllowed();
   guardRenderWrite();
   const cell = x.node as CellNode<unknown>;
   const draft = classifyWrite();
@@ -276,6 +303,7 @@ function writeSignal<T>(x: Signal<T>, value: T): void {
 }
 
 function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
+  assertSignalWriteAllowed();
   guardRenderWrite();
   const cell = x.node as CellNode<unknown>;
   const draft = classifyWrite();
@@ -283,8 +311,9 @@ function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
     appendDraftIntent(draft, cell, 'update', fn);
     return;
   }
+  const next = runUpdater(fn, graphUntracked(() => peekCell(x.node)));
   const rebased = appendUrgentIntent(cell, 'update', fn);
-  const changed = writeCell(x.node, fn(graphUntracked(() => peekCell(x.node))));
+  const changed = writeCell(x.node, next);
   if (rebased && !changed) pokeRebasedCell(cell);
 }
 
@@ -339,6 +368,7 @@ export function serializeAtomState(
 /** Install a value without running lazy initializers and without counting
  * as a write: no propagation, no equality check, no effects. */
 export function installState<T>(atom: Signal<T>, value: T): void {
+  assertSignalWriteAllowed();
   atom.node.initializer = undefined;
   atom.node.value = value;
 }

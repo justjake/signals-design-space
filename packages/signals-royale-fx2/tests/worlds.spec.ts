@@ -1,6 +1,7 @@
 /** Engine-level world semantics: drafts, replay order, fold, views. */
 import { describe, expect, test } from 'vitest';
 import {
+  ReducerAtom,
   computed,
   effect,
   isPending,
@@ -107,6 +108,51 @@ describe('draft visibility', () => {
 });
 
 describe('dispatch-order replay (React updater-queue arithmetic)', () => {
+  test('custom equality is applied after every visible intent', () => {
+    const base = { value: 1, source: 'base' };
+    const equal = { value: 1, source: 'equal-set' };
+    const a = signal(base, { equals: (left, right) => left.value === right.value });
+    const id = inDraft(() => {
+      a.set(equal);
+      a.update((previous) => ({
+        value: previous === base ? 2 : 3,
+        source: previous.source,
+      }));
+    });
+    expect(stateIn(a, [id])).toEqual(valueState({ value: 2, source: 'base' }));
+    retireDraft(id);
+    expect(a.get()).toEqual({ value: 2, source: 'base' });
+  });
+
+  test('a drafted updater cannot read a signal when replayed', () => {
+    const source = signal(10);
+    const target = signal(1);
+    const id = inDraft(() => target.update((value) => value + source.get()));
+    expect(() => stateIn(target, [id])).toThrow(/reads are not allowed/);
+    expect(target.get()).toBe(1);
+    discardDraft(id);
+  });
+
+  test('a rejected urgent updater does not append to an existing rebase log', () => {
+    const source = signal(10);
+    const target = signal(1);
+    const id = inDraft(() => target.set(2));
+    expect(() => target.update((value) => value + source.get())).toThrow(/reads are not allowed/);
+    expect(target.get()).toBe(1);
+    expect(stateIn(target, [id])).toEqual(valueState(2));
+    discardDraft(id);
+  });
+
+  test('ReducerAtom dispatches replay in intent order', () => {
+    const count = new ReducerAtom((state: number, action: number) => state + action, 1);
+    const id = inDraft(() => count.dispatch(2));
+    count.dispatch(10);
+    expect(count.get()).toBe(11);
+    expect(stateIn(count, [id])).toEqual(valueState(13));
+    retireDraft(id);
+    expect(count.get()).toBe(13);
+  });
+
   test('transition +1 then urgent *2: urgent shows 2, world shows (1+1)*2', () => {
     const a = signal(1);
     const id = inDraft(() => a.update((x) => x + 1));
@@ -168,6 +214,42 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 });
 
 describe('computeds across worlds', () => {
+  test('a draft evaluation receives the last settled canonical value as previous', () => {
+    const a = signal(1);
+    const seen: Array<number | undefined> = [];
+    const c = computed<number>((_use, previous) => {
+      seen.push(previous);
+      return a.get() * 2;
+    });
+    expect(c.get()).toBe(2);
+    const id = inDraft(() => a.set(3));
+    expect(stateIn(c, [id])).toEqual(valueState(6));
+    expect(seen).toEqual([undefined, 2]);
+    retireDraft(id);
+  });
+
+  test('writes are also forbidden during draft-world computed evaluation', () => {
+    const source = signal(0);
+    const target = signal(0);
+    const writer = computed(() => {
+      source.get();
+      target.set(1);
+      return 1;
+    });
+    expect(() => writer.get()).toThrow(/writes inside computeds are forbidden/);
+    const id = inDraft(() => source.set(1));
+    let error: unknown;
+    try {
+      latest(writer);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(target.get()).toBe(0);
+    discardDraft(id);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/writes inside computeds are forbidden/);
+  });
+
   test('a computed resolves per world, with per-world dependency branches', () => {
     const flag = signal(false);
     const left = signal('L');

@@ -248,7 +248,7 @@ export interface CellNode<T> extends ReactiveNode {
 
 export interface DerivedNode<T> extends ReactiveNode {
   value: T | typeof UNINITIALIZED;
-  fn: (use: UseFn) => T;
+  fn: (use: UseFn, previous: T | undefined) => T;
   equals: EqualsFn<T>;
   /** GraphChangeClock reading at last successful validation — the unwatched
    * tier's currency gate (validAtGraphChange === clock ⇒ nothing relevant
@@ -311,7 +311,7 @@ export function makeCell<T>(
 }
 
 export function makeDerived<T>(
-  fn: (use: UseFn) => T,
+  fn: (use: UseFn, previous: T | undefined) => T,
   opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
   return {
@@ -927,38 +927,83 @@ export function flush(): void {
 // ---------------------------------------------------------------------------
 
 export class WriteForbiddenError extends Error {}
+/** Policy only. The graph's self-affecting-computed mechanism remains intact;
+ * changing this to false restores writes from computeds without changing the
+ * evaluation or validation machinery. */
+export const FORBID_WRITE_FROM_COMPUTED: boolean = true;
+
+let readsForbidden: string | null = null;
 let writesForbidden: string | null = null;
+
+export function assertSignalReadAllowed(): void {
+  if (readsForbidden !== null) throw new Error(readsForbidden);
+}
+
+export function assertSignalWriteAllowed(): void {
+  if (writesForbidden !== null) throw new WriteForbiddenError(writesForbidden);
+  if (
+    FORBID_WRITE_FROM_COMPUTED &&
+    activeConsumer !== null &&
+    (activeConsumer.flags & Flag.KindDerived) !== 0
+  ) {
+    throw new WriteForbiddenError('writes inside computeds are forbidden');
+  }
+}
+
+export function setWritesForbidden(reason: string | null): string | null {
+  const prev = writesForbidden;
+  writesForbidden = reason;
+  return prev;
+}
+
+export function runUpdater<T>(fn: (value: T) => T, value: T): T {
+  const prevReads = readsForbidden;
+  const prevWrites = writesForbidden;
+  readsForbidden = 'signal reads are not allowed inside an updater or reducer';
+  writesForbidden = 'signal writes are not allowed inside an updater or reducer';
+  try {
+    return fn(value);
+  } finally {
+    readsForbidden = prevReads;
+    writesForbidden = prevWrites;
+  }
+}
 
 function materializeCell<T>(cell: CellNode<T>): void {
   if (cell.value !== UNINITIALIZED) return;
-  const init = cell.initializer!;
+  const init = cell.initializer;
+  if (init === undefined) throw new Error('cyclic lazy initializer');
   cell.initializer = undefined;
   const prevConsumer = activeConsumer;
-  const prevForbidden = writesForbidden;
+  const prevForbidden = setWritesForbidden('a lazy state initializer must not write to other state');
   activeConsumer = null;
-  writesForbidden = 'a lazy state initializer must not write to other state';
   try {
     cell.value = init();
+  } catch (error) {
+    cell.initializer = init;
+    throw error;
   } finally {
     activeConsumer = prevConsumer;
-    writesForbidden = prevForbidden;
+    setWritesForbidden(prevForbidden);
   }
 }
 
 /** Untracked base-value read; materializes a lazy cell. */
 export function peekCell<T>(cell: CellNode<T>): T {
+  assertSignalReadAllowed();
   materializeCell(cell);
   return cell.value as T;
 }
 
 export function readCell<T>(cell: CellNode<T>): T {
+  assertSignalReadAllowed();
   materializeCell(cell);
   if (activeConsumer !== null) trackRead(cell, activeConsumer);
   return cell.value as T;
 }
 
 export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
-  if (writesForbidden !== null) throw new WriteForbiddenError(writesForbidden);
+  assertSignalWriteAllowed();
   // The equality contract compares against the base value, so a write that
   // arrives before the first read still runs the initializer.
   materializeCell(cell);
@@ -1025,7 +1070,10 @@ function recompute(node: DerivedNode<unknown>): void {
   let error: unknown;
   let value: unknown;
   try {
-    value = node.fn((t) => useImpl(t, node) as never);
+    value = node.fn(
+      (t) => useImpl(t, node) as never,
+      node.value === UNINITIALIZED ? undefined : node.value,
+    );
   } catch (e) {
     if (e === PARKED) parked = true;
     else {
@@ -1087,6 +1135,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 }
 
 export function readDerived<T>(node: DerivedNode<T>): T {
+  assertSignalReadAllowed();
   ensureFresh(node as DerivedNode<unknown>);
   if (activeConsumer !== null) trackRead(node, activeConsumer);
   return node.value as T;

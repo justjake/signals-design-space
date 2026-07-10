@@ -34,13 +34,18 @@ import {
   type ReactiveNode,
   type TraceEventId,
   type GraphChangeClock,
+  FORBID_WRITE_FROM_COMPUTED,
   Flag,
   NO_EVENT,
+  assertSignalReadAllowed,
   currentGraphChange,
   ensureFresh,
+  isUninitialized,
   peekCell,
   pokeDraftWatchers,
+  runUpdater,
   setCurrentCause,
+  setWritesForbidden,
   startBatch,
   endBatch,
   traceHook,
@@ -219,7 +224,11 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
       d.state === 'retired' ||
       (world !== null && world.drafts.includes(d));
     if (!included) continue;
-    value = intent.kind === 'set' ? intent.payload : (intent.payload as (p: unknown) => unknown)(value);
+    const next =
+      intent.kind === 'set'
+        ? intent.payload
+        : runUpdater(intent.payload as (p: unknown) => unknown, value);
+    if (!cell.equals(value, next)) value = next;
   }
   return value;
 }
@@ -509,6 +518,7 @@ function reconcileStates(
  * nothing); drafted worlds replay intents (cells) or draft-evaluate
  * (deriveds) into memo records per (node, world signature). */
 export function resolveState(node: ReactiveNode, world: World): DerivedState {
+  assertSignalReadAllowed();
   if (world.drafts.length === 0) {
     untracked(() => {
       if ((node.flags & Flag.KindCell) !== 0) peekCell(node as CellNode<unknown>);
@@ -566,9 +576,13 @@ function draftEvaluate(
     throw WORLD_PARKED;
   };
   const prevPark = currentPark;
+  const prevWritesForbidden = FORBID_WRITE_FROM_COMPUTED
+    ? setWritesForbidden('writes inside computeds are forbidden')
+    : null;
   currentPark = worldUse;
   try {
-    const value = untracked(() => withWorld(world, () => node.fn(worldUse as never)));
+    const previous = isUninitialized(node.value) ? undefined : node.value;
+    const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)));
     return { flags: 0, value, throwable: null };
   } catch (e) {
     if (e === WORLD_PARKED) {
@@ -585,6 +599,7 @@ function draftEvaluate(
     return { flags: Flag.AsyncError, value: node.value, throwable: makeErrorBox(e) };
   } finally {
     currentPark = prevPark;
+    if (FORBID_WRITE_FROM_COMPUTED) setWritesForbidden(prevWritesForbidden);
     sigs.delete(world.sig);
     if (sigs.size === 0) draftEvalStack.delete(node);
   }

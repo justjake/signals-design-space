@@ -1,18 +1,20 @@
 /** Lifetime effects, lazy initializers, SSR, tracer. */
 import { describe, expect, test } from 'vitest';
 import {
+  ReducerAtom,
   attachTracer,
   computed,
   effect,
   initializeAtomState,
   installState,
+  isPending,
   nodeOf,
   read,
   serializeAtomState,
   signal,
   update,
 } from '../src/index.ts';
-import { observeNode } from '../src/graph.ts';
+import { FORBID_WRITE_FROM_COMPUTED, observeNode } from '../src/graph.ts';
 import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts';
 
 const tick = () => new Promise<void>((r) => setTimeout(r));
@@ -104,6 +106,23 @@ describe('lazy initializers', () => {
     expect(() => read(a)).toThrow(/initializer/);
   });
 
+  test('a throwing initializer retries on the next read', () => {
+    let runs = 0;
+    const a = signal(() => {
+      runs++;
+      if (runs === 1) throw new Error('flaky');
+      return 5;
+    });
+    expect(() => read(a)).toThrow('flaky');
+    expect(read(a)).toBe(5);
+    expect(runs).toBe(2);
+  });
+
+  test('a cyclic initializer throws a clear error', () => {
+    const a = signal((): number => a.get() + 1);
+    expect(() => read(a)).toThrow(/cyclic lazy initializer/);
+  });
+
   test('subscription materializes', () => {
     let runs = 0;
     const a = signal(() => {
@@ -113,6 +132,56 @@ describe('lazy initializers', () => {
     const unsub = observeNode(nodeOf(a), () => {});
     expect(runs).toBe(1);
     unsub();
+  });
+});
+
+describe('derived policy and APIs', () => {
+  test('previous is the last settled canonical value', () => {
+    const source = signal(1);
+    const seen: Array<number | undefined> = [];
+    const doubled = computed<number>((_use, previous) => {
+      seen.push(previous);
+      return source.get() * 2;
+    });
+    expect(doubled.get()).toBe(2);
+    source.set(3);
+    expect(doubled.get()).toBe(6);
+    expect(seen).toEqual([undefined, 2]);
+  });
+
+  test('updaters cannot read or write signals', () => {
+    const a = signal(1);
+    const b = signal(10);
+    expect(() => a.update((value) => value + b.get())).toThrow(/reads are not allowed/);
+    expect(() => a.update((value) => value + Number(isPending(b)))).toThrow(/reads are not allowed/);
+    expect(() =>
+      a.update((value) => {
+        b.set(20);
+        return value;
+      }),
+    ).toThrow(/writes are not allowed/);
+    expect(a.get()).toBe(1);
+    expect(b.get()).toBe(10);
+  });
+
+  test('writes inside computeds are forbidden by policy', () => {
+    expect(FORBID_WRITE_FROM_COMPUTED).toBe(true);
+    const target = signal(0);
+    const writer = computed(() => {
+      target.set(1);
+      return 1;
+    });
+    expect(() => writer.get()).toThrow(/writes inside computeds are forbidden/);
+    expect(target.get()).toBe(0);
+  });
+
+  test('ReducerAtom dispatches through its fixed reducer and inherits signal writes', () => {
+    const count = new ReducerAtom((state: number, action: number) => state + action, 10);
+    count.dispatch(5);
+    expect(count.get()).toBe(15);
+    count.set(1);
+    count.update((value) => value * 3);
+    expect(count.get()).toBe(3);
   });
 });
 
