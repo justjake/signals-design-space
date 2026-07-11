@@ -232,7 +232,7 @@ const observerCounts = new Int32Array(RECORD_CAPACITY)
 const causeEvents = new Int32Array(RECORD_CAPACITY)
 const pokePasses = new Int32Array(RECORD_CAPACITY)
 const batchPasses = new Int32Array(RECORD_CAPACITY)
-const pinnedInternals: Array<ReactiveNode | undefined> = []
+const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
 const M = graphMemory
 let nextRecord = RECORD_STRIDE
 let freeLinks: Link = 0
@@ -244,6 +244,7 @@ function allocRecord(): number {
 	if (nextRecord > M.length) {
 		throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
 	}
+	pinnedInternals.push(undefined)
 	return id
 }
 
@@ -1386,9 +1387,9 @@ function recompute(node: DerivedNode<unknown>): void {
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
-export function ensureFresh(node: DerivedNode<unknown>): void {
+export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): void {
 	const id = node.id
-	const flags = flagsOf(node)
+	const flags = knownFlags ?? M[id + NodeSlot.Flags]
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
 		if ((flags & Flag.StaleMask) === 0) {
@@ -1397,7 +1398,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 	} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
 		return
 	}
-	if ((flagsOf(node) & Flag.StaleDirty) !== 0 || node.value === UNINITIALIZED) {
+	if ((flags & Flag.StaleDirty) !== 0 || node.value === UNINITIALIZED) {
 		recompute(node)
 		return
 	}
@@ -1417,7 +1418,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 			(dflags & Flag.KindDerived) !== 0 &&
 			(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 		) {
-			ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>)
+			ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
 		}
 		if (graphClocks[(depId >> 1) + 3] > validAt) {
 			recompute(node)
@@ -1435,8 +1436,9 @@ export function readDerived<T>(node: DerivedNode<T>): T {
 	// Watched + Clean is the hot steady state (push marks are trustworthy,
 	// nothing to validate) — skip the ensureFresh call entirely. Everything
 	// else (stale, or unwatched needing the currency check) takes the call.
-	if ((flagsOf(node) & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
-		ensureFresh(node as DerivedNode<unknown>)
+	const flags = flagsOf(node)
+	if ((flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
+		ensureFresh(node as DerivedNode<unknown>, flags)
 	}
 	if (activeConsumer !== null) {
 		trackRead(node, activeConsumer)
@@ -1516,7 +1518,7 @@ function runWatcher(w: WatcherNode): void {
 				(dflags & Flag.KindDerived) !== 0 &&
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
-				ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>)
+				ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
 				if ((flagsOf(w) & Flag.Watched) === 0) {
 					return
 				} // disposed mid-validation
@@ -1709,7 +1711,8 @@ export function resetGraphForBenchmark(): void {
 	causeEvents.fill(0, 0, end)
 	pokePasses.fill(0, 0, end)
 	batchPasses.fill(0, 0, end)
-	pinnedInternals.length = 0
+	pinnedInternals.length = 1
+	pinnedInternals[0] = undefined
 	pendingRegistrations.length = 0
 	pendingRegistrationEnd = 0
 	registrationScheduled = false
