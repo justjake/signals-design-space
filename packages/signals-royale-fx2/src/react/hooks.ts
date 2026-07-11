@@ -303,6 +303,7 @@ export function useCommitted<T>(x: Readable<T>): T {
 /** A component-owned atom: created once, reclaimed after unmount by
  * dropping (no registry needed — see the engine's ownership model). */
 export function useAtom<T>(initial: T | (() => T), opts?: SignalOptions<T>): Signal<T> {
-	const [atom] = React.useState(() => signal(initial, opts))
-	return atom
+	const atomRef = React.useRef<Signal<T> | null>(null)
+	atomRef.current ??= signal(initial, opts)
+	return atomRef.current
 }
