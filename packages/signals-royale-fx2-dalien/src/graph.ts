@@ -143,7 +143,7 @@ export const enum NodeSlot {
 	DepsTail = 2,
 	Subs = 3,
 	SubsTail = 4,
-	RefCount = 5,
+	HostIndex = 5,
 	ChangedAt = 6,
 	FreeNext = Deps,
 }
@@ -166,6 +166,7 @@ const nodeFns: Array<((use: UseFn, previous: unknown) => unknown) | undefined> =
 
 export abstract class ReactiveNode {
 	declare readonly id: ReactiveNodeId
+	declare readonly hostIndex: number
 	declare throwable: ErrorBox | Suspension | null
 	declare label: string | undefined
 	declare worldMemos: Map<string, unknown> | null
@@ -204,34 +205,34 @@ export abstract class ReactiveNode {
 Object.defineProperties(ReactiveNode.prototype, {
 	value: {
 		get(this: ReactiveNode): unknown {
-			return nodeValues[this.id >> RECORD_SHIFT]
+			return nodeValues[this.hostIndex]
 		},
 		set(this: ReactiveNode, value: unknown) {
-			nodeValues[this.id >> RECORD_SHIFT] = value
+			nodeValues[this.hostIndex] = value
 		},
 	},
 	initializer: {
 		get(this: ReactiveNode): (() => unknown) | undefined {
-			return nodeInitializers[this.id >> RECORD_SHIFT]
+			return nodeInitializers[this.hostIndex]
 		},
 		set(this: ReactiveNode, value: (() => unknown) | undefined) {
-			nodeInitializers[this.id >> RECORD_SHIFT] = value
+			nodeInitializers[this.hostIndex] = value
 		},
 	},
 	equals: {
 		get(this: ReactiveNode): EqualsFn<unknown> {
-			return nodeEquals[this.id >> RECORD_SHIFT]!
+			return nodeEquals[this.hostIndex]!
 		},
 		set(this: ReactiveNode, value: EqualsFn<unknown>) {
-			nodeEquals[this.id >> RECORD_SHIFT] = value
+			nodeEquals[this.hostIndex] = value
 		},
 	},
 	fn: {
 		get(this: ReactiveNode): (use: UseFn, previous: unknown) => unknown {
-			return nodeFns[this.id >> RECORD_SHIFT]!
+			return nodeFns[this.hostIndex]!
 		},
 		set(this: ReactiveNode, value: (use: UseFn, previous: unknown) => unknown) {
-			nodeFns[this.id >> RECORD_SHIFT] = value
+			nodeFns[this.hostIndex] = value
 		},
 	},
 })
@@ -272,11 +273,13 @@ const observerCounts = new Int32Array(RECORD_CAPACITY)
 const causeEvents = new Int32Array(RECORD_CAPACITY)
 const pokePasses = new Int32Array(RECORD_CAPACITY)
 const batchPasses = new Int32Array(RECORD_CAPACITY)
+const refCounts = new Int32Array(RECORD_CAPACITY)
 const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
 const M = graphMemory
 let nextRecord = RECORD_STRIDE
 let freeLinks: Link = 0
 let freeNodes: ReactiveNodeId = 0
+let nextHostIndex = 1
 
 function allocRecord(): number {
 	const id = nextRecord
@@ -285,10 +288,6 @@ function allocRecord(): number {
 		throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
 	}
 	pinnedInternals.push(undefined)
-	nodeValues.push(undefined)
-	nodeInitializers.push(undefined)
-	nodeEquals.push(undefined)
-	nodeFns.push(undefined)
 	return id
 }
 
@@ -303,7 +302,7 @@ function allocLink(): Link {
 
 function freeLink(id: Link): void {
 	const dep = M[id + LinkSlot.LinkDep]
-	if (dep !== 0 && --M[dep + NodeSlot.RefCount] === 0) {
+	if (dep !== 0 && --refCounts[dep >> RECORD_SHIFT] === 0) {
 		pinnedInternals[dep >> RECORD_SHIFT] = undefined
 	}
 	M.fill(0, id, id + RECORD_STRIDE)
@@ -320,6 +319,17 @@ function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
 	M[id + NodeSlot.Flags] = flags
 	;(owner as { id: ReactiveNodeId }).id = id
 	return id
+}
+
+function allocHost(owner: ReactiveNode): number {
+	const id = owner.id
+	let hostIndex = M[id + NodeSlot.HostIndex]
+	if (hostIndex === 0) {
+		hostIndex = nextHostIndex++
+		M[id + NodeSlot.HostIndex] = hostIndex
+	}
+	;(owner as { hostIndex: number }).hostIndex = hostIndex
+	return hostIndex
 }
 
 function flagsOf(node: ReactiveNode): Flags {
@@ -461,12 +471,13 @@ export function initializeCell<T>(
 	const lazyInit = typeof initial === 'function'
 	allocNode(cell, Flag.KindCell)
 	queueNodeRegistration(cell)
-	const index = cell.id >> RECORD_SHIFT
+	const index = allocHost(cell)
 	cell.throwable = null
 	cell.label = opts?.label
 	nodeValues[index] = lazyInit ? UNINITIALIZED : initial
 	nodeInitializers[index] = lazyInit ? (initial as () => T) : undefined
 	nodeEquals[index] = opts?.equals ?? Object.is
+	nodeFns[index] = undefined
 	cell.lifetime = opts?.onObserved
 	cell.lifetimeCleanup = undefined
 	cell.lifetimeActive = false
@@ -488,10 +499,11 @@ export function initializeDerived<T>(
 ): DerivedNode<T> {
 	allocNode(node, Flag.KindDerived | Flag.StaleDirty)
 	queueNodeRegistration(node)
-	const index = node.id >> RECORD_SHIFT
+	const index = allocHost(node)
 	node.throwable = null
 	node.label = opts?.label
 	nodeValues[index] = UNINITIALIZED
+	nodeInitializers[index] = undefined
 	nodeFns[index] = fn as (use: UseFn, previous: unknown) => unknown
 	nodeEquals[index] = opts?.equals ?? Object.is
 	node.worldMemos = null
@@ -729,7 +741,7 @@ function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 	const link = allocLink()
 	M[link + LinkSlot.LinkDep] = depId
 	M[link + LinkSlot.LinkSub] = subId
-	if (++M[depId + NodeSlot.RefCount] === 1) {
+	if (++refCounts[depId >> RECORD_SHIFT] === 1) {
 		pinnedInternals[depId >> RECORD_SHIFT] = dep
 	}
 	M[link + LinkSlot.LinkNextDep] = next
@@ -1096,7 +1108,7 @@ export function endBatch(): void {
 	if (batchDepth === 0) {
 		if (batchBase.size > 0) {
 			for (const [cell, base] of batchBase) {
-				const index = cell.id >> RECORD_SHIFT
+				const index = cell.hostIndex
 				const value = nodeValues[index]
 				if (value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
 					// Invariant: a net-revert restores the changedAt reading — the
@@ -1261,7 +1273,7 @@ export function runUpdater<T>(fn: (value: T) => T, value: T): T {
 }
 
 function materializeCell<T>(cell: CellNode<T>): void {
-	const index = cell.id >> RECORD_SHIFT
+	const index = cell.hostIndex
 	if (nodeValues[index] !== UNINITIALIZED) {
 		return
 	}
@@ -1288,7 +1300,7 @@ function materializeCell<T>(cell: CellNode<T>): void {
 export function peekCell<T>(cell: CellNode<T>): T {
 	assertSignalReadAllowed()
 	materializeCell(cell)
-	return nodeValues[cell.id >> RECORD_SHIFT] as T
+	return nodeValues[cell.hostIndex] as T
 }
 
 export function readCell<T>(cell: CellNode<T>): T {
@@ -1297,7 +1309,7 @@ export function readCell<T>(cell: CellNode<T>): T {
 	if (activeConsumer !== null) {
 		trackRead(cell, activeConsumer)
 	}
-	return nodeValues[cell.id >> RECORD_SHIFT] as T
+	return nodeValues[cell.hostIndex] as T
 }
 
 export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
@@ -1306,21 +1318,22 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	// arrives before the first read still runs the initializer.
 	materializeCell(cell)
 	const id = cell.id
-	const index = id >> RECORD_SHIFT
-	const value = nodeValues[index] as T
-	if (nodeEquals[index]!(value, next)) {
+	const hostIndex = cell.hostIndex
+	const recordIndex = id >> RECORD_SHIFT
+	const value = nodeValues[hostIndex] as T
+	if (nodeEquals[hostIndex]!(value, next)) {
 		return false
 	}
-	if (batchDepth > 0 && batchPasses[index] !== batchPass) {
+	if (batchDepth > 0 && batchPasses[recordIndex] !== batchPass) {
 		// First write to this cell in this batch pass: save the pre-batch state.
 		// The pass stamp stands in for a batchBase.has probe on repeat writes.
-		batchPasses[index] = batchPass
+		batchPasses[recordIndex] = batchPass
 		batchBase.set(cell as CellNode<unknown>, {
 			value,
 			changedAtGraphChange: changedAtOf(id),
 		})
 	}
-	nodeValues[index] = next
+	nodeValues[hostIndex] = next
 	// Invariant: tick the clock FIRST, then stamp the change with the new
 	// reading — a change stamped at a pre-tick reading could compare equal to
 	// a subscriber that validated before this write.
@@ -1369,7 +1382,7 @@ export let finishComputeImpl: (
 	if (parked || hasError) {
 		throw hasError ? error : new Error('parked without async layer')
 	}
-	const index = node.id >> RECORD_SHIFT
+	const index = node.hostIndex
 	const prev = nodeValues[index]
 	if (prev === UNINITIALIZED || !nodeEquals[index]!(prev, value)) {
 		nodeValues[index] = value
@@ -1383,7 +1396,7 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 
 function recompute(node: DerivedNode<unknown>): void {
 	const id = node.id
-	const index = id >> RECORD_SHIFT
+	const hostIndex = node.hostIndex
 	let flags = flagsOf(node)
 	if ((flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -1403,8 +1416,8 @@ function recompute(node: DerivedNode<unknown>): void {
 	let error: unknown
 	let value: unknown
 	try {
-		const previous = nodeValues[index]
-		value = nodeFns[index]!(evalUse, previous === UNINITIALIZED ? undefined : previous)
+		const previous = nodeValues[hostIndex]
+		value = nodeFns[hostIndex]!(evalUse, previous === UNINITIALIZED ? undefined : previous)
 	} catch (e) {
 		if (e === PARKED) {
 			parked = true
@@ -1436,12 +1449,19 @@ function recompute(node: DerivedNode<unknown>): void {
 		node,
 		(flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0),
 	)
-	validAtClocks[index] = preGraphChange
+	validAtClocks[id >> RECORD_SHIFT] = preGraphChange
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
 export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): void {
-	const id = node.id
+	ensureFreshId(node.id, knownFlags, node)
+}
+
+function ensureFreshId(
+	id: ReactiveNodeId,
+	knownFlags?: Flags,
+	owner?: DerivedNode<unknown>,
+): void {
 	const flags = knownFlags ?? M[id + NodeSlot.Flags]
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
@@ -1451,7 +1471,13 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
 		return
 	}
-	if ((flags & Flag.StaleDirty) !== 0 || nodeValues[id >> RECORD_SHIFT] === UNINITIALIZED) {
+	// Validation can execute a dependency body that removes this node's last
+	// graph pin. Retain the owner across the frame before running user code.
+	const node = owner ?? (pinnedInternals[id >> RECORD_SHIFT] as DerivedNode<unknown>)
+	if (
+		(flags & Flag.StaleDirty) !== 0 ||
+		nodeValues[M[id + NodeSlot.HostIndex]] === UNINITIALIZED
+	) {
 		recompute(node)
 		return
 	}
@@ -1471,14 +1497,14 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 			(dflags & Flag.KindDerived) !== 0 &&
 			(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 		) {
-			ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
+			ensureFreshId(depId, dflags)
 		}
 		if (graphClocks[(depId >> 1) + 3] > validAt) {
 			recompute(node)
 			return
 		}
 	}
-	setFlags(node, flagsOf(node) & ~Flag.StaleMask)
+	M[id + NodeSlot.Flags] &= ~Flag.StaleMask
 	// Invariant: the watermark is stamped only AFTER every dep was freshened
 	// and compared (freshen-then-stamp order).
 	validAtClocks[id >> RECORD_SHIFT] = graphChangeClock
@@ -1491,12 +1517,12 @@ export function readDerived<T>(node: DerivedNode<T>): T {
 	// else (stale, or unwatched needing the currency check) takes the call.
 	const flags = flagsOf(node)
 	if ((flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
-		ensureFresh(node as DerivedNode<unknown>, flags)
+		ensureFreshId(node.id, flags, node as DerivedNode<unknown>)
 	}
 	if (activeConsumer !== null) {
 		trackRead(node, activeConsumer)
 	}
-	return nodeValues[node.id >> RECORD_SHIFT] as T
+	return nodeValues[node.hostIndex] as T
 }
 
 export function untracked<T>(fn: () => T): T {
@@ -1571,7 +1597,7 @@ function runWatcher(w: WatcherNode): void {
 				(dflags & Flag.KindDerived) !== 0 &&
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
-				ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
+				ensureFreshId(depId, dflags)
 				if ((flagsOf(w) & Flag.Watched) === 0) {
 					return
 				} // disposed mid-validation
@@ -1695,6 +1721,8 @@ function unlinkAllDeps(w: WatcherNode): void {
 }
 
 function reclaimNodeRecord(id: number): void {
+	const recordIndex = id >> RECORD_SHIFT
+	const hostIndex = M[id + NodeSlot.HostIndex]
 	let link = M[id + NodeSlot.Deps] || undefined
 	while (link !== undefined) {
 		const next = M[link + LinkSlot.LinkNextDep] || undefined
@@ -1706,18 +1734,21 @@ function reclaimNodeRecord(id: number): void {
 		freeLink(link)
 		link = next
 	}
-	pinnedInternals[id >> RECORD_SHIFT] = undefined
+	pinnedInternals[recordIndex] = undefined
 	M.fill(0, id, id + RECORD_STRIDE)
-	const index = id >> RECORD_SHIFT
-	validAtClocks[index] = 0
-	observerCounts[index] = 0
-	causeEvents[index] = 0
-	pokePasses[index] = 0
-	batchPasses[index] = 0
-	nodeValues[index] = undefined
-	nodeInitializers[index] = undefined
-	nodeEquals[index] = undefined
-	nodeFns[index] = undefined
+	M[id + NodeSlot.HostIndex] = hostIndex
+	validAtClocks[recordIndex] = 0
+	observerCounts[recordIndex] = 0
+	causeEvents[recordIndex] = 0
+	pokePasses[recordIndex] = 0
+	batchPasses[recordIndex] = 0
+	refCounts[recordIndex] = 0
+	if (hostIndex !== 0) {
+		nodeValues[hostIndex] = undefined
+		nodeInitializers[hostIndex] = undefined
+		nodeEquals[hostIndex] = undefined
+		nodeFns[hostIndex] = undefined
+	}
 	M[id + NodeSlot.FreeNext] = freeNodes
 	freeNodes = id
 }
@@ -1768,6 +1799,7 @@ export function resetGraphForBenchmark(): void {
 	causeEvents.fill(0, 0, end)
 	pokePasses.fill(0, 0, end)
 	batchPasses.fill(0, 0, end)
+	refCounts.fill(0, 0, end)
 	pinnedInternals.length = 1
 	pinnedInternals[0] = undefined
 	nodeValues.length = 1
@@ -1784,6 +1816,7 @@ export function resetGraphForBenchmark(): void {
 	nextRecord = RECORD_STRIDE
 	freeLinks = 0
 	freeNodes = 0
+	nextHostIndex = 1
 	nodeFinalizer = makeNodeFinalizer()
 	droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWatcher(w))
 }
@@ -1877,7 +1910,7 @@ export function observeNode(
 			// happened yet".
 			if (
 				(flagsOf(node) & Flag.StaleMask) !== 0 &&
-				nodeValues[node.id >> RECORD_SHIFT] !== UNINITIALIZED
+				nodeValues[node.hostIndex] !== UNINITIALIZED
 			) {
 				setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
 				causeEvents[subId >> RECORD_SHIFT] = causeEvents[node.id >> RECORD_SHIFT]
