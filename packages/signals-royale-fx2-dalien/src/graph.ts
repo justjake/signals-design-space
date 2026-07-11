@@ -159,11 +159,6 @@ export const enum LinkSlot {
 	FreeNext = 7,
 }
 
-const nodeValues: unknown[] = [undefined]
-const nodeInitializers: Array<(() => unknown) | undefined> = [undefined]
-const nodeEquals: Array<EqualsFn<unknown> | undefined> = [undefined]
-const nodeFns: Array<((use: UseFn, previous: unknown) => unknown) | undefined> = [undefined]
-
 export abstract class ReactiveNode {
 	declare readonly id: ReactiveNodeId
 	declare throwable: ErrorBox | Suspension | null
@@ -200,41 +195,6 @@ export abstract class ReactiveNode {
 		return validAtClocks[this.id >> RECORD_SHIFT]
 	}
 }
-
-Object.defineProperties(ReactiveNode.prototype, {
-	value: {
-		get(this: ReactiveNode): unknown {
-			return nodeValues[this.id >> RECORD_SHIFT]
-		},
-		set(this: ReactiveNode, value: unknown) {
-			nodeValues[this.id >> RECORD_SHIFT] = value
-		},
-	},
-	initializer: {
-		get(this: ReactiveNode): (() => unknown) | undefined {
-			return nodeInitializers[this.id >> RECORD_SHIFT]
-		},
-		set(this: ReactiveNode, value: (() => unknown) | undefined) {
-			nodeInitializers[this.id >> RECORD_SHIFT] = value
-		},
-	},
-	equals: {
-		get(this: ReactiveNode): EqualsFn<unknown> {
-			return nodeEquals[this.id >> RECORD_SHIFT]!
-		},
-		set(this: ReactiveNode, value: EqualsFn<unknown>) {
-			nodeEquals[this.id >> RECORD_SHIFT] = value
-		},
-	},
-	fn: {
-		get(this: ReactiveNode): (use: UseFn, previous: unknown) => unknown {
-			return nodeFns[this.id >> RECORD_SHIFT]!
-		},
-		set(this: ReactiveNode, value: (use: UseFn, previous: unknown) => unknown) {
-			nodeFns[this.id >> RECORD_SHIFT] = value
-		},
-	},
-})
 
 export interface CellNode<T> extends ReactiveNode {
 	value: T | typeof UNINITIALIZED
@@ -285,10 +245,6 @@ function allocRecord(): number {
 		throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
 	}
 	pinnedInternals.push(undefined)
-	nodeValues.push(undefined)
-	nodeInitializers.push(undefined)
-	nodeEquals.push(undefined)
-	nodeFns.push(undefined)
 	return id
 }
 
@@ -1705,10 +1661,6 @@ function reclaimNodeRecord(id: number): void {
 	causeEvents[index] = 0
 	pokePasses[index] = 0
 	batchPasses[index] = 0
-	nodeValues[index] = undefined
-	nodeInitializers[index] = undefined
-	nodeEquals[index] = undefined
-	nodeFns[index] = undefined
 	M[id + NodeSlot.FreeNext] = freeNodes
 	freeNodes = id
 }
@@ -1761,14 +1713,6 @@ export function resetGraphForBenchmark(): void {
 	batchPasses.fill(0, 0, end)
 	pinnedInternals.length = 1
 	pinnedInternals[0] = undefined
-	nodeValues.length = 1
-	nodeValues[0] = undefined
-	nodeInitializers.length = 1
-	nodeInitializers[0] = undefined
-	nodeEquals.length = 1
-	nodeEquals[0] = undefined
-	nodeFns.length = 1
-	nodeFns[0] = undefined
 	pendingRegistrations.length = 0
 	pendingRegistrationEnd = 0
 	registrationScheduled = false
