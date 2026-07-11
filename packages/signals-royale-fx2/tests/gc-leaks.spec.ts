@@ -100,12 +100,12 @@ describe('leak audit', () => {
 		runInDraft(d2, () => a.update((x) => x + 5))
 		resolveState(nodeOf(c), worldOf([d1.id]))
 		resolveState(nodeOf(c), worldOf([d1.id, d2.id]))
-		expect(nodeOf(c).worldMemos).not.toBeNull()
+		expect(nodeOf(c).worldMemos).toBeInstanceOf(Map)
 		retireDraft(d1.id)
-		expect(nodeOf(c).worldMemos).not.toBeNull() // d2 still live
+		expect(nodeOf(c).worldMemos).toBeInstanceOf(Map) // d2 still live
 		retireDraft(d2.id)
-		expect(nodeOf(c).worldMemos).toBeNull()
-		expect(nodeOf(a).worldMemos).toBeNull()
+		expect(nodeOf(c).worldMemos).toBeUndefined()
+		expect(nodeOf(a).worldMemos).toBeUndefined()
 		expect(liveDraftCount()).toBe(0)
 		expect(read(a)).toBe(6)
 	})

@@ -91,7 +91,7 @@ describe('unmount reclamation', () => {
 		await act(async () => {})
 		expect(text(container)).toContain('1')
 		expect(liveDraftCount()).toBe(0) // retired at commit: quiescent
-		expect(nodeOf(a).worldMemos).toBeNull()
+		expect(nodeOf(a).worldMemos).toBeUndefined()
 		await act(() => {
 			root.render(null)
 		})

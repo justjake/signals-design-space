@@ -394,7 +394,7 @@ function maybeQuiesce(): void {
 	}
 	rebaseLogs.clear()
 	for (const node of memoNodes) {
-		node.worldMemos = null
+		node.worldMemos = undefined
 	}
 	memoNodes.clear()
 }
@@ -771,7 +771,7 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 			certificate,
 			state,
 		}
-		if (node.worldMemos === null) {
+		if (node.worldMemos === undefined) {
 			node.worldMemos = new Map()
 			memoNodes.add(node)
 		}

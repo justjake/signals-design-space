@@ -113,7 +113,7 @@ const Signal = class<T> implements CellNode<T> {
 	declare lifetime: ((ctx: { get(): T; set(v: T): void }) => void | (() => void)) | undefined
 	declare lifetimeCleanup: (() => void) | undefined
 	declare lifetimeActive: boolean
-	declare worldMemos: Map<string, unknown> | null
+	declare worldMemos: Map<string, unknown> | undefined
 	declare pokePass: PokePass
 
 	constructor(initial: T | (() => T), opts?: SignalOptions<T>) {
@@ -135,7 +135,7 @@ const Signal = class<T> implements CellNode<T> {
 		this.lifetime = opts?.onObserved
 		this.lifetimeCleanup = undefined
 		this.lifetimeActive = false
-		this.worldMemos = null
+		this.worldMemos = undefined
 		this.pokePass = 0
 	}
 	/** Base-state read (tracked inside computations); in a draft evaluation,

@@ -184,8 +184,8 @@ export interface ReactiveNode {
 	/** Trace: event that caused the latest invalidation reaching this node. */
 	causeEvent: TraceEventId
 	label: string | undefined
-	/** World-resolution memos, managed by worlds.ts; null while quiescent. */
-	worldMemos: Map<string, unknown> | null
+	/** World-resolution memos, managed by worlds.ts; undefined while quiescent. */
+	worldMemos: Map<string, unknown> | undefined
 	/** Reading of the last poke walk that reached this node; equality with
 	 * the running pokePass means that walk already visited it. */
 	pokePass: PokePass
@@ -312,7 +312,7 @@ export function makeDerived<T>(
 		fn,
 		equals: opts?.equals ?? Object.is,
 		validAtGraphChange: 0,
-		worldMemos: null,
+		worldMemos: undefined,
 		pokePass: 0,
 	}
 }
@@ -1323,7 +1323,7 @@ function makeWatcher(
 		children: undefined,
 		onNotify: undefined,
 		onDraftWake: undefined,
-		worldMemos: null,
+		worldMemos: undefined,
 		pokePass: 0,
 	}
 }
