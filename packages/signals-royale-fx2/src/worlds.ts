@@ -164,7 +164,7 @@ function logFor(cell: CellNode<unknown>): RebaseLog {
 	if (log === undefined) {
 		// Capture the value BEFORE any drafted intent; materializes lazy cells
 		// (replay needs the starting value for the equality/update contract).
-		log = { valueBeforeDrafts: untracked(() => peekCell(cell)), intents: [] }
+		log = { valueBeforeDrafts: peekCell(cell), intents: [] }
 		rebaseLogs.set(cell, log)
 	}
 	return log
@@ -265,7 +265,7 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
 function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 	const log = rebaseLogs.get(cell)
 	if (log === undefined) {
-		return untracked(() => peekCell(cell))
+		return peekCell(cell)
 	}
 	let value = log.valueBeforeDrafts
 	for (const intent of log.intents) {

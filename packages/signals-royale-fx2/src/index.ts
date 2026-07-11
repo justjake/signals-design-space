@@ -108,7 +108,7 @@ export class Signal<T> {
 	}
 	/** Untracked base-state read. */
 	peek(): T {
-		return graphUntracked(() => peekCell(this.node))
+		return peekCell(this.node)
 	}
 }
 
@@ -343,10 +343,7 @@ export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
 		appendDraftIntent(draft, cell, 'update', fn)
 		return
 	}
-	const next = runUpdater(
-		fn,
-		graphUntracked(() => peekCell(x.node)),
-	)
+	const next = runUpdater(fn, peekCell(x.node))
 	const rebased = appendUrgentIntent(cell, 'update', fn)
 	const changed = writeCell(x.node, next)
 	if (rebased && !changed) {
@@ -390,7 +387,7 @@ export function serializeAtomState(
 ): string {
 	const out: Record<string, unknown> = {}
 	for (const [key, atom] of atomEntries(atoms)) {
-		out[key] = graphUntracked(() => peekCell(atom.node))
+		out[key] = peekCell(atom.node)
 	}
 	return JSON.stringify(out, replacer as never)
 }

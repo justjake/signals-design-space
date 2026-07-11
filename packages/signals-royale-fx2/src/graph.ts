@@ -514,7 +514,7 @@ export function flushLifetimeTransitions(): void {
 		cell.lifetimeActive = shouldBeActive
 		if (shouldBeActive) {
 			const ctx = {
-				get: () => untracked(() => peekCell(cell)),
+				get: () => peekCell(cell),
 				set: (v: unknown) => {
 					writeCell(cell, v)
 				},
