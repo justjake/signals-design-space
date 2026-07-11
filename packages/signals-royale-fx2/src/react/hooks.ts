@@ -65,6 +65,10 @@ type Readable<T> = Signal<T> | Computed<T>
 
 const NO_IDS: readonly DraftId[] = []
 
+function forceReducer(count: number): number {
+	return count + 1
+}
+
 /** The hooks have no mode without a SignalScope: the scope is the world
  * carrier, and a subscriber without one would have no channel for
  * transition worlds at all. Rendering a scope-consuming hook outside a
@@ -250,7 +254,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 export function useIsPending(x: AnyReadable): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireScope('useIsPending'), null)
-	const [, force] = React.useReducer((c: number) => c + 1, 0)
+	const [, force] = React.useReducer(forceReducer, 0)
 	const pending = isPendingPassive(node, null)
 	const shown = React.useRef(pending)
 	shown.current = pending
@@ -274,7 +278,7 @@ export function useCommitted<T>(x: Readable<T>): T {
 	const scope = requireScope('useCommitted')
 	noteHookRender(scope, null)
 	const container = scope.container ?? undefined
-	const [, force] = React.useReducer((c: number) => c + 1, 0)
+	const [, force] = React.useReducer(forceReducer, 0)
 	const snap = committedSnapshot(node, container)
 	const shown = React.useRef(snap)
 	shown.current = snap
