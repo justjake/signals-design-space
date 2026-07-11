@@ -263,8 +263,8 @@ export function dispatchUrgent(dispatch: () => void): void {
 }
 
 /** A repair wake: never a live draft id (draft ids start at 1), so the
- * reducer prunes it to a pure revision bump — an urgent re-render against
- * whatever the queues say the world is now. */
+ * reducer leaves it out of ids while returning a fresh wrapper — an urgent
+ * re-render against whatever the queues say the world is now. */
 export const REPAIR_WAKE: DraftId = 0
 
 interface RenderedResolution {

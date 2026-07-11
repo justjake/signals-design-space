@@ -2,8 +2,8 @@
  * SignalScope: the per-root world carrier.
  *
  * Its reducer state is the set of transition draft ids this root has been
- * told about (plus a revision counter, below). Because every draft dispatch
- * happens inside its transition's scope, React's own update queues decide
+ * told about. Because every draft dispatch happens inside its transition's
+ * scope, React's own update queues decide
  * which render passes see which ids: urgent passes skip pending transition
  * updates (world = committed base), the transition's own passes include
  * them, and a rebased retry recomputes the same queue over new state. That
@@ -18,10 +18,10 @@
  * and only components with their own pending updates render — value
  * subscribers are woken per drafted cell through their own reducers.
  *
- * The revision counter handles one hazard: a wake for a draft id the state
- * already contains (an append to an already-rendered draft) must still
- * produce a fresh state object, so React re-renders the transition's passes
- * against the completed batch — a pass never commits half a batch.
+ * The fresh state object handles one hazard: a wake for a draft id the state
+ * already contains (an append to an already-rendered draft) still re-renders
+ * the transition's passes against the completed batch — a pass never commits
+ * half a batch.
  */
 import * as React from 'react'
 import { NO_EVENT } from '../graph.ts'
@@ -31,23 +31,28 @@ import { confirmCommit, noteRenderWorld, registerProvider, type ProviderRecord }
 
 export interface WorldState {
 	ids: readonly DraftId[]
-	rev: number
 }
 
-export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 }
+export const EMPTY_WORLD: WorldState = { ids: [] }
 
 /** Shared by the scope and every useValue hook: accumulate live draft ids,
  * prune dead ones (retired and discarded drafts resolve to base state anyway,
  * and a long-lived subscriber must not grow history forever), and always
  * return a fresh object so a re-dispatched id still restarts the pass. */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-	const live = prev.ids.filter((d) => isLiveDraft(d))
-	const add = isLiveDraft(id) && !live.includes(id)
+	const live: DraftId[] = []
+	let add = isLiveDraft(id)
+	for (const draft of prev.ids) {
+		if (isLiveDraft(draft)) {
+			live.push(draft)
+			add = add && draft !== id
+		}
+	}
 	if (add) {
 		live.push(id)
 	}
 	const ids = !add && live.length === prev.ids.length ? prev.ids : live
-	return { ids, rev: prev.rev + 1 }
+	return { ids }
 }
 
 /** The scope's identity-stable record, or null outside any SignalScope.
