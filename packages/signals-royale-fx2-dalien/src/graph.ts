@@ -641,24 +641,36 @@ export function flushLifetimeTransitions(): void {
 	}
 }
 
-/** Record "sub read dep" for the eval in progress, reusing edges in place. */
-function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
+/** Record "sub read dep". The common repeat-read path stays small enough to
+ * inline into cell/computed reads; cursor movement and insertion are cold. */
+function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
 	const depId = dep.id
 	const subId = sub.id
-	const tail = depsTailOf(subId)
+	const tail: Link = M[subId + NodeSlot.DepsTail]
 	if (
-		tail !== undefined &&
-		linkDep(tail) === depId &&
+		tail !== 0 &&
+		M[tail + LinkSlot.LinkDep] === depId &&
 		M[tail + LinkSlot.LinkEvalPass] === evalPass
 	) {
-		return tail
+		return
 	}
-	const next = tail === undefined ? depsOf(subId) : M[tail + LinkSlot.LinkNextDep] || undefined
-	if (next !== undefined && linkDep(next) === depId) {
+	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
+	if (next !== 0 && M[next + LinkSlot.LinkDep] === depId) {
 		M[next + LinkSlot.LinkEvalPass] = evalPass
 		M[subId + NodeSlot.DepsTail] = next
-		return next
+		return
 	}
+	trackReadInsert(dep, sub, depId, subId, tail, next)
+}
+
+function trackReadInsert(
+	dep: ReactiveNode,
+	sub: ReactiveNode,
+	depId: ReactiveNodeId,
+	subId: ReactiveNodeId,
+	tail: Link,
+	next: Link,
+): void {
 	const watched = (flagsOf(sub) & Flag.Watched) !== 0
 	if (watched) {
 		// Same-pass dedup for non-adjacent re-reads: this sub's earlier link
@@ -674,7 +686,7 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 			linkSub(last) === subId &&
 			M[last + LinkSlot.LinkEvalPass] === evalPass
 		) {
-			return last
+			return
 		}
 	}
 	const link = allocLink()
@@ -683,9 +695,9 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 	if (++M[depId + NodeSlot.RefCount] === 1) {
 		pinnedInternals[depId >> RECORD_SHIFT] = dep
 	}
-	M[link + LinkSlot.LinkNextDep] = next ?? 0
+	M[link + LinkSlot.LinkNextDep] = next
 	M[link + LinkSlot.LinkEvalPass] = evalPass
-	if (tail === undefined) {
+	if (tail === 0) {
 		M[subId + NodeSlot.Deps] = link
 	} else {
 		M[tail + LinkSlot.LinkNextDep] = link
@@ -695,7 +707,6 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 		linkIntoSubs(link, sub)
 		addObserver(dep)
 	}
-	return link
 }
 
 /** Drop dependency edges not re-read by the eval that just finished. */
