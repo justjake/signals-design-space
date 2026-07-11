@@ -107,9 +107,9 @@ export class Signal<T> extends ReactiveNode implements CellNode<T> {
 		const world = getCurrentWorld()
 		if (world !== null) {
 			// Inside a draft evaluation every read resolves that world.
-			return unwrapForEval(resolveState(this.node, world), getCurrentPark()!) as T
+			return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
 		}
-		return readCell(this.node)
+		return readCell(this)
 	}
 	set(value: T): void {
 		set(this, value)
@@ -121,7 +121,7 @@ export class Signal<T> extends ReactiveNode implements CellNode<T> {
 	}
 	/** Untracked base-state read. */
 	peek(): T {
-		return peekCell(this.node)
+		return peekCell(this)
 	}
 }
 
@@ -153,7 +153,7 @@ export class Computed<T> extends ReactiveNode implements DerivedNode<T> {
 		initializeDerived(this, fn, opts)
 	}
 	get(): T {
-		const node = this.node
+		const node = this
 		const world = getCurrentWorld()
 		if (world !== null) {
 			// Inside a draft evaluation every read resolves that world.

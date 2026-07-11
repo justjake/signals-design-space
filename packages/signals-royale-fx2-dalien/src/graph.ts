@@ -644,11 +644,7 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
 	const depId = dep.id
 	const subId = sub.id
 	const tail: Link = M[subId + NodeSlot.DepsTail]
-	if (
-		tail !== 0 &&
-		M[tail + LinkSlot.LinkDep] === depId &&
-		M[tail + LinkSlot.LinkEvalPass] === evalPass
-	) {
+	if (tail !== 0 && M[tail + LinkSlot.LinkDep] === depId) {
 		return
 	}
 	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
@@ -657,18 +653,15 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
 		M[subId + NodeSlot.DepsTail] = next
 		return
 	}
-	trackReadInsert(dep, sub, depId, subId, tail, next)
+	trackReadInsert(dep, sub)
 }
 
-function trackReadInsert(
-	dep: ReactiveNode,
-	sub: ReactiveNode,
-	depId: ReactiveNodeId,
-	subId: ReactiveNodeId,
-	tail: Link,
-	next: Link,
-): void {
-	const watched = (flagsOf(sub) & Flag.Watched) !== 0
+function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
+	const depId = dep.id
+	const subId = sub.id
+	const tail: Link = M[subId + NodeSlot.DepsTail]
+	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
+	const watched = (M[subId + NodeSlot.Flags] & Flag.Watched) !== 0
 	if (watched) {
 		// Same-pass dedup for non-adjacent re-reads: this sub's earlier link
 		// sits at the dep's subs tail (cursor reuse re-marks, new watched edges
