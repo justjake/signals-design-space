@@ -139,30 +139,24 @@ export type Link = Brand<number, 'Link'>
 
 export const enum NodeSlot {
 	Flags = 0,
-	ChangedAt = 1,
-	Subs = 2,
-	SubsTail = 3,
-	Deps = 4,
-	DepsTail = 5,
-	ObserverCount = 6,
-	CauseEvent = 7,
-	PokePass = 8,
-	ValidAt = 9,
-	BatchPass = 10,
-	RefCount = 11,
-	Generation = 12,
-	FreeNext = 15,
+	Deps = 1,
+	DepsTail = 2,
+	Subs = 3,
+	SubsTail = 4,
+	RefCount = 5,
+	ChangedAt = 6,
+	FreeNext = Deps,
 }
 
 export const enum LinkSlot {
+	LinkEvalPass = 0,
 	LinkDep = 1,
 	LinkSub = 2,
-	LinkNextDep = 3,
-	LinkPrevSub = 4,
-	LinkNextSub = 5,
+	LinkPrevSub = 3,
+	LinkNextSub = 4,
+	LinkNextDep = 5,
 	LinkInSubs = 6,
-	LinkEvalPass = 7,
-	FreeNext = 15,
+	FreeNext = 7,
 }
 
 export abstract class ReactiveNode {
@@ -177,10 +171,10 @@ export abstract class ReactiveNode {
 		M[this.id + NodeSlot.Flags] = value
 	}
 	get changedAtGraphChange(): GraphChangeClock {
-		return M[this.id + NodeSlot.ChangedAt]
+		return graphClocks[(this.id >> 1) + 3]
 	}
 	set changedAtGraphChange(value: GraphChangeClock) {
-		M[this.id + NodeSlot.ChangedAt] = value
+		graphClocks[(this.id >> 1) + 3] = value
 	}
 	get subs(): Link | undefined {
 		return M[this.id + NodeSlot.Subs] || undefined
@@ -189,16 +183,16 @@ export abstract class ReactiveNode {
 		return M[this.id + NodeSlot.Deps] || undefined
 	}
 	get observerCount(): number {
-		return M[this.id + NodeSlot.ObserverCount]
+		return observerCounts[this.id >> RECORD_SHIFT]
 	}
 	get causeEvent(): TraceEventId {
-		return M[this.id + NodeSlot.CauseEvent]
+		return causeEvents[this.id >> RECORD_SHIFT]
 	}
 	set causeEvent(value: TraceEventId) {
-		M[this.id + NodeSlot.CauseEvent] = value
+		causeEvents[this.id >> RECORD_SHIFT] = value
 	}
 	get validAtGraphChange(): GraphChangeClock {
-		return M[this.id + NodeSlot.ValidAt]
+		return validAtClocks[this.id >> RECORD_SHIFT]
 	}
 }
 
@@ -225,12 +219,19 @@ export interface WatcherNode extends ReactiveNode {
 	onDraftWake: ((id: DraftId) => void) | undefined
 }
 
-export const RECORD_SHIFT = 4
+export const RECORD_SHIFT = 3
 const RECORD_STRIDE = 1 << RECORD_SHIFT
 // Fixed like dalien's arena generation: virtual pages are committed on touch.
 // This experiment deliberately omits growth so every hot access keeps a const
-// base binding. One million records is enough for the test and benchmark runs.
-export const graphMemory = new Int32Array(RECORD_STRIDE * 4_194_304)
+// base binding. Growth comes after the fixed-arena hot path is competitive.
+const RECORD_CAPACITY = 2_097_152
+export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
+const graphClocks = new Float64Array(graphMemory.buffer)
+const validAtClocks = new Float64Array(RECORD_CAPACITY)
+const observerCounts = new Int32Array(RECORD_CAPACITY)
+const causeEvents = new Int32Array(RECORD_CAPACITY)
+const pokePasses = new Int32Array(RECORD_CAPACITY)
+const batchPasses = new Int32Array(RECORD_CAPACITY)
 const pinnedInternals: Array<ReactiveNode | undefined> = []
 const M = graphMemory
 let nextRecord = RECORD_STRIDE
@@ -269,6 +270,7 @@ function allocNode(owner: ReactiveNode, flags: Flags, register = true): Reactive
 	const id = freeNodes !== 0 ? freeNodes : allocRecord()
 	if (freeNodes !== 0) {
 		freeNodes = M[id + NodeSlot.FreeNext]
+		M[id + NodeSlot.FreeNext] = 0
 	}
 	M[id + NodeSlot.Flags] = flags
 	;(owner as { id: ReactiveNodeId }).id = id
@@ -310,11 +312,11 @@ function subsTailOf(node: ReactiveNodeId): Link | undefined {
 }
 
 function changedAtOf(node: ReactiveNodeId): GraphChangeClock {
-	return M[node + NodeSlot.ChangedAt]
+	return graphClocks[(node >> 1) + 3]
 }
 
 function validAtOf(node: ReactiveNodeId): GraphChangeClock {
-	return M[node + NodeSlot.ValidAt]
+	return validAtClocks[node >> RECORD_SHIFT]
 }
 
 function linkDep(id: Link): ReactiveNodeId {
@@ -516,7 +518,8 @@ function unlinkFromSubs(link: Link): void {
  */
 export function addObserver(node: ReactiveNode): void {
 	const id = node.id
-	const observerCount = ++M[id + NodeSlot.ObserverCount]
+	const index = id >> RECORD_SHIFT
+	const observerCount = ++observerCounts[index]
 	if (observerCount === 1) {
 		M[id + NodeSlot.Flags] |= Flag.Watched
 		if ((M[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
@@ -527,7 +530,7 @@ export function addObserver(node: ReactiveNode): void {
 			// running eval is the validator — its finally stamps fresh staleness
 			// and a current validAt reading.
 			const validate = (M[id + NodeSlot.Flags] & Flag.Computing) === 0
-			const validAt = M[id + NodeSlot.ValidAt]
+			const validAt = validAtClocks[index]
 			let invalid = false
 			for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
 				linkIntoSubs(l, node)
@@ -562,7 +565,8 @@ export function addObserver(node: ReactiveNode): void {
  */
 export function removeObserver(node: ReactiveNode): void {
 	const id = node.id
-	const observerCount = --M[id + NodeSlot.ObserverCount]
+	const index = id >> RECORD_SHIFT
+	const observerCount = --observerCounts[index]
 	if (observerCount === 0) {
 		M[id + NodeSlot.Flags] &= ~Flag.Watched
 		if ((M[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
@@ -571,7 +575,8 @@ export function removeObserver(node: ReactiveNode): void {
 				const dep = linkDep(l)
 				removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
 			}
-			M[id + NodeSlot.ValidAt] = (M[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
+			validAtClocks[index] =
+				(M[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
 		}
 		noteLifetimeTransition(node)
 	}
@@ -617,7 +622,7 @@ export function flushLifetimeTransitions(): void {
 	const cells = [...pendingLifetimeCells]
 	pendingLifetimeCells.clear()
 	for (const cell of cells) {
-		const shouldBeActive = M[cell.id + NodeSlot.ObserverCount] > 0
+		const shouldBeActive = observerCounts[cell.id >> RECORD_SHIFT] > 0
 		if (shouldBeActive === cell.lifetimeActive) {
 			continue
 		}
@@ -855,7 +860,7 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 			}
 		} else {
 			M[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
-			M[sub + NodeSlot.CauseEvent] = cause
+			causeEvents[sub >> RECORD_SHIFT] = cause
 			if ((flags & Flag.Watching) !== 0) {
 				scheduleWatcher(sub, flags | Flag.StaleCheck)
 			} else if ((flags & Flag.KindDerived) !== 0) {
@@ -937,8 +942,9 @@ export function pokeDraftWatchers(
 		let stack: PokeFrame | undefined
 		top: do {
 			const sub = linkSub(cur)
-			if (M[sub + NodeSlot.PokePass] !== pass) {
-				M[sub + NodeSlot.PokePass] = pass
+			const subIndex = sub >> RECORD_SHIFT
+			if (pokePasses[subIndex] !== pass) {
+				pokePasses[subIndex] = pass
 				const flags = M[sub + NodeSlot.Flags]
 				if ((flags & Flag.WatchDraft) !== 0) {
 					const w = pinnedInternals[sub >> RECORD_SHIFT] as WatcherNode
@@ -952,7 +958,7 @@ export function pokeDraftWatchers(
 						}
 						scheduleWatcher(sub, nextFlags)
 						M[sub + NodeSlot.Flags] = nextFlags | Flag.Scheduled
-						M[sub + NodeSlot.CauseEvent] = cause
+						causeEvents[subIndex] = cause
 						if (wake !== undefined && w.onDraftWake !== undefined) {
 							;(wakes ??= []).push(w)
 						}
@@ -1021,9 +1027,9 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
 	graphChangeClock++
 	const id = node.id
 	setFlags(node, (flagsOf(node) & ~Flag.StaleMask) | Flag.StaleDirty)
-	M[id + NodeSlot.CauseEvent] = cause
+	causeEvents[id >> RECORD_SHIFT] = cause
 	// Invariant: changes are stamped with the CURRENT clock, after the tick.
-	M[id + NodeSlot.ChangedAt] = graphChangeClock
+	graphClocks[(id >> 1) + 3] = graphChangeClock
 	propagateWave(subsOf(id), cause)
 	if (batchDepth === 0) {
 		flush()
@@ -1063,7 +1069,7 @@ export function endBatch(): void {
 					// batch produced no real change, so consumers must validate as
 					// unchanged (the clock still ticked; they pay one reading compare).
 					if (cell.equals(cell.value, base.value)) {
-						M[cell.id + NodeSlot.ChangedAt] = base.changedAtGraphChange
+						graphClocks[(cell.id >> 1) + 3] = base.changedAtGraphChange
 					}
 				}
 			}
@@ -1268,10 +1274,11 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 		return false
 	}
 	const id = cell.id
-	if (batchDepth > 0 && M[id + NodeSlot.BatchPass] !== batchPass) {
+	const index = id >> RECORD_SHIFT
+	if (batchDepth > 0 && batchPasses[index] !== batchPass) {
 		// First write to this cell in this batch pass: save the pre-batch state.
 		// The pass stamp stands in for a batchBase.has probe on repeat writes.
-		M[id + NodeSlot.BatchPass] = batchPass
+		batchPasses[index] = batchPass
 		batchBase.set(cell as CellNode<unknown>, {
 			value: cell.value,
 			changedAtGraphChange: changedAtOf(id),
@@ -1282,7 +1289,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	// reading — a change stamped at a pre-tick reading could compare equal to
 	// a subscriber that validated before this write.
 	graphChangeClock++
-	M[id + NodeSlot.ChangedAt] = graphChangeClock
+	graphClocks[(id >> 1) + 3] = graphChangeClock
 	const cause = traceHook !== null ? traceHook('write', cell, currentCause) : NO_EVENT
 	propagateFrom(cell as CellNode<unknown>, cause)
 	return true
@@ -1381,7 +1388,7 @@ function recompute(node: DerivedNode<unknown>): void {
 	// not tick the clock, and any consumer that validated before this
 	// recompute holds a strictly older validAt reading.
 	if (changed) {
-		M[id + NodeSlot.ChangedAt] = graphChangeClock
+		graphClocks[(id >> 1) + 3] = graphChangeClock
 	}
 	// A computed whose evaluation wrote state is self-affecting: its inputs
 	// moved under it, so it never caches — every read re-evaluates.
@@ -1390,7 +1397,7 @@ function recompute(node: DerivedNode<unknown>): void {
 		node,
 		(flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0),
 	)
-	M[id + NodeSlot.ValidAt] = preGraphChange
+	validAtClocks[id >> RECORD_SHIFT] = preGraphChange
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
@@ -1415,7 +1422,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 	// FRESHENED before its reading is compared — a lazy dep may recompute
 	// right here, stamping its changedAt with the current clock, and the
 	// strictly-greater test then reports it correctly.
-	const validAt = M[id + NodeSlot.ValidAt]
+	const validAt = validAtClocks[id >> RECORD_SHIFT]
 	for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
 		const depId = linkDep(l)
 		// Same watched-Clean skip as readDerived: such a dep has nothing to
@@ -1427,7 +1434,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 		) {
 			ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>)
 		}
-		if (M[depId + NodeSlot.ChangedAt] > validAt) {
+		if (graphClocks[(depId >> 1) + 3] > validAt) {
 			recompute(node)
 			return
 		}
@@ -1435,7 +1442,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 	setFlags(node, flagsOf(node) & ~Flag.StaleMask)
 	// Invariant: the watermark is stamped only AFTER every dep was freshened
 	// and compared (freshen-then-stamp order).
-	M[id + NodeSlot.ValidAt] = graphChangeClock
+	validAtClocks[id >> RECORD_SHIFT] = graphChangeClock
 }
 
 export function readDerived<T>(node: DerivedNode<T>): T {
@@ -1514,7 +1521,7 @@ function runWatcher(w: WatcherNode): void {
 	// that disposes this very watcher — re-check after every pull.
 	if ((flagsOf(w) & Flag.StaleCheck) !== 0) {
 		let changed = false
-		const validAt = M[id + NodeSlot.ValidAt]
+		const validAt = validAtClocks[id >> RECORD_SHIFT]
 		for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
 			const depId = linkDep(l)
 			// Same watched-Clean skip as readDerived: such a dep has nothing to
@@ -1529,7 +1536,7 @@ function runWatcher(w: WatcherNode): void {
 					return
 				} // disposed mid-validation
 			}
-			if (M[depId + NodeSlot.ChangedAt] > validAt) {
+			if (graphClocks[(depId >> 1) + 3] > validAt) {
 				changed = true
 				break
 			}
@@ -1538,7 +1545,7 @@ function runWatcher(w: WatcherNode): void {
 			setFlags(w, flagsOf(w) & ~Flag.StaleMask)
 			// Invariant: watermark stamped only after every dep was freshened and
 			// compared (freshen-then-stamp order) — same rule as ensureFresh.
-			M[id + NodeSlot.ValidAt] = graphChangeClock
+			validAtClocks[id >> RECORD_SHIFT] = graphChangeClock
 			return
 		}
 	}
@@ -1582,7 +1589,8 @@ function executeWatcher(w: WatcherNode): void {
 	activeScope = w
 	const myPass = newEvalPass()
 	M[id + NodeSlot.DepsTail] = 0
-	const cause = traceHook !== null ? traceHook('effect-run', w, M[id + NodeSlot.CauseEvent]) : NO_EVENT
+	const cause =
+		traceHook !== null ? traceHook('effect-run', w, causeEvents[id >> RECORD_SHIFT]) : NO_EVENT
 	// The validation reading is taken at the PRE-run clock: if the body
 	// itself writes, its deps may have moved under it, and the wave its write
 	// pushed re-schedules this watcher — whose next validation must then see
@@ -1600,7 +1608,7 @@ function executeWatcher(w: WatcherNode): void {
 		activeConsumer = prevConsumer
 		activeScope = prevScope
 		trimDeps(w)
-		M[id + NodeSlot.ValidAt] = preGraphChange
+		validAtClocks[id >> RECORD_SHIFT] = preGraphChange
 	}
 }
 
@@ -1661,6 +1669,12 @@ function reclaimNodeRecord(id: number): void {
 	}
 	pinnedInternals[id >> RECORD_SHIFT] = undefined
 	M.fill(0, id, id + RECORD_STRIDE)
+	const index = id >> RECORD_SHIFT
+	validAtClocks[index] = 0
+	observerCounts[index] = 0
+	causeEvents[index] = 0
+	pokePasses[index] = 0
+	batchPasses[index] = 0
 	M[id + NodeSlot.FreeNext] = freeNodes
 	freeNodes = id
 }
@@ -1695,6 +1709,12 @@ function drainPendingRegistrations(): void {
  * already be unreachable. This keeps arena capacity out of multi-case runs. */
 export function resetGraphForBenchmark(): void {
 	M.fill(0, 0, nextRecord)
+	const end = nextRecord >> RECORD_SHIFT
+	validAtClocks.fill(0, 0, end)
+	observerCounts.fill(0, 0, end)
+	causeEvents.fill(0, 0, end)
+	pokePasses.fill(0, 0, end)
+	batchPasses.fill(0, 0, end)
 	pinnedInternals.length = 0
 	pendingRegistrations.length = 0
 	pendingRegistrationEnd = 0
@@ -1798,7 +1818,7 @@ export function observeNode(
 				(node as DerivedNode<unknown>).value !== UNINITIALIZED
 			) {
 				setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
-				M[subId + NodeSlot.CauseEvent] = M[node.id + NodeSlot.CauseEvent]
+				causeEvents[subId >> RECORD_SHIFT] = causeEvents[node.id >> RECORD_SHIFT]
 				scheduleWatcher(subId, flagsOf(sub))
 			}
 		}
