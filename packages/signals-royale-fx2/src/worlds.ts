@@ -748,13 +748,11 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
 	if (world.drafts.length === 0) {
-		untracked(() => {
-			if ((node.flags & Flag.KindCell) !== 0) {
-				peekCell(node as CellNode<unknown>)
-			} else {
-				ensureFresh(node as DerivedNode<unknown>)
-			}
-		})
+		if ((node.flags & Flag.KindCell) !== 0) {
+			peekCell(node as CellNode<unknown>)
+		} else {
+			untracked(() => ensureFresh(node as DerivedNode<unknown>))
+		}
 		recordSource(node)
 		return node as CellNode<unknown> | DerivedNode<unknown>
 	}
