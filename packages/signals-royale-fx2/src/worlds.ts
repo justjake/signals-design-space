@@ -645,14 +645,6 @@ export function peekWorldMemo(node: ReactiveNode, sig: string): DerivedState | u
 	return memoFor(node, sig)?.state
 }
 
-function storeMemo(node: ReactiveNode, sig: string, memo: WorldMemo): void {
-	if (node.worldMemos === null) {
-		node.worldMemos = new Map()
-		memoNodes.add(node)
-	}
-	node.worldMemos.set(sig, memo)
-}
-
 function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 	const graphChange = currentGraphChange()
 	if (memo.validAtGraphChange === graphChange && memo.validAtDraftChange === draftChangeClock) {
@@ -721,17 +713,6 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
 	}
 }
 
-/** State identity stability: keep the previous state record when the fresh
- * resolution is indistinguishable, so subscribers comparing snapshots by
- * identity do not re-render for no reason. */
-function reconcileStates(
-	node: ReactiveNode,
-	prev: DerivedState | undefined,
-	next: DerivedState,
-): DerivedState {
-	return prev !== undefined && statesEqual(node, prev, next) ? prev : next
-}
-
 /** Resolve a node's value as seen by a world. The base world hits the
  * ordinary graph and returns the NODE ITSELF as the state view (cells and
  * deriveds carry the DerivedState shape; the trivial read allocates
@@ -781,7 +762,13 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	} else {
 		fresh = draftEvaluate(node as DerivedNode<unknown>, world, memo?.state, certificate)
 	}
-	const state = reconcileStates(node, memo?.state, fresh)
+	// Keep the previous state record when the fresh resolution is
+	// indistinguishable, so identity-comparing subscribers do not re-render.
+	const previousState = memo?.state
+	const state =
+		previousState !== undefined && statesEqual(node, previousState, fresh)
+			? previousState
+			: fresh
 	if (memo === undefined) {
 		memo = {
 			validAtGraphChange: currentGraphChange(),
@@ -790,7 +777,11 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 			certificate,
 			state,
 		}
-		storeMemo(node, world.sig, memo)
+		if (node.worldMemos === null) {
+			node.worldMemos = new Map()
+			memoNodes.add(node)
+		}
+		node.worldMemos.set(world.sig, memo)
 	} else {
 		memo.validAtGraphChange = currentGraphChange()
 		memo.validAtDraftChange = draftChangeClock
