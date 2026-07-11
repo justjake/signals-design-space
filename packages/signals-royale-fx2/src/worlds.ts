@@ -159,17 +159,6 @@ export function sealDraft(draft: Draft): void {
 	}
 }
 
-function logFor(cell: CellNode<unknown>): RebaseLog {
-	let log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		// Capture the value BEFORE any drafted intent; materializes lazy cells
-		// (replay needs the starting value for the equality/update contract).
-		log = { valueBeforeDrafts: peekCell(cell), intents: [] }
-		rebaseLogs.set(cell, log)
-	}
-	return log
-}
-
 /** Record a drafted write intent. Draft watchers (isPending probes, latest()
  * viewers) get poked; base values do not move. Subscribers of the cell
  * — and of watched computeds over it — additionally receive the draft id on
@@ -185,9 +174,15 @@ export function appendDraftIntent(
 	if (draft.state !== 'open') {
 		throw new Error('cannot write into a batch that already ended')
 	}
+	let log = rebaseLogs.get(cell)
+	if (log === undefined) {
+		// Capture the value BEFORE any drafted intent; materializes lazy cells
+		// (replay needs the starting value for the equality/update contract).
+		log = { valueBeforeDrafts: peekCell(cell), intents: [] }
+		rebaseLogs.set(cell, log)
+	}
 	// Array order is dispatch order; retirement flips visibility, never
 	// position.
-	const log = logFor(cell)
 	log.intents.push({ kind, payload, draft })
 	draft.cells.add(cell)
 	draftChangeClock++
