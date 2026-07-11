@@ -7,6 +7,8 @@ One durable row per completed round. Working raw evidence lives in
 | --- | --- | --- | --- | --- |
 | 01 | `1831581a9c6a515b5553d6bcc3a9f325e024964e` | Rejected `liveDrafts` + `Draft.cells` recipient selection; no production change retained | History-heavy median 44.618 -> 1.263 ms (-97.2%); 1,000 unrelated drafts 2.762 -> 44.748 ms (16.2x regression) | `REJECT`: replaced O(cell history) with O(all live drafts); avoiding both requires mirrored membership state or a dual-path policy |
 | 02 | `31e1bbdd6cf7e0076e77f9bf061f80671b14796c` | Deleted unread `WorldState.rev`; fused live-ID filtering and membership detection; removed stale revision prose | Repeated-live-ID median 116.497 -> 84.403 ms (-27.6%); final controller median 85.025 ms (-27.0%) | `APPROVE` / `APPROVE`: `ids` is the payload, fresh wrapper identity prevents the render-time bailout; full final gate passed |
+| 03 | `4c0e842d47f876ef3d0c2bc2e1036ee5e92a385d` | Rejected per-cell rebase-log selection for `draftsAffecting`; no production change retained | Sparse median 203.796 -> 5.869 ms (-97.1%); retained-history control 3.356 -> 365.891 ms (109.0x regression) | `REJECT`: traded global live-draft scale for unbounded retained intent history; a robust repair requires the forbidden index or hybrid policy |
+| 04 | `65aaaf04c3d787ad02f904be5ed081d3cfb2e6ac` | Reused the stable `Draft.world` for the sole live draft; removed per-read single-draft world reconstruction | Single-draft `latest()` median 64.977 -> 29.518 ms (-54.6%); controller 29.653 ms (-54.4%); dual control remained parity | `APPROVE` / `APPROVE`: one owner now serves cutoff and ambient latest reads; full final gate passed |
 
 ## Near-miss ledger
 

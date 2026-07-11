@@ -89,8 +89,8 @@ export interface Draft {
 	/** The base clock at which this draft opened alone. Zero permanently
 	 * disables producer-side wake cutoffs after overlap. */
 	cutoffAtGraphChange: GraphChangeClock
-	/** Stable single-draft world used by the one-live-draft notification
-	 * cutoff. Its draft array is allocated once with the draft. */
+	/** Stable single-draft world shared by the notification cutoff and ambient
+	 * latest reads when this is the only live draft. */
 	world: World
 	/** Cells this draft wrote (for fold, poke, and log teardown). */
 	cells: Set<CellNode<unknown>>
@@ -903,6 +903,9 @@ export function unwrapForEval(
 export function latestWorld(): World {
 	if (liveDrafts.size === 0) {
 		return BASE_WORLD
+	}
+	if (liveDrafts.size === 1) {
+		return liveDrafts.values().next().value!.world
 	}
 	const drafts = [...liveDrafts.values()]
 	return { drafts, sig: drafts.map((d) => d.id).join(',') }
