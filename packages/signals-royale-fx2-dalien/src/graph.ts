@@ -161,7 +161,7 @@ export const enum LinkSlot {
 
 const nodeValues: unknown[] = [undefined]
 const nodeInitializers: Array<(() => unknown) | undefined> = [undefined]
-const nodeEquals: Array<EqualsFn<any> | undefined> = [undefined]
+const nodeEquals: Array<EqualsFn<unknown> | undefined> = [undefined]
 const nodeFns: Array<((use: UseFn, previous: unknown) => unknown) | undefined> = [undefined]
 
 export abstract class ReactiveNode {
@@ -461,12 +461,11 @@ export function initializeCell<T>(
 	const lazyInit = typeof initial === 'function'
 	allocNode(cell, Flag.KindCell)
 	queueNodeRegistration(cell)
-	const index = cell.id >> RECORD_SHIFT
 	cell.throwable = null
 	cell.label = opts?.label
-	nodeValues[index] = lazyInit ? UNINITIALIZED : initial
-	nodeInitializers[index] = lazyInit ? (initial as () => T) : undefined
-	nodeEquals[index] = opts?.equals ?? Object.is
+	cell.value = lazyInit ? UNINITIALIZED : (initial as T)
+	cell.initializer = lazyInit ? (initial as () => T) : undefined
+	cell.equals = opts?.equals ?? Object.is
 	cell.lifetime = opts?.onObserved
 	cell.lifetimeCleanup = undefined
 	cell.lifetimeActive = false
@@ -488,12 +487,11 @@ export function initializeDerived<T>(
 ): DerivedNode<T> {
 	allocNode(node, Flag.KindDerived | Flag.StaleDirty)
 	queueNodeRegistration(node)
-	const index = node.id >> RECORD_SHIFT
 	node.throwable = null
 	node.label = opts?.label
-	nodeValues[index] = UNINITIALIZED
-	nodeFns[index] = fn as (use: UseFn, previous: unknown) => unknown
-	nodeEquals[index] = opts?.equals ?? Object.is
+	node.value = UNINITIALIZED
+	node.fn = fn
+	node.equals = opts?.equals ?? Object.is
 	node.worldMemos = null
 	return node
 }
@@ -1096,13 +1094,11 @@ export function endBatch(): void {
 	if (batchDepth === 0) {
 		if (batchBase.size > 0) {
 			for (const [cell, base] of batchBase) {
-				const index = cell.id >> RECORD_SHIFT
-				const value = nodeValues[index]
-				if (value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
+				if (cell.value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
 					// Invariant: a net-revert restores the changedAt reading — the
 					// batch produced no real change, so consumers must validate as
 					// unchanged (the clock still ticked; they pay one reading compare).
-					if (nodeEquals[index]!(value, base.value)) {
+					if (cell.equals(cell.value, base.value)) {
 						graphClocks[(cell.id >> 1) + 3] = base.changedAtGraphChange
 					}
 				}
@@ -1261,22 +1257,21 @@ export function runUpdater<T>(fn: (value: T) => T, value: T): T {
 }
 
 function materializeCell<T>(cell: CellNode<T>): void {
-	const index = cell.id >> RECORD_SHIFT
-	if (nodeValues[index] !== UNINITIALIZED) {
+	if (cell.value !== UNINITIALIZED) {
 		return
 	}
-	const init = nodeInitializers[index]
+	const init = cell.initializer
 	if (init === undefined) {
 		throw new Error('cyclic lazy initializer')
 	}
-	nodeInitializers[index] = undefined
+	cell.initializer = undefined
 	const prevConsumer = activeConsumer
 	const prevForbidden = setWritesForbidden('a lazy state initializer must not write to other state')
 	activeConsumer = null
 	try {
-		nodeValues[index] = init()
+		cell.value = init()
 	} catch (error) {
-		nodeInitializers[index] = init
+		cell.initializer = init
 		throw error
 	} finally {
 		activeConsumer = prevConsumer
@@ -1288,7 +1283,7 @@ function materializeCell<T>(cell: CellNode<T>): void {
 export function peekCell<T>(cell: CellNode<T>): T {
 	assertSignalReadAllowed()
 	materializeCell(cell)
-	return nodeValues[cell.id >> RECORD_SHIFT] as T
+	return cell.value as T
 }
 
 export function readCell<T>(cell: CellNode<T>): T {
@@ -1297,7 +1292,7 @@ export function readCell<T>(cell: CellNode<T>): T {
 	if (activeConsumer !== null) {
 		trackRead(cell, activeConsumer)
 	}
-	return nodeValues[cell.id >> RECORD_SHIFT] as T
+	return cell.value as T
 }
 
 export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
@@ -1305,22 +1300,21 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	// The equality contract compares against the base value, so a write that
 	// arrives before the first read still runs the initializer.
 	materializeCell(cell)
-	const id = cell.id
-	const index = id >> RECORD_SHIFT
-	const value = nodeValues[index] as T
-	if (nodeEquals[index]!(value, next)) {
+	if (cell.equals(cell.value as T, next)) {
 		return false
 	}
+	const id = cell.id
+	const index = id >> RECORD_SHIFT
 	if (batchDepth > 0 && batchPasses[index] !== batchPass) {
 		// First write to this cell in this batch pass: save the pre-batch state.
 		// The pass stamp stands in for a batchBase.has probe on repeat writes.
 		batchPasses[index] = batchPass
 		batchBase.set(cell as CellNode<unknown>, {
-			value,
+			value: cell.value,
 			changedAtGraphChange: changedAtOf(id),
 		})
 	}
-	nodeValues[index] = next
+	cell.value = next
 	// Invariant: tick the clock FIRST, then stamp the change with the new
 	// reading — a change stamped at a pre-tick reading could compare equal to
 	// a subscriber that validated before this write.
@@ -1369,10 +1363,9 @@ export let finishComputeImpl: (
 	if (parked || hasError) {
 		throw hasError ? error : new Error('parked without async layer')
 	}
-	const index = node.id >> RECORD_SHIFT
-	const prev = nodeValues[index]
-	if (prev === UNINITIALIZED || !nodeEquals[index]!(prev, value)) {
-		nodeValues[index] = value
+	const prev = node.value
+	if (prev === UNINITIALIZED || !node.equals(prev, value)) {
+		node.value = value
 		return true
 	}
 	return false
@@ -1383,7 +1376,6 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 
 function recompute(node: DerivedNode<unknown>): void {
 	const id = node.id
-	const index = id >> RECORD_SHIFT
 	let flags = flagsOf(node)
 	if ((flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -1403,8 +1395,7 @@ function recompute(node: DerivedNode<unknown>): void {
 	let error: unknown
 	let value: unknown
 	try {
-		const previous = nodeValues[index]
-		value = nodeFns[index]!(evalUse, previous === UNINITIALIZED ? undefined : previous)
+		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
 	} catch (e) {
 		if (e === PARKED) {
 			parked = true
@@ -1436,7 +1427,7 @@ function recompute(node: DerivedNode<unknown>): void {
 		node,
 		(flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0),
 	)
-	validAtClocks[index] = preGraphChange
+	validAtClocks[id >> RECORD_SHIFT] = preGraphChange
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
@@ -1451,7 +1442,7 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
 		return
 	}
-	if ((flags & Flag.StaleDirty) !== 0 || nodeValues[id >> RECORD_SHIFT] === UNINITIALIZED) {
+	if ((flags & Flag.StaleDirty) !== 0 || node.value === UNINITIALIZED) {
 		recompute(node)
 		return
 	}
@@ -1496,7 +1487,7 @@ export function readDerived<T>(node: DerivedNode<T>): T {
 	if (activeConsumer !== null) {
 		trackRead(node, activeConsumer)
 	}
-	return nodeValues[node.id >> RECORD_SHIFT] as T
+	return node.value as T
 }
 
 export function untracked<T>(fn: () => T): T {
@@ -1877,7 +1868,7 @@ export function observeNode(
 			// happened yet".
 			if (
 				(flagsOf(node) & Flag.StaleMask) !== 0 &&
-				nodeValues[node.id >> RECORD_SHIFT] !== UNINITIALIZED
+				(node as DerivedNode<unknown>).value !== UNINITIALIZED
 			) {
 				setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
 				causeEvents[subId >> RECORD_SHIFT] = causeEvents[node.id >> RECORD_SHIFT]
