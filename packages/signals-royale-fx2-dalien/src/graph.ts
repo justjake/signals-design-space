@@ -266,7 +266,7 @@ function freeLink(id: Link): void {
 	freeLinks = id
 }
 
-function allocNode(owner: ReactiveNode, flags: Flags, register = true): ReactiveNodeId {
+function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
 	const id = freeNodes !== 0 ? freeNodes : allocRecord()
 	if (freeNodes !== 0) {
 		freeNodes = M[id + NodeSlot.FreeNext]
@@ -274,16 +274,6 @@ function allocNode(owner: ReactiveNode, flags: Flags, register = true): Reactive
 	}
 	M[id + NodeSlot.Flags] = flags
 	;(owner as { id: ReactiveNodeId }).id = id
-	if (register) {
-		pendingRegistrations[pendingRegistrationEnd++] = owner
-		pendingRegistrations[pendingRegistrationEnd++] = id
-		if (pendingRegistrationEnd >= 16_384) {
-			drainPendingRegistrations()
-		} else if (!registrationScheduled) {
-			registrationScheduled = true
-			queueMicrotask(drainPendingRegistrations)
-		}
-	}
 	return id
 }
 
@@ -425,6 +415,7 @@ export function initializeCell<T>(
 ): CellNode<T> {
 	const lazyInit = typeof initial === 'function'
 	allocNode(cell, Flag.KindCell)
+	queueNodeRegistration(cell)
 	cell.throwable = null
 	cell.label = opts?.label
 	cell.value = lazyInit ? UNINITIALIZED : (initial as T)
@@ -450,6 +441,7 @@ export function initializeDerived<T>(
 	opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
 	allocNode(node, Flag.KindDerived | Flag.StaleDirty)
+	queueNodeRegistration(node)
 	node.throwable = null
 	node.label = opts?.label
 	node.value = UNINITIALIZED
@@ -1507,7 +1499,7 @@ function makeWatcher(
 		onDraftWake: undefined,
 		worldMemos: null,
 	} as WatcherNode
-	const id = allocNode(w, Flag.Watching | Flag.Watched | capabilities, false)
+	const id = allocNode(w, Flag.Watching | Flag.Watched | capabilities)
 	pinnedInternals[id >> RECORD_SHIFT] = w
 	return w
 }
@@ -1632,7 +1624,6 @@ export function disposeWatcher(w: WatcherNode): void {
 		}
 	} finally {
 		unlinkAllDeps(w)
-		nodeFinalizer.unregister(w)
 		pinnedInternals[w.id >> RECORD_SHIFT] = undefined
 		reclaimNodeRecord(w.id)
 	}
@@ -1679,9 +1670,19 @@ function reclaimNodeRecord(id: number): void {
 	freeNodes = id
 }
 
-let pendingRegistrations: unknown[] = []
+let pendingRegistrations: Array<ReactiveNode | undefined> = []
 let pendingRegistrationEnd = 0
 let registrationScheduled = false
+
+function queueNodeRegistration(owner: ReactiveNode): void {
+	pendingRegistrations[pendingRegistrationEnd++] = owner
+	if (pendingRegistrationEnd >= 8_192) {
+		drainPendingRegistrations()
+	} else if (!registrationScheduled) {
+		registrationScheduled = true
+		queueMicrotask(drainPendingRegistrations)
+	}
+}
 
 function makeNodeFinalizer(): FinalizationRegistry<number> {
 	const registry = new FinalizationRegistry<number>((id) => {
@@ -1697,9 +1698,9 @@ let nodeFinalizer = makeNodeFinalizer()
 function drainPendingRegistrations(): void {
 	registrationScheduled = false
 	const end = pendingRegistrationEnd
-	for (let i = 0; i < end; i += 2) {
-		const owner = pendingRegistrations[i] as ReactiveNode
-		nodeFinalizer.register(owner, pendingRegistrations[i + 1] as number, owner)
+	for (let i = 0; i < end; i++) {
+		const owner = pendingRegistrations[i]!
+		nodeFinalizer.register(owner, owner.id)
 	}
 	pendingRegistrations.fill(undefined, 0, end)
 	pendingRegistrationEnd = 0
