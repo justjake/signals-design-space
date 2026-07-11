@@ -292,10 +292,6 @@ export interface WatcherNode extends ReactiveNode {
 
 export type UseFn = <U>(t: PromiseLike<U>) => U
 
-export function defaultEquals<T>(a: T, b: T): boolean {
-	return Object.is(a, b)
-}
-
 export function makeCell<T>(
 	initial: T | (() => T),
 	opts?: {
@@ -318,7 +314,7 @@ export function makeCell<T>(
 		label: opts?.label,
 		value: lazyInit ? UNINITIALIZED : (initial as T),
 		initializer: lazyInit ? (initial as () => T) : undefined,
-		equals: opts?.equals ?? defaultEquals,
+		equals: opts?.equals ?? Object.is,
 		batchPass: 0,
 		lifetime: opts?.onObserved,
 		lifetimeCleanup: undefined,
@@ -346,7 +342,7 @@ export function makeDerived<T>(
 		label: opts?.label,
 		value: UNINITIALIZED,
 		fn,
-		equals: opts?.equals ?? defaultEquals,
+		equals: opts?.equals ?? Object.is,
 		validAtGraphChange: 0,
 		worldMemos: null,
 		pokePass: 0,
