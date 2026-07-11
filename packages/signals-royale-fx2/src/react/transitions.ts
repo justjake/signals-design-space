@@ -33,13 +33,11 @@ export function startTransitionWrite(scope: () => void): void {
  * whole lifetime, including renders it holds open. */
 export function useSignalTransition(): [boolean, (scope: () => void) => void] {
 	const [isPending, startTransition] = React.useTransition()
-	const start = React.useCallback(
-		(scope: () => void) => {
-			startTransition(() => {
-				runDraftScope(scope)
-			})
-		},
-		[startTransition],
-	)
-	return [isPending, start]
+	const startRef = React.useRef<((scope: () => void) => void) | null>(null)
+	startRef.current ??= (scope) => {
+		startTransition(() => {
+			runDraftScope(scope)
+		})
+	}
+	return [isPending, startRef.current]
 }
