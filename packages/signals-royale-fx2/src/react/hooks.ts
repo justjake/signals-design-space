@@ -57,23 +57,22 @@ import {
 	resolutionDiffers,
 	REPAIR_WAKE,
 	type ProviderRecord,
+	type RenderedResolution,
 } from './host.ts'
 import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts'
 
 type AnyReadable = Signal<any> | Computed<any>
 type Readable<T> = Signal<T> | Computed<T>
 
-interface ResolutionStash {
-	ids: readonly DraftId[]
-	value: unknown
-	live: boolean
-}
-
 interface UseValueState {
 	delivered: Set<DraftId>
-	rendered: ResolutionStash
+	rendered: RenderedResolution
 	repairPending: boolean
-	committed: ResolutionStash
+	/** What the committed tree shows. Advances only in the layout effect, so
+	 * a held transition's speculative values stay in the draft channel. This
+	 * makes folds silent when the carrier already shows their values and keeps
+	 * live appends from double-dispatching repairs. */
+	committed: RenderedResolution
 }
 
 const NO_IDS: readonly DraftId[] = []
@@ -193,14 +192,6 @@ export function useValue<T>(x: Readable<T>): T {
 	// with `delivered` under the same reasoning (a pending dispatch already
 	// guarantees a re-render against current state).
 	state.repairPending = false
-	// What the COMMITTED tree shows for this hook: copied from the render in
-	// a layout effect, so it advances exactly at commits. This — not the
-	// latest render — is the repair channel's target: a held transition pass
-	// is speculative, and everything about it (its values, its late appends,
-	// its rebases) belongs to the draft channel and React's own pass
-	// machinery. The committed stash is what makes fold silence exact (a
-	// carrier's committed world resolves the folded value it already shows)
-	// and keeps a live draft's appends from double-dispatching repairs.
 	// Render-notify delivery: the engine says "something over your sources
 	// moved" (a base wave, a poke, a fold); the predicate answers "would the
 	// committed tree show anything different if re-rendered now?". The

@@ -267,7 +267,7 @@ export function dispatchUrgent(dispatch: () => void): void {
  * re-render against whatever the queues say the world is now. */
 export const REPAIR_WAKE: DraftId = 0
 
-interface RenderedResolution {
+export interface RenderedResolution {
 	ids: readonly DraftId[]
 	value: unknown
 	/** False until the hook's first completed render fills the stash. */
@@ -335,11 +335,8 @@ export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResoluti
 	if (asyncBits === Flag.AsyncError) {
 		return true
 	}
-	if (asyncBits === Flag.AsyncSuspended) {
-		if (isUninitialized(st.value)) {
-			return true
-		}
-		return !Object.is(st.value, rendered.value)
+	if (asyncBits === Flag.AsyncSuspended && isUninitialized(st.value)) {
+		return true
 	}
 	return !Object.is(st.value, rendered.value)
 }
