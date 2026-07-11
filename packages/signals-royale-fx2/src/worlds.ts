@@ -907,8 +907,15 @@ export function latestWorld(): World {
 	if (liveDrafts.size === 1) {
 		return liveDrafts.values().next().value!.world
 	}
-	const drafts = [...liveDrafts.values()]
-	return { drafts, sig: drafts.map((d) => d.id).join(',') }
+	const drafts = new Array<Draft>(liveDrafts.size)
+	const ids = new Array<DraftId>(liveDrafts.size)
+	let index = 0
+	for (const draft of liveDrafts.values()) {
+		drafts[index] = draft
+		ids[index] = draft.id
+		index++
+	}
+	return { drafts, sig: ids.join(',') }
 }
 
 export function setCommittedWorld(container: object, ids: readonly DraftId[]): void {
