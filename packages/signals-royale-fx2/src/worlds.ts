@@ -311,7 +311,7 @@ export function retireDraft(id: DraftId): void {
 			: NO_EVENT
 	draft.retireEvent = evt
 	const prevCause = setCurrentCause(evt)
-	const fold = () => {
+	try {
 		startBatch()
 		try {
 			for (const cell of draft.cells) {
@@ -325,9 +325,6 @@ export function retireDraft(id: DraftId): void {
 		} finally {
 			endBatch()
 		}
-	}
-	try {
-		fold()
 	} finally {
 		setCurrentCause(prevCause)
 	}
