@@ -51,10 +51,18 @@ The initial port was 1.598x slower geometrically. The following changes reduced 
 
 The remaining costs are structural. Creation pays for arena allocation bookkeeping and a finalizer cell per GC-owned handle. Reads traverse typed numeric records, then perform an ID-to-handle lookup before executing handle-owned `fn`, `equals`, or value logic. FX2's object links hold those object references directly, and V8 optimizes their stable hidden-class fields well. A CPU profile after the creation fix attributed 17.6% of non-library samples to dependency tracking, 15.0% to validation, and 8.6% to writes.
 
-Moving `value`, `fn`, and related host state into per-field indexed columns, as `dalien-signals` does, would remove much of the handle recovery path. That is a different ownership model from this experiment's constraint that JS state live on the handle. A single `SignalInternals`/`ComputedInternals` column would retain the same ID-to-object lookup and is unlikely to close the gap; per-field columns or numeric public handles are the meaningful next experiments.
+### Per-field JS column follow-up
+
+A follow-up kept the public object handles but moved `value`, `initializer`, `equals`, and computed `fn` into canonical per-field JS arrays. Handle properties became compatibility accessors; graph reads, writes, equality checks, and computed invocation consumed the columns directly.
+
+The naive record-indexed columns wrote four entries for every interleaved link and regressed construction badly. A corrected layout gave only cells/computeds a dense host index stored in their node record, moved link reference counts to a typed column, and retained a handle only for validation frames that could execute user code. It passed conformance, fuzz, graph-tier, and GC tests.
+
+That best column layout was still slower. Three isolated rounds measured 1.477x geometric mean and 1.451x aggregate time versus FX2, compared with 1.405x and 1.403x for handle-owned fields. Signal creation moved from 5.68 to 8.43 ms, while computation creation was essentially unchanged at 148.20 versus 146.61 ms. The implementation commits (`a32a82b`, `67edd18`, and `3d7759b`) are preserved and then reverted by `173fefd`, `c005c52`, and `35223b8`.
+
+The lifetime constraint prevents columns from eliminating handle recovery: validating a dependency can run user code that removes the current computed's last graph pin. The active validation frame must acquire and strongly retain that object before descending. Columns therefore added host-index loads and array maintenance without removing the required handle ownership path. A single `SignalInternals`/`ComputedInternals` column has the same limitation. Numeric public handles could avoid it, but are outside the required API.
 
 ## Complexity
 
 Compared with the current object package, `graph.ts` grows from 1,601 to 1,834 lines while `index.ts` shrinks from 540 to 495: a net increase of 188 lines in the two core files. The added mechanisms are record layout, free lists, pin reference counts, finalizer registration, arena reset, and typed auxiliary columns. Big-O graph behavior is unchanged; constant factors and lifetime machinery increase.
 
-The useful result is therefore not a replacement recommendation. The object graph remains the baseline for this handle-owned state design. This fork is the evidence-bearing boundary: an arena becomes attractive only if host state also adopts indexed columns or public APIs use numeric handles, and growth should be implemented only after choosing that model.
+The useful result is therefore not a replacement recommendation. The object graph remains the baseline for this object-handle API. Both handle-owned fields and per-field indexed columns were measured; the columns made this hybrid slower. Arena growth should not be implemented unless another design first closes the fixed-arena execution gap.
