@@ -1,7 +1,7 @@
 /** Lifetime effects, lazy initializers, SSR, tracer. */
 import { describe, expect, test } from 'vitest'
+import * as fx2 from '../src/index.ts'
 import {
-	ReducerAtom,
 	attachTracer,
 	computed,
 	effect,
@@ -10,13 +10,20 @@ import {
 	isPending,
 	nodeOf,
 	read,
+	reducerAtom,
 	serializeAtomState,
 	signal,
+	type Signal,
 	untracked,
 	update,
 } from '../src/index.ts'
 import { FORBID_WRITE_FROM_COMPUTED, observeNode } from '../src/graph.ts'
 import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+
+type Animal = { name: string }
+type Dog = Animal & { bark(): void }
+type ExpectFalse<T extends false> = T
+type SignalIsInvariant = ExpectFalse<Signal<Dog> extends Signal<Animal> ? true : false>
 
 const tick = () => new Promise<void>((r) => setTimeout(r))
 
@@ -139,6 +146,17 @@ describe('lazy initializers', () => {
 })
 
 describe('derived policy and APIs', () => {
+	test('writable factories return the graph node without runtime handle classes', () => {
+		const source = signal(1)
+		const reduced = reducerAtom((state: number, action: number) => state + action, 1)
+		expect(nodeOf(source)).toBe(source)
+		expect(nodeOf(reduced)).toBe(reduced)
+		expect(fx2).not.toHaveProperty('Signal')
+		expect(fx2).not.toHaveProperty('ReducerAtom')
+		expect(fx2.signal).toBe(signal)
+		expect(fx2.reducerAtom).toBe(reducerAtom)
+	})
+
 	test('previous is the last settled canonical value', () => {
 		const source = signal(1)
 		const seen: Array<number | undefined> = []
@@ -211,7 +229,7 @@ describe('derived policy and APIs', () => {
 	})
 
 	test('ReducerAtom dispatches through its fixed reducer and inherits signal writes', () => {
-		const count = new ReducerAtom((state: number, action: number) => state + action, 10)
+		const count = reducerAtom((state: number, action: number) => state + action, 10)
 		count.dispatch(5)
 		expect(count.get()).toBe(15)
 		count.set(1)

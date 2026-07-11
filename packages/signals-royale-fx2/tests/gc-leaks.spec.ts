@@ -26,7 +26,7 @@ import {
 function subCount(x: Signal<number>): number {
 	let n = 0
 	for (
-		let l: Link | undefined = (x.node as CellNode<number>).subs;
+		let l: Link | undefined = (nodeOf(x) as CellNode<number>).subs;
 		l !== undefined;
 		l = l.nextSub
 	) {

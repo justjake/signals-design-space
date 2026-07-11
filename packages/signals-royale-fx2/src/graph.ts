@@ -292,38 +292,6 @@ export interface WatcherNode extends ReactiveNode {
 
 export type UseFn = <U>(t: PromiseLike<U>) => U
 
-export function makeCell<T>(
-	initial: T | (() => T),
-	opts?: {
-		equals?: EqualsFn<T>
-		label?: string
-		onObserved?: (ctx: { get(): T; set(v: T): void }) => void | (() => void)
-	},
-): CellNode<T> {
-	const lazyInit = typeof initial === 'function'
-	return {
-		flags: Flag.KindCell,
-		changedAtGraphChange: 0,
-		throwable: null,
-		subs: undefined,
-		subsTail: undefined,
-		deps: undefined,
-		depsTail: undefined,
-		observerCount: 0,
-		causeEvent: NO_EVENT,
-		label: opts?.label,
-		value: lazyInit ? UNINITIALIZED : (initial as T),
-		initializer: lazyInit ? (initial as () => T) : undefined,
-		equals: opts?.equals ?? Object.is,
-		batchPass: 0,
-		lifetime: opts?.onObserved,
-		lifetimeCleanup: undefined,
-		lifetimeActive: false,
-		worldMemos: null,
-		pokePass: 0,
-	}
-}
-
 export function makeDerived<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: { equals?: EqualsFn<T>; label?: string },

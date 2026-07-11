@@ -1,5 +1,14 @@
 /** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
-import { Computed, Signal, batch, computed, effect, effectScope, signal } from '../src/index.ts'
+import {
+	Computed,
+	batch,
+	computed,
+	effect,
+	effectScope,
+	installState,
+	signal,
+	type Signal,
+} from '../src/index.ts'
 
 export interface ReactiveFramework<S = unknown> {
 	name: string
@@ -21,12 +30,11 @@ let disposeScope: (() => void) | null = null
 const framework: ReactiveFramework<Cell> = {
 	name: 'Royale FX2',
 	createSignal(initialValue) {
-		const s: Signal<unknown> = new Signal(initialValue, undefined)
+		const s = signal(initialValue)
 		if (typeof initialValue === 'function') {
 			// The benchmark stores plain values; opt out of lazy-initializer
 			// treatment for function-valued ones.
-			s.node.initializer = undefined
-			s.node.value = initialValue
+			installState(s, initialValue)
 		}
 		return s
 	},

@@ -12,20 +12,26 @@
  */
 
 import {
+	type BatchPass,
 	type CellNode,
 	type DerivedNode,
 	type EqualsFn,
 	type Flags,
+	type GraphChangeClock,
+	type Link,
+	type PokePass,
 	type ReactiveNode,
+	type TraceEventId,
 	type UseFn,
 	Flag,
+	NO_EVENT,
+	UNINITIALIZED,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
 	activeEvaluation,
 	flushLifetimeTransitions,
 	getActiveConsumer,
 	isUninitialized,
-	makeCell,
 	makeDerived,
 	makeEffect,
 	makeScope,
@@ -82,11 +88,55 @@ export interface ComputedOptions<T> {
 	label?: string
 }
 
-export class Signal<T> {
-	/** @internal */
-	readonly node: CellNode<T>
+export type Signal<in out T> = {
+	get(): T
+	set(value: T): void
+	update(fn: (prev: T) => T): void
+	peek(): T
+}
+
+const Signal = class<T> implements CellNode<T> {
+	declare flags: Flags
+	declare changedAtGraphChange: GraphChangeClock
+	declare throwable: ErrorBox | Suspension | null
+	declare subs: Link | undefined
+	declare subsTail: Link | undefined
+	declare deps: Link | undefined
+	declare depsTail: Link | undefined
+	declare observerCount: number
+	declare causeEvent: TraceEventId
+	declare label: string | undefined
+	declare value: T | typeof UNINITIALIZED
+	declare initializer: (() => T) | undefined
+	declare equals: EqualsFn<T>
+	declare batchPass: BatchPass
+	declare lifetime: ((ctx: { get(): T; set(v: T): void }) => void | (() => void)) | undefined
+	declare lifetimeCleanup: (() => void) | undefined
+	declare lifetimeActive: boolean
+	declare worldMemos: Map<string, unknown> | null
+	declare pokePass: PokePass
+
 	constructor(initial: T | (() => T), opts?: SignalOptions<T>) {
-		this.node = makeCell(initial, opts)
+		const lazyInit = typeof initial === 'function'
+		this.flags = Flag.KindCell
+		this.changedAtGraphChange = 0
+		this.throwable = null
+		this.subs = undefined
+		this.subsTail = undefined
+		this.deps = undefined
+		this.depsTail = undefined
+		this.observerCount = 0
+		this.causeEvent = NO_EVENT
+		this.label = opts?.label
+		this.value = lazyInit ? UNINITIALIZED : (initial as T)
+		this.initializer = lazyInit ? (initial as () => T) : undefined
+		this.equals = opts?.equals ?? Object.is
+		this.batchPass = 0
+		this.lifetime = opts?.onObserved
+		this.lifetimeCleanup = undefined
+		this.lifetimeActive = false
+		this.worldMemos = null
+		this.pokePass = 0
 	}
 	/** Base-state read (tracked inside computations); in a draft evaluation,
 	 * resolves that evaluation's own world. */
@@ -94,9 +144,9 @@ export class Signal<T> {
 		const world = getCurrentWorld()
 		if (world !== null) {
 			// Inside a draft evaluation every read resolves that world.
-			return unwrapForEval(resolveState(this.node, world), getCurrentPark()!) as T
+			return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
 		}
-		return readCell(this.node)
+		return readCell(this)
 	}
 	set(value: T): void {
 		set(this, value)
@@ -108,23 +158,22 @@ export class Signal<T> {
 	}
 	/** Untracked base-state read. */
 	peek(): T {
-		return peekCell(this.node)
+		return peekCell(this)
 	}
 }
 
 /** A signal whose dispatches replay through one reducer fixed at creation. */
-export class ReducerAtom<S, A> extends Signal<S> {
-	readonly reduce: (state: S, action: A) => S
+export type ReducerAtom<S, A> = Signal<S> & {
+	dispatch: (action: A) => void
+}
 
-	constructor(reduce: (state: S, action: A) => S, initial: S | (() => S), opts?: SignalOptions<S>) {
-		super(initial, opts)
-		this.reduce = reduce
-	}
+type ReducerSignal<S, A> = ReducerAtom<S, A> & {
+	reduce: (state: S, action: A) => S
+}
 
-	dispatch(action: A): void {
-		const reduce = this.reduce
-		this.update((state) => reduce(state, action))
-	}
+function dispatchReducer<S, A>(this: ReducerSignal<S, A>, action: A): void {
+	const reduce = this.reduce
+	this.update((state) => reduce(state, action))
 }
 
 export class Computed<T> {
@@ -159,6 +208,17 @@ export function signal<T>(initial: T | (() => T), opts?: SignalOptions<T>): Sign
 	return new Signal(initial, opts)
 }
 
+export function reducerAtom<S, A>(
+	reduce: (state: S, action: A) => S,
+	initial: S | (() => S),
+	opts?: SignalOptions<S>,
+): ReducerAtom<S, A> {
+	const node = new Signal(initial, opts) as unknown as ReducerSignal<S, A>
+	node.reduce = reduce
+	node.dispatch = dispatchReducer
+	return node
+}
+
 export function computed<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: ComputedOptions<T>,
@@ -168,11 +228,15 @@ export function computed<T>(
 
 /** @internal Resolve a handle to its engine node. */
 export function nodeOf(x: AnyReadable): ReactiveNode {
-	const node = (x as Signal<unknown>).node
-	if (node === undefined) {
-		throw new TypeError('expected a signal or computed handle')
+	const signalNode = x as unknown as ReactiveNode
+	if ((signalNode.flags & Flag.KindCell) !== 0) {
+		return signalNode
 	}
-	return node
+	const node = (x as Computed<unknown>).node
+	if (node !== undefined) {
+		return node
+	}
+	throw new TypeError('expected a signal or computed handle')
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +382,7 @@ function guardRenderWrite(): void {
 export function set<T>(x: Signal<T>, value: T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
-	const cell = x.node as CellNode<unknown>
+	const cell = x as unknown as CellNode<unknown>
 	const draft = classifyWrite()
 	if (draft !== null) {
 		appendDraftIntent(draft, cell, 'set', value)
@@ -326,7 +390,7 @@ export function set<T>(x: Signal<T>, value: T): void {
 	}
 	// Urgent: base state moves now; pending worlds replay it in dispatch order.
 	const rebased = appendUrgentIntent(cell, 'set', value)
-	const changed = writeCell(x.node, value)
+	const changed = writeCell(cell, value)
 	// Equality cutoff with pending drafts: base state did not move (no wave
 	// ran) but the drafted replays did — their audiences must still hear it.
 	if (rebased && !changed) {
@@ -337,15 +401,15 @@ export function set<T>(x: Signal<T>, value: T): void {
 export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
-	const cell = x.node as CellNode<unknown>
+	const cell = x as unknown as CellNode<unknown>
 	const draft = classifyWrite()
 	if (draft !== null) {
 		appendDraftIntent(draft, cell, 'update', fn)
 		return
 	}
-	const next = runUpdater(fn, peekCell(x.node))
+	const next = runUpdater(fn, peekCell(cell) as T)
 	const rebased = appendUrgentIntent(cell, 'update', fn)
-	const changed = writeCell(x.node, next)
+	const changed = writeCell(cell, next)
 	if (rebased && !changed) {
 		pokeRebasedCell(cell)
 	}
@@ -387,7 +451,7 @@ export function serializeAtomState(
 ): string {
 	const out: Record<string, unknown> = {}
 	for (const [key, atom] of atomEntries(atoms)) {
-		out[key] = peekCell(atom.node)
+		out[key] = peekCell(atom as unknown as CellNode<unknown>)
 	}
 	return JSON.stringify(out, replacer as never)
 }
@@ -396,8 +460,9 @@ export function serializeAtomState(
  * as a write: no propagation, no equality check, no effects. */
 export function installState<T>(atom: Signal<T>, value: T): void {
 	assertSignalWriteAllowed()
-	atom.node.initializer = undefined
-	atom.node.value = value
+	const cell = atom as unknown as CellNode<T>
+	cell.initializer = undefined
+	cell.value = value
 }
 
 export function initializeAtomState(

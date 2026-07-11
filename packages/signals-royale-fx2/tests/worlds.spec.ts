@@ -2,7 +2,6 @@
 import { describe, expect, test } from 'vitest'
 import {
 	Flag,
-	ReducerAtom,
 	computed,
 	effect,
 	isPending,
@@ -10,6 +9,7 @@ import {
 	committed,
 	nodeOf,
 	read,
+	reducerAtom,
 	setRenderWorldProvider,
 	signal,
 	untracked,
@@ -29,7 +29,7 @@ import {
 	worldOf,
 	type DraftId,
 } from '../src/worlds.ts'
-import { observeNode } from '../src/graph.ts'
+import { observeNode, type CellNode } from '../src/graph.ts'
 
 function deferred<T>() {
 	let resolve!: (value: T) => void
@@ -157,7 +157,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 	})
 
 	test('ReducerAtom dispatches replay in intent order', () => {
-		const count = new ReducerAtom((state: number, action: number) => state + action, 1)
+		const count = reducerAtom((state: number, action: number) => state + action, 1)
 		const id = inDraft(() => count.dispatch(2))
 		count.dispatch(10)
 		expect(count.get()).toBe(11)
@@ -682,15 +682,15 @@ describe('dead-prefix folding', () => {
 		const first = inDraft(() => a.set(2))
 		a.update((value) => value * 10)
 		const second = inDraft(() => a.update((value) => value + 3))
-		expect(rebaseLogIntentCount(a.node)).toBe(3)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(3)
 
 		retireDraft(first)
 		expect(a.get()).toBe(20)
 		expect(stateIn(a, [second])).toEqual(valueState(23))
-		expect(rebaseLogIntentCount(a.node)).toBe(1)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(1)
 
 		retireDraft(second)
-		expect(rebaseLogIntentCount(a.node)).toBe(0)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(0)
 	})
 
 	test('discarded intents are skipped while later urgent history folds', () => {
@@ -702,7 +702,7 @@ describe('dead-prefix folding', () => {
 		discardDraft(first)
 		expect(a.get()).toBe(10)
 		expect(stateIn(a, [second])).toEqual(valueState(13))
-		expect(rebaseLogIntentCount(a.node)).toBe(1)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(1)
 		discardDraft(second)
 	})
 
@@ -712,7 +712,7 @@ describe('dead-prefix folding', () => {
 		const second = inDraft(() => a.set(3))
 
 		retireDraft(second)
-		expect(rebaseLogIntentCount(a.node)).toBe(2)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(2)
 		expect(a.get()).toBe(3)
 		discardDraft(first)
 	})
@@ -731,7 +731,7 @@ describe('dead-prefix folding', () => {
 
 		retireDraft(first)
 		expect(stateIn(a, [second])).toEqual(valueState({ value: 2, source: 'base' }))
-		expect(rebaseLogIntentCount(a.node)).toBe(1)
+		expect(rebaseLogIntentCount(nodeOf(a) as CellNode<unknown>)).toBe(1)
 		discardDraft(second)
 	})
 })

@@ -4,7 +4,6 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import {
-	Signal,
 	Computed,
 	attachTracer,
 	batch,
@@ -21,6 +20,7 @@ import {
 	signal,
 	untracked,
 	update,
+	type Signal,
 	type SignalOptions,
 	type UseFn,
 } from 'signals-royale-fx2'
