@@ -17,9 +17,10 @@ cleanup.
 
 Before production edits, record the chosen direction, base SHA, causal
 performance hypothesis, probe and repetitions, raw baseline, and measurement
-integrity boundary. Complete the rest of the round record before handoff. It is
-for audit, not controller approval. Consider materially different approaches
-yourself; record their tradeoffs before handoff.
+integrity boundary, including the baseline compiler/runtime and emit manifests.
+Complete the rest of the round record before handoff. It is for audit, not
+controller approval. Consider materially different approaches yourself; record
+their tradeoffs before handoff.
 
 ## Evidence and boundaries
 
@@ -31,6 +32,12 @@ yourself; record their tradeoffs before handoff.
   `HUMAN_DECISION` only if an unresolved edge blocks useful progress broadly.
 - A rejected near miss is evidence, not a prescribed design. You decide whether
   its fast mechanism can be made simpler and understandable.
+
+## Probe execution
+
+Follow `PLAN.md`'s performance probe protocol and fill every compiler/runtime
+field in the round template. A source edit requires a fresh emit; repetitions
+reuse it with plain Node and never execute live TypeScript.
 
 ## Design rules
 

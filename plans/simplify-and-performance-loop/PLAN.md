@@ -99,13 +99,31 @@ to continue.
 - Treat READMEs and old reports as leads, not authority. Verify source, tests,
   measurements, and relevant history.
 - Freeze benchmarks, adapters, warmups, repetitions, checksums, and test config
-  during a library round. Measurement work must be a separate reviewed round.
+  during a library round. Freeze the probe source and compiler config too.
+  Measurement work must be a separate reviewed round.
 - Never invent unresolved semantics. Prefer another candidate; ask the human
   only when the decision blocks further worthwhile work.
 - Commit each accepted candidate separately; it becomes the next baseline.
 
 Keep working evidence in `/tmp/fx2-simplify-loop/<NN>-<slug>/`. `RESULTS.md` is
 the durable memory.
+
+## Performance probe protocol
+
+For each actor and source revision, one package-local NodeNext `tsc` program
+compiles the live FX2 source and frozen `.mts` probe together into a fresh
+immutable directory. Every repetition runs that same emitted artifact with
+plain Node. Never run measured code through `tsx`, esbuild, Bun, live `.ts`
+imports, or a reused output directory.
+
+Record the TypeScript version and hashes for its launcher and resolved compiler
+binary, plus the Node binary/version, compiler config, probe, source manifest,
+runtime dependency state, and full artifact manifest. Copy the resolved React,
+ReactDOM, and Scheduler packages into the artifact before hashing and making it
+read-only; never link live runtime code. Verify the full manifest after
+sampling. Baseline and candidate use separate outputs but identical non-source
+inputs. Compilation, import, setup, validation, and output stay outside timing.
+The exact preparation and run commands live in `templates/round.md`.
 
 ## One round
 
@@ -114,8 +132,9 @@ the durable memory.
 Start or resume the implementer without proposing a candidate. Before editing
 production code, it records only its chosen direction, base SHA, causal
 performance hypothesis, probe and repetitions, raw baseline, and measurement
-integrity boundary in `templates/round.md`. It completes the explanatory parts
-before handoff. This is an audit trail, not approval or a design lock.
+integrity boundary in `templates/round.md`, including the compiler/runtime and
+baseline emission record above. It completes the explanatory parts before
+handoff. This is an audit trail, not approval or a design lock.
 
 The implementer then iterates with focused tests and the identical probe. It
 may replace its approach while pursuing the same coherent goal. It returns when
@@ -133,15 +152,18 @@ Ultra saves the complete diff and independently runs:
 - `git diff --check`;
 - focused semantic tests named by the implementer;
 - package typecheck;
-- the exact probe for the same number of candidate samples.
+- a fresh controller emit from the frozen compiler config and probe;
+- plain Node over that immutable artifact for the same number of samples.
 
 Compare the saved baseline with every candidate sample. Treat timing within 3%
 as parity for core benchmarks and within 5% for React or memory. With no
 baseline worktree, noisy or load-skewed evidence is inconclusive; never add
 samples until the result becomes favorable.
 
-Reject stale-source measurements, shifted timing boundaries, skipped observable
-work, benchmark detection, or benchmark/config edits.
+Reject stale or reused output, live-TypeScript runtime imports, implicit
+transforms, compiler/config/probe drift, linked or changed runtime dependencies,
+shifted timing boundaries, skipped observable work, benchmark detection, or
+benchmark/config edits.
 
 ### 3. Review and revise
 

@@ -9,6 +9,55 @@
 - Raw baseline output:
 - Causal performance hypothesis:
 - Measurement integrity boundary:
+- Node path/version and binary hash:
+- Package-local TypeScript version, launcher hash, and resolved compiler binary
+  hash:
+- Emit-config/effective-config/probe hashes:
+- Baseline source/runtime manifests:
+- Baseline artifact directory and full-manifest hash:
+
+Exact preparation/run commands (replace `NN-SLUG` and `REVISION`):
+
+```sh
+set -eu
+round=/tmp/fx2-simplify-loop/NN-SLUG
+revision=REVISION
+probe="$round/probe.mts"
+package="$PWD/packages/signals-royale-fx2"
+node=$(realpath "$(command -v node)")
+tsc=$(realpath "$package/node_modules/typescript/bin/tsc")
+emit=$(mktemp -d "$round/emit-$revision.XXXXXX")
+emitted_probe="$emit${probe%.mts}.mjs"
+
+NODE_OPTIONS= "$node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --showConfig > "$round/config-$revision.json"
+NODE_OPTIONS= "$node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --pretty false --listEmittedFiles > "$round/emitted-$revision.txt"
+cp "$package/package.json" "$emit/package.json"
+mkdir "$emit/node_modules"
+for dependency in react react-dom scheduler; do
+	cp -RL "$(realpath "$package/node_modules/$dependency")" "$emit/node_modules/$dependency"
+done
+test -f "$emitted_probe"
+(
+	cd "$emit"
+	find node_modules -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256
+) > "$round/runtime-$revision.sha256"
+(
+	cd "$emit"
+	find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256
+) > "$round/emit-$revision.before.sha256"
+find "$emit" -type f -exec chmod a-w {} +
+find "$emit" -type d -exec chmod a-w {} +
+NODE_ENV=production NODE_OPTIONS= "$node" "$emitted_probe"
+(
+	cd "$emit"
+	find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256
+) > "$round/emit-$revision.after.sha256"
+cmp "$round/emit-$revision.before.sha256" "$round/emit-$revision.after.sha256"
+```
+
+The per-round config extends the package's `tsconfig.perf.json`, compiles live
+`src` plus the frozen `.mts` probe in one NodeNext program, and rewrites `.ts`
+imports. Compare the runtime manifests between baseline and candidate.
 
 The sections below may evolve during implementation but must be complete before
 handoff.
@@ -50,6 +99,12 @@ for controller approval.
 
 Why the selected benchmark exercises the changed path and why no observable
 work, timing boundary, configuration, or input is changing.
+
+## Candidate emission
+
+- Candidate source/runtime manifests:
+- Candidate artifact directory and full-manifest hash:
+- Post-sample manifest comparison:
 
 ## Abandon rule
 

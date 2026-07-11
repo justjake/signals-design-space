@@ -30,6 +30,9 @@ summaries, and the implementer's prose are not authority.
 6. **Integrity** — reject benchmark/config edits, benchmark detection,
    hard-coded inputs, skipped work, invalid caching, fidelity loss, favorable
    sample selection, shifted timing boundaries, or stale-source measurement.
+   Enforce `PLAN.md`'s probe protocol: one fresh source+probe `tsc` emit per
+   revision, copied runtime packages, plain Node, matching hashes, and no live
+   TypeScript or implicit transform.
 
 Also flag trivial one-caller helpers, avoidable intermediate representations,
 allocation-heavy collection construction, and any new generic `isRecord` guard.
