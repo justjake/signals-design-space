@@ -95,7 +95,6 @@ export interface Draft {
 	/** Cells this draft wrote (for fold, poke, and log teardown). */
 	cells: Set<CellNode<unknown>>
 	openEvent: TraceEventId
-	retireEvent: TraceEventId
 	lastWriteEvent: TraceEventId
 }
 
@@ -144,7 +143,6 @@ export function openDraft(): Draft {
 		world: { drafts, sig: String(id) },
 		cells: new Set(),
 		openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
-		retireEvent: NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)
@@ -309,7 +307,6 @@ export function retireDraft(id: DraftId): void {
 					draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
 				)
 			: NO_EVENT
-	draft.retireEvent = evt
 	const prevCause = setCurrentCause(evt)
 	try {
 		startBatch()
