@@ -99,12 +99,12 @@ export class Signal<T> {
 		return readCell(this.node)
 	}
 	set(value: T): void {
-		writeSignal(this, value)
+		set(this, value)
 	}
 	/** Functional update. Inside a transition the function is recorded and
 	 * REPLAYS against each world's base value (React updater-queue rules). */
 	update(fn: (prev: T) => T): void {
-		updateSignal(this, fn)
+		update(this, fn)
 	}
 	/** Untracked base-state read. */
 	peek(): T {
@@ -315,7 +315,7 @@ function guardRenderWrite(): void {
 	renderWriteGuard?.()
 }
 
-function writeSignal<T>(x: Signal<T>, value: T): void {
+export function set<T>(x: Signal<T>, value: T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
 	const cell = x.node as CellNode<unknown>
@@ -334,7 +334,7 @@ function writeSignal<T>(x: Signal<T>, value: T): void {
 	}
 }
 
-function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
+export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
 	const cell = x.node as CellNode<unknown>
@@ -352,14 +352,6 @@ function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
 	if (rebased && !changed) {
 		pokeRebasedCell(cell)
 	}
-}
-
-export function set<T>(x: Signal<T>, value: T): void {
-	writeSignal(x, value)
-}
-
-export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
-	updateSignal(x, fn)
 }
 
 export function read<T>(x: Readable<T>): T {
