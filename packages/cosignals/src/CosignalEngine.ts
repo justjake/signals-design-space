@@ -5935,7 +5935,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		let link = a.memory[sh + ArenaField.DEPS]!
 		while (link !== 0) {
-			const depShadow = a.memory[link + ArenaLinkField.DEP]!
+			const depShadow: number = a.memory[link + ArenaLinkField.DEP]!
 			const ix = a.memory[depShadow + ArenaField.NODE]!
 			const node = nodeIndexToInternals[ix]
 			if (

@@ -16,7 +16,7 @@
 		"react": "link:../../../vendor/react/build/oss-experimental/react",
 		"react-dom": "link:../../../vendor/react/build/oss-experimental/react-dom",
 		"scheduler": "link:../../../vendor/react/build/oss-experimental/scheduler",
-		"typescript": "^5.8.0",
+		"typescript": "7.0.2",
 		"vitest": "^4.0.0"
 	}
 }

@@ -63,8 +63,8 @@ importers:
         specifier: 4.23.0
         version: 4.23.0
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -116,8 +116,8 @@ importers:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -125,8 +125,8 @@ importers:
   packages/cosignals:
     devDependencies:
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -162,8 +162,8 @@ importers:
         specifier: 0.0.2
         version: 0.0.2
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -196,8 +196,8 @@ importers:
         specifier: 0.0.2
         version: 0.0.2
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -208,8 +208,8 @@ importers:
         specifier: 24.13.2
         version: 24.13.2
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -239,8 +239,8 @@ importers:
         specifier: ^26.1.0
         version: 26.1.0
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -297,8 +297,8 @@ importers:
         specifier: ^26.1.0
         version: 26.1.0
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -349,8 +349,8 @@ importers:
         specifier: 0.28.1
         version: 0.28.1
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
 
   packages/react-signals-playground:
     dependencies:
@@ -392,8 +392,8 @@ importers:
         specifier: 6.0.2
         version: 6.0.2(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vite:
         specifier: 8.1.0
         version: 8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0)
@@ -401,8 +401,8 @@ importers:
   packages/react-signals-utils:
     devDependencies:
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -432,8 +432,39 @@ importers:
         specifier: link:../../vendor/react/build/oss-experimental/scheduler
         version: link:../../vendor/react/build/oss-experimental/scheduler
       typescript:
-        specifier: ^5.8.0
-        version: 5.9.3
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
+
+  packages/signals-royale-fx2-dalien:
+    dependencies:
+      react:
+        specifier: link:../../vendor/react/build/oss-experimental/react
+        version: link:../../vendor/react/build/oss-experimental/react
+      react-dom:
+        specifier: link:../../vendor/react/build/oss-experimental/react-dom
+        version: link:../../vendor/react/build/oss-experimental/react-dom
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.1.0
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^26.0.0
+        version: 26.1.0
+      reactive-framework-test-suite:
+        specifier: 0.0.2
+        version: 0.0.2
+      scheduler:
+        specifier: link:../../vendor/react/build/oss-experimental/scheduler
+        version: link:../../vendor/react/build/oss-experimental/scheduler
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
@@ -447,8 +478,8 @@ importers:
         specifier: 0.0.2
         version: 0.0.2
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       vitest:
         specifier: 4.1.6
         version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -1569,16 +1600,6 @@ packages:
   tsx@4.23.0:
     resolution: {integrity: sha512-eUdUIaCr963q2h5u3+QwvYp0+eqPvn+egeqZUm0hwERCqqx1E3kK5ehbGCvqSE5MQAULr67ww0cA3jKc3YkM1w==}
     engines: {node: '>=18.0.0'}
-    hasBin: true
-
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
-    engines: {node: '>=14.17'}
     hasBin: true
 
   typescript@7.0.2:
@@ -2774,10 +2795,6 @@ snapshots:
       esbuild: 0.28.1
     optionalDependencies:
       fsevents: 2.3.3
-
-  typescript@5.9.3: {}
-
-  typescript@6.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:

@@ -21,7 +21,7 @@
 		"react-dom": "19.3.0-canary-e71a6393-20260702",
 		"reactive-framework-test-suite": "0.0.2",
 		"scheduler": "0.28.0-canary-e71a6393-20260702",
-		"typescript": "^5.8.0",
+		"typescript": "7.0.2",
 		"vitest": "^3.0.0"
 	},
 	"peerDependencies": {
