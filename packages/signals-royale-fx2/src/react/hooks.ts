@@ -63,6 +63,19 @@ import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts'
 type AnyReadable = Signal<any> | Computed<any>
 type Readable<T> = Signal<T> | Computed<T>
 
+interface ResolutionStash {
+	ids: readonly DraftId[]
+	value: unknown
+	live: boolean
+}
+
+interface UseValueState {
+	delivered: Set<DraftId>
+	rendered: ResolutionStash
+	repairPending: boolean
+	committed: ResolutionStash
+}
+
 const NO_IDS: readonly DraftId[] = []
 
 function forceReducer(count: number): number {
@@ -142,6 +155,20 @@ export function useValue<T>(x: Readable<T>): T {
 	const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD)
 	noteHookRender(scope, hookWorld.ids)
 	const ids = renderPassIds(scope) ?? hookWorld.ids
+	// One record per hook owns the delivery/repair protocol. Initialize it
+	// explicitly because useRef evaluates a non-primitive initializer every
+	// render even though React consumes that value only on mount.
+	const stateRef = React.useRef<UseValueState | null>(null)
+	let state = stateRef.current
+	if (state === null) {
+		state = {
+			delivered: new Set(),
+			rendered: { ids: NO_IDS, value: undefined, live: false },
+			repairPending: false,
+			committed: { ids: NO_IDS, value: undefined, live: false },
+		}
+		stateRef.current = state
+	}
 	// Draft ids delivered to this hook's reducer since its last render. The
 	// dispatch is scheduling-only, so a repeat id adds nothing: it is already
 	// sitting undelivered in this hook's queue and the pass that consumes it
@@ -151,30 +178,21 @@ export function useValue<T>(x: Readable<T>): T {
 	// commits a stale frame. Over-clearing (abandoned pass, StrictMode double
 	// render) only permits a redundant dispatch, which is harmless; writes
 	// during render throw, so no delivery can race the clear.
-	const delivered = React.useRef<Set<DraftId>>(new Set())
-	delivered.current.clear()
+	state.delivered.clear()
 	const deliver = React.useCallback(
 		(id: DraftId) => {
-			if (delivered.current.has(id)) {
+			if (state.delivered.has(id)) {
 				return
 			}
-			delivered.current.add(id)
+			state.delivered.add(id)
 			dispatchDraftWake(id, wake)
 		},
-		[wake],
+		[state, wake],
 	)
-	// One mutable stash per hook (not per render): what the latest completed
-	// render resolved, for the subscribe-time repair check.
-	const rendered = React.useRef<{ ids: readonly DraftId[]; value: unknown; live: boolean }>({
-		ids: NO_IDS,
-		value: undefined,
-		live: false,
-	})
 	// Base-channel dedup: at most one REPAIR_WAKE per render window, cleared
 	// with `delivered` under the same reasoning (a pending dispatch already
 	// guarantees a re-render against current state).
-	const repairPending = React.useRef(false)
-	repairPending.current = false
+	state.repairPending = false
 	// What the COMMITTED tree shows for this hook: copied from the render in
 	// a layout effect, so it advances exactly at commits. This — not the
 	// latest render — is the repair channel's target: a held transition pass
@@ -183,48 +201,43 @@ export function useValue<T>(x: Readable<T>): T {
 	// machinery. The committed stash is what makes fold silence exact (a
 	// carrier's committed world resolves the folded value it already shows)
 	// and keeps a live draft's appends from double-dispatching repairs.
-	const committedStash = React.useRef<{ ids: readonly DraftId[]; value: unknown; live: boolean }>({
-		ids: NO_IDS,
-		value: undefined,
-		live: false,
-	})
 	// Render-notify delivery: the engine says "something over your sources
 	// moved" (a base wave, a poke, a fold); the predicate answers "would the
 	// committed tree show anything different if re-rendered now?". The
 	// dispatch inherits the ambient lane — exactly useState's semantics for
 	// the write that caused it.
 	const onNotify = React.useCallback(() => {
-		const stash = committedStash.current
-		if (!stash.live || repairPending.current) {
+		const stash = state.committed
+		if (!stash.live || state.repairPending) {
 			return
 		}
 		if (!resolutionDiffers(node, stash)) {
 			return
 		}
-		repairPending.current = true
+		state.repairPending = true
 		wake(REPAIR_WAKE)
-	}, [node, wake])
+	}, [node, state, wake])
 	// Subscribe in a passive effect (commit time) — the constant-snapshot
 	// remnant of useSyncExternalStore is exactly this effect, so the effect
 	// is used directly. correctSubscription closes the render→attach gap.
 	React.useEffect(() => {
 		const off = observeNode(node, onNotify, deliver)
-		if (rendered.current.live) {
-			correctSubscription(node, rendered.current, scope, deliver, wake)
+		if (state.rendered.live) {
+			correctSubscription(node, state.rendered, scope, deliver, wake)
 		}
 		return off
-	}, [node, scope, deliver, wake, onNotify])
+	}, [node, scope, state, deliver, wake, onNotify])
 	const world = worldOf(ids)
 	const st = resolveState(node, world)
 	const value = unwrapState(st, world)
-	const stash = rendered.current
+	const stash = state.rendered
 	stash.ids = ids
 	stash.value = value
 	stash.live = true
 	// Commit-sync the committed stash (no deps: runs on every commit, with
 	// this render's resolution; a suspended render never reaches it).
 	React.useLayoutEffect(() => {
-		const c = committedStash.current
+		const c = state.committed
 		c.ids = ids
 		c.value = value
 		c.live = true
