@@ -66,3 +66,88 @@ The lifetime constraint prevents columns from eliminating handle recovery: valid
 Compared with the current object package, `graph.ts` grows from 1,601 to 1,834 lines while `index.ts` shrinks from 540 to 495: a net increase of 188 lines in the two core files. The added mechanisms are record layout, free lists, pin reference counts, finalizer registration, arena reset, and typed auxiliary columns. Big-O graph behavior is unchanged; constant factors and lifetime machinery increase.
 
 The useful result is therefore not a replacement recommendation. The object graph remains the baseline for this object-handle API. Both handle-owned fields and per-field indexed columns were measured; the columns made this hybrid slower. Arena growth should not be implemented unless another design first closes the fixed-arena execution gap.
+
+## 2026-07-12 optimization round: 1.405x to 1.06x
+
+A second round revised the conclusion above. The gap was not structural; it
+was a set of identifiable per-operation costs, each with a fix that keeps
+the arena design and the full test surface (329 package tests, 179
+conformance cases, oracle fuzz at 5,000 seeds, GC/leak suite) green.
+
+Measured on the same three-round isolated `milomg-reactivity-benchmark`
+protocol, the geometric-mean ratio against `signals-royale-fx2` moved from
+1.405x to 1.0618x, with the arena now winning eight of twenty rows outright
+(signal creation 0.74x, the three large dynamic-graph cases 0.78-0.91x,
+update-heavy writes 0.93x). Both packages were under active development
+during the round; the reference numbers name the fx2 working tree at
+measurement time. Machine load was elevated but shared by the alternating
+protocol.
+
+What closed the gap, in landing order:
+
+- **Persistent integer stack for the invalidation wave.** The wave never
+  runs user code, so one module-lifetime `Int32Array` replaces a heap cons
+  cell per branching descent.
+- **Trace-guarded cause stores.** The per-visit causal-event store only
+  runs while a tracer is attached.
+- **No `fill()` builtins in reclaim.** Freed records are cleared with
+  explicit stores of exactly the slots each record kind can have dirtied —
+  a freed watcher record, for instance, provably dirties only its dep list
+  head/tail and validation watermark.
+- **Lazy records.** Cells and computeds are born pointing at a shared,
+  immutable "virgin" record that carries their born flags word; the real
+  record and finalizer registration materialize at first graph
+  participation. A handle dropped before that point frees with ordinary
+  GC. Writes to a recordless cell store the value and skip the clock
+  entirely unless a draft world is live or a tracer is attached (both can
+  observe a cell from outside the edge graph).
+- **Cell re-virginization.** A cell record's only owners are its incoming
+  links, so when the last one drops, the record returns to the free pool
+  and the live handle points back at the virgin record. Cells linked by
+  reads therefore never touch the FinalizationRegistry at all; only
+  computeds (whose records own dep links a dead handle must free) and
+  tracer/draft-materialized cells register.
+- **Generation-stamped typed effect queue.** The flush queue stores
+  (record id, generation) pairs instead of handles: enqueueing is two int
+  stores with no handle lookup and no write barrier, and a record
+  reclaimed between schedule and drain gen-mismatches into a no-op.
+- **Bytecode diet.** Typed-array field access compiles to roughly double
+  the bytecode of a named-property access, which starved V8's inlining
+  budgets. Moving cold bodies (cycle throw, children/cleanup disposal,
+  stale-edge freeing, batch-base save, re-virginize) out of hot functions
+  restored inlining across the validate/recompute/track cluster.
+- **Stackless chain validation.** A node with exactly one dependency
+  validates with one reading compare, and a chain of single-dep,
+  single-subscriber possibly-stale computeds validates with one descent
+  and one climb — no recursion frames. Deep-chain propagation went from
+  1.4x to parity.
+- **Plain-success recompute inline.** The seam that folds async outcomes
+  into node state is only called for async-touched evaluations; a plain
+  successful evaluation resolves to the equality cutoff inline.
+- **Engine core in a single-instantiation closure + local const views.**
+  Bundlers emit module state as mutable top-level `var`s, so every arena
+  access compiled to a context-slot load that could not be folded or
+  reused across calls. Binding the arena views as function-scope consts
+  (and opening hot functions with local views) removed most of those
+  loads; wide fan-out propagation improved from ~1.4x to ~1.2x.
+- **Free-record stacks.** Intrusive free lists chain a dependent memory
+  read through every allocation; explicit stack arrays make each pop an
+  independent indexed load. The dense create/dispose lifecycle driver
+  (100 effects x 1000 reads) went from 11.3 ms to 3.7 ms.
+
+What remains (the current 1.06x): the read-and-validate paths still pay
+more per operation than object fields — a tracked read costs an id load
+plus a typed-array flags load where the object graph pays one field load,
+and the same multiplier applies through validation loops and effect
+re-runs. The rows still losing are exactly the small, cache-resident
+graphs dominated by those paths (wide fan-out 1.43x, effect
+create+dispose 1.38x, equality-cutoff chains 1.34x). The identified next
+step, not taken in this round, is a hybrid split: keep links, clocks, and
+propagation in the arena (where the large-graph rows are won) and move
+per-node hot words (flags, dep-cursor) onto the handles.
+
+Two claims from the earlier conclusion did not survive re-testing.
+Typed-array bounds checks were already exonerated by the masking
+experiment and remain exonerated. The finalizer-registration cost, judged
+inherent above, was removable for the dominant cell lifecycle via
+re-virginization.
