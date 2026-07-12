@@ -1947,14 +1947,26 @@ function createGraphCore(
 		executeWatcher(w)
 	}
 
-	/** Effects created by the previous run belong to that run. Out of line:
-	 * effects with children are the exception, and the loop stays out of
-	 * executeWatcher's bytecode (hot-cluster inlining budget). */
+	/** Dispose every child even when one cleanup throws, then surface the
+	 * first error after the whole owned set is released. Out of line so the
+	 * exceptional loop stays out of executeWatcher's bytecode. */
 	function disposeWatcherChildren(w: WatcherNode): void {
 		const children = w.children!
 		w.children = undefined
+		let failed = false
+		let failure: unknown
 		for (const child of children) {
-			disposeWatcher(child)
+			try {
+				disposeWatcher(child)
+			} catch (error) {
+				if (!failed) {
+					failed = true
+					failure = error
+				}
+			}
+		}
+		if (failed) {
+			throw failure
 		}
 	}
 
@@ -1977,7 +1989,16 @@ function createGraphCore(
 		const clocks = graphClocks
 		const id = w.id
 		if (w.children !== undefined) {
-			disposeWatcherChildren(w)
+			try {
+				disposeWatcherChildren(w)
+			} catch (error) {
+				try {
+					disposeWatcher(w)
+				} catch {
+					// Preserve the first child-cleanup error.
+				}
+				throw error
+			}
 		}
 		if (w.cleanup !== undefined) {
 			runWatcherCleanup(w)
@@ -2026,17 +2047,28 @@ function createGraphCore(
 			return
 		}
 		setFlags(w, flagsOf(w) & ~Flag.Watched)
+		let failed = false
+		let failure: unknown
 		try {
 			if (w.children !== undefined) {
-				for (const child of w.children) {
-					disposeWatcher(child)
+				try {
+					disposeWatcherChildren(w)
+				} catch (error) {
+					failed = true
+					failure = error
 				}
-				w.children = undefined
 			}
 			if (w.cleanup !== undefined) {
 				const c = w.cleanup
 				w.cleanup = undefined
-				untracked(c)
+				try {
+					untracked(c)
+				} catch (error) {
+					if (!failed) {
+						failed = true
+						failure = error
+					}
+				}
 			}
 		} finally {
 			unlinkAllDeps(w)
@@ -2050,6 +2082,9 @@ function createGraphCore(
 			validAtColumn[id >> RECORD_SHIFT] = 0
 			generationColumn[id >> RECORD_SHIFT]++
 			pushFreeNode(id)
+		}
+		if (failed) {
+			throw failure
 		}
 	}
 
@@ -2167,35 +2202,25 @@ function createGraphCore(
 		freeLinkCount = 0
 		freeNodeCount = 0
 		nodeFinalizer = makeNodeFinalizer()
-		droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWatcher(w))
 	}
-
-	/**
-	 * Reclaims effects whose disposer was dropped without being called. The
-	 * watcher node is held by the graph (its dependencies' subscriber lists), so
-	 * only the disposer's collectibility tells us the user is done with it.
-	 */
-	let droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWatcher(w))
 
 	function makeEffect(fn: () => void | (() => void)): () => void {
 		const w = makeWatcher(fn, Flag.WatchRunEffect)
-		const owned = activeScope !== null && (flagsOf(activeScope) & Flag.Watched) !== 0
-		if (owned) {
-			;(activeScope!.children ??= []).push(w)
+		const owner = activeScope
+		if (owner !== null && (flagsOf(owner) & Flag.Watched) !== 0) {
+			;(owner.children ??= []).push(w)
 		}
-		executeWatcher(w)
-		const dispose = () => {
-			droppedDisposers.unregister(dispose)
-			disposeWatcher(w)
+		try {
+			executeWatcher(w)
+		} catch (error) {
+			try {
+				disposeWatcher(w)
+			} catch {
+				// Preserve the setup error.
+			}
+			throw error
 		}
-		// An effect created inside a scope (or another effect) lives and dies
-		// with its owner; dropping the per-effect disposer is normal usage there,
-		// not abandonment. Only ownerless effects arm the reclamation registry —
-		// a collected disposer must never kill an effect something still owns.
-		if (!owned) {
-			droppedDisposers.register(dispose, w, dispose)
-		}
-		return dispose
+		return () => disposeWatcher(w)
 	}
 
 	function makeScope(fn: () => void): () => void {
@@ -2206,17 +2231,21 @@ function createGraphCore(
 		activeScope = w
 		activeConsumer = null
 		try {
-			fn()
-		} finally {
-			activeScope = prevScope
-			activeConsumer = prevConsumer
+			try {
+				fn()
+			} finally {
+				activeScope = prevScope
+				activeConsumer = prevConsumer
+			}
+		} catch (error) {
+			try {
+				disposeWatcher(w)
+			} catch {
+				// Preserve the setup error.
+			}
+			throw error
 		}
-		const dispose = () => {
-			droppedDisposers.unregister(dispose)
-			disposeWatcher(w)
-		}
-		droppedDisposers.register(dispose, w, dispose)
-		return dispose
+		return () => disposeWatcher(w)
 	}
 
 	/**
@@ -2236,15 +2265,16 @@ function createGraphCore(
 		const sub = makeWatcher(undefined, Flag.WatchRender | Flag.WatchDraft)
 		sub.onNotify = notify
 		sub.onDraftWake = draftWake
-		newEvalPass()
-		const subId = sub.id
-		sub.depsTail = 0
-		const prevConsumer = activeConsumer
-		activeConsumer = sub
 		try {
-			if ((flagsOf(node) & Flag.KindCell) !== 0) {
-				readCell(node as CellNode<unknown>)
-			} else if ((flagsOf(node) & Flag.KindDerived) !== 0) {
+			newEvalPass()
+			const subId = sub.id
+			sub.depsTail = 0
+			const prevConsumer = activeConsumer
+			activeConsumer = sub
+			try {
+				if ((flagsOf(node) & Flag.KindCell) !== 0) {
+					readCell(node as CellNode<unknown>)
+				} else if ((flagsOf(node) & Flag.KindDerived) !== 0) {
 				// Subscribe to invalidation only; do not force evaluation here.
 				trackRead(node, sub)
 				// This installed a back-edge without a pull, so the stale-cover
@@ -2257,27 +2287,30 @@ function createGraphCore(
 				// edges, so no wave was ever swallowed and there is no missed edge —
 				// exactly the edge-triggered contract's "no Clean→stale transition
 				// happened yet".
-				if (
-					(flagsOf(node) & Flag.StaleMask) !== 0 &&
-					(node as DerivedNode<unknown>).value !== UNINITIALIZED
-				) {
-					setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
-					causeColumn[subId >> RECORD_SHIFT] = causeColumn[node.id >> RECORD_SHIFT]
-					scheduleWatcher(subId, flagsOf(sub))
+					if (
+						(flagsOf(node) & Flag.StaleMask) !== 0 &&
+						(node as DerivedNode<unknown>).value !== UNINITIALIZED
+					) {
+						setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
+						causeColumn[subId >> RECORD_SHIFT] = causeColumn[node.id >> RECORD_SHIFT]
+						scheduleWatcher(subId, flagsOf(sub))
+					}
 				}
+			} finally {
+				activeConsumer = prevConsumer
 			}
-		} finally {
-			activeConsumer = prevConsumer
+			if (batchDepth === 0) {
+				flush()
+			}
+		} catch (error) {
+			try {
+				disposeWatcher(sub)
+			} catch {
+				// Preserve the subscription error.
+			}
+			throw error
 		}
-		if (batchDepth === 0) {
-			flush()
-		}
-		const dispose = () => {
-			droppedDisposers.unregister(dispose)
-			disposeWatcher(sub)
-		}
-		droppedDisposers.register(dispose, sub, dispose)
-		return dispose
+		return () => disposeWatcher(sub)
 	}
 
 	return {

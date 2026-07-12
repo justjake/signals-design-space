@@ -1,6 +1,6 @@
 /**
- * Leak audit (--expose-gc): dropped handles reclaim; quiescence leaves no
- * per-suspension state.
+ * Leak audit (--expose-gc): explicit disposal releases graph ownership;
+ * quiescence leaves no per-suspension state.
  *
  * Reclamation model under test:
  * - Unwatched computeds hold references dependency-ward only, so dropping
@@ -61,34 +61,6 @@ describe('leak audit', () => {
 		await collect()
 		expect(finalized).toBe(true)
 		expect(subCount(base)).toBe(0) // unwatched reads never registered subscriptions
-	})
-
-	test('a dropped effect disposer reclaims the watcher and its subscriptions', async () => {
-		const base = signal(1)
-		let runs = 0
-		;(() => {
-			// The disposer is dropped without being called.
-			void effect(() => {
-				base.get()
-				runs++
-			})
-		})()
-		expect(subCount(base)).toBe(1)
-		expect(runs).toBe(1)
-		await collect(10)
-		expect(subCount(base)).toBe(0) // registry unhooked the dropped effect
-		base.set(2)
-		expect(runs).toBe(1) // and it never runs again
-	})
-
-	test('a dropped subscription handle reclaims', async () => {
-		const base = signal(1)
-		;(() => {
-			void observeNode(nodeOf(base), () => {})
-		})()
-		expect(subCount(base)).toBe(1)
-		await collect(10)
-		expect(subCount(base)).toBe(0)
 	})
 
 	test('quiescence: retiring the last draft leaves no per-suspension state', () => {
@@ -158,20 +130,6 @@ describe('leak audit', () => {
 		})()
 		await collect()
 		expect(finalized).toBe(true) // forward references only after demote
-		expect(subCount(base)).toBe(0)
-	})
-
-	test('a dropped subscription over a computed chain reclaims the whole watched closure', async () => {
-		const base = signal(1)
-		const top = computed(() => base.get() + 1)
-		;(() => {
-			// The subscription handle is dropped without being called.
-			void observeNode(nodeOf(top), () => {})
-		})()
-		expect(read(top)).toBe(2) // watched evaluation links base -> top
-		expect(subCount(base)).toBe(1)
-		await collect(10)
-		// The registry disposed the subscription; the demote cascade unhooked the chain.
 		expect(subCount(base)).toBe(0)
 	})
 
@@ -246,7 +204,7 @@ describe('leak audit', () => {
 		expect(payloadRef.deref()).toBeUndefined()
 	})
 
-	test('a scope-owned effect survives GC of its unused per-effect disposer', async () => {
+	test('a scope owns effects whose individual disposer is unused', () => {
 		const base = signal(1)
 		let runs = 0
 		const disposeScope = effectScope(() => {
@@ -259,7 +217,6 @@ describe('leak audit', () => {
 			})
 		})
 		expect(runs).toBe(1)
-		await collect(10)
 		base.set(2)
 		expect(runs).toBe(2) // still alive: the scope is the owner
 		disposeScope()

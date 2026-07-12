@@ -16,12 +16,15 @@ import {
 	type Link,
 	type ReactiveNode,
 	Flag,
+	NO_EVENT,
 	batch,
 	currentGraphChange,
 	dependencyOf,
+	invalidateDerived,
 	makeCell,
 	makeDerived,
 	makeEffect,
+	makeScope,
 	nextDependency,
 	nextSubscriber,
 	observeNode,
@@ -454,6 +457,60 @@ describe('two-tier graph: render-notify delivery re-entrancy', () => {
 		for (const stop of stops) {
 			stop()
 		}
+	})
+})
+
+describe('watcher ownership', () => {
+	test('failed watcher setup releases every edge before rethrowing', () => {
+		const source = makeCell(0)
+		expect(() =>
+			makeEffect(() => {
+				readCell(source)
+				throw new Error('effect setup')
+			}),
+		).toThrow('effect setup')
+		expect(source.observerCount).toBe(0)
+
+		expect(() =>
+			makeScope(() => {
+				makeEffect(() => {
+					readCell(source)
+				})
+				throw new Error('scope setup')
+			}),
+		).toThrow('scope setup')
+		expect(source.observerCount).toBe(0)
+
+		const computed = makeDerived<unknown>(() => readCell(source))
+		readDerived(computed)
+		invalidateDerived(computed, NO_EVENT)
+		expect(() =>
+			observeNode(computed, () => {
+				throw new Error('subscription setup')
+			}),
+		).toThrow('subscription setup')
+		expect(computed.observerCount).toBe(0)
+		expect(source.observerCount).toBe(0)
+	})
+
+	test('a throwing child cleanup does not retain its siblings', () => {
+		const first = makeCell(0)
+		const second = makeCell(0)
+		const stop = makeScope(() => {
+			makeEffect(() => {
+				readCell(first)
+				return () => {
+					throw new Error('cleanup')
+				}
+			})
+			makeEffect(() => {
+				readCell(second)
+			})
+		})
+		expect([first.observerCount, second.observerCount]).toEqual([1, 1])
+		expect(stop).toThrow('cleanup')
+		expect([first.observerCount, second.observerCount]).toEqual([0, 0])
+		expect(stop).not.toThrow()
 	})
 })
 
