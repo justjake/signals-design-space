@@ -80,14 +80,14 @@ export const enum Flag {
 	KindAtom = 0b0000_0000_0001,
 	/** Cached computed. */
 	KindComputed = 0b0000_0000_0010,
-	/** Watcher: an effect, a store subscription, or a scope anchor. */
+	/** Watcher: an effect or store subscription. */
 	Watching = 0b0000_0000_0100,
 
 	// Watcher capabilities: fixed at creation, present on Watching nodes
 	// only. Scheduling dispatches on these bits, never on whether a callback
 	// happens to be installed. A component subscription is
 	// Watching|WatchRender|WatchDraft; an engine effect is
-	// Watching|WatchRunEffect; a scope anchor is Watching alone.
+	// Watching|WatchRunEffect.
 	/** Deliver through the render-notify queue, after effects settle. The
 	 * subscriber's own notify callback decides whether the delivery becomes
 	 * a re-render. */
@@ -299,17 +299,23 @@ export interface ComputedNode<T> extends ReactiveNode {
 	validAtGraphChange: GraphChangeClock
 }
 
-/** A node that reacts when its dependencies change: effects,
- * render-notify subscribers, and effect-scope anchors. */
-export interface WatcherNode extends ReactiveNode {
+/** State needed while a scope or effect body owns nested effects. A real
+ * watcher's Watched bit prevents a self-disposed effect from gaining children
+ * later in the same body. */
+interface EffectOwner {
+	flags: Flags
+	/** Direct child effects, allocated only when the first child is created. */
+	children: WatcherNode[] | undefined
+}
+
+/** A node that reacts when its dependencies change: effects and
+ * render-notify subscribers. */
+export interface WatcherNode extends ReactiveNode, EffectOwner {
 	/** The clock reading at this watcher's last validation or run; same
 	 * meaning as ComputedNode.validAtGraphChange. */
 	validAtGraphChange: GraphChangeClock
 	fn: (() => void | (() => void)) | undefined
 	cleanup: (() => void) | undefined
-	/** Child effects created during this watcher's run (when it acts as a
-	 * scope); disposing the watcher disposes them. */
-	children: WatcherNode[] | undefined
 	/** Delivery callback: render notification for WatchRender watchers, or
 	 * the React-phase scheduler for a deferred effect. */
 	onNotify: (() => void) | undefined
@@ -631,9 +637,7 @@ let renderNotifyCount = 0
  * allocates a fresh one instead. */
 let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
 
-/** Route a watcher into its flush queue by capability bit. Scope anchors
- * carry neither capability and are never scheduled (they track no
- * dependencies). */
+/** Route a watcher into its flush queue by capability bit. */
 function scheduleWatcher(w: WatcherNode): void {
 	const flags = w.flags
 	// One masked test covering both "already queued" and "disposed"
@@ -1400,7 +1404,7 @@ export function isUninitialized(v: unknown): boolean {
 export { UNINITIALIZED }
 
 // ---------------------------------------------------------------------------
-// Watchers: effects, scopes, and store subscriptions
+// Watchers: effects and store subscriptions
 // ---------------------------------------------------------------------------
 
 function makeWatcher(
@@ -1432,16 +1436,16 @@ function makeWatcher(
 	}
 }
 
-let activeScope: WatcherNode | null = null
+let activeEffectOwner: EffectOwner | null = null
 
 /** Dispose every child even when one cleanup throws, then surface the first
  * error after the whole owned set is released. */
-function disposeChildren(w: WatcherNode): void {
-	const children = w.children
+function disposeChildren(owner: EffectOwner): void {
+	const children = owner.children
 	if (children === undefined) {
 		return
 	}
-	w.children = undefined
+	owner.children = undefined
 	let failed = false
 	let failure: unknown
 	for (const child of children) {
@@ -1539,9 +1543,9 @@ function executeWatcher(w: WatcherNode): void {
 		return
 	}
 	const prevConsumer = activeConsumer
-	const prevScope = activeScope
+	const prevOwner = activeEffectOwner
 	activeConsumer = w
-	activeScope = w
+	activeEffectOwner = w
 	const myPass = newEvalPass()
 	w.depsTail = undefined
 	const cause = traceHook !== null ? traceHook('effect-run', w, w.causeEvent) : NO_EVENT
@@ -1561,7 +1565,7 @@ function executeWatcher(w: WatcherNode): void {
 		setCurrentCause(prevCause)
 		evalPass = myPass
 		activeConsumer = prevConsumer
-		activeScope = prevScope
+		activeEffectOwner = prevOwner
 		trimDeps(w)
 		w.validAtGraphChange = preGraphChange
 	}
@@ -1685,7 +1689,7 @@ export function makeScheduledEffect(
 
 export function makeEffect(fn: () => void | (() => void)): () => void {
 	const w = makeWatcher(fn, Flag.WatchRunEffect)
-	const owner = activeScope
+	const owner = activeEffectOwner
 	if (owner !== null && (owner.flags & Flag.Watched) !== 0) {
 		;(owner.children ??= []).push(w)
 	}
@@ -1703,28 +1707,27 @@ export function makeEffect(fn: () => void | (() => void)): () => void {
 }
 
 export function makeScope(fn: () => void): () => void {
-	// A scope anchor: owns child effects, takes no deliveries of its own.
-	const w = makeWatcher(undefined, 0)
-	const prevScope = activeScope
+	const owner: EffectOwner = { flags: Flag.Watched, children: undefined }
+	const prevOwner = activeEffectOwner
 	const prevConsumer = activeConsumer
-	activeScope = w
+	activeEffectOwner = owner
 	activeConsumer = null
 	try {
 		try {
 			fn()
 		} finally {
-			activeScope = prevScope
+			activeEffectOwner = prevOwner
 			activeConsumer = prevConsumer
 		}
 	} catch (error) {
 		try {
-			disposeWatcher(w)
+			disposeChildren(owner)
 		} catch {
 			// Preserve the setup error.
 		}
 		throw error
 	}
-	return () => disposeWatcher(w)
+	return () => disposeChildren(owner)
 }
 
 /**

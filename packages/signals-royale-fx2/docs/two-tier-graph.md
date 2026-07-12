@@ -695,10 +695,15 @@ document's sections above describe the code at landing time. The mapping:
   `WatchRender` (render-notify queue), `WatchRunEffect` (validated effect
   queue), `WatchDraft` (draft pings/wakes), and `WatchSchedule` (defer a
   validated effect body to its host phase). Component subscription =
-  `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`;
-  scope anchor = `Watching` alone. The `scheduled`/`computing` bools became
-  the `Scheduled`/`Computing` bits; the `disposed` bool is gone — watcher
-  disposal is `Watching` set with `Watched` clear.
+  `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`.
+  The `scheduled`/`computing` bools became the `Scheduled`/`Computing` bits;
+  the `disposed` bool is gone — watcher disposal is `Watching` set with
+  `Watched` clear.
+- `effectScope` no longer creates a watcher. Its `EffectOwner` contains only
+  the existing `flags` and lazy `children` fields. `activeEffectOwner` points
+  to it while the scope callback runs, or to an effect while that effect runs.
+  Both collect nested effects through `children`; the shared `Watched` check
+  prevents a self-disposed effect from accepting more.
 - `pokeLeafObservers`/`pokeAndWakeLeafObservers` became ONE iterative
   `pokeDraftWatchers(node, cause, wake?)` sharing the wave's cursor +
   frame-stack skeleton, deduped by a per-node pokePass reading against the

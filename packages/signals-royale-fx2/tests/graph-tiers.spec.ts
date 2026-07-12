@@ -545,6 +545,58 @@ describe('watcher ownership', () => {
 		expect([first.observerCount, second.observerCount]).toEqual([0, 0])
 		expect(stop).not.toThrow()
 	})
+
+	test('an effect replaces the children owned by its previous run', () => {
+		const source = atom(0)
+		const events: string[] = []
+		const stop = makeEffect(() => {
+			const value = readAtom(source)
+			events.push(`parent:${value}`)
+			void makeEffect(() => {
+				events.push(`child:${value}`)
+				return () => events.push(`cleanup:${value}`)
+			})
+		})
+
+		writeAtom(source, 1)
+		expect(events).toEqual([
+			'parent:0',
+			'child:0',
+			'cleanup:0',
+			'parent:1',
+			'child:1',
+		])
+		stop()
+		expect(events.at(-1)).toBe('cleanup:1')
+	})
+
+	test('an effect created after its owner disposes itself remains independent', () => {
+		const parentSource = atom(0)
+		const childSource = atom(0)
+		let parentRuns = 0
+		let childRuns = 0
+		let stopParent = () => {}
+		let stopChild = () => {}
+		stopParent = makeEffect(() => {
+			readAtom(parentSource)
+			parentRuns++
+			if (parentRuns === 2) {
+				stopParent()
+				stopChild = makeEffect(() => {
+					readAtom(childSource)
+					childRuns++
+				})
+			}
+		})
+
+		writeAtom(parentSource, 1)
+		writeAtom(parentSource, 2)
+		writeAtom(childSource, 1)
+		stopParent()
+		writeAtom(childSource, 2)
+		expect([parentRuns, childRuns]).toEqual([2, 3])
+		stopChild()
+	})
 })
 
 describe('scheduled effect tracking', () => {
