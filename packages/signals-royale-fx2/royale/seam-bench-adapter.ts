@@ -1,10 +1,10 @@
 /** react-seam-bench Contender for fx2. */
 import type { ComponentType, ReactNode } from 'react'
-import { batch, set, signal, type Signal } from 'signals-royale-fx2'
+import { batch, createAtom, set, type Atom } from 'signals-royale-fx2'
 import {
-	SignalScope,
+	SignalScopeProvider,
 	registerReactSignals,
-	startTransitionWrite,
+	startSignalTransition,
 	useValue,
 } from '../src/react/index.ts'
 
@@ -27,9 +27,9 @@ export interface Contender {
 const contender: Contender = {
 	name: 'royale-fx2',
 	createCells(n: number): CellStore {
-		const cells: Signal<number>[] = []
+		const cells: Atom<number>[] = []
 		for (let i = 0; i < n; i++) {
-			cells.push(signal(0))
+			cells.push(createAtom(0))
 		}
 		return {
 			useCell(i: number): number {
@@ -46,7 +46,7 @@ const contender: Contender = {
 				})
 			},
 			writeManyInTransition(updates) {
-				startTransitionWrite(() => {
+				startSignalTransition(() => {
 					for (const [i, v] of updates) {
 						set(cells[i], v)
 					}
@@ -55,7 +55,7 @@ const contender: Contender = {
 			dispose() {
 				cells.length = 0 // dropped handles reclaim structurally
 			},
-			Provider: SignalScope as ComponentType<{ children: ReactNode }>,
+			Provider: SignalScopeProvider as ComponentType<{ children: ReactNode }>,
 		}
 	},
 }

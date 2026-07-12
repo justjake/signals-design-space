@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest'
 import * as fx2 from '../src/index.ts'
 import {
 	attachTracer,
-	computed,
+	createComputed,
 	effect,
 	initializeAtomState,
 	installState,
@@ -12,20 +12,25 @@ import {
 	read,
 	reducerAtom,
 	serializeAtomState,
-	signal,
+	createAtom,
+	type Atom,
 	type Computed,
-	type Signal,
 	untracked,
 	update,
 } from '../src/index.ts'
-import { FORBID_WRITE_FROM_COMPUTED, observeNode } from '../src/graph.ts'
-import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+import {
+	FORBID_WRITE_FROM_COMPUTED,
+	SignalReadForbidden,
+	SignalWriteForbidden,
+	observeNode,
+} from '../src/graph.ts'
+import { openDraft, retireDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
 
 type Animal = { name: string }
 type Dog = Animal & { bark(): void }
 type ExpectFalse<T extends false> = T
 type ExpectTrue<T extends true> = T
-type SignalIsInvariant = ExpectFalse<Signal<Dog> extends Signal<Animal> ? true : false>
+type AtomIsInvariant = ExpectFalse<Atom<Dog> extends Atom<Animal> ? true : false>
 type ComputedIsCovariant = ExpectTrue<Computed<Dog> extends Computed<Animal> ? true : false>
 
 const tick = () => new Promise<void>((r) => setTimeout(r))
@@ -33,13 +38,13 @@ const tick = () => new Promise<void>((r) => setTimeout(r))
 describe('lifetime effects', () => {
 	test('first subscriber of any kind activates; last of every kind deactivates', async () => {
 		const log: string[] = []
-		const a = signal(0, {
+		const a = createAtom(0, {
 			onObserved: (ctx) => {
 				log.push(`on:${ctx.get()}`)
 				return () => log.push('off')
 			},
 		})
-		const c = computed(() => a.get() * 2)
+		const c = createComputed(() => a.get() * 2)
 		read(c) // unobserved computed chain: no observation
 		await tick()
 		expect(log).toEqual([])
@@ -59,7 +64,7 @@ describe('lifetime effects', () => {
 
 	test('flaps within one tick coalesce; ctx.set writes urgently', async () => {
 		const log: string[] = []
-		const a = signal(1, {
+		const a = createAtom(1, {
 			onObserved: (ctx) => {
 				log.push('on')
 				ctx.set(ctx.get() + 41)
@@ -78,10 +83,15 @@ describe('lifetime effects', () => {
 	})
 })
 
+test('forbidden-operation errors name themselves', () => {
+	expect(new SignalReadForbidden().name).toBe('SignalReadForbidden')
+	expect(new SignalWriteForbidden().name).toBe('SignalWriteForbidden')
+})
+
 describe('lazy initializers', () => {
 	test('runs once at first read, not at construction', () => {
 		let runs = 0
-		const a = signal(() => {
+		const a = createAtom(() => {
 			runs++
 			return 7
 		})
@@ -93,7 +103,7 @@ describe('lazy initializers', () => {
 
 	test('set before first read runs the initializer first (equality base)', () => {
 		let runs = 0
-		const a = signal(() => {
+		const a = createAtom(() => {
 			runs++
 			return 1
 		})
@@ -103,14 +113,14 @@ describe('lazy initializers', () => {
 	})
 
 	test('update before first read applies against the initialized base', () => {
-		const a = signal(() => 10)
+		const a = createAtom(() => 10)
 		update(a, (x) => x + 5)
 		expect(read(a)).toBe(15)
 	})
 
 	test('an initializer is forbidden from writing', () => {
-		const b = signal(0)
-		const a = signal((): number => {
+		const b = createAtom(0)
+		const a = createAtom((): number => {
 			b.set(1)
 			return 0
 		})
@@ -119,7 +129,7 @@ describe('lazy initializers', () => {
 
 	test('a throwing initializer retries on the next read', () => {
 		let runs = 0
-		const a = signal(() => {
+		const a = createAtom(() => {
 			runs++
 			if (runs === 1) {
 				throw new Error('flaky')
@@ -132,13 +142,13 @@ describe('lazy initializers', () => {
 	})
 
 	test('a cyclic initializer throws a clear error', () => {
-		const a = signal((): number => a.get() + 1)
+		const a = createAtom((): number => a.get() + 1)
 		expect(() => read(a)).toThrow(/cyclic lazy initializer/)
 	})
 
 	test('subscription materializes', () => {
 		let runs = 0
-		const a = signal(() => {
+		const a = createAtom(() => {
 			runs++
 			return 3
 		})
@@ -148,30 +158,32 @@ describe('lazy initializers', () => {
 	})
 })
 
-describe('derived policy and APIs', () => {
+describe('computed policy and APIs', () => {
 	test('factories return graph nodes without runtime handle classes', () => {
-		const source = signal(1)
+		const source = createAtom(1)
 		const reduced = reducerAtom((state: number, action: number) => state + action, 1)
-		const derived = computed(() => source.get() + 1)
-		const otherDerived = computed(() => 0)
+		const computedValue = createComputed(() => source.get() + 1)
+		const otherComputed = createComputed(() => 0)
 		expect(nodeOf(source)).toBe(source)
 		expect(nodeOf(reduced)).toBe(reduced)
-		expect(nodeOf(derived)).toBe(derived)
-		expect(Object.getPrototypeOf(derived)).toBe(Object.prototype)
-		expect(derived.get).toBe(otherDerived.get)
-		expect(derived.peek).toBe(otherDerived.peek)
-		expect(fx2).not.toHaveProperty('Signal')
+		expect(nodeOf(computedValue)).toBe(computedValue)
+		expect(Object.getPrototypeOf(computedValue)).toBe(Object.prototype)
+		expect(computedValue.get).toBe(otherComputed.get)
+		expect(computedValue.peek).toBe(otherComputed.peek)
+		expect(fx2).not.toHaveProperty('Atom')
 		expect(fx2).not.toHaveProperty('ReducerAtom')
 		expect(fx2).not.toHaveProperty('Computed')
-		expect(fx2.signal).toBe(signal)
+		expect(fx2).not.toHaveProperty('signal')
+		expect(fx2).not.toHaveProperty('computed')
+		expect(fx2.createAtom).toBe(createAtom)
 		expect(fx2.reducerAtom).toBe(reducerAtom)
-		expect(fx2.computed).toBe(computed)
+		expect(fx2.createComputed).toBe(createComputed)
 	})
 
 	test('previous is the last settled canonical value', () => {
-		const source = signal(1)
+		const source = createAtom(1)
 		const seen: Array<number | undefined> = []
-		const doubled = computed<number>((_use, previous) => {
+		const doubled = createComputed<number>((_use, previous) => {
 			seen.push(previous)
 			return source.get() * 2
 		})
@@ -182,15 +194,15 @@ describe('derived policy and APIs', () => {
 	})
 
 	test('a computed cannot read itself', () => {
-		let self!: ReturnType<typeof computed<number>>
-		self = computed(() => self.get())
+		let self!: ReturnType<typeof createComputed<number>>
+		self = createComputed(() => self.get())
 		expect(() => self.get()).toThrow(/cycle detected in computed/)
 	})
 
 	test('a previously settled computed still cannot read itself', () => {
-		const recurse = signal(false)
-		let self!: ReturnType<typeof computed<number>>
-		self = computed((_use, previous) => {
+		const recurse = createAtom(false)
+		let self!: ReturnType<typeof createComputed<number>>
+		self = createComputed((_use, previous) => {
 			if (recurse.get()) {
 				return self.get()
 			}
@@ -202,8 +214,9 @@ describe('derived policy and APIs', () => {
 	})
 
 	test('updaters cannot read or write signals', () => {
-		const a = signal(1)
-		const b = signal(10)
+		const a = createAtom(1)
+		const b = createAtom(10)
+		expect(() => a.update((value) => value + b.get())).toThrow(SignalReadForbidden)
 		expect(() => a.update((value) => value + b.get())).toThrow(/reads are not allowed/)
 		expect(() => a.update((value) => value + Number(isPending(b)))).toThrow(/reads are not allowed/)
 		expect(() =>
@@ -211,15 +224,15 @@ describe('derived policy and APIs', () => {
 				b.set(20)
 				return value
 			}),
-		).toThrow(/writes are not allowed/)
+		).toThrow(SignalWriteForbidden)
 		expect(a.get()).toBe(1)
 		expect(b.get()).toBe(10)
 	})
 
 	test('writes inside computeds are forbidden by policy', () => {
 		expect(FORBID_WRITE_FROM_COMPUTED).toBe(true)
-		const target = signal(0)
-		const writer = computed(() => {
+		const target = createAtom(0)
+		const writer = createComputed(() => {
 			target.set(1)
 			return 1
 		})
@@ -228,8 +241,8 @@ describe('derived policy and APIs', () => {
 	})
 
 	test('untracked does not bypass computed write policy', () => {
-		const target = signal(0)
-		const writer = computed(() =>
+		const target = createAtom(0)
+		const writer = createComputed(() =>
 			untracked(() => {
 				target.set(1)
 				return 1
@@ -251,16 +264,16 @@ describe('derived policy and APIs', () => {
 
 describe('SSR', () => {
 	test('serialize/initialize round-trips; install skips initializers and is not a write', () => {
-		const s1 = signal(1)
-		const s2 = signal('x')
+		const s1 = createAtom(1)
+		const s2 = createAtom('x')
 		s1.set(5)
 		const json = serializeAtomState([s1, s2])
 		let initRuns = 0
-		const c1 = signal((): number => {
+		const c1 = createAtom((): number => {
 			initRuns++
 			return 0
 		})
-		const c2 = signal('default')
+		const c2 = createAtom('default')
 		let effectRuns = 0
 		const dispose = effect(() => {
 			void c2.get()
@@ -276,12 +289,12 @@ describe('SSR', () => {
 	})
 
 	test('record keys and replacer/reviver pass through', () => {
-		const a = signal(2)
+		const a = createAtom(2)
 		const json = serializeAtomState({ count: a }, (_k, v) => (typeof v === 'number' ? v * 10 : v))
-		const b = signal(0)
+		const b = createAtom(0)
 		initializeAtomState(json, { count: b }, (_k, v) => (typeof v === 'number' ? v / 10 : v))
 		expect(read(b)).toBe(2)
-		const fresh = signal(0)
+		const fresh = createAtom(0)
 		installState(fresh, 9)
 		expect(read(fresh)).toBe(9)
 	})
@@ -290,8 +303,8 @@ describe('SSR', () => {
 describe('causality tracer', () => {
 	test('chains: effect run -> write -> parent write; ring bounds with counted overflow', () => {
 		const t = attachTracer({ capacity: 16 })
-		const a = signal(0, { label: 'a' })
-		const b = signal(0, { label: 'b' })
+		const a = createAtom(0, { label: 'a' })
+		const b = createAtom(0, { label: 'b' })
 		effect(() => b.set(a.get() + 1)) // writes b whenever a changes
 		a.set(1)
 		const events = t.events()
@@ -307,7 +320,7 @@ describe('causality tracer', () => {
 		expect(writeA.kind).toBe('write')
 		expect(writeA.label).toBe('a')
 		// Unrelated operations never chain.
-		const unrelated = signal(0, { label: 'u' })
+		const unrelated = createAtom(0, { label: 'u' })
 		unrelated.set(1)
 		const writeU = t.events().find((e) => e.kind === 'write' && e.label === 'u')!
 		expect(writeU.cause).toBe(0)
@@ -322,9 +335,9 @@ describe('causality tracer', () => {
 
 	test('draft chains: retire event points at the draft last write, opens the fold writes', () => {
 		const t = attachTracer()
-		const a = signal(1, { label: 'a' })
+		const a = createAtom(1, { label: 'a' })
 		const d = openDraft()
-		runInDraft(d, () => a.update((x) => x + 1))
+		runWithDraftWrites(d, () => a.update((x) => x + 1))
 		sealDraft(d)
 		retireDraft(d.id)
 		const events = t.events()

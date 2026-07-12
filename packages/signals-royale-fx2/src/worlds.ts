@@ -6,28 +6,28 @@
  * old state while it renders a work-in-progress tree with the transition's
  * updates applied. useState supports this because pending updates live in
  * per-hook queues, and each render pass chooses which queued updates to
- * apply. An external store has a single current value per cell, so every
+ * apply. An external store has a single current value per atom, so every
  * render pass would see the same thing — a transition's writes would either
  * show up immediately (defeating the transition) or be invisible to the
- * work-in-progress render. This module gives cells the same machinery React
- * gives useState: pending updates are stored beside the cell rather than in
+ * work-in-progress render. This module gives atoms the same machinery React
+ * gives useState: pending updates are stored beside the atom rather than in
  * it, and every reader declares which pending batches it wants to see.
  *
  * The model:
  *
  * - A draft is one transition batch. A write made inside a transition does
- *   not touch the cell; it appends an intent — either a set-value or an
- *   updater function — to that cell's rebase log, tagged with the draft.
- * - A rebase log exists per cell, only while some draft has written to it.
- *   It holds the value the cell had before the first drafted write
+ *   not touch the atom; it appends an intent — either a set-value or an
+ *   updater function — to that atom's rebase log, tagged with the draft.
+ * - A rebase log exists per atom, only while some draft has written to it.
+ *   It holds the value the atom had before the first drafted write
  *   (valueBeforeDrafts) plus every intent since, in dispatch order. Urgent
- *   (non-transition) writes to a logged cell update the cell's base value
+ *   (non-transition) writes to a logged atom update the atom's base value
  *   immediately as usual, and also append an intent, so drafted replays
  *   see them in order.
  * - A world is a set of drafts: the answer to "which pending batches does
  *   this reader include?". Each React render pass resolves values in the
  *   world matching its lanes; ordinary non-React reads use the empty
- *   world, meaning base state. A cell's value in a world is computed by
+ *   world, meaning base state. An atom's value in a world is computed by
  *   starting from valueBeforeDrafts and replaying, in dispatch order,
  *   every intent whose draft the world includes. Urgent intents always
  *   replay.
@@ -42,13 +42,13 @@
  * applied to a stale snapshot.
  *
  * Lifecycle: when React commits a transition, its draft is retired — the
- * full replay is folded into the cell through the normal write path
+ * full replay is folded into the atom through the normal write path
  * (equality check, propagation, effects), and the draft is marked retired
  * so render passes still holding its id resolve the same values they
  * already rendered. When a transition is abandoned, its draft is discarded:
  * its intents stop applying, and every subscriber that rendered them is
- * poked to re-render without them. When the last draft touching a cell
- * dies, the cell's log is deleted; when no drafts are live at all, all
+ * poked to re-render without them. When the last draft touching an atom
+ * dies, the atom's log is deleted; when no drafts are live at all, all
  * per-world memo state is swept. A quiescent engine holds no transition
  * state anywhere.
  *
@@ -60,8 +60,8 @@
 
 import {
 	type Brand,
-	type CellNode,
-	type DerivedNode,
+	type AtomNode,
+	type ComputedNode,
 	type ReactiveNode,
 	type TraceEventId,
 	type GraphChangeClock,
@@ -71,7 +71,7 @@ import {
 	currentGraphChange,
 	ensureFresh,
 	isUninitialized,
-	peekCell,
+	peekAtom,
 	pokeDraftWatchers,
 	runUpdater,
 	setActiveEvaluation,
@@ -79,11 +79,12 @@ import {
 	startBatch,
 	endBatch,
 	traceHook,
+	trackWorldSource,
 	untracked,
-	writeCell,
+	writeAtom,
 } from './graph.ts'
 import {
-	type DerivedState,
+	type ResolvedState,
 	type ErrorBox,
 	type Suspension,
 	makeErrorBox,
@@ -92,6 +93,9 @@ import {
 	trackThenable,
 } from './asyncs.ts'
 
+/** Numeric identity of a draft. Ids start at 1 and are never reused, so
+ * long-lived React state can hold an id without retaining the Draft
+ * record behind it. */
 export type DraftId = Brand<number, 'DraftId'>
 /** A draft is open while its transition scope runs, sealed once the scope
  * returns (no more writes accepted), and finally either retired
@@ -103,10 +107,12 @@ export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded'
  * store readings of it to detect staleness. */
 export type DraftChangeClock = Brand<number, 'DraftChangeClock'>
 
+/** How an intent writes: 'set' replaces the atom's value, 'update'
+ * applies an updater function to the previous value. */
 export type OpKind = 'set' | 'update'
 
-/** The set of drafts visible to one read, render pass, or committed root.
- * A world is only a replay filter — not a copy of the graph, and not a
+/** Which drafts one read, render pass, or committed root can see. A
+ * world is only a replay filter — not a copy of the graph, and not a
  * React lane. */
 export interface World {
 	/** Live drafts, in creation order. */
@@ -116,6 +122,7 @@ export interface World {
 	sig: string
 }
 
+/** The empty world: no drafts, so every atom resolves to base state. */
 export const BASE_WORLD: World = { drafts: [], sig: '' }
 
 /** One recorded write: a set-value or an updater function. */
@@ -126,14 +133,16 @@ export interface Intent {
 	draft: Draft | null
 }
 
-/** A cell's pending-write history (see the header). */
+/** An atom's pending-write history (see the header). */
 export interface RebaseLog {
-	/** The cell's value when the first draft intent arrived. */
+	/** The atom's value when the first draft intent arrived. */
 	valueBeforeDrafts: unknown
 	/** All intents since, in dispatch order. */
 	intents: Intent[]
 }
 
+/** One transition batch: its identity, lifecycle state, and the atoms it
+ * wrote (see the header). */
 export interface Draft {
 	id: DraftId
 	state: DraftState
@@ -146,9 +155,9 @@ export interface Draft {
 	 * notification cutoff and by ambient latest() reads when this is the
 	 * only live draft. */
 	world: World
-	/** Cells this draft wrote; used by retirement, discard, and log
+	/** Atoms this draft wrote; used by retirement, discard, and log
 	 * teardown. */
-	cells: Set<CellNode<unknown>>
+	atoms: Set<AtomNode<unknown>>
 	openEvent: TraceEventId
 	lastWriteEvent: TraceEventId
 }
@@ -156,11 +165,11 @@ export interface Draft {
 let nextDraftId: DraftId = 1
 /** Open and sealed drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>()
-/** Cells with at least one live draft intent. */
-const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>()
-/** Per-cell draft revision: the draft clock reading at the cell's last
- * draft-related change. Weak so a deleted log's cell retains nothing. */
-const draftRevisionByCell = new WeakMap<CellNode<unknown>, DraftChangeClock>()
+/** Atoms with at least one live draft intent. */
+const rebaseLogs = new Map<AtomNode<unknown>, RebaseLog>()
+/** Per-atom draft revision: the draft clock reading at the atom's last
+ * draft-related change. Weak so a deleted log's atom retains nothing. */
+const draftRevisionByAtom = new WeakMap<AtomNode<unknown>, DraftChangeClock>()
 let draftChangeClock: DraftChangeClock = 1
 /** Nodes currently holding world memos, so quiescence can sweep them. */
 const memoNodes = new Set<ReactiveNode>()
@@ -198,7 +207,7 @@ export function openDraft(): Draft {
 		state: 'open',
 		cutoffAtGraphChange: alone ? currentGraphChange() : 0,
 		world: { drafts, sig: String(id) },
-		cells: new Set(),
+		atoms: new Set(),
 		openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
@@ -214,67 +223,67 @@ export function sealDraft(draft: Draft): void {
 	}
 }
 
-/** Record a drafted write. The cell's base value does not move. Draft
+/** Record a drafted write. The atom's base value does not move. Draft
  * watchers (isPending probes, latest() viewers) are poked, and subscribers
- * of the cell — and of watched computeds over it — additionally receive
+ * of the atom — and of watched computeds over it — additionally receive
  * the draft id through their draft-wake callback, so exactly the affected
  * components join the transition's render passes. */
 export function appendDraftIntent(
 	draft: Draft,
-	cell: CellNode<unknown>,
+	atom: AtomNode<unknown>,
 	kind: OpKind,
 	payload: unknown,
 ): void {
 	if (draft.state !== 'open') {
 		throw new Error('cannot write into a batch that already ended')
 	}
-	let log = rebaseLogs.get(cell)
+	let log = rebaseLogs.get(atom)
 	if (log === undefined) {
-		// Capture the value before any drafted intent. peekCell runs a lazy
-		// cell's initializer, which replay needs for its starting value.
-		log = { valueBeforeDrafts: peekCell(cell), intents: [] }
-		rebaseLogs.set(cell, log)
+		// Capture the value before any drafted intent. peekAtom runs a lazy
+		// atom's initializer, which replay needs for its starting value.
+		log = { valueBeforeDrafts: peekAtom(atom), intents: [] }
+		rebaseLogs.set(atom, log)
 	}
 	log.intents.push({ kind, payload, draft })
-	draft.cells.add(cell)
+	draft.atoms.add(atom)
 	draftChangeClock++
-	draftRevisionByCell.set(cell, draftChangeClock)
+	draftRevisionByAtom.set(atom, draftChangeClock)
 	let cause: TraceEventId = NO_EVENT
 	if (traceHook !== null) {
-		cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id })
-		cell.causeEvent = cause
+		cause = draft.lastWriteEvent = traceHook('write', atom, draft.openEvent, { draft: draft.id })
+		atom.causeEvent = cause
 	}
 	if (draft.cutoffAtGraphChange === currentGraphChange()) {
 		cutoffWorld = draft.world
 		try {
-			pokeDraftWatchers(cell, cause, draft.id, changedInCutoffWorld)
+			pokeDraftWatchers(atom, cause, draft.id, changedInCutoffWorld)
 		} finally {
 			cutoffWorld = null
 		}
 	} else {
-		pokeDraftWatchers(cell, cause, draft.id)
+		pokeDraftWatchers(atom, cause, draft.id)
 	}
 }
 
-/** Record an urgent write on a cell that currently has a rebase log, so
+/** Record an urgent write on an atom that currently has a rebase log, so
  * pending worlds replay it in dispatch order. The base-state write itself
- * is performed by the caller. Returns false when the cell has no log. */
+ * is performed by the caller. Returns false when the atom has no log. */
 export function appendUrgentIntent(
-	cell: CellNode<unknown>,
+	atom: AtomNode<unknown>,
 	kind: OpKind,
 	payload: unknown,
 ): boolean {
-	const log = rebaseLogs.get(cell)
+	const log = rebaseLogs.get(atom)
 	if (log === undefined) {
 		return false
 	}
 	log.intents.push({ kind, payload, draft: null })
 	draftChangeClock++
-	draftRevisionByCell.set(cell, draftChangeClock)
+	draftRevisionByAtom.set(atom, draftChangeClock)
 	return true
 }
 
-/** Handle the case where an urgent write to a drafted cell was an
+/** Handle the case where an urgent write to a drafted atom was an
  * equality no-op for base state. No wave propagated — yet the drafted
  * replays did change, because the urgent intent now sits after the draft's
  * intents in the log and the combined replay can land on a different
@@ -284,8 +293,8 @@ export function appendUrgentIntent(
  * subscribers urgently, and React restarts in-progress transition work
  * after an interleaved urgent commit, so those passes re-resolve their
  * worlds fresh. */
-export function pokeRebasedCell(cell: CellNode<unknown>): void {
-	const log = rebaseLogs.get(cell)
+export function pokeRebasedAtom(atom: AtomNode<unknown>): void {
+	const log = rebaseLogs.get(atom)
 	if (log === undefined) {
 		return
 	}
@@ -301,17 +310,17 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
 			continue
 		}
 		woken.add(d)
-		pokeDraftWatchers(cell, NO_EVENT, d.id)
+		pokeDraftWatchers(atom, NO_EVENT, d.id)
 	}
 }
 
-/** Replay a cell's log for a world, or for base state when `world` is
+/** Replay an atom's log for a world, or for base state when `world` is
  * null. Urgent and retired intents always apply; drafted intents apply
  * only when the world includes their draft. */
-function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
-	const log = rebaseLogs.get(cell)
+function replayLog(atom: AtomNode<unknown>, world: World | null): unknown {
+	const log = rebaseLogs.get(atom)
 	if (log === undefined) {
-		return peekCell(cell)
+		return peekAtom(atom)
 	}
 	let value = log.valueBeforeDrafts
 	for (const intent of log.intents) {
@@ -321,19 +330,19 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 		if (!included) {
 			continue
 		}
-		value = applyIntent(cell, value, intent)
+		value = applyIntent(atom, value, intent)
 	}
 	return value
 }
 
 /** Apply one intent to a value; shared by world replay and by the
  * dead-prefix folding in releaseLogs. */
-function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): unknown {
+function applyIntent(atom: AtomNode<unknown>, value: unknown, intent: Intent): unknown {
 	const next =
 		intent.kind === 'set'
 			? intent.payload
 			: runUpdater(intent.payload as (p: unknown) => unknown, value)
-	return cell.equals(value, next) ? value : next
+	return atom.equals(value, next) ? value : next
 }
 
 /** Commit a draft: fold its replay into base state through the normal
@@ -365,13 +374,13 @@ export function retireDraft(id: DraftId): void {
 	try {
 		startBatch()
 		try {
-			for (const cell of draft.cells) {
-				draftRevisionByCell.set(cell, draftChangeClock)
+			for (const atom of draft.atoms) {
+				draftRevisionByAtom.set(atom, draftChangeClock)
 				// The draft is already marked retired, so this base-state
 				// replay includes its intents, interleaved with urgent ones in
 				// dispatch order.
-				writeCell(cell, replayLog(cell, null))
-				pokeDraftWatchers(cell, evt)
+				writeAtom(atom, replayLog(atom, null))
+				pokeDraftWatchers(atom, evt)
 			}
 		} finally {
 			endBatch()
@@ -384,7 +393,7 @@ export function retireDraft(id: DraftId): void {
 }
 
 /** Roll back an abandoned draft. The poke reaches every subscriber over
- * the draft's cells; those that rendered the draft's values now resolve
+ * the draft's atoms; those that rendered the draft's values now resolve
  * base values, compare different, and re-render without them. */
 export function discardDraft(id: DraftId): void {
 	const draft = liveDrafts.get(id)
@@ -395,9 +404,9 @@ export function discardDraft(id: DraftId): void {
 	draft.state = 'discarded'
 	draftChangeClock++
 	const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT
-	for (const cell of draft.cells) {
-		draftRevisionByCell.set(cell, draftChangeClock)
-		pokeDraftWatchers(cell, evt)
+	for (const atom of draft.atoms) {
+		draftRevisionByAtom.set(atom, draftChangeClock)
+		pokeDraftWatchers(atom, evt)
 	}
 	releaseLogs(draft)
 	maybeQuiesce()
@@ -409,8 +418,8 @@ export function discardDraft(id: DraftId): void {
  * live intent: intents after it may be updater functions whose results
  * depend on that intent's world-specific value. */
 function releaseLogs(dead: Draft): void {
-	for (const cell of dead.cells) {
-		const log = rebaseLogs.get(cell)
+	for (const atom of dead.atoms) {
+		const log = rebaseLogs.get(atom)
 		if (log === undefined) {
 			continue
 		}
@@ -418,17 +427,17 @@ function releaseLogs(dead: Draft): void {
 		let value = log.valueBeforeDrafts
 		let prefix = 0
 		for (; prefix < intents.length; prefix++) {
-			const intent = intents[prefix] as Intent
+			const intent = intents[prefix]
 			const draft = intent.draft
 			if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') {
 				break
 			}
 			if (draft === null || draft.state === 'retired') {
-				value = applyIntent(cell, value, intent)
+				value = applyIntent(atom, value, intent)
 			}
 		}
 		if (prefix === intents.length) {
-			rebaseLogs.delete(cell)
+			rebaseLogs.delete(atom)
 		} else if (prefix !== 0) {
 			log.valueBeforeDrafts = value
 			intents.copyWithin(0, prefix)
@@ -438,8 +447,8 @@ function releaseLogs(dead: Draft): void {
 }
 
 /** @internal Test seam for the bounded-history invariant. */
-export function rebaseLogIntentCount<T>(cell: CellNode<T>): number {
-	return rebaseLogs.get(cell as CellNode<unknown>)?.intents.length ?? 0
+export function rebaseLogIntentCount<T>(atom: AtomNode<T>): number {
+	return rebaseLogs.get(atom as AtomNode<unknown>)?.intents.length ?? 0
 }
 
 /** With no live drafts, every per-draft structure empties: the engine
@@ -463,23 +472,23 @@ export function isLiveDraft(id: DraftId): boolean {
 
 const NO_IDS: readonly DraftId[] = []
 
-/** Live drafts holding intents against this node's source cells (the node
- * itself for a cell; its transitive dependency cells for a derived). Used
+/** Live drafts holding intents against this node's source atoms (the node
+ * itself for an atom; its transitive dependency atoms for a computed). Used
  * for late-subscription repair: a subscriber that mounted after the
  * write-time wakes asks which transitions it missed. */
 export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 	if (liveDrafts.size === 0) {
 		return NO_IDS
 	}
-	const sources = new Set<CellNode<unknown>>()
+	const sources = new Set<AtomNode<unknown>>()
 	const visited = new Set<ReactiveNode>()
 	const collect = (n: ReactiveNode): void => {
 		if (visited.has(n)) {
 			return
 		}
 		visited.add(n)
-		if ((n.flags & Flag.KindCell) !== 0) {
-			sources.add(n as CellNode<unknown>)
+		if ((n.flags & Flag.KindAtom) !== 0) {
+			sources.add(n as AtomNode<unknown>)
 			return
 		}
 		for (let l = n.deps; l !== undefined; l = l.nextDep) {
@@ -489,8 +498,8 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 	collect(node)
 	const out: DraftId[] = []
 	for (const [id, draft] of liveDrafts) {
-		for (const cell of draft.cells) {
-			if (sources.has(cell)) {
+		for (const atom of draft.atoms) {
+			if (sources.has(atom)) {
 				out.push(id)
 				break
 			}
@@ -499,9 +508,9 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 	return out
 }
 
-/** True while some live draft holds intents against this cell. */
-export function cellHasDraftIntents(cell: CellNode<unknown>): boolean {
-	const log = rebaseLogs.get(cell)
+/** True while some live draft holds intents against this atom. */
+export function atomHasDraftIntents(atom: AtomNode<unknown>): boolean {
+	const log = rebaseLogs.get(atom)
 	if (log === undefined) {
 		return false
 	}
@@ -526,29 +535,31 @@ export function discardAllDrafts(): void {
 // belongs to a draft or to base state.
 // ---------------------------------------------------------------------------
 
-/** The draft of the explicit scope in progress (startTransitionWrite). */
-let currentDraft: Draft | null = null
-/** Installed by the React bindings: detects writes issued inside a plain
- * React.startTransition, without our helper. */
+/** Explicit write target used by engine tests and non-React integrations.
+ * It affects write classification only; reads remain in their current
+ * world (normally base state). */
+let currentDraftWriteTarget: Draft | null = null
+/** Installed by the React bindings: detects writes issued inside the
+ * current React transition context. */
 let ambientClassifier: (() => Draft | null) | null = null
 
 export function setAmbientClassifier(fn: (() => Draft | null) | null): void {
 	ambientClassifier = fn
 }
 
-export function runInDraft<T>(draft: Draft, fn: () => T): T {
-	const prev = currentDraft
-	currentDraft = draft
+export function runWithDraftWrites<T>(draft: Draft, fn: () => T): T {
+	const prev = currentDraftWriteTarget
+	currentDraftWriteTarget = draft
 	try {
 		return fn()
 	} finally {
-		currentDraft = prev
+		currentDraftWriteTarget = prev
 	}
 }
 
 export function classifyWrite(): Draft | null {
-	if (currentDraft !== null) {
-		return currentDraft
+	if (currentDraftWriteTarget !== null) {
+		return currentDraftWriteTarget
 	}
 	if (ambientClassifier !== null) {
 		return ambientClassifier()
@@ -636,7 +647,7 @@ interface WorldMemo {
 	 * change to the node invalidates the memo outright. */
 	nodeChangedAtGraphChange: GraphChangeClock
 	certificate: Certificate
-	state: DerivedState
+	state: ResolvedState
 }
 
 /** The certificate being collected by the draft-world evaluation in
@@ -670,22 +681,22 @@ function appendCertificate(
 
 function recordSource(node: ReactiveNode): void {
 	const draftRevision =
-		(node.flags & Flag.KindCell) !== 0
-			? (draftRevisionByCell.get(node as CellNode<unknown>) ?? 0)
+		(node.flags & Flag.KindAtom) !== 0
+			? (draftRevisionByAtom.get(node as AtomNode<unknown>) ?? 0)
 			: 0
 	appendCertificate(node, node.changedAtGraphChange, draftRevision)
 }
 
 function inheritCertificate(certificate: Certificate): void {
 	for (let i = 0; i < certificate.count; i++) {
-		const entry = certificate.entries[i] as CertificateEntry
+		const entry = certificate.entries[i]
 		appendCertificate(entry.node as ReactiveNode, entry.changedAtGraphChange, entry.draftRevision)
 	}
 }
 
 function clearInactiveCertificateEntries(certificate: Certificate, previousCount: number): void {
 	for (let i = certificate.count; i < previousCount; i++) {
-		const entry = certificate.entries[i] as CertificateEntry
+		const entry = certificate.entries[i]
 		entry.node = null
 	}
 }
@@ -695,7 +706,7 @@ function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
 }
 
 /** Passive view of a world memo's state: no evaluation, no validation. */
-export function peekWorldMemo(node: ReactiveNode, sig: string): DerivedState | undefined {
+export function peekWorldMemo(node: ReactiveNode, sig: string): ResolvedState | undefined {
 	return memoFor(node, sig)?.state
 }
 
@@ -714,14 +725,14 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 		return false
 	}
 	for (let i = 0; i < memo.certificate.count; i++) {
-		const entry = memo.certificate.entries[i] as CertificateEntry
+		const entry = memo.certificate.entries[i]
 		const source = entry.node as ReactiveNode
 		if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
 			return false
 		}
 		if (
-			(source.flags & Flag.KindCell) !== 0 &&
-			(draftRevisionByCell.get(source as CellNode<unknown>) ?? 0) !== entry.draftRevision
+			(source.flags & Flag.KindAtom) !== 0 &&
+			(draftRevisionByAtom.get(source as AtomNode<unknown>) ?? 0) !== entry.draftRevision
 		) {
 			return false
 		}
@@ -733,13 +744,13 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 
 /** Whether two resolutions are indistinguishable to a reader: same async
  * state, and equal values under the node's own equality function. */
-function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState): boolean {
+function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedState): boolean {
 	const asyncBits = right.flags & Flag.AsyncMask
 	if ((left.flags & Flag.AsyncMask) !== asyncBits) {
 		return false
 	}
 	if (asyncBits === 0) {
-		const equals = (node as DerivedNode<unknown>).equals ?? Object.is
+		const equals = (node as ComputedNode<unknown>).equals ?? Object.is
 		return equals(left.value, right.value)
 	}
 	if (asyncBits === Flag.AsyncSuspended) {
@@ -748,11 +759,11 @@ function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState
 	return (left.throwable as ErrorBox).error === (right.throwable as ErrorBox).error
 }
 
-/** The value cutoff used while exactly one draft is live: for each node
- * the poke walk reaches, compare the node's previous resolution in the
- * draft's world against a fresh one, and skip the node's subscribers when
- * they are equal. Before the draft first touched the node, its world
- * resolution is identical to base state. */
+/** While exactly one draft is live, the poke walk applies a value
+ * cutoff: for each node it reaches, compare the node's previous
+ * resolution in the draft's world against a fresh one, and skip the
+ * node's subscribers when they are equal. Before the draft first touched
+ * the node, its world resolution is identical to base state. */
 function changedInCutoffWorld(node: ReactiveNode): boolean {
 	const world = cutoffWorld!
 	try {
@@ -769,22 +780,22 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
 
 /** Resolve a node's value as seen by a world. For the base world this is
  * an ordinary graph read, and the node itself is returned as the state
- * view (nodes carry the DerivedState shape), so nothing is allocated. For
- * a drafted world, cells replay their logs and deriveds re-evaluate under
+ * view (nodes carry the ResolvedState shape), so nothing is allocated. For
+ * a drafted world, atoms replay their logs and computeds re-evaluate under
  * the world, with results memoized per (node, world signature). */
-export function resolveState(node: ReactiveNode, world: World): DerivedState {
+export function resolveState(node: ReactiveNode, world: World): ResolvedState {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
 	if (world.drafts.length === 0) {
-		if ((node.flags & Flag.KindCell) !== 0) {
-			peekCell(node as CellNode<unknown>)
+		if ((node.flags & Flag.KindAtom) !== 0) {
+			peekAtom(node as AtomNode<unknown>)
 		} else {
-			untracked(() => ensureFresh(node as DerivedNode<unknown>))
+			untracked(() => ensureFresh(node as ComputedNode<unknown>))
 		}
 		recordSource(node)
-		return node as CellNode<unknown> | DerivedNode<unknown>
+		return node as AtomNode<unknown> | ComputedNode<unknown>
 	}
 	let memo = memoFor(node, world.sig)
 	if (memo !== undefined && memoValid(node, memo)) {
@@ -793,37 +804,35 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 		return memo.state
 	}
 	const certificate = memo?.certificate ?? { entries: [], count: 0 }
-	let fresh: DerivedState
-	if ((node.flags & Flag.KindCell) !== 0) {
-		const cell = node as CellNode<unknown>
+	let fresh: ResolvedState
+	if ((node.flags & Flag.KindAtom) !== 0) {
+		const atom = node as AtomNode<unknown>
 		const previousCount = certificate.count
 		let entry = certificate.entries[0]
 		if (entry === undefined) {
 			entry = {
-				node: cell,
-				changedAtGraphChange: cell.changedAtGraphChange,
-				draftRevision: draftRevisionByCell.get(cell) ?? 0,
+				node: atom,
+				changedAtGraphChange: atom.changedAtGraphChange,
+				draftRevision: draftRevisionByAtom.get(atom) ?? 0,
 			}
 			certificate.entries[0] = entry
 		} else {
-			entry.node = cell
-			entry.changedAtGraphChange = cell.changedAtGraphChange
-			entry.draftRevision = draftRevisionByCell.get(cell) ?? 0
+			entry.node = atom
+			entry.changedAtGraphChange = atom.changedAtGraphChange
+			entry.draftRevision = draftRevisionByAtom.get(atom) ?? 0
 		}
 		certificate.count = 1
 		clearInactiveCertificateEntries(certificate, previousCount)
-		fresh = { flags: 0, value: replayLog(cell, world), throwable: null }
+		fresh = { flags: 0, value: replayLog(atom, world), throwable: null }
 	} else {
-		fresh = draftEvaluate(node as DerivedNode<unknown>, world, memo?.state, certificate)
+		fresh = draftEvaluate(node as ComputedNode<unknown>, world, memo?.state, certificate)
 	}
 	// Keep the previous state record when the fresh resolution is
 	// indistinguishable from it, so subscribers that compare by identity do
 	// not re-render.
 	const previousState = memo?.state
 	const state =
-		previousState !== undefined && statesEqual(node, previousState, fresh)
-			? previousState
-			: fresh
+		previousState !== undefined && statesEqual(node, previousState, fresh) ? previousState : fresh
 	if (memo === undefined) {
 		memo = {
 			validAtGraphChange: currentGraphChange(),
@@ -848,15 +857,47 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	return state
 }
 
-/** Evaluate a derived's body under a world, without touching the node's
+/** Resolve without adding this read to an enclosing draft-world computed's
+ * dependency certificate. The target computed still collects its own
+ * certificate if it must evaluate; only the caller's dependency is
+ * suppressed. */
+export function resolveStateUntracked(node: ReactiveNode, world: World): ResolvedState {
+	const previous = activeCertificate
+	activeCertificate = null
+	try {
+		return resolveState(node, world)
+	} finally {
+		activeCertificate = previous
+	}
+}
+
+/** Give a scheduled effect wake-only edges to the actual sources used by a
+ * computed's current draft-world memo. No-op outside a scheduled effect. */
+export function trackWorldSources(node: ReactiveNode, world: World): void {
+	if (world.drafts.length === 0) {
+		return
+	}
+	const memo = memoFor(node, world.sig)
+	if (memo === undefined) {
+		return
+	}
+	for (let i = 0; i < memo.certificate.count; i++) {
+		const source = memo.certificate.entries[i].node
+		if (source !== null) {
+			trackWorldSource(source)
+		}
+	}
+}
+
+/** Evaluate a computed's body under a world, without touching the node's
  * own cached value or dependency edges. Reads inside the body resolve the
  * same world (via withWorld) and record into the certificate. */
 function draftEvaluate(
-	node: DerivedNode<unknown>,
+	node: ComputedNode<unknown>,
 	world: World,
-	prev: DerivedState | undefined,
+	prev: ResolvedState | undefined,
 	certificate: Certificate,
-): DerivedState {
+): ResolvedState {
 	// Reuse the previous pending span's suspension: Suspense retries must
 	// observe one stable thenable per span.
 	const suspension =
@@ -926,7 +967,7 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
  * the reader. No stale value is served here — a world evaluation must not
  * fold a stale base value into a draft-world result. */
 export function unwrapForEval(
-	st: DerivedState,
+	st: ResolvedState,
 	park: (t: PromiseLike<unknown>) => unknown,
 ): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask

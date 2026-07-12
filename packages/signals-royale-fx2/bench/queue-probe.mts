@@ -15,7 +15,7 @@
  *
  * Run: node --expose-gc --import tsx bench/queue-probe.mts
  */
-import { effect, nodeOf, signal } from '../src/index.ts'
+import { createAtom, effect, nodeOf } from '../src/index.ts'
 import { observeNode } from '../src/graph.ts'
 
 if (typeof gc !== 'function') {
@@ -54,7 +54,7 @@ function measure(label: string, setup: () => (i: number) => void): void {
 }
 
 measure('render-notify burst', () => {
-	const cell = signal(0)
+	const cell = createAtom(0)
 	let hits = 0
 	for (let s = 0; s < SUBS; s++) {
 		held.push(observeNode(nodeOf(cell), () => void hits++))
@@ -63,7 +63,7 @@ measure('render-notify burst', () => {
 })
 
 measure('effect burst', () => {
-	const cell = signal(0)
+	const cell = createAtom(0)
 	let hits = 0
 	for (let s = 0; s < SUBS; s++) {
 		held.push(

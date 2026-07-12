@@ -9,10 +9,13 @@ verbatim alien-signals core at `upstream-alien-signals/src/system.ts`. All fx2
 line numbers cite `src/graph.ts` at commit `8072ddd` unless another file is
 named.
 
-STATUS: LANDED, together with the DerivedState merge (section 11, an
+STATUS: LANDED, together with the ResolvedState merge (section 11, an
 owner-decided amendment sharing the same read-path surgery). Three deltas
 between this design and the as-built code, each found by the tests and
 documented inline where the design said something else:
+
+Sections 1-10 preserve the names used by the historical `8072ddd` design.
+Section 13 maps them to the current `Atom`/`Computed` vocabulary.
 
 - pass-id uniqueness (section 2): the case-3 dedup probe requires eval pass
   ids that are NEVER reused; the pre-existing restore discipline recycles
@@ -198,7 +201,7 @@ export type Flags = Brand<number, 'Flags'>; // the stored word (see graph.ts)
 round converted them to the `const enum` above and branded the stored
 word — same bits, same table.)
 
-The two async bits are the DerivedState merge's exclusive value-plane field
+The two async bits are the ResolvedState merge's exclusive value-plane field
 (section 11): clear-then-set discipline exactly like `Flag.StaleMask`,
 both-clear is the plain-value state, `Flag.AsyncMask` is the read protocol.
 
@@ -238,10 +241,10 @@ shape — a link cursor plus an explicit stack of suspended `nextSub` positions
 
 1. already stale → if Watcher and unscheduled, re-schedule (today's 404-406);
    do not descend;
-2. Clean → set **Check only** (never Dirty), record `causeEvent`. Versions,
-   not marks, are the recompute trigger — this is what makes
-   write-then-revert inside a batch a true no-op (`batchBase` restore,
-   554-574);
+2. Clean → set **Check only** (never Dirty), record `causeEvent`. Readings,
+   not marks, are the recompute trigger. Atom readings never move backward:
+   a write-then-revert may cost validation or recomputation, which is required
+   if a computed cached the intermediate value inside the batch;
 3. Watcher → `scheduleWatcher` (markedLeaves vs watcherQueue split unchanged,
    424-432); do not descend;
 4. Derived → bump the global validation clock and the node's uSES snapshot
@@ -435,16 +438,17 @@ promote is behavioral → covered by falsify-first probes A/B]
   (685-686), `invalidateDerived` (452-453), the Clean→Check derived bump in
   the wave (416-417), the loud discard-time bump (worlds.ts 262; today
   `bumpStoreVersionLoud`), and snapshot suppression for silent folds.
-- **Batching and flush**: `batchBase` net-revert version restore (554-574),
-  effects-settle-before-leaf-notify ordering and throwing-effect abort
-  (593-633).
-- **Watcher lifecycle**: FinalizationRegistry reclamation of dropped
-  disposers (948-987), scope ownership, dispose cascade.
+- **Batching and flush**: delivery is deferred until the outer batch ends;
+  effects-settle-before-leaf-notify ordering and throwing-effect abort remain
+  pinned.
+- **Watcher lifecycle**: scope ownership and the dispose cascade. A later
+  simplification removed FinalizationRegistry reclamation; effects, scopes,
+  and subscriptions now require explicit disposal.
 - **Public API**: zero signature changes in `index.ts` or
   `reactIntegration`; the React bindings under `src/react/` reference no
   graph internals (verified by grep) and are untouched. (Scoped to the tier
-  rebuild alone. The DerivedState merge, section 11, deliberately changes
-  the read-protocol surface: `Envelope` → `DerivedState`,
+  rebuild alone. The ResolvedState merge, section 11, deliberately changes
+  the read-protocol surface: `Envelope` → `ResolvedState`,
   `reactIntegration.resolveEnvelope` → `resolveState`, and the bindings'
   unwrap sites moved with it. `reactIntegration` itself was later dissolved
   by owner ruling: the react directory is part of the library, so the
@@ -514,10 +518,9 @@ the pre-rebuild graph in the landing session:
   corrected behavior plus the tier invariant
   (`Watched ⟺ observerCount > 0` for non-watchers, `expectTierInvariant`),
   which is also this design's risk-2 mitigation;
-- T7 landed as two leak-audit tests: promote/demote cycling leaves zero
-  subs-side entries and the demoted chain collects when dropped; a DROPPED
-  watched subscription handle over a computed chain is reclaimed by the
-  FinalizationRegistry and the demote cascade unhooks the closure.
+- T7's remaining leak audit proves promote/demote cycling leaves zero
+  subs-side entries and the demoted chain collects when dropped. The former
+  dropped-subscription-handle test was removed with disposer finalization.
 
 Gates for the landing commit (all run, all green): `npx tsc --noEmit`; full
 suite 278 = 265 prior + 11 tier tests + 2 leak-audit extensions; deep oracle
@@ -569,21 +572,21 @@ ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in RE
    consciously deferred, benchmark-gated.
 5. `validAtGraphChange = graphChangeClock` at demote assumes watched-Clean implies
    fresh; poke paths mark only leaf watchers (475, 509) and worlds folds go
-   through `writeCell`, so no overlay path leaves a watched derived
+   through `writeAtom`, so no overlay path leaves a watched computed
    Clean-but-stale — T6 pins this.
 
-## 11. DerivedState merge (owner-decided amendment, landed with the rebuild)
+## 11. ResolvedState merge (owner-decided amendment, landed with the rebuild)
 
 The duplication being removed: `envelopeOf` (asyncs.ts) manufactured a fresh
 Envelope record on EVERY base-state read — even the trivial value case — and
-`resolveEnvelope`'s base cell path allocated the same wrapper; meanwhile
+`resolveEnvelope`'s base atom path allocated the same wrapper; meanwhile
 `node.asyncState` already encoded the same 3-state machine. One model
 replaces both: node-resident state read through one protocol.
 
-**The state shape** — `DerivedState` (asyncs.ts), and nodes ARE it:
+**The state shape** — `ResolvedState` (asyncs.ts), and nodes ARE it:
 
 ```ts
-interface DerivedState {
+interface ResolvedState {
   flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
   throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
@@ -595,10 +598,10 @@ interface DerivedState {
   `Flag.AsyncMask`, clear-then-set exactly like `Flag.StaleMask`,
   both-clear = value state.
 - `node.throwable` is initialized `null` at construction on EVERY node kind
-  including cells and watchers (shape discipline: no post-construction
-  property addition). Cells never set the bits but share the uniform
+  including atoms and watchers (shape discipline: no post-construction
+  property addition). Atoms never set the bits but share the uniform
   `{ flags, value, throwable }` read protocol — which is what deletes the
-  base-world cell wrapper allocation. The slot stores the Suspension RECORD,
+  base-world atom wrapper allocation. The slot stores the Suspension RECORD,
   not its promise: the engine needs `.settled` for the identity-reuse rule
   and `.resolve` at settlement; the promise is what gets thrown. It stores
   the ErrorBox, not the error alone: box identity is the
@@ -619,13 +622,13 @@ interface DerivedState {
   flag/value/throwable compares preserving `equals()`, suspension-identity
   and box-identity semantics exactly.
 - `resolveEnvelope` → `resolveState`: the base world freshens the node
-  (`peekCell`/`ensureFresh`) and returns THE NODE as the state view — zero
+  (`peekAtom`/`ensureFresh`) and returns THE NODE as the state view — zero
   allocation; drafted worlds return memo records as before.
   `unwrapForEval`, hooks' `unwrapState`, `latest`, `committed`,
   `isPendingPassive` all read the protocol: value → `value`; error → throw
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
-- The `Envelope` type export is gone; `DerivedState`, `ErrorBox`,
+- The `Envelope` type export is gone; `ResolvedState`, `ErrorBox`,
   `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
   `isUninitialized` are the replacement protocol exports. No alias
   survives — one name per concept, and every importer (worlds, index,
@@ -684,13 +687,14 @@ median; effect burst 68,056 -> 256 B/wave median.
 A later round reorganized the flags word and unified the walks; this
 document's sections above describe the code at landing time. The mapping:
 
-- Flag renames: `Cell`→`KindCell`, `Derived`→`KindDerived`,
+- Flag renames: `Cell`→`KindAtom`, `Derived`→`KindComputed`,
   `Watcher`→`Watching` (alien's name), `Check`→`StaleCheck`,
   `Dirty`→`StaleDirty`, `DerivedError`→`AsyncError`,
   `DerivedSuspended`→`AsyncSuspended`.
 - New capability bits route dispatch (never callback presence):
   `WatchRender` (render-notify queue), `WatchRunEffect` (validated effect
-  queue), `WatchDraft` (draft pings/wakes). Component subscription =
+  queue), `WatchDraft` (draft pings/wakes), and `WatchSchedule` (defer a
+  validated effect body to its host phase). Component subscription =
   `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`;
   scope anchor = `Watching` alone. The `scheduled`/`computing` bools became
   the `Scheduled`/`Computing` bits; the `disposed` bool is gone — watcher
@@ -706,14 +710,14 @@ document's sections above describe the code at landing time. The mapping:
 - The per-node uSES counter is now `storeVersion` — THE useSyncExternalStore
   snapshot; bump = subscribers re-render. Its base-clock companion (a second
   per-node counter that served the unscoped hook mode) is deleted with that
-  mode: every scope-consuming hook now requires a SignalScope and throws
+  mode: every scope-consuming hook now requires a SignalScopeProvider and throws
   without one, so the silent-fold delivery channel is always the render-pass
   world. Settlement and discard bump through one helper
   (`bumpStoreVersionLoud`) that bypasses suppression: suppression exists
   only for silent draft folds, and those two carry information no render
   pass has shown.
 - graph.ts carries a contract-matrix comment over the colocated walks
-  (propagateWave, pokeDraftWatchers, propagateFrom, invalidateDerived):
+  (propagateWave, pokeDraftWatchers, propagateFrom, invalidateComputed):
   rows = walks, columns = marks staleness / bumps storeVersion / schedules
   effects / schedules render subscribers / dedup mechanism.
 - worlds.ts intents lost their write-only `seq` field (`OpSeq` died with

@@ -13,8 +13,8 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 
 const React = (await import('react')).default ?? (await import('react'))
 const { createRoot } = await import('react-dom/client')
-const { signal } = await import('signals-royale-fx2')
-const { registerReactSignals, useValue, wrapCreateRoot, startTransitionWrite } =
+const { createAtom } = await import('signals-royale-fx2')
+const { registerReactSignals, useValue, wrapCreateRoot, startSignalTransition } =
 	await import('../src/react/index.ts')
 
 registerReactSignals()
@@ -57,7 +57,7 @@ async function run(label, makeCase) {
 	for (let i = 0; i < 20; i++) {
 		await frame()
 	}
-	startTransitionWrite(write)
+	startSignalTransition(write)
 	await settle(() => done(el))
 	console.log(`${label}: advisory ${advisories.length > 0 ? 'FIRES' : 'silent'}`)
 	root.unmount()
@@ -66,7 +66,7 @@ async function run(label, makeCase) {
 
 // (a) one cell written 100x, 4 subscribers.
 await run('same-cell burst (100 writes, 4 subs)', () => {
-	const cell = signal(0)
+	const cell = createAtom(0)
 	const Sub = () => React.createElement('i', null, String(useValue(cell)), ';')
 	return {
 		node: React.createElement(
@@ -86,7 +86,7 @@ await run('same-cell burst (100 writes, 4 subs)', () => {
 // (a2) one cell written 100x, 15 subscribers (more fibers than the
 // advisory's distinct-fiber threshold).
 await run('same-cell burst (100 writes, 15 subs)', () => {
-	const cell = signal(0)
+	const cell = createAtom(0)
 	const Sub = () => React.createElement('i', null, String(useValue(cell)), ';')
 	return {
 		node: React.createElement(
@@ -105,7 +105,7 @@ await run('same-cell burst (100 writes, 15 subs)', () => {
 
 // (b) 50 distinct cells rewritten once each, one subscriber per cell.
 await run('many-distinct-cells rewrite (50 cells)', () => {
-	const cells = Array.from({ length: 50 }, () => signal(0))
+	const cells = Array.from({ length: 50 }, () => createAtom(0))
 	const Sub = ({ i }) => React.createElement('i', null, String(useValue(cells[i])), ';')
 	return {
 		node: React.createElement(

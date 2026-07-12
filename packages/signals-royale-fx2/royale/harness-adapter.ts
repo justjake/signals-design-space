@@ -1,14 +1,13 @@
 /** FrameworkAdapter for the shared conformance/bench harness. */
 import {
-	computed,
+	createComputed,
 	effect,
 	effectScope,
 	endBatch,
 	installState,
-	signal,
+	createAtom,
 	startBatch,
 	type Computed,
-	type Signal,
 	untracked,
 } from '../src/index.ts'
 
@@ -35,7 +34,7 @@ const adapter: FrameworkAdapter = {
 	signal<T>(initialValue: T): AdapterSignal<T> {
 		// The engine treats function-valued initials as lazy initializers; the
 		// harness stores plain values, including functions, so opt out here.
-		const s = signal(initialValue)
+		const s = createAtom(initialValue)
 		if (typeof initialValue === 'function') {
 			installState(s, initialValue)
 		}
@@ -45,7 +44,7 @@ const adapter: FrameworkAdapter = {
 		}
 	},
 	computed<T>(fn: () => T): AdapterComputed<T> {
-		const c: Computed<T> = computed(fn)
+		const c: Computed<T> = createComputed(fn)
 		return { read: () => c.get() }
 	},
 	effect,

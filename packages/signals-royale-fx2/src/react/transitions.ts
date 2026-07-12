@@ -1,43 +1,28 @@
 /**
- * Transition write helpers. Each opens an engine draft, dispatches its id
- * to every SignalScope from inside React.startTransition (so the
- * dispatches join the transition's updates), and classifies the callback's
- * writes into the draft.
- *
- * Plain React.startTransition works without these helpers too: the first
- * engine write inside any transition context is detected by the ambient
- * classifier in host.ts, which opens and broadcasts a draft on the spot.
+ * Transition write helpers. The first engine write inside React's
+ * transition context is detected by host.ts, which opens and broadcasts
+ * one draft for that React transition object. The signal batch only
+ * defers graph delivery until the callback finishes.
  */
 import * as React from 'react'
-import { openDraft, runInDraft, sealDraft } from '../worlds.ts'
-import { broadcastDraft } from './host.ts'
+import { batch } from '../graph.ts'
 
-function runDraftScope(scope: () => void): void {
-	const draft = openDraft()
-	broadcastDraft(draft)
-	try {
-		runInDraft(draft, scope)
-	} finally {
-		sealDraft(draft)
-	}
-}
-
-/** Run writes as one transition batch, invisible to base-state readers
- * and the committed DOM until React commits the transition. */
-export function startTransitionWrite(scope: () => void): void {
+/** Run writes in one signal batch and transition draft, invisible to
+ * base-state readers and the committed DOM until React commits. */
+export function startSignalTransition(scope: () => void): void {
 	React.startTransition(() => {
-		runDraftScope(scope)
+		batch(scope)
 	})
 }
 
-/** React's useTransition combined with an engine draft: isPending covers
- * the batch's whole lifetime, including renders it holds open. */
+/** React's useTransition combined with a signal batch and engine draft:
+ * isPending covers the draft's whole lifetime, including held renders. */
 export function useSignalTransition(): [boolean, (scope: () => void) => void] {
 	const [isPending, startTransition] = React.useTransition()
 	const startRef = React.useRef<((scope: () => void) => void) | null>(null)
 	startRef.current ??= (scope) => {
 		startTransition(() => {
-			runDraftScope(scope)
+			batch(scope)
 		})
 	}
 	return [isPending, startRef.current]

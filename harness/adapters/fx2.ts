@@ -11,7 +11,7 @@
 import { SkipTest } from 'reactive-framework-test-suite'
 import type { AdapterSignal, FrameworkAdapter } from './types'
 import adapter from '../../packages/signals-royale-fx2/royale/harness-adapter.ts'
-import { WriteForbiddenError } from '../../packages/signals-royale-fx2/src/graph.ts'
+import { SignalWriteForbidden } from '../../packages/signals-royale-fx2/src/graph.ts'
 
 const shimmed: FrameworkAdapter = {
 	...(adapter as unknown as FrameworkAdapter),
@@ -27,7 +27,7 @@ const shimmed: FrameworkAdapter = {
 					signal.write(value)
 				} catch (error) {
 					if (
-						error instanceof WriteForbiddenError &&
+						error instanceof SignalWriteForbidden &&
 						error.message === 'writes inside computeds are forbidden'
 					) {
 						throw new SkipTest('computed writes are disabled by policy')

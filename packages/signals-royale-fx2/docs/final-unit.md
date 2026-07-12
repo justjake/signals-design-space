@@ -85,12 +85,13 @@ run/validation watermark.
 
 ### The named ordering invariants (each enforced with a comment at its site)
 
-1. **Tick-then-stamp** (`writeCell`, `invalidateDerived`): the clock ticks
+1. **Tick-then-stamp** (`writeAtom`, `invalidateComputed`): the clock ticks
    first; the change is stamped with the new reading. A pre-tick stamp
    could compare equal to a subscriber that validated before the write.
-2. **Real changes only** (`recompute`, batch net-revert): equality-cutoff
-   recomputes do not advance `changedAt`; a batch whose writes net-revert
-   restores the pre-batch reading. Both port the old version discipline.
+2. **Real computed changes only** (`recompute`): equality-cutoff
+   recomputes do not advance `changedAt`. Atom writes always retain their
+   new reading, including writes later reverted in the same batch; moving
+   that reading backwards is unsound after an intermediate computed read.
 3. **Freshen-then-stamp** (`ensureFresh`, `runWatcher`): a dep is freshened
    before its reading is compared (a lazy dep recomputes mid-walk, stamping
    with the current clock), and the subscriber's `validAt` is stamped only
@@ -128,8 +129,8 @@ compare/stamp site. The counter taxonomy is now: two clocks
   is repaired at attach, exactly one extra render (guard; uSES covered it
   via snapshot compare, the repair covers it now).
 - Watermark ordering pins: lazy-chain freshen order, cutoff no-recompute,
-  net-revert no-recompute (guards; the invariants they pin were preserved
-  from the version discipline).
+  and a mid-batch computed read followed by a net-revert (the final read
+  must not serve the intermediate cached value).
 - The 1200-seed oracle ran twice, deterministic-green, as the semantic
   referee for the validation rewrite; the oracle's subscriber model mirrors
   the notify predicate (resolve in the sub's world, compare against its
@@ -137,7 +138,7 @@ compare/stamp site. The counter taxonomy is now: two clocks
 
 ## SSR note
 
-Server rendering works (SignalScope is a useReducer component; its layout
+Server rendering works (SignalScopeProvider is a useReducer component; its layout
 effect is client-only). Hydration consistency is the standard signals-SSR
 seeding concern — give the client engine the values the server rendered —
 and the post-hydration gap is case 2 above. `getServerSnapshot` machinery

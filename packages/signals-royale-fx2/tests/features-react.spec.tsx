@@ -1,26 +1,28 @@
 // @vitest-environment jsdom
 /** Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
- * useSignalTransition, useCommitted, useAtom, useComputed, useSignalEffect). */
+ * useSignalTransition, useCommitted, useAtom, useComputed,
+ * useSignalEffect/useSignalLayoutEffect). */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
 import {
 	attachTracer,
-	computed,
+	createComputed,
 	nodeOf,
 	read,
 	serializeAtomState,
 	initializeAtomState,
-	signal,
+	createAtom,
 	update,
-	type Signal,
+	type Atom,
 } from 'signals-royale-fx2'
 import {
-	startTransitionWrite,
+	startSignalTransition,
 	useAtom,
 	useCommitted,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
+	useSignalLayoutEffect,
 	useSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'
@@ -38,10 +40,10 @@ afterEach(async () => {
 describe('scenario 11 — suspense family', () => {
 	/** The resource idiom: one request per param key, so requests are stable
 	 * across re-evaluations and a param change is what refetches. */
-	function makeResource(param: Signal<number>) {
+	function makeResource(param: Atom<number>) {
 		let fetchCount = 0
 		const gates = new Map<string, ReturnType<typeof deferred<string>>>()
-		const data = computed((use) => {
+		const data = createComputed((use) => {
 			const key = `${param.get()}`
 			let g = gates.get(key)
 			if (g === undefined) {
@@ -69,7 +71,7 @@ describe('scenario 11 — suspense family', () => {
 	}
 
 	test('first load: fallback then converge; one fetch across retries', async () => {
-		const param = signal(0)
+		const param = createAtom(0)
 		const r = makeResource(param)
 		const { container } = await h.mount(
 			<React.Suspense fallback={<i>loading</i>}>
@@ -83,7 +85,7 @@ describe('scenario 11 — suspense family', () => {
 	})
 
 	test('settlement inside a transition commits with the transition', async () => {
-		const param = signal(0)
+		const param = createAtom(0)
 		const r = makeResource(param)
 		const { container } = await h.mount(
 			<React.Suspense fallback={<i>loading</i>}>
@@ -92,7 +94,7 @@ describe('scenario 11 — suspense family', () => {
 		)
 		await r.settle('0', 'one')
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				param.set(1)
 			})
 		})
@@ -106,7 +108,7 @@ describe('scenario 11 — suspense family', () => {
 describe('scenario 14 — lifetime effects across subscriber kinds', () => {
 	test('React subscribers mount one observation; ctx.set feeds the UI', async () => {
 		const log: string[] = []
-		const a = signal(0, {
+		const a = createAtom(0, {
 			onObserved: (ctx) => {
 				log.push(`observe:${ctx.get()}`)
 				ctx.set(42)
@@ -148,8 +150,8 @@ describe('scenario 14 — lifetime effects across subscriber kinds', () => {
 describe('scenario 15 — causality traces', () => {
 	test('urgent chain reaches the write; post-retirement chain passes the retirement', async () => {
 		const t = attachTracer()
-		const a = signal(1, { label: 'a' })
-		const hold = signal(false)
+		const a = createAtom(1, { label: 'a' })
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function App() {
 			const v = useValue(a)
@@ -165,7 +167,7 @@ describe('scenario 15 — causality traces', () => {
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 1)
 				hold.set(true)
 			})
@@ -200,7 +202,7 @@ describe('scenario 15 — causality traces', () => {
 describe('scenario 17 — lazy initializers under React', () => {
 	test('initializer runs at first render read, once', async () => {
 		let runs = 0
-		const a = signal((): number => {
+		const a = createAtom((): number => {
 			runs++
 			return 7
 		})
@@ -224,17 +226,17 @@ describe('scenario 18 — SSR', () => {
 	// so the server half is exercised at the engine level: commit values on
 	// the "server" engine, serialize under app keys, install client-side.
 	test('serialize -> install on fresh atoms -> exact first client render', async () => {
-		const s1 = signal(1)
-		const s2 = signal('x')
+		const s1 = createAtom(1)
+		const s2 = createAtom('x')
 		s1.set(5)
 		const json = serializeAtomState([s1, s2])
 		// "Client": fresh atoms; install skips initializers, is not a write.
 		let initRuns = 0
-		const c1 = signal((): number => {
+		const c1 = createAtom((): number => {
 			initRuns++
 			return 0
 		})
-		const c2 = signal('default')
+		const c2 = createAtom('default')
 		initializeAtomState(json, [c1, c2])
 		expect(initRuns).toBe(0)
 		let renders = 0
@@ -253,11 +255,11 @@ describe('scenario 18 — SSR', () => {
 	})
 })
 
-describe('hooks demand a SignalScope', () => {
-	// The hooks have no unscoped mode: a scope is the world carrier, and a
+describe('hooks demand a SignalScopeProvider', () => {
+	// Hooks have no unscoped mode: a scope is the world carrier, and a
 	// subscriber without one has no channel for transition worlds at all.
-	// Rendering any scope-consuming hook outside a SignalScope throws with a
-	// message naming the fixes.
+	// Rendering any scope-consuming hook outside a SignalScopeProvider
+	// throws with a message naming the fixes.
 	class Boundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
 		state: { error: Error | null } = { error: null }
 		static getDerivedStateFromError(error: Error) {
@@ -274,17 +276,31 @@ describe('hooks demand a SignalScope', () => {
 
 	test('[falsify-first] every scope-consuming hook throws without a scope, naming the fixes', async () => {
 		const { createRoot } = await import('react-dom/client')
-		const a = signal(1)
+		const a = createAtom(1)
 		const cases: Array<[string, () => React.ReactNode]> = [
 			['useValue', () => <span>{useValue(a)}</span>],
 			['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
 			['useIsPending', () => <span>{String(useIsPending(a))}</span>],
 			['useCommitted', () => <span>{useCommitted(a)}</span>],
+			[
+				'useSignalEffect',
+				() => {
+					useSignalEffect(() => {})
+					return null
+				},
+			],
+			[
+				'useSignalLayoutEffect',
+				() => {
+					useSignalLayoutEffect(() => {})
+					return null
+				},
+			],
 		]
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
 			const div = document.body.appendChild(document.createElement('div'))
-			const root = createRoot(div) // deliberately no SignalScope
+			const root = createRoot(div) // deliberately no SignalScopeProvider
 			await act(() => {
 				root.render(
 					<Boundary>
@@ -293,7 +309,7 @@ describe('hooks demand a SignalScope', () => {
 				)
 			})
 			expect(text(div), name).toContain('caught:')
-			expect(text(div), name).toContain('SignalScope')
+			expect(text(div), name).toContain('SignalScopeProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
 			await act(() => root.unmount())
 			div.remove()
@@ -303,8 +319,8 @@ describe('hooks demand a SignalScope', () => {
 
 describe('fx2 extras', () => {
 	test('plain React.startTransition writes classify ambiently (no helper needed)', async () => {
-		const a = signal(0)
-		const hold = signal(false)
+		const a = createAtom(0)
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -336,8 +352,8 @@ describe('fx2 extras', () => {
 	})
 
 	test('useSignalTransition: isPending spans the batch lifetime', async () => {
-		const a = signal(0)
-		const hold = signal(false)
+		const a = createAtom(0)
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		let start!: (scope: () => void) => void
 		const pendingSeen: boolean[] = []
@@ -379,7 +395,7 @@ describe('fx2 extras', () => {
 	})
 
 	test('useCommitted tracks this root screen, urgent and transitional', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		let renders = 0
 		function App() {
 			renders++
@@ -400,7 +416,7 @@ describe('fx2 extras', () => {
 		expect(text(container)).toBe('n:1;c:1;')
 		expect(renders).toBe(2)
 		await act(() => {
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('n:2;c:2;')
@@ -410,7 +426,7 @@ describe('fx2 extras', () => {
 	})
 
 	test('useAtom is component-owned; useComputed derives; useSignalEffect observes commits', async () => {
-		const base = signal(2)
+		const base = createAtom(2)
 		const effectSeen: number[] = []
 		function App() {
 			const own = useAtom(10)

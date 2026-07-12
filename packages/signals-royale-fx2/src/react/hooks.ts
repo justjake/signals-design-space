@@ -1,5 +1,6 @@
 /**
- * The React hooks over the engine.
+ * React hooks connect signals to components: they read values, subscribe
+ * to changes, and re-render through React's own state machinery.
  *
  * Every re-render request is a dispatch into the hook's own reducer, so
  * each re-render gets its scheduling from the dispatch context — exactly
@@ -11,8 +12,8 @@
  *
  * Two message kinds flow through the reducer:
  *
- * - Draft ids: when a transition writes a cell, exactly the subscribers
- *   of that cell (and of watched computeds over it) receive the draft id,
+ * - Draft ids: when a transition writes an atom, exactly the subscribers
+ *   of that atom (and of watched computeds over it) receive the draft id,
  *   dispatched inside the transition's own scope. React's update queues
  *   then decide visibility per pass: urgent passes skip the update and
  *   see base state, the transition's passes include it, rebased retries
@@ -29,23 +30,47 @@
  * missed drafts and compares the rendered resolution against current
  * state.
  */
-import * as React from 'react'
+import type * as React from 'react'
 import {
-	computed,
+	useCallback,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useReducer,
+	useRef,
+} from 'react'
+import {
 	committedSnapshot,
-	effect as engineEffect,
+	createAtom,
+	createComputed,
 	isErrorBox,
 	isPendingPassive,
 	isUninitialized,
 	nodeOf,
-	signal,
-	type Computed,
+	type Atom,
+	type AtomOptions,
 	type Signal,
-	type SignalOptions,
 } from '../index.ts'
-import { Flag, observeNode, type ReactiveNode } from '../graph.ts'
-import { resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
-import { type DerivedState, type ErrorBox, type Suspension } from '../asyncs.ts'
+import {
+	Flag,
+	activeWorldSourceConsumer,
+	makeScheduledEffect,
+	observeNode,
+	type Link,
+	type ReactiveNode,
+	type ScheduledEffect,
+} from '../graph.ts'
+import {
+	committedWorldOf,
+	resolveState,
+	trackWorldSources,
+	withWorld,
+	worldOf,
+	type DraftId,
+	type World,
+} from '../worlds.ts'
+import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import { getActiveTracer } from '../tracer.ts'
 import {
 	correctSubscription,
@@ -55,13 +80,10 @@ import {
 	renderPassIds,
 	resolutionDiffers,
 	REPAIR_WAKE,
-	type ProviderRecord,
+	type SignalScope,
 	type RenderedResolution,
 } from './host.ts'
-import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts'
-
-type AnyReadable = Signal<any> | Computed<any>
-type Readable<T> = Signal<T> | Computed<T>
+import { EMPTY_WORLD, ScopeContext, worldsReducer } from './SignalScopeProvider.ts'
 
 interface UseValueState {
 	delivered: Set<DraftId>
@@ -76,22 +98,90 @@ interface UseValueState {
 	committed: RenderedResolution
 }
 
+interface SignalEffectState {
+	effect: ScheduledEffect | null
+	/** The scope whose committed world the installed watcher currently uses. */
+	scope: SignalScope | null
+	/** The watcher owns dependency identity and edges. This is only its
+	 * current link head plus parallel per-root committed values. */
+	dependencies: Link | undefined
+	dependencyValues: unknown[]
+	dependencyCount: number
+	version: number
+	running: boolean
+	rerunRequested: boolean
+}
+
 const NO_IDS: readonly DraftId[] = []
 
 function forceReducer(count: number): number {
 	return count + 1
 }
 
-/** The hooks cannot work without a SignalScope: the scope carries
+function signalEffectValue(node: ReactiveNode, world: World): unknown {
+	const state = resolveState(node, world)
+	if (activeWorldSourceConsumer !== null && (node.flags & Flag.KindComputed) !== 0) {
+		trackWorldSources(node, world)
+	}
+	if ((state.flags & Flag.AsyncError) !== 0) {
+		return state.throwable
+	}
+	if ((state.flags & Flag.AsyncSuspended) !== 0 && isUninitialized(state.value)) {
+		return state.throwable
+	}
+	return state.value
+}
+
+function signalEffectDependenciesChanged(state: SignalEffectState, world: World): boolean {
+	let link = state.dependencies
+	for (let i = 0; i < state.dependencyCount; i++) {
+		if (!Object.is(signalEffectValue(link!.dep, world), state.dependencyValues[i])) {
+			return true
+		}
+		link = link!.nextDep
+	}
+	return false
+}
+
+/** Dispose a scheduled effect and release every hook-side reference it
+ * retained. Used both by React unmount and by the setup-throw path, where a
+ * later cleanup hook in the same commit would never get a chance to mount. */
+function disposeSignalEffect(state: SignalEffectState): void {
+	const effect = state.effect
+	const scope = state.scope
+	try {
+		if (effect !== null) {
+			const world = scope === null ? null : committedWorldOf(scope)
+			if (world === null || world.drafts.length === 0) {
+				effect.dispose()
+			} else {
+				withWorld(world, () => effect.dispose())
+			}
+		}
+	} finally {
+		state.effect = null
+		state.scope = null
+		state.dependencies = undefined
+		state.version = -1
+		state.running = false
+		state.rerunRequested = false
+		for (let i = 0; i < state.dependencyCount; i++) {
+			state.dependencyValues[i] = undefined
+		}
+		state.dependencyCount = 0
+	}
+}
+
+/** These hooks cannot work without a SignalScopeProvider: the scope carries
  * transition worlds, and a subscriber without one would have no channel
  * for them at all. Rendering a scope-consuming hook outside a scope is a
  * wiring error — fail loudly, at the hook, naming the fixes. */
-function requireScope(hook: string): ProviderRecord {
-	const scope = React.useContext(ScopeContext)
+function requireScope(hook: string): SignalScope {
+	const scope = useContext(ScopeContext)
 	if (scope === null) {
 		throw new Error(
-			`${hook} was rendered without a SignalScope above it. ` +
-				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalScope>.',
+			`${hook} was rendered without a SignalScopeProvider above it. ` +
+				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalScopeProvider>.',
 		)
 	}
 	return scope
@@ -109,7 +199,8 @@ function traceDelivery(node: ReactiveNode, value: unknown): void {
 }
 
 /**
- * The suspend-versus-stale rule at the React boundary:
+ * Unwrap a resolved state for a render, deciding between suspending and
+ * serving a stale value:
  * - a transition render (its world carries live drafts) hands React the
  *   pending thenable, so the transition holds and the previous UI stays;
  * - an urgent render with settled history serves the stale value —
@@ -117,7 +208,7 @@ function traceDelivery(node: ReactiveNode, value: unknown): void {
  *   flash;
  * - a never-settled value suspends everywhere.
  */
-function unwrapState(st: DerivedState, world: World): unknown {
+function unwrapState(st: ResolvedState, world: World): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask
 	if (asyncBits === 0) {
 		return st.value
@@ -136,30 +227,31 @@ function unwrapState(st: DerivedState, world: World): unknown {
 }
 
 /**
- * The subscribing read hook.
+ * Read x and subscribe: the component re-renders whenever the value it
+ * would show changes.
  *
- * The render world is the pass's valid note when the hook's scope wrote
- * one (covering components that mount inside a transition pass, whose
- * reducers never received the write-time dispatch), and otherwise the
- * hook's own reducer state. Both come from React state for this very
- * pass, so neither can run ahead of it.
+ * The hook renders in a world chosen from React state: the pass's valid
+ * note when the hook's scope wrote one (covering components that mount
+ * inside a transition pass, whose reducers never received the write-time
+ * dispatch), and otherwise the hook's own reducer state. Both come from
+ * React state for this very pass, so neither can run ahead of it.
  *
- * A committed transition costs no extra renders by construction: the
- * render-notify predicate resolves in the world this hook rendered, and a
+ * A committed transition costs no extra renders by construction:
+ * resolutionDiffers resolves in the world this hook rendered, and a
  * fold whose values were already delivered through render-pass worlds
  * compares equal. The gap for subscribers that attached late is closed by
  * correctSubscription at subscribe time.
  */
-export function useValue<T>(x: Readable<T>): T {
+export function useValue<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const scope = requireScope('useValue')
-	const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD)
+	const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
 	noteHookRender(scope, hookWorld.ids)
 	const ids = renderPassIds(scope) ?? hookWorld.ids
 	// One record per hook owns the delivery/repair protocol. Initialize it
 	// explicitly because useRef evaluates a non-primitive initializer every
 	// render even though React consumes that value only on mount.
-	const stateRef = React.useRef<UseValueState | null>(null)
+	const stateRef = useRef<UseValueState | null>(null)
 	let state = stateRef.current
 	if (state === null) {
 		state = {
@@ -181,7 +273,7 @@ export function useValue<T>(x: Readable<T>): T {
 	// dispatch, which is harmless; writes during render throw, so no
 	// delivery can race the clear.
 	state.delivered.clear()
-	const deliver = React.useCallback(
+	const deliver = useCallback(
 		(id: DraftId) => {
 			if (state.delivered.has(id)) {
 				return
@@ -200,8 +292,12 @@ export function useValue<T>(x: Readable<T>): T {
 	// "would the committed tree show anything different if re-rendered
 	// now?". The dispatch inherits the ambient scheduling context —
 	// exactly useState's semantics for the write that caused it.
-	const onNotify = React.useCallback(() => {
-		const stash = state.committed
+	const onNotify = useCallback(() => {
+		// The scope's first-child marker confirms before descendant layout
+		// effects. During that narrow window this render is the one committing,
+		// so compare against it directly; outside it, never trust speculative
+		// render state over the last completed commit.
+		const stash = scope.committing ? state.rendered : state.committed
 		if (!stash.live || state.repairPending) {
 			return
 		}
@@ -210,10 +306,10 @@ export function useValue<T>(x: Readable<T>): T {
 		}
 		state.repairPending = true
 		wake(REPAIR_WAKE)
-	}, [node, state, wake])
+	}, [node, scope, state, wake])
 	// Subscribe in a passive effect, at commit time; correctSubscription
 	// closes the gap between rendering and the subscription attaching.
-	React.useEffect(() => {
+	useEffect(() => {
 		const off = observeNode(node, onNotify, deliver)
 		if (state.rendered.live) {
 			correctSubscription(node, state.rendered, scope, deliver, wake)
@@ -230,7 +326,7 @@ export function useValue<T>(x: Readable<T>): T {
 	// Advance the committed stash at commit time. No dependency array: the
 	// effect runs on every commit with that render's resolution, and a
 	// suspended render never reaches it.
-	React.useLayoutEffect(() => {
+	useLayoutEffect(() => {
 		const c = state.committed
 		c.ids = ids
 		c.value = value
@@ -243,33 +339,126 @@ export function useValue<T>(x: Readable<T>): T {
 /** A component-scoped computed. No explicit disposal: an unwatched
  * computed only holds references toward its dependencies, so dropping it
  * at unmount makes it garbage-collectible. */
-export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
+export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	requireScope('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const c = React.useMemo(() => computed(fn), deps as unknown[])
+	const c = useMemo(() => createComputed(fn), deps)
 	return useValue(c)
 }
 
-/** An engine effect bound to the component lifetime. It observes base
- * values only; cleanups are honored, and StrictMode's double-mount nets
- * out to one live effect. */
+function useSignalEffectImpl(
+	fn: () => void | (() => void),
+	usePhaseEffect: typeof useEffect,
+): void {
+	const scope = requireScope(
+		usePhaseEffect === useLayoutEffect ? 'useSignalLayoutEffect' : 'useSignalEffect',
+	)
+	const [version, schedule] = useReducer(forceReducer, 0)
+	const stateRef = useRef<SignalEffectState | null>(null)
+	let state = stateRef.current
+	if (state === null) {
+		state = {
+			effect: null,
+			scope: null,
+			dependencies: undefined,
+			dependencyValues: [],
+			dependencyCount: 0,
+			version: -1,
+			running: false,
+			rerunRequested: false,
+		}
+		stateRef.current = state
+	}
+	usePhaseEffect(() => {
+		const scopeChanged = state.scope !== scope
+		const signalRequested = state.version !== version
+		const rerunRequested = state.rerunRequested
+		if (!scopeChanged && !signalRequested && !rerunRequested) {
+			return
+		}
+		state.scope = scope
+		state.version = version
+		state.rerunRequested = false
+		const world = committedWorldOf(scope)
+		if (
+			!scopeChanged &&
+			!rerunRequested &&
+			state.effect !== null &&
+			!state.effect.refresh(() => signalEffectDependenciesChanged(state, world))
+		) {
+			return
+		}
+		state.effect ??= makeScheduledEffect(
+			() => {
+				if (state.running) {
+					state.rerunRequested = true
+					schedule()
+					return
+				}
+				const committedScope = state.scope
+				if (committedScope !== null && state.effect !== null) {
+					const changed = state.effect.refresh(() =>
+						signalEffectDependenciesChanged(state, committedWorldOf(committedScope)),
+					)
+					if (changed) {
+						schedule()
+					}
+				}
+			},
+			() => schedule(),
+		)
+		try {
+			state.running = true
+			try {
+				const effect = state.effect
+				state.dependencies =
+					world.drafts.length === 0 ? effect.run(fn) : withWorld(world, () => effect.run(fn))
+			} finally {
+				state.running = false
+			}
+			const previousCount = state.dependencyCount
+			let count = 0
+			for (let link = state.dependencies; link !== undefined; link = link.nextDep) {
+				state.dependencyValues[count] = signalEffectValue(link.dep, world)
+				count++
+			}
+			for (let i = count; i < previousCount; i++) {
+				state.dependencyValues[i] = undefined
+			}
+			state.dependencyCount = count
+		} catch (error) {
+			disposeSignalEffect(state)
+			throw error
+		}
+	})
+	usePhaseEffect(() => {
+		return () => disposeSignalEffect(state)
+	}, [])
+}
+
+/** Run a tracked signal effect during React's passive-effect phase. */
 export function useSignalEffect(fn: () => void | (() => void)): void {
-	React.useEffect(() => engineEffect(fn), [])
+	useSignalEffectImpl(fn, useEffect)
+}
+
+/** Run a tracked signal effect during React's layout-effect phase. */
+export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
+	useSignalEffectImpl(fn, useLayoutEffect)
 }
 
 /** True while newer data exists behind the committed value of x: a
  * pending transition draft on it, or an async refetch loading behind a
  * stale value. */
-export function useIsPending(x: AnyReadable): boolean {
+export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireScope('useIsPending'), null)
-	const [, force] = React.useReducer(forceReducer, 0)
+	const [, force] = useReducer(forceReducer, 0)
 	const pending = isPendingPassive(node, null)
-	const shown = React.useRef(pending)
+	const shown = useRef(pending)
 	shown.current = pending
 	// Dispatch only when the boolean this hook shows would actually flip;
 	// pokes and waves over-notify by design.
-	const onNotify = React.useCallback(() => {
+	const onNotify = useCallback(() => {
 		// The flip escapes any ambient transition: an indicator scheduled
 		// inside the transition it indicates would be held hostage by it.
 		// React's own useTransition schedules isPending before the scope
@@ -278,28 +467,27 @@ export function useIsPending(x: AnyReadable): boolean {
 			dispatchUrgent(force)
 		}
 	}, [node])
-	React.useEffect(() => observeNode(node, onNotify), [node, onNotify])
+	useEffect(() => observeNode(node, onNotify), [node, onNotify])
 	return pending
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
-export function useCommitted<T>(x: Readable<T>): T {
+export function useCommitted<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const scope = requireScope('useCommitted')
 	noteHookRender(scope, null)
-	const container = scope.container ?? undefined
-	const [, force] = React.useReducer(forceReducer, 0)
-	const snap = committedSnapshot(node, container)
-	const shown = React.useRef(snap)
+	const [, force] = useReducer(forceReducer, 0)
+	const snap = committedSnapshot(node, scope)
+	const shown = useRef(snap)
 	shown.current = snap
 	// The committed snapshot has stable identity (a value, or a stable
 	// error box), so Object.is is the whole comparison.
-	const onNotify = React.useCallback(() => {
-		if (!Object.is(committedSnapshot(node, container), shown.current)) {
+	const onNotify = useCallback(() => {
+		if (!Object.is(committedSnapshot(node, scope), shown.current)) {
 			force()
 		}
-	}, [node, container])
-	React.useEffect(() => observeNode(node, onNotify), [node, onNotify])
+	}, [node, scope])
+	useEffect(() => observeNode(node, onNotify), [node, onNotify])
 	if (isErrorBox(snap)) {
 		throw snap.error
 	}
@@ -308,8 +496,8 @@ export function useCommitted<T>(x: Readable<T>): T {
 
 /** A component-owned atom: created once on mount, garbage-collected after
  * unmount when the component's references to it drop. */
-export function useAtom<T>(initial: T | (() => T), opts?: SignalOptions<T>): Signal<T> {
-	const atomRef = React.useRef<Signal<T> | null>(null)
-	atomRef.current ??= signal(initial, opts)
+export function useAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
+	const atomRef = useRef<Atom<T> | null>(null)
+	atomRef.current ??= createAtom(initial, opts)
 	return atomRef.current
 }

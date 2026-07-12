@@ -8,13 +8,14 @@
  * public React semantics — state updates, context, and effects.
  */
 export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
-export { SignalScope, wrapCreateRoot, ScopeContext } from './scope.ts'
+export { SignalScopeProvider, wrapCreateRoot, ScopeContext } from './SignalScopeProvider.ts'
 export {
 	useValue,
 	useComputed,
 	useSignalEffect,
+	useSignalLayoutEffect,
 	useIsPending,
 	useCommitted,
 	useAtom,
 } from './hooks.ts'
-export { startTransitionWrite, useSignalTransition } from './transitions.ts'
+export { startSignalTransition, useSignalTransition } from './transitions.ts'

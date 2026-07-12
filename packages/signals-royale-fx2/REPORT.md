@@ -16,7 +16,7 @@ React is the world clock. The engine keeps canonical state in a conventional
 signal graph and layers concurrency as a replay overlay: transition writes
 become drafts (ordered intent logs), and a reader resolves values in a world
 = canonical + a specific draft set. Which passes see which drafts is decided
-by React itself: draft ids are dispatched into each root's `SignalScope`
+by React itself: draft ids are dispatched into each root's `SignalScopeProvider`
 reducer inside the owning `startTransition`, so React's own update queues
 carry the world — urgent passes skip it, the transition's passes include it,
 rebased retries recompute it, and functional updates replay against each
@@ -174,8 +174,8 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
 - Async/Suspense: evaluate-to-pending, parallel parks, stable thenables,
   error boxes, two-level suspend-vs-stale, settlement-as-write with world
   attribution — done.
-- React bindings: useValue/useComputed/useSignalEffect/useCommitted/
-  useIsPending/useAtom, useSignalTransition + startTransitionWrite + plain
+- React bindings: useValue/useComputed/useSignalEffect/useSignalLayoutEffect/useCommitted/
+  useIsPending/useAtom, useSignalTransition + startSignalTransition + plain
   startTransition classification, loud registration, multi-root, write-
   during-render throws, unmount silence — done.
 - SSR serialize/initialize/installState — done. Causality tracer (attach/
@@ -194,7 +194,7 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
    *ambient* `latest()` after any render resolved that render's world (a
    canonical last pass hid live drafts). Fix: the seam is now a provider —
    the host answers "what world is rendering right now", gated on React's
-   live hook dispatcher, noted by the SignalScope render (top of every
+   live hook dispatcher, noted by the SignalScopeProvider render (top of every
    draft-carrying pass, in tree order) and by every world-reading hook.
    Regression tests at both levels were written first and verified to fail
    pre-fix (engine: worlds.spec `latest() context resolution` x4; React:
@@ -265,7 +265,7 @@ Nothing in the shared battery is disputed.
   should close most of the 1.3–1.5x.
 - Fanout claim path: batch uSES notify fan-out per commit to cut the ~0.5 ms
   fanout delta and mount cost.
-- A per-pass world beacon: teach `SignalScope` to re-render at the top of
+- A per-pass world beacon: teach `SignalScopeProvider` to re-render at the top of
   urgent passes too (context-selector trick) to close the last latest()
   corner without a fork line.
 - Wire the causality tracer into the playground UI (the format is already
@@ -280,12 +280,12 @@ correctness gaps. Both are fixed below; the fork is untouched (tree still
 
 ### 10.1 Mixed-root fold staleness (moderate)
 
-A `useValue` subscriber in a root without `SignalScope` went stale when a
+A `useValue` subscriber in a root without `SignalScopeProvider` went stale when a
 transition retired via a scoped root's commit: the silent fold suppresses
 the `reactEpoch` snapshot bump, so epoch-snapshot subscribers outside any
 scope bailed forever (judge probe E i-b pinned the unscoped root at `b:1;` with
 canonical already 2, repaired only by the next canonical write). Resolution:
-converge, not enforce — `SignalScope` is a public export, and a scope-less
+converge, not enforce — `SignalScopeProvider` is a public export, and a scope-less
 root is a legitimate degraded mode (canonical-only view, no transition
 worlds). Two parts:
 
@@ -868,15 +868,15 @@ battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
 the unhandled error is the same refresh TypeError).
 
-## 20. Walk modernization (mandatory SignalScope, unified poke walk, flag table)
+## 20. Walk modernization (mandatory SignalScopeProvider, unified poke walk, flag table)
 
 Owner-specified in full; two commits (the WaveFrame amortization is the
 second, separately revertable).
 
-- **Mandatory SignalScope.** The unscoped hook mode is deleted: every
+- **Mandatory SignalScopeProvider.** The unscoped hook mode is deleted: every
   scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
   `useCommitted`) throws without a scope, naming `wrapCreateRoot` and
-  `<SignalScope>` as the fixes (falsify-first: the throw test rendered fine
+  `<SignalScopeProvider>` as the fixes (falsify-first: the throw test rendered fine
   pre-change). `canonicalEpoch` is deleted entirely; `reactEpoch` is renamed
   `storeEpoch` — THE useSyncExternalStore snapshot; bump = subscribers
   re-render. Fold loudness is unchanged: loud folds bump it, silent folds
@@ -951,7 +951,9 @@ that watermarks cannot — caught by T12). Falsified pre-change: the lane
 discriminator (timeout-origin write rendered in the microtask window under
 uSES: "expected '1' to be '0'"). Guards: mixed signal+setState atomicity
 (one render), burst = one render, render→attach layout-write repair,
-lazy-chain/cutoff/net-revert watermark pins. Full design argument in
+lazy-chain/cutoff/net-revert watermark pins. The net-revert restoration was
+later removed after a mid-batch read proved that moving an atom's reading
+backward could preserve an intermediate computed cache. Full design argument in
 docs/final-unit.md. Gates: tsc clean; 290 tests; 1200-seed oracle twice
 (deterministic-green, subscriber model mirrors the notify predicate);
 battery at the pinned 23/2/1.

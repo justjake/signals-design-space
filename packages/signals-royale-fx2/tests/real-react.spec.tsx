@@ -7,18 +7,18 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
 import {
 	batch,
-	computed,
+	createComputed,
 	isPending as enginePending,
 	latest,
 	committed,
 	read,
-	signal,
+	createAtom,
 	update,
 	serializeAtomState,
 	initializeAtomState,
 } from 'signals-royale-fx2'
 import {
-	startTransitionWrite,
+	startSignalTransition,
 	useIsPending,
 	useSignalTransition,
 	useValue,
@@ -34,7 +34,7 @@ afterEach(async () => {
 	expect(errors).toEqual([])
 })
 
-function Reader({ id, atom }: { id: string; atom: ReturnType<typeof signal<number>> }) {
+function Reader({ id, atom }: { id: string; atom: ReturnType<typeof createAtom<number>> }) {
 	return (
 		<span>
 			{id}:{useValue(atom)};
@@ -44,8 +44,8 @@ function Reader({ id, atom }: { id: string; atom: ReturnType<typeof signal<numbe
 
 describe('scenario 1 — urgent writes commit once', () => {
 	test('single write: one re-render; batched writes: one re-render', async () => {
-		const a = signal(0)
-		const b = signal(0)
+		const a = createAtom(0)
+		const b = createAtom(0)
 		let renders = 0
 		function App() {
 			renders++
@@ -76,8 +76,8 @@ describe('scenario 1 — urgent writes commit once', () => {
 
 describe('scenario 2 — transition invisibility + isPending', () => {
 	test('drafts stay out of the committed DOM; the read family agrees; isPending flips', async () => {
-		const a = signal(0)
-		const hold = signal(false)
+		const a = createAtom(0)
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -100,7 +100,7 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		)
 		expect(text(container)).toBe('i;v:0;')
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(1)
 				hold.set(true)
 			})
@@ -121,8 +121,8 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 
 describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () => {
 	test('(1+1)*2 = 4: urgent commits alone, retirement lands rebased', async () => {
-		const a = signal(1)
-		const hold = signal(false)
+		const a = createAtom(1)
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function App() {
 			const v = useValue(a)
@@ -138,7 +138,7 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 1)
 				hold.set(true)
 			})
@@ -157,8 +157,8 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 	})
 
 	test('branch state: +2 pending, urgent double: 1 -> 2 -> 6, never 3 or 4', async () => {
-		const a = signal(1)
-		const hold = signal(false)
+		const a = createAtom(1)
+		const hold = createAtom(false)
 		const gate = deferred<void>()
 		const seen: number[] = []
 		function Value() {
@@ -184,7 +184,7 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 			</>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 2)
 				hold.set(true)
 			})
@@ -211,11 +211,11 @@ describe('the latest() context rule', () => {
 	// ambient code sees the newest view. Reading ahead of your world is a
 	// tear.
 	test('urgent bodies, base-state computeds, the transition render, and ambient code', async () => {
-		const a = signal(1)
-		const b = signal(0) // unrelated urgent driver
-		const hold = signal(false)
+		const a = createAtom(1)
+		const b = createAtom(0) // unrelated urgent driver
+		const hold = createAtom(false)
 		const gate = deferred<void>()
-		const viaComputed = computed(() => latest(a) * 100)
+		const viaComputed = createComputed(() => latest(a) * 100)
 		// Every render of the probe records what its subscription resolved next
 		// to what a plain latest(a) call in the body resolved. While the draft
 		// is held the pair must agree: the transition's passes see 2, urgent
@@ -252,7 +252,7 @@ describe('the latest() context rule', () => {
 
 		held = true
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(2)
 				hold.set(true)
 			})
@@ -287,7 +287,7 @@ describe('the latest() context rule', () => {
 
 describe('scenario 4 — sibling consistency', () => {
 	test('paired reads agree in every render pass, transitions included', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		const pairs: Array<[number, number]> = []
 		function Pair() {
 			const v1 = useValue(a)
@@ -307,7 +307,7 @@ describe('scenario 4 — sibling consistency', () => {
 		)
 		await act(() => {
 			a.set(1)
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('2,2;2,2;')
@@ -319,7 +319,7 @@ describe('scenario 4 — sibling consistency', () => {
 
 describe('scenario 5 — mount mid-transition', () => {
 	test('the late mount shows committed state, then joins the transition commit', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -341,7 +341,7 @@ describe('scenario 5 — mount mid-transition', () => {
 		}
 		const { root, container } = await h.mount(<App extra={false} />)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		expect(text(container)).toBe('r1:0;s:0;')
 		await act(() => {
@@ -359,8 +359,8 @@ describe('scenario 5 — mount mid-transition', () => {
 describe('scenario 6 — flushSync excludes deferred work', () => {
 	test('a flushSync urgent write commits without the pending transition', async () => {
 		const { flushSync } = await import('react-dom')
-		const a = signal(0)
-		const b = signal(0)
+		const a = createAtom(0)
+		const b = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -379,7 +379,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 			</>,
 		)
 		await act(() => {
-			startTransitionWrite(() => a.set(9))
+			startSignalTransition(() => a.set(9))
 		})
 		await act(() => {
 			flushSync(() => b.set(1))
@@ -395,7 +395,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 
 describe('scenario 7 — one transition across two roots', () => {
 	test('per-root committed views diverge while one root holds, then join', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -411,7 +411,7 @@ describe('scenario 7 — one transition across two roots', () => {
 		)
 		const two = await h.mount(<Reader id="r" atom={a} />)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		expect(text(one.container)).toBe('s:0;') // held here
 		expect(text(two.container)).toBe('r:1;') // committed there
@@ -435,7 +435,7 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 	// carried it, so the fold is its only delivery channel: it must
 	// converge, not stay stale until the next write.
 	test('a scope mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
-		const a = signal(1)
+		const a = createAtom(1)
 		const gate = deferred<void>()
 		function Suspender() {
 			const v = useValue(a)
@@ -450,7 +450,7 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		expect(text(first.container)).toBe('s:1;')
 		// This root registers after the draft's dispatch: its passes never carry
@@ -469,8 +469,8 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 describe('scenario 8 — StrictMode nets one subscription and one observation', () => {
 	test('double-mount: one observe; writes deliver; unmount cleans up once', async () => {
 		const log: string[] = []
-		const a = signal(0)
-		const observed = signal(0, {
+		const a = createAtom(0)
+		const observed = createAtom(0, {
 			onObserved: () => {
 				log.push('observe')
 				return () => log.push('unobserve')
@@ -505,7 +505,7 @@ describe('scenario 8 — StrictMode nets one subscription and one observation', 
 describe('scenario 9 — unmount: silence and baseline', () => {
 	test('no deliveries after unmount; lifetime observation released', async () => {
 		const log: string[] = []
-		const a = signal(0, {
+		const a = createAtom(0, {
 			onObserved: () => {
 				log.push('observe')
 				return () => log.push('unobserve')
@@ -527,7 +527,7 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 		const before = renders
 		await act(() => {
 			a.set(1)
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(renders).toBe(before)
@@ -537,7 +537,7 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 
 describe('scenario 10 — write-during-render fails loudly', () => {
 	test('set() from a component body throws synchronously', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		let thrown: unknown
 		function Bad() {
 			const v = useValue(a)
@@ -559,8 +559,8 @@ describe('scenario 10 — write-during-render fails loudly', () => {
 describe('scenario 12 — time slicing stays real', () => {
 	test('urgent flushSync lands while a large transition renders', async () => {
 		const { flushSync } = await import('react-dom')
-		const items = signal(0)
-		const urgent = signal(0)
+		const items = createAtom(0)
+		const urgent = createAtom(0)
 		let itemRenders = 0
 		function SlowItem({ k }: { k: number }) {
 			itemRenders++
@@ -593,7 +593,7 @@ describe('scenario 12 — time slicing stays real', () => {
 		)
 		;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
 		try {
-			startTransitionWrite(() => items.set(24))
+			startSignalTransition(() => items.set(24))
 			const deadline = Date.now() + 5000
 			while (itemRenders < 3 && Date.now() < deadline) {
 				await tick(5)

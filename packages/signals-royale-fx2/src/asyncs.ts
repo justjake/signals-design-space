@@ -22,12 +22,12 @@
  */
 
 import {
-	type DerivedNode,
+	type ComputedNode,
 	type Flags,
 	Flag,
 	PARKED,
 	ensureFresh,
-	invalidateDerived,
+	invalidateComputed,
 	isUninitialized,
 	NO_EVENT,
 	setCurrentCause,
@@ -39,14 +39,17 @@ import {
 	untracked,
 } from './graph.ts'
 
+/** Settlement state recorded for a tracked thenable. */
 export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected'
 
+/** Per-thenable tracking record: its settlement state plus everything
+ * currently parked on it. */
 export interface ThenableBox {
 	status: ThenableStatus
 	value: unknown
 	reason: unknown
 	/** Computeds whose latest base-state evaluation parked on this thenable. */
-	parkedNodes: Set<DerivedNode<unknown>>
+	parkedNodes: Set<ComputedNode<unknown>>
 	/** Suspensions (base-state or per-world) waiting on this thenable. */
 	parkedSuspensions: Set<Suspension>
 }
@@ -60,6 +63,8 @@ export interface Suspension {
 	settled: boolean
 }
 
+/** A thrown error, boxed so an erroring evaluation has one stable result
+ * object to compare and rethrow (see the header on stability). */
 export interface ErrorBox {
 	error: unknown
 }
@@ -80,8 +85,8 @@ export function isErrorBox(v: unknown): v is ErrorBox {
 }
 
 /**
- * The uniform shape a resolved value is read through. Graph nodes (cells
- * and deriveds) satisfy this interface directly, so resolving base state
+ * Every resolved value is read through this one shape. Graph nodes (atoms
+ * and computeds) satisfy the interface directly, so resolving base state
  * allocates nothing; per-world memo records (worlds.ts) are separate
  * objects of the same shape.
  *
@@ -96,7 +101,7 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  *   or the Suspension whose .promise suspends a reader (AsyncSuspended);
  *   null for a plain value.
  */
-export interface DerivedState {
+export interface ResolvedState {
 	flags: Flags
 	value: unknown
 	throwable: ErrorBox | Suspension | null
@@ -172,7 +177,7 @@ function settle(box: ThenableBox): void {
 	startBatch()
 	try {
 		for (const node of nodes) {
-			invalidateDerived(node, cause)
+			invalidateComputed(node, cause)
 			try {
 				untracked(() => ensureFresh(node))
 			} catch {
@@ -190,7 +195,7 @@ function settle(box: ThenableBox): void {
 }
 
 /** Handles use(t) inside a base-state evaluation. */
-function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
+function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
 		return box.value
@@ -214,7 +219,7 @@ function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unkno
 }
 
 function finishCompute(
-	node: DerivedNode<unknown>,
+	node: ComputedNode<unknown>,
 	parked: boolean,
 	hasError: boolean,
 	error: unknown,

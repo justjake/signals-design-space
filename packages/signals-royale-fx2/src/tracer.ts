@@ -11,6 +11,7 @@
 
 import { type ReactiveNode, type TraceEventId, NO_EVENT, setTraceHook } from './graph.ts'
 
+/** One entry in the tracer's ring. */
 export interface TraceEvent {
 	id: TraceEventId
 	kind: string
@@ -20,6 +21,7 @@ export interface TraceEvent {
 	data: unknown
 }
 
+/** Options accepted by the Tracer constructor and attachTracer(). */
 export interface TracerOptions {
 	/** Ring capacity in events; overflow evicts oldest and is counted. */
 	capacity?: number

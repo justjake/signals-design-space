@@ -3,18 +3,20 @@
 import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
-import { nodeOf, signal, read, type Signal } from 'signals-royale-fx2'
-import { liveDraftCount, openDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+import { createRoot } from 'react-dom/client'
+import { committed, createAtom, nodeOf, read, type Atom } from 'signals-royale-fx2'
+import { liveDraftCount, openDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
-	startTransitionWrite,
+	SignalScopeProvider,
+	startSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'
 import { broadcastDraft, registerProvider } from '../src/react/host.ts'
 import { makeHarness, text } from './helpers.tsx'
 
-function subCount(x: Signal<number>): number {
+function subCount(x: Atom<number>): number {
 	let n = 0
 	for (let l = nodeOf(x).subs; l !== undefined; l = l.nextSub) {
 		n++
@@ -33,15 +35,50 @@ describe('registration', () => {
 		const h2 = registerReactSignals()
 		expect(h1).toBe(h2)
 	})
+
+	test('root commit bookkeeping precedes descendant layout effects', async () => {
+		resetReactSignalsForTest()
+		registerReactSignals()
+		const atom = createAtom(0)
+		const container = document.createElement('div')
+		document.body.appendChild(container)
+		const root = createRoot(container)
+		const seen: Array<[rendered: number, committed: number, liveDrafts: number]> = []
+		function Child() {
+			const value = useValue(atom)
+			React.useLayoutEffect(() => {
+				seen.push([value, committed(atom, container), liveDraftCount()])
+			})
+			return null
+		}
+		try {
+			await act(() => {
+				root.render(
+					<SignalScopeProvider container={container}>
+						<Child />
+					</SignalScopeProvider>,
+				)
+			})
+			expect(seen).toEqual([[0, 0, 0]])
+			await act(() => {
+				startSignalTransition(() => atom.set(1))
+			})
+			expect(seen).toContainEqual([1, 1, 0])
+			expect(seen).not.toContainEqual([1, 0, 1])
+		} finally {
+			await act(() => root.unmount())
+			container.remove()
+		}
+	})
 })
 
 describe('hosted draft lifetime', () => {
 	test('a draft with no providers retires after its writing scope', async () => {
 		resetReactSignalsForTest()
-		const a = signal(0)
+		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
-		runInDraft(draft, () => a.set(1))
+		runWithDraftWrites(draft, () => a.set(1))
 		sealDraft(draft)
 		expect(liveDraftCount()).toBe(1)
 		await Promise.resolve()
@@ -54,12 +91,13 @@ describe('hosted draft lifetime', () => {
 		const delivered: number[] = []
 		const unregister = registerProvider({
 			container: null,
+			committing: false,
 			dispatch: (id) => delivered.push(id),
 		})
-		const a = signal(0)
+		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
-		runInDraft(draft, () => a.set(2))
+		runWithDraftWrites(draft, () => a.set(2))
 		sealDraft(draft)
 		expect(delivered).toEqual([draft.id])
 		expect(liveDraftCount()).toBe(1)
@@ -72,7 +110,7 @@ describe('hosted draft lifetime', () => {
 describe('unmount reclamation', () => {
 	test('50 readers unmount back to zero subscriptions; transitions quiesce', async () => {
 		const h = makeHarness()
-		const a = signal(0)
+		const a = createAtom(0)
 		function Many() {
 			const kids = []
 			for (let i = 0; i < 50; i++) {
@@ -86,7 +124,7 @@ describe('unmount reclamation', () => {
 		const { root, container } = await h.mount(<Many />)
 		expect(subCount(a)).toBe(50)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		await act(async () => {})
 		expect(text(container)).toContain('1')
@@ -103,14 +141,14 @@ describe('unmount reclamation', () => {
 
 	test('a full mount/write/transition/unmount cycle leaves no live drafts', async () => {
 		const h = makeHarness()
-		const a = signal(0)
+		const a = createAtom(0)
 		function App() {
 			return <span>{useValue(a)}</span>
 		}
 		const m1 = await h.mount(<App />)
 		const m2 = await h.mount(<App />)
 		await act(() => {
-			startTransitionWrite(() => a.set(5))
+			startSignalTransition(() => a.set(5))
 		})
 		await act(async () => {})
 		expect(text(m1.container)).toBe('5')
