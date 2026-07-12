@@ -244,7 +244,13 @@ function allocRecord(): number {
 	if (nextRecord > M.length) {
 		throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
 	}
-	pinnedInternals.push(undefined)
+	// Grow the pin table in chunks (explicit undefined fill keeps it
+	// hole-free on every engine) instead of one push per record.
+	if (id >> RECORD_SHIFT >= pinnedInternals.length) {
+		for (let i = 0; i < 1024; i++) {
+			pinnedInternals.push(undefined)
+		}
+	}
 	return id
 }
 
@@ -262,7 +268,15 @@ function freeLink(id: Link): void {
 	if (dep !== 0 && --M[dep + NodeSlot.RefCount] === 0) {
 		pinnedInternals[dep >> RECORD_SHIFT] = undefined
 	}
-	M.fill(0, id, id + RECORD_STRIDE)
+	// Slot-by-slot zeroing: unlinkFromSubs already cleared PrevSub/NextSub/
+	// InSubs for subs-listed links, and they were never set otherwise, so
+	// only the four slots this module writes on every link need clearing.
+	// Explicit stores keep this on the inlined fast path (TypedArray fill is
+	// a builtin call per freed link).
+	M[id + LinkSlot.LinkEvalPass] = 0
+	M[id + LinkSlot.LinkDep] = 0
+	M[id + LinkSlot.LinkSub] = 0
+	M[id + LinkSlot.LinkNextDep] = 0
 	M[id + LinkSlot.FreeNext] = freeLinks
 	freeLinks = id
 }
@@ -795,16 +809,25 @@ function scheduleWatcher(id: ReactiveNodeId, flags: Flags): void {
 // the root node's changedAt/clock movement, then run the wave.
 // ---------------------------------------------------------------------------
 
-/** Suspended traversal positions for the iterative walks (heap, not the JS
+/** Suspended traversal positions for the poke walk (heap, not the JS
  * call stack, so walk depth is bounded by memory rather than stack frames). */
-interface WaveFrame {
+interface PokeFrame {
 	value: Link | undefined
-	prev: WaveFrame | undefined
-}
-
-interface PokeFrame extends WaveFrame {
 	changed: boolean
 	prev: PokeFrame | undefined
+}
+
+/** Suspended traversal positions for the invalidation wave: a persistent
+ * integer stack rather than per-frame heap cells. propagateWave never runs
+ * user code, so it cannot nest — one module-level stack serves every wave
+ * with zero allocation on the steady path. */
+let waveStack = new Int32Array(256)
+
+function growWaveStack(): Int32Array<ArrayBuffer> {
+	const bigger = new Int32Array(waveStack.length * 2)
+	bigger.set(waveStack)
+	waveStack = bigger
+	return bigger
 }
 
 /**
@@ -834,11 +857,13 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	if (link === undefined) {
 		return
 	}
+	const tracing = cause !== NO_EVENT
+	let stack = waveStack
+	let top = 0
 	let cur: Link = link
-	let next: Link | undefined = M[cur + LinkSlot.LinkNextSub] || undefined
-	let stack: WaveFrame | undefined
-	top: do {
-		const sub = linkSub(cur)
+	let next: Link = M[cur + LinkSlot.LinkNextSub]
+	do {
+		const sub = M[cur + LinkSlot.LinkSub]
 		const flags = M[sub + NodeSlot.Flags]
 		if ((flags & Flag.StaleMask) !== 0) {
 			if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
@@ -846,37 +871,47 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 			}
 		} else {
 			M[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
-			causeEvents[sub >> RECORD_SHIFT] = cause
+			if (tracing) {
+				causeEvents[sub >> RECORD_SHIFT] = cause
+			}
 			if ((flags & Flag.Watching) !== 0) {
 				scheduleWatcher(sub, flags | Flag.StaleCheck)
 			} else if ((flags & Flag.KindDerived) !== 0) {
-				const subSubs = subsOf(sub)
-				if (subSubs !== undefined) {
+				const subSubs = M[sub + NodeSlot.Subs]
+				if (subSubs !== 0) {
 					cur = subSubs
-					const sibling = M[cur + LinkSlot.LinkNextSub] || undefined
-					if (sibling !== undefined) {
-						stack = { value: next, prev: stack }
+					const sibling = M[cur + LinkSlot.LinkNextSub]
+					if (sibling !== 0) {
+						if (top === stack.length) {
+							stack = growWaveStack()
+						}
+						stack[top++] = next
 						next = sibling
 					}
 					continue
 				}
 			}
 		}
-		if (next !== undefined) {
+		if (next !== 0) {
 			cur = next
-			next = M[cur + LinkSlot.LinkNextSub] || undefined
+			next = M[cur + LinkSlot.LinkNextSub]
 			continue
 		}
-		while (stack !== undefined) {
-			const resume = stack.value
-			stack = stack.prev
-			if (resume !== undefined) {
-				cur = resume
-				next = M[cur + LinkSlot.LinkNextSub] || undefined
-				continue top
+		// Sibling chain exhausted: resume the nearest suspended position.
+		// Suspended values can be 0 (the descent happened at its chain's tail);
+		// those frames carry nothing to resume and pop straight through.
+		let resume = 0
+		while (top !== 0) {
+			resume = stack[--top]
+			if (resume !== 0) {
+				break
 			}
 		}
-		break
+		if (resume === 0) {
+			break
+		}
+		cur = resume
+		next = M[cur + LinkSlot.LinkNextSub]
 	} while (true)
 }
 
@@ -944,7 +979,9 @@ export function pokeDraftWatchers(
 						}
 						scheduleWatcher(sub, nextFlags)
 						M[sub + NodeSlot.Flags] = nextFlags | Flag.Scheduled
-						causeEvents[subIndex] = cause
+						if (cause !== NO_EVENT) {
+							causeEvents[subIndex] = cause
+						}
 						if (wake !== undefined && w.onDraftWake !== undefined) {
 							;(wakes ??= []).push(w)
 						}
@@ -1654,7 +1691,15 @@ function reclaimNodeRecord(id: number): void {
 		link = next
 	}
 	pinnedInternals[id >> RECORD_SHIFT] = undefined
-	M.fill(0, id, id + RECORD_STRIDE)
+	// Explicit stores for the same reason as freeLink: no builtin call per
+	// reclaimed node. ChangedAt spans two words; the Float64 view clears both.
+	M[id + NodeSlot.Flags] = 0
+	M[id + NodeSlot.Deps] = 0
+	M[id + NodeSlot.DepsTail] = 0
+	M[id + NodeSlot.Subs] = 0
+	M[id + NodeSlot.SubsTail] = 0
+	M[id + NodeSlot.RefCount] = 0
+	graphClocks[(id >> 1) + 3] = 0
 	const index = id >> RECORD_SHIFT
 	validAtClocks[index] = 0
 	observerCounts[index] = 0
