@@ -10,7 +10,7 @@
  * - Draft retirement drops rebase logs and world memos (quiescence).
  */
 import { describe, expect, test } from 'vitest'
-import { computed, effect, effectScope, nodeOf, read, signal, type Signal } from '../src/index.ts'
+import { createComputed, effect, effectScope, nodeOf, read, createAtom, type Atom } from '../src/index.ts'
 import { nextSubscriber, observeNode, type CellNode, type Link } from '../src/graph.ts'
 import {
 	liveDraftCount,
@@ -23,10 +23,10 @@ import {
 	type DraftId,
 } from '../src/worlds.ts'
 
-function subCount(x: Signal<number>): number {
+function subCount(x: Atom<number>): number {
 	let n = 0
 	for (
-		let l: Link | undefined = (x.node as CellNode<number>).subs;
+		let l: Link | undefined = (nodeOf(x) as CellNode<number>).subs;
 		l !== undefined;
 		l = nextSubscriber(l)
 	) {
@@ -47,14 +47,14 @@ async function collect(times = 5): Promise<void> {
 
 describe('leak audit', () => {
 	test('a dropped unwatched computed chain is collected (no registry needed)', async () => {
-		const base = signal(1)
+		const base = createAtom(1)
 		let finalized = false
 		const reg = new FinalizationRegistry(() => {
 			finalized = true
 		})
 		;(() => {
-			const mid = computed(() => base.get() * 2)
-			const top = computed(() => mid.get() + 1)
+			const mid = createComputed(() => base.get() * 2)
+			const top = createComputed(() => mid.get() + 1)
 			expect(read(top)).toBe(3)
 			reg.register(top, null)
 		})()
@@ -64,8 +64,8 @@ describe('leak audit', () => {
 	})
 
 	test('quiescence: retiring the last draft leaves no per-suspension state', () => {
-		const a = signal(0)
-		const c = computed(() => a.get() + 1)
+		const a = createAtom(0)
+		const c = createComputed(() => a.get() + 1)
 		const d1 = openDraft()
 		const d2 = openDraft()
 		runInDraft(d1, () => a.set(1))
@@ -87,7 +87,7 @@ describe('leak audit', () => {
 		// committed id sets) holds draft IDS, never Draft records — a record
 		// captured in a committed reducer state that never updates again would
 		// be retained forever, while a stale id is inert.
-		const a = signal({ n: 0 })
+		const a = createAtom({ n: 0 })
 		const committedReducerState: DraftId[] = [] // stands in for React state that never updates again
 		let draftRef!: WeakRef<object>
 		let payloadRef!: WeakRef<object>
@@ -110,14 +110,14 @@ describe('leak audit', () => {
 	})
 
 	test('promote/demote cycling leaves no back-edges; the demoted chain collects when dropped', async () => {
-		const base = signal(1)
+		const base = createAtom(1)
 		let finalized = false
 		const reg = new FinalizationRegistry(() => {
 			finalized = true
 		})
 		;(() => {
-			const mid = computed(() => base.get() * 2)
-			const top = computed(() => mid.get() + 1)
+			const mid = createComputed(() => base.get() * 2)
+			const top = createComputed(() => mid.get() + 1)
 			// Subscribe without pulling, pull through the watched tier, then
 			// unsubscribe: promote installed back-edges down to the cell, and
 			// demote must remove every one of them.
@@ -134,7 +134,7 @@ describe('leak audit', () => {
 	})
 
 	test('disposing an effect deterministically unlinks now (no GC needed)', () => {
-		const base = signal(1)
+		const base = createAtom(1)
 		const dispose = effect(() => void base.get())
 		expect(subCount(base)).toBe(1)
 		dispose()
@@ -148,7 +148,7 @@ describe('leak audit', () => {
 		// would pin the disposed watcher (and its closure) forever. Passes before
 		// and after the storage change; fails against a retained-capacity variant
 		// that skips the nulling.
-		const cell = signal(0)
+		const cell = createAtom(0)
 		const payloadRef = (() => {
 			const payload = { tag: 'effect-closure-payload' }
 			const dispose = effect(() => {
@@ -164,7 +164,7 @@ describe('leak audit', () => {
 	})
 
 	test('[guard] a disposed subscription collects even though the render-notify buffer retains capacity', async () => {
-		const cell = signal(0)
+		const cell = createAtom(0)
 		const payloadRef = (() => {
 			const payload = { tag: 'subscription-closure-payload' }
 			const unsub = observeNode(nodeOf(cell), () => void payload)
@@ -177,7 +177,7 @@ describe('leak audit', () => {
 	})
 
 	test('[guard] effects preempted by a throwing flush collect after disposal (catch-path slots nulled)', async () => {
-		const cell = signal(0)
+		const cell = createAtom(0)
 		let armed = false
 		const payloadRef = (() => {
 			const disposeThrowing = effect(() => {
@@ -205,7 +205,7 @@ describe('leak audit', () => {
 	})
 
 	test('a scope owns effects whose individual disposer is unused', () => {
-		const base = signal(1)
+		const base = createAtom(1)
 		let runs = 0
 		const disposeScope = effectScope(() => {
 			// Common usage: the per-effect disposer is dropped because the scope

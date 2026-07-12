@@ -1,10 +1,10 @@
 /** Daishi tearing-matrix adapter: three hooks over one module-level store. */
-import { signal, update } from 'signals-royale-fx2-dalien'
+import { createAtom, update } from 'signals-royale-fx2-dalien'
 import { registerReactSignals, useValue } from '../src/react/index.ts'
 
 registerReactSignals()
 
-const count = signal(0)
+const count = createAtom(0)
 
 const increment = (): void => {
 	update(count, (x) => x + 1)

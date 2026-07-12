@@ -32,17 +32,18 @@
  */
 import * as React from 'react'
 import {
-	computed,
+	createComputed,
 	committedSnapshot,
 	effect as engineEffect,
 	isErrorBox,
 	isPendingPassive,
 	isUninitialized,
 	nodeOf,
-	signal,
+	createAtom,
+	type Atom,
 	type Computed,
 	type Signal,
-	type SignalOptions,
+	type AtomOptions,
 } from '../index.ts'
 import { Flag, observeNode, type ReactiveNode } from '../graph.ts'
 import { resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
@@ -61,8 +62,7 @@ import {
 } from './host.ts'
 import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts'
 
-type AnyReadable = Signal<any> | Computed<any>
-type Readable<T> = Signal<T> | Computed<T>
+type AnyReadable = Signal<any>
 
 interface UseValueState {
 	delivered: Set<DraftId>
@@ -148,7 +148,7 @@ function unwrapState(st: DerivedState, world: World): unknown {
  * The gap for subscribers that attached late is closed by
  * correctSubscription at subscribe time.
  */
-export function useValue<T>(x: Readable<T>): T {
+export function useValue<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const scope = requireScope('useValue')
 	const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD)
@@ -237,12 +237,12 @@ export function useValue<T>(x: Readable<T>): T {
 	return value as T
 }
 
-/** A component-scoped computed (disposed by dropping; graph edges are
+/** A component-scoped createComputed (disposed by dropping; graph edges are
  * dependency-ward only, so unmount reclaims it structurally). */
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
 	requireScope('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const c = React.useMemo(() => computed(fn), deps)
+	const c = React.useMemo(() => createComputed(fn), deps)
 	return useValue(c)
 }
 
@@ -277,7 +277,7 @@ export function useIsPending(x: AnyReadable): boolean {
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
-export function useCommitted<T>(x: Readable<T>): T {
+export function useCommitted<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const scope = requireScope('useCommitted')
 	noteHookRender(scope, null)
@@ -302,8 +302,8 @@ export function useCommitted<T>(x: Readable<T>): T {
 
 /** A component-owned atom: created once, reclaimed after unmount by
  * dropping (no registry needed — see the engine's ownership model). */
-export function useAtom<T>(initial: T | (() => T), opts?: SignalOptions<T>): Signal<T> {
-	const atomRef = React.useRef<Signal<T> | null>(null)
-	atomRef.current ??= signal(initial, opts)
+export function useAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
+	const atomRef = React.useRef<Atom<T> | null>(null)
+	atomRef.current ??= createAtom(initial, opts)
 	return atomRef.current
 }

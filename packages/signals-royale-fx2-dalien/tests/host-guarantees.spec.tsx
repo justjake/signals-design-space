@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
-import { nodeOf, signal, read, type Signal } from 'signals-royale-fx2-dalien'
+import { nodeOf, createAtom, read, type Signal } from 'signals-royale-fx2-dalien'
 import { liveDraftCount, openDraft, runInDraft, sealDraft } from '../src/worlds.ts'
 import {
 	registerReactSignals,
@@ -39,7 +39,7 @@ describe('registration', () => {
 describe('hosted draft lifetime', () => {
 	test('a draft with no providers retires after its writing scope', async () => {
 		resetReactSignalsForTest()
-		const a = signal(0)
+		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
 		runInDraft(draft, () => a.set(1))
@@ -57,7 +57,7 @@ describe('hosted draft lifetime', () => {
 			container: null,
 			dispatch: (id) => delivered.push(id),
 		})
-		const a = signal(0)
+		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
 		runInDraft(draft, () => a.set(2))
@@ -73,7 +73,7 @@ describe('hosted draft lifetime', () => {
 describe('unmount reclamation', () => {
 	test('50 readers unmount back to zero subscriptions; transitions quiesce', async () => {
 		const h = makeHarness()
-		const a = signal(0)
+		const a = createAtom(0)
 		function Many() {
 			const kids = []
 			for (let i = 0; i < 50; i++) {
@@ -104,7 +104,7 @@ describe('unmount reclamation', () => {
 
 	test('a full mount/write/transition/unmount cycle leaves no live drafts', async () => {
 		const h = makeHarness()
-		const a = signal(0)
+		const a = createAtom(0)
 		function App() {
 			return <span>{useValue(a)}</span>
 		}

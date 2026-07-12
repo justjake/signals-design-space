@@ -89,7 +89,7 @@ if (contender === 'royale-fx2') {
 		createCells(n) {
 			const cells = []
 			for (let i = 0; i < n; i++) {
-				cells.push(engine.signal(0))
+				cells.push(engine.createAtom(0))
 			}
 			return cells
 		},

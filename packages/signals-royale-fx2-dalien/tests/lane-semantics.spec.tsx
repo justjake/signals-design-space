@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
-import { signal } from 'signals-royale-fx2-dalien'
+import { createAtom } from 'signals-royale-fx2-dalien'
 import { useValue } from 'signals-royale-fx2-dalien/react'
 
 let h: Harness
@@ -41,7 +41,7 @@ const settleUntil = async (cond: () => boolean) => {
 
 describe('base writes behave like useState', () => {
 	test('a timeout-origin write renders at default priority: not in the microtask window', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		function App() {
 			return <span>{useValue(a)}</span>
 		}
@@ -66,7 +66,7 @@ describe('base writes behave like useState', () => {
 	})
 
 	test('a click-origin write renders synchronously before the microtask window closes', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		function App() {
 			return (
 				<button onClick={() => a.set(1)}>
@@ -86,7 +86,7 @@ describe('base writes behave like useState', () => {
 	})
 
 	test('a signal write and a setState in one async callback commit as ONE render', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		let renders = 0
 		let setSt: (v: number) => void
 		function App() {
@@ -120,7 +120,7 @@ describe('base writes behave like useState', () => {
 	})
 
 	test('a write burst from one callback costs one render', async () => {
-		const a = signal(0)
+		const a = createAtom(0)
 		let renders = 0
 		function App() {
 			renders++
@@ -151,7 +151,7 @@ describe('the render→attach gap', () => {
 		// rendered 0 but the store says 9 by the time it subscribes — the
 		// commit-time repair must re-render it. Hydration is this same gap at
 		// its widest.
-		const a = signal(0)
+		const a = createAtom(0)
 		let readerRenders = 0
 		function Reader() {
 			readerRenders++

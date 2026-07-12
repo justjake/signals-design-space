@@ -10,17 +10,17 @@
 import { describe, expect, test } from 'vitest'
 import {
 	Flag,
-	computed,
+	createComputed,
 	effect,
 	isPending,
 	latest,
 	nodeOf,
 	read,
 	resetEngineForTest,
-	signal,
+	createAtom,
 	batch,
+	type Atom,
 	type Computed,
-	type Signal,
 } from '../src/index.ts'
 import {
 	discardDraft,
@@ -236,7 +236,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 	resetEngineForTest()
 	const model: Model = { cells: [], drafts: new Map() }
 	const exprs: Expr[] = []
-	const engCells: Signal<number>[] = []
+	const engCells: Atom<number>[] = []
 	const engComps: Computed<number>[] = []
 	const engDrafts = new Map<number, Draft>() // schedule draft ix -> engine draft record (transient: dies with this run)
 	const idToIx = new Map<DraftId, number>() // engine draft id -> schedule ix
@@ -374,7 +374,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 			switch (s.t) {
 				case 'cell': {
 					model.cells.push({ init: s.init, intents: [] })
-					engCells.push(signal(s.init))
+					engCells.push(createAtom(s.init))
 					if (engCells.length === 1) {
 						attachScoped({ cell: 0 }, true)
 					}
@@ -392,7 +392,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 							: e.op === 'mul'
 								? () => e.args.reduce((acc, r) => acc * engRef(r), 1) % 1000003
 								: () => (engRef(e.cond) % 2 === 0 ? engRef(e.then) : engRef(e.else))
-					engComps.push(computed(fn))
+					engComps.push(createComputed(fn))
 					if (effectRef === null && ix === 0) {
 						effectRef = { comp: 0 }
 						disposeEffect = effect(() => {

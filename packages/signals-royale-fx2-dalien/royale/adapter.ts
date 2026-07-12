@@ -4,12 +4,10 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import {
-	Signal,
-	Computed,
 	attachTracer,
 	batch,
 	committed,
-	computed,
+	createComputed,
 	effect,
 	initializeAtomState,
 	isPending,
@@ -18,10 +16,12 @@ import {
 	read,
 	serializeAtomState,
 	set,
-	signal,
+	createAtom,
 	untracked,
 	update,
-	type SignalOptions,
+	type Atom,
+	type AtomOptions,
+	type Signal,
 	type UseFn,
 } from 'signals-royale-fx2-dalien'
 import {
@@ -47,8 +47,6 @@ export interface RoyaleTraceView {
 	stop(): void
 }
 
-type Atom = Signal<unknown> | Computed<unknown>
-
 const adapter = {
 	slug: 'fx2',
 	React,
@@ -71,31 +69,31 @@ const adapter = {
 			label?: string
 		},
 	): unknown {
-		return signal(initial, opts as SignalOptions<T>)
+		return createAtom(initial, opts as AtomOptions<T>)
 	},
 	set(a: unknown, v: unknown): void {
-		set(a as Signal<unknown>, v)
+		set(a as Atom<unknown>, v)
 	},
 	update(a: unknown, fn: (prev: unknown) => unknown): void {
-		update(a as Signal<unknown>, fn)
+		update(a as Atom<unknown>, fn)
 	},
 	computed<T>(
 		fn: (use: <U>(t: PromiseLike<U>) => U) => T,
 		opts?: { equals?(a: T, b: T): boolean; label?: string },
 	): unknown {
-		return computed(fn, opts)
+		return createComputed(fn, opts)
 	},
 	read(x: unknown): unknown {
-		return read(x as Atom)
+		return read(x as Signal<unknown>)
 	},
 	latest(x: unknown): unknown {
-		return latest(x as Atom)
+		return latest(x as Signal<unknown>)
 	},
 	committed(x: unknown, container?: unknown): unknown {
-		return committed(x as Atom, container as object | undefined)
+		return committed(x as Signal<unknown>, container as object | undefined)
 	},
 	isPending(x: unknown): boolean {
-		return isPending(x as Atom)
+		return isPending(x as Signal<unknown>)
 	},
 	effect(fn: () => void | (() => void)): () => void {
 		return effect(fn)
@@ -107,14 +105,14 @@ const adapter = {
 		return untracked(fn)
 	},
 	serialize(atoms: unknown[]): string {
-		return serializeAtomState(atoms as Signal<unknown>[])
+		return serializeAtomState(atoms as Atom<unknown>[])
 	},
 	initialize(json: string, atoms: unknown[]): void {
-		initializeAtomState(json, atoms as Signal<unknown>[])
+		initializeAtomState(json, atoms as Atom<unknown>[])
 	},
 
 	useValue(x: unknown): unknown {
-		return useValue(x as Atom)
+		return useValue(x as Signal<unknown>)
 	},
 	useComputed<T>(fn: () => T, deps: unknown[]): T {
 		return useComputed(fn, deps)
@@ -123,10 +121,10 @@ const adapter = {
 		useSignalEffect(fn)
 	},
 	useIsPending(x: unknown): boolean {
-		return useIsPending(x as Atom)
+		return useIsPending(x as Signal<unknown>)
 	},
 	useCommitted(x: unknown): unknown {
-		return useCommitted(x as Atom)
+		return useCommitted(x as Signal<unknown>)
 	},
 	startTransitionWrite(scope: () => void): void {
 		startTransitionWrite(scope)
@@ -136,7 +134,7 @@ const adapter = {
 		const t = attachTracer()
 		return {
 			whyLastDelivery(x: unknown): string[] {
-				return t.whyLastDelivery(nodeOf(x as Atom))
+				return t.whyLastDelivery(nodeOf(x as Signal<unknown>))
 			},
 			events(): Array<{ id: number; kind: string; cause?: number }> {
 				return t

@@ -73,7 +73,7 @@ import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer
 // Public handle types
 // ---------------------------------------------------------------------------
 
-export interface SignalOptions<T> {
+export interface AtomOptions<T> {
 	equals?: EqualsFn<T>
 	label?: string
 	/** Runs when the atom gains its first subscriber of any kind; the cleanup
@@ -86,7 +86,14 @@ export interface ComputedOptions<T> {
 	label?: string
 }
 
-export class Signal<T> extends ReactiveNode implements CellNode<T> {
+export type Atom<in out T> = {
+	get(): T
+	set(value: T): void
+	update(fn: (prev: T) => T): void
+	peek(): T
+}
+
+const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 	declare value: T | typeof UNINITIALIZED
 	declare initializer: (() => T) | undefined
 	declare equals: EqualsFn<T>
@@ -97,7 +104,7 @@ export class Signal<T> extends ReactiveNode implements CellNode<T> {
 	get node(): this {
 		return this
 	}
-	constructor(initial: T | (() => T), opts?: SignalOptions<T>) {
+	constructor(initial: T | (() => T), opts?: AtomOptions<T>) {
 		super()
 		initializeCell(this, initial, opts)
 	}
@@ -126,44 +133,40 @@ export class Signal<T> extends ReactiveNode implements CellNode<T> {
 }
 
 /** A signal whose dispatches replay through one reducer fixed at creation. */
-export class ReducerAtom<S, A> extends Signal<S> {
-	readonly reduce: (state: S, action: A) => S
-
-	constructor(reduce: (state: S, action: A) => S, initial: S | (() => S), opts?: SignalOptions<S>) {
-		super(initial, opts)
-		this.reduce = reduce
-	}
-
-	dispatch(action: A): void {
-		const reduce = this.reduce
-		this.update((state) => reduce(state, action))
-	}
+export type ReducerAtom<S, A> = Atom<S> & {
+	dispatch(action: A): void
 }
 
-export class Computed<T> extends ReactiveNode implements DerivedNode<T> {
+type ReducerAtomNode<S, A> = ReducerAtom<S, A> & CellNode<S> & {
+	reduce: (state: S, action: A) => S
+}
+
+function dispatchReducer<S, A>(this: ReducerAtomNode<S, A>, action: A): void {
+	const reduce = this.reduce
+	this.update((state) => reduce(state, action))
+}
+
+export type Computed<out T> = {
+	get(): T
+	peek(): T
+}
+
+const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 	declare value: T | typeof UNINITIALIZED
 	declare fn: DerivedNode<T>['fn']
 	declare equals: EqualsFn<T>
-	/** @internal Compatibility alias; the handle itself owns the internals. */
-	get node(): this {
-		return this
-	}
 	constructor(fn: (use: UseFn, previous: T | undefined) => T, opts?: ComputedOptions<T>) {
 		super()
 		initializeDerived(this, fn, opts)
 	}
 	get(): T {
-		const node = this
 		const world = getCurrentWorld()
 		if (world !== null) {
-			// Inside a draft evaluation every read resolves that world.
-			return unwrapForEval(resolveState(node, world), getCurrentPark()!) as T
+			return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
 		}
-		const value = readDerived(node)
-		// A node can carry async state only after something parked or errored;
-		// until then one module-flag test replaces the per-read flags probe.
-		if (asyncPlaneUsed && (graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
-			return unwrapAsyncRead(node as DerivedNode<unknown>) as T
+		const value = readDerived(this)
+		if (asyncPlaneUsed && (graphMemory[this.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
+			return unwrapAsyncRead(this as DerivedNode<unknown>) as T
 		}
 		return value
 	}
@@ -172,15 +175,24 @@ export class Computed<T> extends ReactiveNode implements DerivedNode<T> {
 	}
 }
 
-export type Readable<T> = Signal<T> | Computed<T>
-/** @internal Accepts any handle regardless of value-type variance. */
-type AnyReadable = Signal<any> | Computed<any>
+export type Signal<T> = Atom<T> | Computed<T>
 
-export function signal<T>(initial: T | (() => T), opts?: SignalOptions<T>): Signal<T> {
-	return new Signal(initial, opts)
+export function createAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
+	return new Atom(initial, opts)
 }
 
-export function computed<T>(
+export function reducerAtom<S, A>(
+	reduce: (state: S, action: A) => S,
+	initial: S | (() => S),
+	opts?: AtomOptions<S>,
+): ReducerAtom<S, A> {
+	const node = new Atom(initial, opts) as unknown as ReducerAtomNode<S, A>
+	node.reduce = reduce
+	node.dispatch = dispatchReducer
+	return node
+}
+
+export function createComputed<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: ComputedOptions<T>,
 ): Computed<T> {
@@ -188,11 +200,12 @@ export function computed<T>(
 }
 
 /** @internal Resolve a handle to its engine node. */
-export function nodeOf(x: AnyReadable): ReactiveNode {
-	if (typeof (x as Signal<unknown>).id !== 'number') {
+export function nodeOf(x: Signal<any>): ReactiveNode {
+	const node = x as unknown as ReactiveNode
+	if (typeof node.id !== 'number') {
 		throw new TypeError('expected a signal or computed handle')
 	}
-	return x as ReactiveNode
+	return node
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +243,7 @@ function stateValue(st: DerivedState): unknown {
  * context's own world instead, because reading ahead of your world is a
  * tear: a draft evaluation sees its draft world, a base-state computed or
  * effect evaluation sees base state, a render pass sees the pass's world. */
-export function latest<T>(x: Readable<T>): T {
+export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = getCurrentWorld()
 	if (world === null) {
@@ -257,7 +270,7 @@ export function latest<T>(x: Readable<T>): T {
 }
 
 /** What is on screen: per-root when a container is given. Never subscribes. */
-export function committed<T>(x: Readable<T>, container?: object): T {
+export function committed<T>(x: Signal<T>, container?: object): T {
 	const node = nodeOf(x)
 	if (activeEvaluation === node) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -289,7 +302,7 @@ export function committedSnapshot(node: ReactiveNode, container: object | undefi
  * screen — a pending transition draft on this atom, or an async refetch
  * loading behind a stale value. Passive by contract: never evaluates,
  * never refetches, never suspends. */
-export function isPending(x: AnyReadable): boolean {
+export function isPending(x: Signal<any>): boolean {
 	return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld())
 }
 
@@ -336,10 +349,10 @@ function guardRenderWrite(): void {
 	renderWriteGuard?.()
 }
 
-export function set<T>(x: Signal<T>, value: T): void {
+export function set<T>(x: Atom<T>, value: T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
-	const cell = x.node as CellNode<unknown>
+	const cell = x as unknown as CellNode<unknown>
 	const draft = classifyWrite()
 	if (draft !== null) {
 		appendDraftIntent(draft, cell, 'set', value)
@@ -347,7 +360,7 @@ export function set<T>(x: Signal<T>, value: T): void {
 	}
 	// Urgent: base state moves now; pending worlds replay it in dispatch order.
 	const rebased = appendUrgentIntent(cell, 'set', value)
-	const changed = writeCell(x.node, value)
+	const changed = writeCell(cell, value)
 	// Equality cutoff with pending drafts: base state did not move (no wave
 	// ran) but the drafted replays did — their audiences must still hear it.
 	if (rebased && !changed) {
@@ -355,24 +368,24 @@ export function set<T>(x: Signal<T>, value: T): void {
 	}
 }
 
-export function update<T>(x: Signal<T>, fn: (prev: T) => T): void {
+export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
-	const cell = x.node as CellNode<unknown>
+	const cell = x as unknown as CellNode<T>
 	const draft = classifyWrite()
 	if (draft !== null) {
-		appendDraftIntent(draft, cell, 'update', fn)
+		appendDraftIntent(draft, cell as CellNode<unknown>, 'update', fn)
 		return
 	}
-	const next = runUpdater(fn, peekCell(x.node))
-	const rebased = appendUrgentIntent(cell, 'update', fn)
-	const changed = writeCell(x.node, next)
+	const next = runUpdater(fn, peekCell(cell))
+	const rebased = appendUrgentIntent(cell as CellNode<unknown>, 'update', fn)
+	const changed = writeCell(cell, next)
 	if (rebased && !changed) {
-		pokeRebasedCell(cell)
+		pokeRebasedCell(cell as CellNode<unknown>)
 	}
 }
 
-export function read<T>(x: Readable<T>): T {
+export function read<T>(x: Signal<T>): T {
 	nodeOf(x) // validate the handle before dispatching to its read method
 	return x.get()
 }
@@ -394,13 +407,7 @@ export { resetGraphForBenchmark }
 // ---------------------------------------------------------------------------
 
 /** Atoms under app-supplied keys: positional (array) or named (record). */
-type AtomMap = Record<string, Signal<any>> | Signal<any>[]
-
-function atomEntries(atoms: AtomMap): Array<[string, Signal<unknown>]> {
-	return Array.isArray(atoms)
-		? atoms.map((a, i) => [String(i), a] as [string, Signal<unknown>])
-		: Object.entries(atoms)
-}
+type AtomMap = Record<string, Atom<any>> | Atom<any>[]
 
 /** Serialize base atom state under app-supplied keys. */
 export function serializeAtomState(
@@ -408,18 +415,27 @@ export function serializeAtomState(
 	replacer?: (key: string, value: unknown) => unknown,
 ): string {
 	const out: Record<string, unknown> = {}
-	for (const [key, atom] of atomEntries(atoms)) {
-		out[key] = peekCell(atom.node)
+	if (Array.isArray(atoms)) {
+		for (let i = 0; i < atoms.length; i++) {
+			out[i] = peekCell(atoms[i] as unknown as CellNode<unknown>)
+		}
+	} else {
+		for (const key in atoms) {
+			if (Object.prototype.hasOwnProperty.call(atoms, key)) {
+				out[key] = peekCell(atoms[key] as unknown as CellNode<unknown>)
+			}
+		}
 	}
 	return JSON.stringify(out, replacer as never)
 }
 
 /** Install a value without running lazy initializers and without counting
  * as a write: no propagation, no equality check, no effects. */
-export function installState<T>(atom: Signal<T>, value: T): void {
+export function installState<T>(atom: Atom<T>, value: T): void {
 	assertSignalWriteAllowed()
-	atom.node.initializer = undefined
-	atom.node.value = value
+	const node = atom as unknown as CellNode<T>
+	node.initializer = undefined
+	node.value = value
 }
 
 export function initializeAtomState(
@@ -428,9 +444,20 @@ export function initializeAtomState(
 	reviver?: (key: string, value: unknown) => unknown,
 ): void {
 	const data = JSON.parse(json, reviver as never) as Record<string, unknown>
-	for (const [key, atom] of atomEntries(atoms)) {
-		if (Object.prototype.hasOwnProperty.call(data, key)) {
-			installState(atom, data[key])
+	if (Array.isArray(atoms)) {
+		for (let i = 0; i < atoms.length; i++) {
+			if (Object.prototype.hasOwnProperty.call(data, i)) {
+				installState(atoms[i], data[i])
+			}
+		}
+	} else {
+		for (const key in atoms) {
+			if (
+				Object.prototype.hasOwnProperty.call(atoms, key) &&
+				Object.prototype.hasOwnProperty.call(data, key)
+			) {
+				installState(atoms[key], data[key])
+			}
 		}
 	}
 }

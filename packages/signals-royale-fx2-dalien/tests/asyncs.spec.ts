@@ -1,6 +1,6 @@
 /** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from 'vitest'
-import { computed, effect, isPending, latest, read, signal } from '../src/index.ts'
+import { createComputed, effect, isPending, latest, read, createAtom } from '../src/index.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -17,7 +17,7 @@ const tick = () => new Promise<void>((r) => setTimeout(r))
 describe('pending as graph state', () => {
 	test('never-settled read throws a stable thenable; settlement converges', async () => {
 		const gate = deferred<string>()
-		const c = computed((use) => use(gate.promise))
+		const c = createComputed((use) => use(gate.promise))
 		let thrown1: unknown
 		let thrown2: unknown
 		try {
@@ -46,8 +46,8 @@ describe('pending as graph state', () => {
 		// A user-owned nonce cell is the refetch trigger: the computed reads it,
 		// so a bump invalidates with the data inputs unchanged and starts a new
 		// fetch through the ordinary write path.
-		const nonce = signal(0)
-		const c = computed((use) => use(gates[nonce.get()].promise))
+		const nonce = createAtom(0)
+		const c = createComputed((use) => use(gates[nonce.get()].promise))
 		gates[0].resolve(1)
 		try {
 			read(c) // first touch attaches to the (already resolved) thenable
@@ -68,8 +68,8 @@ describe('pending as graph state', () => {
 
 	test('pending forwards: a computed reading a pending computed parks too', async () => {
 		const gate = deferred<number>()
-		const inner = computed((use) => use(gate.promise))
-		const outer = computed(() => inner.get() + 1)
+		const inner = createComputed((use) => use(gate.promise))
+		const outer = createComputed(() => inner.get() + 1)
 		expect(isPending(outer)).toBe(false)
 		expect(() => read(outer)).toThrow()
 		// Forwarded first load is still a first load: not pending (Solid rule).
@@ -81,7 +81,7 @@ describe('pending as graph state', () => {
 
 	test('settlement behaves as a write: effects observing downstream re-run', async () => {
 		const gate = deferred<number>()
-		const c = computed((use) => use(gate.promise) * 2)
+		const c = createComputed((use) => use(gate.promise) * 2)
 		const seen: unknown[] = []
 		effect(() => {
 			try {
@@ -101,7 +101,7 @@ describe('errors are reference-stable boxes', () => {
 	test('a rejected thenable rethrows the same reason at every read site', async () => {
 		const gate = deferred<never>()
 		const boom = new Error('boom')
-		const c = computed((use) => use(gate.promise))
+		const c = createComputed((use) => use(gate.promise))
 		try {
 			read(c)
 		} catch {
@@ -127,10 +127,10 @@ describe('errors are reference-stable boxes', () => {
 
 	test('a throwing computed forwards the same reason to downstream readers', () => {
 		const boom = new Error('sync-boom')
-		const c = computed(() => {
+		const c = createComputed(() => {
 			throw boom
 		})
-		const d = computed(() => c.get())
+		const d = createComputed(() => c.get())
 		expect(() => read(d)).toThrow(boom)
 		expect(() => read(d)).toThrow(boom)
 	})
