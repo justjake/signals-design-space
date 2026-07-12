@@ -795,15 +795,16 @@ function createGraphCore(
 		const id = node.id
 		const observerCount = ++mem[id + NodeSlot.ObserverCount]
 		if (observerCount === 1) {
-			mem[id + NodeSlot.Flags] |= Flag.Watched
-			if ((mem[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
+			const flags = mem[id + NodeSlot.Flags]
+			mem[id + NodeSlot.Flags] = flags | Flag.Watched
+			if ((flags & Flag.KindDerived) !== 0) {
 				// A canonically Computing node was promoted from inside its running body.
 				// Skip history validation: its watermark predates this evaluation, so
 				// deps the eval just re-read
 				// would compare as changed-since and seed a false StaleCheck. The
 				// running eval is the validator — its finally stamps fresh staleness
 				// and a current validAt reading.
-				const validate = (mem[id + NodeSlot.Flags] & Flag.Computing) === 0
+				const validate = (flags & Flag.Computing) === 0
 				const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
 				let invalid = false
 				for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
@@ -821,8 +822,11 @@ function createGraphCore(
 				if (invalid && (mem[id + NodeSlot.Flags] & Flag.StaleMask) === 0) {
 					mem[id + NodeSlot.Flags] |= Flag.StaleCheck
 				}
+			} else if ((node as CellNode<unknown>).lifetime !== undefined) {
+				// Only cells reach the non-derived branch (watchers are never
+				// dependencies), and only lifetime cells need the transition note.
+				noteLifetimeTransition(node)
 			}
-			noteLifetimeTransition(node)
 		}
 	}
 
@@ -853,8 +857,10 @@ function createGraphCore(
 				}
 				clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] =
 					(mem[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
+			} else if ((node as CellNode<unknown>).lifetime !== undefined) {
+				// Mirror of the promote branch: only lifetime cells need the note.
+				noteLifetimeTransition(node)
 			}
-			noteLifetimeTransition(node)
 		}
 	}
 
@@ -980,7 +986,19 @@ function createGraphCore(
 		}
 		sub.depsTail = link
 		if (watched) {
-			linkIntoSubs(link, sub)
+			// Fused subs insertion: a freshly-allocated link is never already a
+			// member of a subscriber list, so the membership guard linkIntoSubs
+			// carries for reused links is unnecessary here.
+			mem[link + LinkSlot.LinkInSubs] = 1
+			const subsTail = mem[depId + NodeSlot.SubsTail]
+			mem[link + LinkSlot.LinkPrevSub] = subsTail
+			mem[link + LinkSlot.LinkNextSub] = 0
+			if (subsTail !== 0) {
+				mem[subsTail + LinkSlot.LinkNextSub] = link
+			} else {
+				mem[depId + NodeSlot.Subs] = link
+			}
+			mem[depId + NodeSlot.SubsTail] = link
 			addObserver(dep)
 		}
 	}
