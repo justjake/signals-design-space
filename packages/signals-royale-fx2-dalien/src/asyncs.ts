@@ -188,6 +188,12 @@ function settle(box: ThenableBox): void {
 	}
 }
 
+/** Whether ANY node ever entered the async value plane (parked or errored).
+ * False in a fully-synchronous app, which lets the computed read path skip
+ * its per-read async-state probe: AsyncError/AsyncSuspended can only be set
+ * by the two sites that flip this. Never reset — a heuristic, not state. */
+export let asyncPlaneUsed = false
+
 /** use(t) inside a base-state evaluation. */
 function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
 	const box = trackThenable(t)
@@ -208,6 +214,7 @@ function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unkno
 	box.parkedSuspensions.add(suspension)
 	consumer.throwable = suspension
 	graphMemory[consumer.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended
+	asyncPlaneUsed = true
 	throw PARKED
 }
 
@@ -234,6 +241,7 @@ function finishCompute(
 			node.throwable = makeErrorBox(error)
 		}
 		graphMemory[node.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncError
+		asyncPlaneUsed = true
 		return !sameError
 	}
 	if ((flags & Flag.AsyncSuspended) !== 0) {

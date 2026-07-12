@@ -44,7 +44,7 @@ import {
 	writeCell,
 	graphMemory,
 } from './graph.ts'
-import { type DerivedState, type ErrorBox, type Suspension, isErrorBox } from './asyncs.ts'
+import { type DerivedState, type ErrorBox, type Suspension, asyncPlaneUsed, isErrorBox } from './asyncs.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -160,7 +160,9 @@ export class Computed<T> extends ReactiveNode implements DerivedNode<T> {
 			return unwrapForEval(resolveState(node, world), getCurrentPark()!) as T
 		}
 		const value = readDerived(node)
-		if ((graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
+		// A node can carry async state only after something parked or errored;
+		// until then one module-flag test replaces the per-read flags probe.
+		if (asyncPlaneUsed && (graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
 			return unwrapAsyncRead(node as DerivedNode<unknown>) as T
 		}
 		return value

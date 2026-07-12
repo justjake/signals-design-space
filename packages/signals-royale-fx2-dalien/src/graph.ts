@@ -264,6 +264,10 @@ export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
 const graphClocks = new Float64Array(graphMemory.buffer)
 const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
 const M = graphMemory
+// Hot functions open with local views (const mem = M, clocks, pins): a
+// bundler emits module state as mutable top-level vars, so a module-slot
+// read cannot be constant-folded and must re-load after every call; a
+// function-local const loads the slot once per activation.
 
 /**
  * Lazy records: cells and deriveds are born WITHOUT an arena record — their
@@ -340,9 +344,10 @@ function allocRecord(stride: number): number {
 }
 
 function allocLink(): Link {
+	const mem = M
 	if (freeLinks !== 0) {
 		const id = freeLinks
-		freeLinks = M[id + LinkSlot.FreeNext]
+		freeLinks = mem[id + LinkSlot.FreeNext]
 		return id
 	}
 	return allocRecord(RECORD_STRIDE)
@@ -355,40 +360,45 @@ function allocLink(): Link {
  * tolerate staleness. Out of line so unpinning stays cheap in freeLink
  * (hot-cluster inlining budget). */
 function unpinDep(dep: ReactiveNodeId): void {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	const depIndex = dep >> RECORD_SHIFT
-	const flags = M[dep + NodeSlot.Flags]
+	const flags = mem[dep + NodeSlot.Flags]
 	if ((flags & (Flag.KindCell | Flag.Registered)) === Flag.KindCell) {
-		const owner = pinnedInternals[depIndex] as { id: ReactiveNodeId }
+		const owner = pins[depIndex] as { id: ReactiveNodeId }
 		owner.id = VIRGIN_CELL
-		M[dep + NodeSlot.Flags] = 0
-		M[dep + NodeSlot.Generation]++
-		graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
-		M[dep + NodeSlot.FreeNext] = freeNodes
+		mem[dep + NodeSlot.Flags] = 0
+		mem[dep + NodeSlot.Generation]++
+		clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
+		mem[dep + NodeSlot.FreeNext] = freeNodes
 		freeNodes = dep
 	}
-	pinnedInternals[depIndex] = undefined
+	pins[depIndex] = undefined
 }
 
 function freeLink(id: Link): void {
-	const dep = M[id + LinkSlot.LinkDep]
-	if (dep !== 0 && --M[dep + NodeSlot.RefCount] === 0) {
+	const mem = M
+	const dep = mem[id + LinkSlot.LinkDep]
+	if (dep !== 0 && --mem[dep + NodeSlot.RefCount] === 0) {
 		unpinDep(dep)
 	}
 	// No zeroing: unlinkFromSubs already cleared PrevSub/NextSub/InSubs for
 	// subs-listed links (and they were never set otherwise), and the insert
 	// path assigns LinkDep/LinkSub/LinkNextDep/LinkEvalPass on every reuse.
 	// A free-listed link therefore carries stale-but-dead slot values only.
-	M[id + LinkSlot.FreeNext] = freeLinks
+	mem[id + LinkSlot.FreeNext] = freeLinks
 	freeLinks = id
 }
 
 function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
+	const mem = M
 	const id = freeNodes !== 0 ? freeNodes : allocRecord(NODE_STRIDE)
 	if (freeNodes !== 0) {
-		freeNodes = M[id + NodeSlot.FreeNext]
-		M[id + NodeSlot.FreeNext] = 0
+		freeNodes = mem[id + NodeSlot.FreeNext]
+		mem[id + NodeSlot.FreeNext] = 0
 	}
-	M[id + NodeSlot.Flags] = flags
+	mem[id + NodeSlot.Flags] = flags
 	;(owner as { id: ReactiveNodeId }).id = id
 	return id
 }
@@ -580,42 +590,44 @@ export function initializeDerived<T>(
 // ---------------------------------------------------------------------------
 
 function linkIntoSubs(link: Link, sub: ReactiveNode): void {
-	if (M[link + LinkSlot.LinkInSubs] !== 0) {
+	const mem = M
+	if (mem[link + LinkSlot.LinkInSubs] !== 0) {
 		return
 	}
-	M[link + LinkSlot.LinkInSubs] = 1
+	mem[link + LinkSlot.LinkInSubs] = 1
 	const dep = linkDep(link)
-	M[link + LinkSlot.LinkPrevSub] = subsTailOf(dep) ?? 0
-	M[link + LinkSlot.LinkNextSub] = 0
+	mem[link + LinkSlot.LinkPrevSub] = subsTailOf(dep) ?? 0
+	mem[link + LinkSlot.LinkNextSub] = 0
 	const tail = subsTailOf(dep)
 	if (tail !== undefined) {
-		M[tail + LinkSlot.LinkNextSub] = link
+		mem[tail + LinkSlot.LinkNextSub] = link
 	} else {
-		M[dep + NodeSlot.Subs] = link
+		mem[dep + NodeSlot.Subs] = link
 	}
-	M[dep + NodeSlot.SubsTail] = link
+	mem[dep + NodeSlot.SubsTail] = link
 }
 
 function unlinkFromSubs(link: Link): void {
-	if (M[link + LinkSlot.LinkInSubs] === 0) {
+	const mem = M
+	if (mem[link + LinkSlot.LinkInSubs] === 0) {
 		return
 	}
-	M[link + LinkSlot.LinkInSubs] = 0
+	mem[link + LinkSlot.LinkInSubs] = 0
 	const dep = linkDep(link)
-	const prev = M[link + LinkSlot.LinkPrevSub]
-	const next = M[link + LinkSlot.LinkNextSub]
+	const prev = mem[link + LinkSlot.LinkPrevSub]
+	const next = mem[link + LinkSlot.LinkNextSub]
 	if (prev !== 0) {
-		M[prev + LinkSlot.LinkNextSub] = next
+		mem[prev + LinkSlot.LinkNextSub] = next
 	} else {
-		M[dep + NodeSlot.Subs] = next
+		mem[dep + NodeSlot.Subs] = next
 	}
 	if (next !== 0) {
-		M[next + LinkSlot.LinkPrevSub] = prev
+		mem[next + LinkSlot.LinkPrevSub] = prev
 	} else {
-		M[dep + NodeSlot.SubsTail] = prev
+		mem[dep + NodeSlot.SubsTail] = prev
 	}
-	M[link + LinkSlot.LinkPrevSub] = 0
-	M[link + LinkSlot.LinkNextSub] = 0
+	mem[link + LinkSlot.LinkPrevSub] = 0
+	mem[link + LinkSlot.LinkNextSub] = 0
 }
 
 /**
@@ -633,34 +645,37 @@ function unlinkFromSubs(link: Link): void {
  * scheduled).
  */
 export function addObserver(node: ReactiveNode): void {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	const id = node.id
-	const observerCount = ++M[id + NodeSlot.ObserverCount]
+	const observerCount = ++mem[id + NodeSlot.ObserverCount]
 	if (observerCount === 1) {
-		M[id + NodeSlot.Flags] |= Flag.Watched
-		if ((M[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
+		mem[id + NodeSlot.Flags] |= Flag.Watched
+		if ((mem[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
 			// A canonically Computing node was promoted from inside its running body.
 			// Skip history validation: its watermark predates this evaluation, so
 			// deps the eval just re-read
 			// would compare as changed-since and seed a false StaleCheck. The
 			// running eval is the validator — its finally stamps fresh staleness
 			// and a current validAt reading.
-			const validate = (M[id + NodeSlot.Flags] & Flag.Computing) === 0
-			const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+			const validate = (mem[id + NodeSlot.Flags] & Flag.Computing) === 0
+			const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
 			let invalid = false
-			for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
+			for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 				linkIntoSubs(l, node)
 				const depId = linkDep(l)
-				addObserver(pinnedInternals[depId >> RECORD_SHIFT]!)
+				addObserver(pins[depId >> RECORD_SHIFT]!)
 				if (
 					validate &&
 					(changedAtOf(depId) > validAt ||
-						(M[depId + NodeSlot.Flags] & Flag.StaleMask) !== 0)
+						(mem[depId + NodeSlot.Flags] & Flag.StaleMask) !== 0)
 				) {
 					invalid = true
 				}
 			}
-			if (invalid && (M[id + NodeSlot.Flags] & Flag.StaleMask) === 0) {
-				M[id + NodeSlot.Flags] |= Flag.StaleCheck
+			if (invalid && (mem[id + NodeSlot.Flags] & Flag.StaleMask) === 0) {
+				mem[id + NodeSlot.Flags] |= Flag.StaleCheck
 			}
 		}
 		noteLifetimeTransition(node)
@@ -679,18 +694,21 @@ export function addObserver(node: ReactiveNode): void {
  * current validAtGraphChange — so no staleness seeding happens here.
  */
 export function removeObserver(node: ReactiveNode): void {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	const id = node.id
-	const observerCount = --M[id + NodeSlot.ObserverCount]
+	const observerCount = --mem[id + NodeSlot.ObserverCount]
 	if (observerCount === 0) {
-		M[id + NodeSlot.Flags] &= ~Flag.Watched
-		if ((M[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
-			for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
+		mem[id + NodeSlot.Flags] &= ~Flag.Watched
+		if ((mem[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
+			for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 				unlinkFromSubs(l)
 				const dep = linkDep(l)
-				removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
+				removeObserver(pins[dep >> RECORD_SHIFT]!)
 			}
-			graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] =
-				(M[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
+			clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] =
+				(mem[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
 		}
 		noteLifetimeTransition(node)
 	}
@@ -763,30 +781,33 @@ export function flushLifetimeTransitions(): void {
 /** Record "sub read dep". The common repeat-read path stays small enough to
  * inline into cell/computed reads; cursor movement and insertion are cold. */
 function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
+	const mem = M
 	const depId = dep.id
 	const subId = sub.id
-	const tail: Link = M[subId + NodeSlot.DepsTail]
-	if (tail !== 0 && M[tail + LinkSlot.LinkDep] === depId) {
+	const tail: Link = mem[subId + NodeSlot.DepsTail]
+	if (tail !== 0 && mem[tail + LinkSlot.LinkDep] === depId) {
 		return
 	}
-	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
-	if (next !== 0 && M[next + LinkSlot.LinkDep] === depId) {
-		M[next + LinkSlot.LinkEvalPass] = evalPass
-		M[subId + NodeSlot.DepsTail] = next
+	const next: Link = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
+	if (next !== 0 && mem[next + LinkSlot.LinkDep] === depId) {
+		mem[next + LinkSlot.LinkEvalPass] = evalPass
+		mem[subId + NodeSlot.DepsTail] = next
 		return
 	}
 	trackReadInsert(dep, sub)
 }
 
 function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
+	const mem = M
+	const pins = pinnedInternals
 	// First edge onto a virgin dep materializes its record. The sub is never
 	// virgin here: it is a recomputing derived (recompute materializes) or a
 	// watcher (eager records).
 	const depId = ensureDepRecord(dep)
 	const subId = sub.id
-	const tail: Link = M[subId + NodeSlot.DepsTail]
-	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
-	const watched = (M[subId + NodeSlot.Flags] & Flag.Watched) !== 0
+	const tail: Link = mem[subId + NodeSlot.DepsTail]
+	const next: Link = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
+	const watched = (mem[subId + NodeSlot.Flags] & Flag.Watched) !== 0
 	if (watched) {
 		// Same-pass dedup for non-adjacent re-reads: this sub's earlier link
 		// sits at the dep's subs tail (cursor reuse re-marks, new watched edges
@@ -799,25 +820,25 @@ function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 		if (
 			last !== undefined &&
 			linkSub(last) === subId &&
-			M[last + LinkSlot.LinkEvalPass] === evalPass
+			mem[last + LinkSlot.LinkEvalPass] === evalPass
 		) {
 			return
 		}
 	}
 	const link = allocLink()
-	M[link + LinkSlot.LinkDep] = depId
-	M[link + LinkSlot.LinkSub] = subId
-	if (++M[depId + NodeSlot.RefCount] === 1) {
-		pinnedInternals[depId >> RECORD_SHIFT] = dep
+	mem[link + LinkSlot.LinkDep] = depId
+	mem[link + LinkSlot.LinkSub] = subId
+	if (++mem[depId + NodeSlot.RefCount] === 1) {
+		pins[depId >> RECORD_SHIFT] = dep
 	}
-	M[link + LinkSlot.LinkNextDep] = next
-	M[link + LinkSlot.LinkEvalPass] = evalPass
+	mem[link + LinkSlot.LinkNextDep] = next
+	mem[link + LinkSlot.LinkEvalPass] = evalPass
 	if (tail === 0) {
-		M[subId + NodeSlot.Deps] = link
+		mem[subId + NodeSlot.Deps] = link
 	} else {
-		M[tail + LinkSlot.LinkNextDep] = link
+		mem[tail + LinkSlot.LinkNextDep] = link
 	}
-	M[subId + NodeSlot.DepsTail] = link
+	mem[subId + NodeSlot.DepsTail] = link
 	if (watched) {
 		linkIntoSubs(link, sub)
 		addObserver(dep)
@@ -829,13 +850,14 @@ function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
  * the freeing walk lives out of line so trimDeps inlines into recompute
  * and executeWatcher (hot-cluster inlining budget). */
 function trimDeps(sub: ReactiveNode): void {
+	const mem = M
 	const subId = sub.id
-	const tail = M[subId + NodeSlot.DepsTail]
-	const stale = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
+	const tail = mem[subId + NodeSlot.DepsTail]
+	const stale = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
 	if (tail !== 0) {
-		M[tail + LinkSlot.LinkNextDep] = 0
+		mem[tail + LinkSlot.LinkNextDep] = 0
 	} else {
-		M[subId + NodeSlot.Deps] = 0
+		mem[subId + NodeSlot.Deps] = 0
 	}
 	if (stale !== 0) {
 		freeStaleDeps(stale)
@@ -843,12 +865,14 @@ function trimDeps(sub: ReactiveNode): void {
 }
 
 function freeStaleDeps(stale: Link): void {
+	const mem = M
+	const pins = pinnedInternals
 	while (stale !== 0) {
-		const next = M[stale + LinkSlot.LinkNextDep]
-		if (M[stale + LinkSlot.LinkInSubs] !== 0) {
+		const next = mem[stale + LinkSlot.LinkNextDep]
+		if (mem[stale + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(stale)
 			const dep = linkDep(stale)
-			removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
+			removeObserver(pins[dep >> RECORD_SHIFT]!)
 		}
 		freeLink(stale)
 		stale = next
@@ -894,12 +918,14 @@ let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
 /** Route a watcher into its flush queue by capability bit. Scope anchors
  * carry neither bit and are never scheduled (they track no dependencies). */
 function scheduleWatcher(id: ReactiveNodeId, flags: Flags): void {
+	const mem = M
+	const pins = pinnedInternals
 	// One masked test: not already queued AND not disposed (Watched = alive).
 	if ((flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) {
 		return
 	}
 	if ((flags & Flag.WatchRender) !== 0) {
-		renderNotifyQueue[renderNotifyCount++] = pinnedInternals[id >> RECORD_SHIFT] as WatcherNode
+		renderNotifyQueue[renderNotifyCount++] = pins[id >> RECORD_SHIFT] as WatcherNode
 	} else if ((flags & Flag.WatchRunEffect) !== 0) {
 		// Ids, not handles: no lookup and no write barrier here, and no slot
 		// nulling at drain. The generation stamp makes a stale entry (record
@@ -909,11 +935,11 @@ function scheduleWatcher(id: ReactiveNodeId, flags: Flags): void {
 			growEffectQueue()
 		}
 		effectIds[effectCount] = id
-		effectGens[effectCount++] = M[id + NodeSlot.Generation]
+		effectGens[effectCount++] = mem[id + NodeSlot.Generation]
 	} else {
 		return
 	}
-	M[id + NodeSlot.Flags] = flags | Flag.Scheduled
+	mem[id + NodeSlot.Flags] = flags | Flag.Scheduled
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1012,7 @@ function growWaveStack(): Int32Array<ArrayBuffer> {
  * growth at all.
  */
 function propagateWave(link: Link | undefined, cause: TraceEventId): void {
+	const mem = M
 	if (link === undefined) {
 		return
 	}
@@ -993,26 +1020,26 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	let stack = waveStack
 	let top = 0
 	let cur: Link = link
-	let next: Link = M[cur + LinkSlot.LinkNextSub]
+	let next: Link = mem[cur + LinkSlot.LinkNextSub]
 	do {
-		const sub = M[cur + LinkSlot.LinkSub]
-		const flags = M[sub + NodeSlot.Flags]
+		const sub = mem[cur + LinkSlot.LinkSub]
+		const flags = mem[sub + NodeSlot.Flags]
 		if ((flags & Flag.StaleMask) !== 0) {
 			if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
 				scheduleWatcher(sub, flags)
 			}
 		} else {
-			M[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
+			mem[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
 			if (tracing) {
-				M[sub + NodeSlot.CauseEvent] = cause
+				mem[sub + NodeSlot.CauseEvent] = cause
 			}
 			if ((flags & Flag.Watching) !== 0) {
 				scheduleWatcher(sub, flags | Flag.StaleCheck)
 			} else if ((flags & Flag.KindDerived) !== 0) {
-				const subSubs = M[sub + NodeSlot.Subs]
+				const subSubs = mem[sub + NodeSlot.Subs]
 				if (subSubs !== 0) {
 					cur = subSubs
-					const sibling = M[cur + LinkSlot.LinkNextSub]
+					const sibling = mem[cur + LinkSlot.LinkNextSub]
 					if (sibling !== 0) {
 						if (top === stack.length) {
 							stack = growWaveStack()
@@ -1026,7 +1053,7 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 		}
 		if (next !== 0) {
 			cur = next
-			next = M[cur + LinkSlot.LinkNextSub]
+			next = mem[cur + LinkSlot.LinkNextSub]
 			continue
 		}
 		// Sibling chain exhausted: resume the nearest suspended position.
@@ -1043,7 +1070,7 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 			break
 		}
 		cur = resume
-		next = M[cur + LinkSlot.LinkNextSub]
+		next = mem[cur + LinkSlot.LinkNextSub]
 	} while (true)
 }
 
@@ -1272,6 +1299,8 @@ const enum Limit {
  * throwing effect aborts the flush; the effects it preempted are skipped
  * (cleared), not left armed for unrelated writes to trigger later. */
 export function flush(): void {
+	const mem = M
+	const pins = pinnedInternals
 	if (flushing) {
 		return
 	}
@@ -1287,16 +1316,16 @@ export function flush(): void {
 			}
 			const i = queueHead++
 			const id = effectIds[i]
-			if (M[id + NodeSlot.Generation] !== effectGens[i]) {
+			if (mem[id + NodeSlot.Generation] !== effectGens[i]) {
 				continue // record reclaimed since scheduling: dead entry
 			}
 			// Clear Scheduled alone: runWatcher's validation reads StaleCheck.
-			const flags: Flags = M[id + NodeSlot.Flags] & ~Flag.Scheduled
-			M[id + NodeSlot.Flags] = flags
+			const flags: Flags = mem[id + NodeSlot.Flags] & ~Flag.Scheduled
+			mem[id + NodeSlot.Flags] = flags
 			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
 				continue
 			}
-			runWatcher(pinnedInternals[id >> RECORD_SHIFT] as WatcherNode, flags)
+			runWatcher(pins[id >> RECORD_SHIFT] as WatcherNode, flags)
 		}
 		effectCount = 0
 		queueHead = 0
@@ -1305,10 +1334,10 @@ export function flush(): void {
 		// trigger later.
 		for (let i = queueHead; i < effectCount; i++) {
 			const id = effectIds[i]
-			if (M[id + NodeSlot.Generation] !== effectGens[i]) {
+			if (mem[id + NodeSlot.Generation] !== effectGens[i]) {
 				continue
 			}
-			M[id + NodeSlot.Flags] &= ~(Flag.Scheduled | Flag.StaleMask)
+			mem[id + NodeSlot.Flags] &= ~(Flag.Scheduled | Flag.StaleMask)
 		}
 		effectCount = 0
 		queueHead = 0
@@ -1439,6 +1468,8 @@ export function readCell<T>(cell: CellNode<T>): T {
 }
 
 export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
+	const mem = M
+	const clocks = graphClocks
 	assertSignalWriteAllowed()
 	// The equality contract compares against the base value, so a write that
 	// arrives before the first read still runs the initializer.
@@ -1461,7 +1492,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 		}
 		id = ensureNodeRecord(cell)
 	}
-	if (batchDepth > 0 && M[id + NodeSlot.BatchPass] !== batchPass) {
+	if (batchDepth > 0 && mem[id + NodeSlot.BatchPass] !== batchPass) {
 		saveBatchBase(cell as CellNode<unknown>, id)
 	}
 	cell.value = next
@@ -1469,7 +1500,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	// reading — a change stamped at a pre-tick reading could compare equal to
 	// a subscriber that validated before this write.
 	graphChangeClock++
-	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
+	clocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
 	const cause = traceHook !== null ? traceHook('write', cell, currentCause) : NO_EVENT
 	propagateFrom(cell as CellNode<unknown>, cause)
 	return true
@@ -1531,18 +1562,20 @@ function throwComputeCycle(node: DerivedNode<unknown>): never {
 }
 
 function recompute(node: DerivedNode<unknown>): void {
+	const mem = M
+	const clocks = graphClocks
 	const id = ensureNodeRecord(node)
-	const flags: Flags = M[id + NodeSlot.Flags]
+	const flags: Flags = mem[id + NodeSlot.Flags]
 	if ((flags & Flag.ComputingMask) !== 0) {
 		throwComputeCycle(node)
 	}
-	M[id + NodeSlot.Flags] = flags | Flag.Computing
+	mem[id + NodeSlot.Flags] = flags | Flag.Computing
 	const prevConsumer = activeConsumer
 	const prevEvaluation = activeEvaluation
 	activeConsumer = node
 	activeEvaluation = node
-	const myPass = newEvalPass()
-	M[id + NodeSlot.DepsTail] = 0
+	const myPass: EvalPass = (evalPass = ++evalPassCounter)
+	mem[id + NodeSlot.DepsTail] = 0
 	// The validation reading is taken at the PRE-eval clock: if the evaluation
 	// itself writes (self-affecting computed), the next read must revalidate.
 	const preGraphChange = graphChangeClock
@@ -1565,23 +1598,38 @@ function recompute(node: DerivedNode<unknown>): void {
 		activeConsumer = prevConsumer
 		activeEvaluation = prevEvaluation
 		trimDeps(node)
-		M[id + NodeSlot.Flags] &= ~Flag.Computing
+		mem[id + NodeSlot.Flags] &= ~Flag.Computing
 	}
-	const changed = finishComputeImpl(node, parked, hasError, error, value)
+	// Plain success over a plain previous state is the equality cutoff alone —
+	// finishComputeImpl's tail with its async no-ops elided (AsyncMask clear
+	// implies throwable is already null). Every async-touched outcome takes
+	// the installed seam.
+	let changed: boolean
+	if (!parked && !hasError && (mem[id + NodeSlot.Flags] & Flag.AsyncMask) === 0) {
+		const prev = node.value
+		if (prev === UNINITIALIZED || !node.equals(prev as never, value as never)) {
+			node.value = value
+			changed = true
+		} else {
+			changed = false
+		}
+	} else {
+		changed = finishComputeImpl(node, parked, hasError, error, value)
+	}
 	// Invariant: only a REAL change advances the reading (equality cutoff
 	// keeps the old stamp, so downstream validAt comparisons stay equal).
 	// Stamped with the CURRENT clock, not the pre-eval reading: recomputes do
 	// not tick the clock, and any consumer that validated before this
 	// recompute holds a strictly older validAt reading.
 	if (changed) {
-		graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
+		clocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
 	}
 	// A computed whose evaluation wrote state is self-affecting: its inputs
 	// moved under it, so it never caches — every read re-evaluates.
-	M[id + NodeSlot.Flags] =
-		(M[id + NodeSlot.Flags] & ~Flag.StaleMask) |
+	mem[id + NodeSlot.Flags] =
+		(mem[id + NodeSlot.Flags] & ~Flag.StaleMask) |
 		(graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
-	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
+	clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
 }
 
 /**
@@ -1600,20 +1648,23 @@ function recompute(node: DerivedNode<unknown>): void {
  * node's dependency closure is watched (promote installs it).
  */
 function chainResolve(startDep: ReactiveNodeId): boolean {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	let node = startDep
-	let link = M[node + NodeSlot.Deps]
-	if (link === 0 || M[link + LinkSlot.LinkNextDep] !== 0) {
+	let link = mem[node + NodeSlot.Deps]
+	if (link === 0 || mem[link + LinkSlot.LinkNextDep] !== 0) {
 		return false
 	}
 	let dep = 0
 	while (true) {
-		dep = M[link + LinkSlot.LinkDep]
-		const dflags = M[dep + NodeSlot.Flags]
+		dep = mem[link + LinkSlot.LinkDep]
+		const dflags = mem[dep + NodeSlot.Flags]
 		if (
 			(dflags & (Flag.KindDerived | Flag.StaleMask)) ===
 			(Flag.KindDerived | Flag.StaleDirty)
 		) {
-			recompute(pinnedInternals[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
+			recompute(pins[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
 			break
 		}
 		if (
@@ -1622,12 +1673,12 @@ function chainResolve(startDep: ReactiveNodeId): boolean {
 		) {
 			break // a cell or a Clean derived: fresh as-is, compare-ready
 		}
-		const depDeps = M[dep + NodeSlot.Deps]
-		if (depDeps === 0 || M[depDeps + LinkSlot.LinkNextDep] !== 0) {
+		const depDeps = mem[dep + NodeSlot.Deps]
+		if (depDeps === 0 || mem[depDeps + LinkSlot.LinkNextDep] !== 0) {
 			return false // branching deps: generic validation owns this
 		}
-		const depSubs = M[dep + NodeSlot.Subs]
-		if (depSubs === 0 || M[depSubs + LinkSlot.LinkNextSub] !== 0) {
+		const depSubs = mem[dep + NodeSlot.Subs]
+		if (depSubs === 0 || mem[depSubs + LinkSlot.LinkNextSub] !== 0) {
 			return false // shared node: the climb needs a unique subscriber
 		}
 		node = dep
@@ -1635,32 +1686,35 @@ function chainResolve(startDep: ReactiveNodeId): boolean {
 	}
 	while (true) {
 		if (
-			graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
-			graphClocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt]
+			clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
+			clocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt]
 		) {
-			recompute(pinnedInternals[node >> RECORD_SHIFT] as DerivedNode<unknown>)
+			recompute(pins[node >> RECORD_SHIFT] as DerivedNode<unknown>)
 		} else {
-			M[node + NodeSlot.Flags] &= ~Flag.StaleMask
-			graphClocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+			mem[node + NodeSlot.Flags] &= ~Flag.StaleMask
+			clocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
 		}
 		if (node === startDep) {
 			return true
 		}
-		const up = M[node + NodeSlot.Subs]
+		const up = mem[node + NodeSlot.Subs]
 		if (up === 0) {
 			// Restructured by re-entrant user code mid-climb; the untouched
 			// upper marks resolve generically on their own pulls.
 			return true
 		}
 		dep = node
-		node = M[up + LinkSlot.LinkSub]
+		node = mem[up + LinkSlot.LinkSub]
 	}
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
 export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): void {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	const id = node.id
-	const flags = knownFlags ?? M[id + NodeSlot.Flags]
+	const flags = knownFlags ?? mem[id + NodeSlot.Flags]
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
 		if ((flags & Flag.StaleMask) === 0) {
@@ -1686,19 +1740,19 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	// FRESHENED before its reading is compared — a lazy dep may recompute
 	// right here, stamping its changedAt with the current clock, and the
 	// strictly-greater test then reports it correctly.
-	const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
-	for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
+	const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+	for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 		const depId = linkDep(l)
 		// Same watched-Clean skip as readDerived: such a dep has nothing to
 		// validate, so don't pay a call to find that out.
-		const dflags = M[depId + NodeSlot.Flags]
+		const dflags = mem[depId + NodeSlot.Flags]
 		if (
 			(dflags & Flag.KindDerived) !== 0 &&
 			(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 		) {
-			ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
+			ensureFresh(pins[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
 		}
-		if (graphClocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {
+		if (clocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {
 			recompute(node)
 			return
 		}
@@ -1706,7 +1760,7 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	setFlags(node, flagsOf(node) & ~Flag.StaleMask)
 	// Invariant: the watermark is stamped only AFTER every dep was freshened
 	// and compared (freshen-then-stamp order).
-	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+	clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
 }
 
 export function readDerived<T>(node: DerivedNode<T>): T {
@@ -1780,28 +1834,31 @@ function makeWatcher(
 let activeScope: WatcherNode | null = null
 
 function runWatcher(w: WatcherNode, flags: Flags): void {
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
 	const id = w.id
 	// Validate: a StaleCheck-marked watcher whose derived deps cut off must
 	// not re-run its body. Validation can itself run user code (computed fns)
 	// that disposes this very watcher — re-check after every pull.
 	if ((flags & Flag.StaleCheck) !== 0) {
 		let changed = false
-		const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
-		for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
+		const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+		for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 			const depId = linkDep(l)
 			// Same watched-Clean skip as readDerived: such a dep has nothing to
 			// validate, so don't pay a call to find that out.
-			const dflags = M[depId + NodeSlot.Flags]
+			const dflags = mem[depId + NodeSlot.Flags]
 			if (
 				(dflags & Flag.KindDerived) !== 0 &&
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
-				ensureFresh(pinnedInternals[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
+				ensureFresh(pins[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
 				if ((flagsOf(w) & Flag.Watched) === 0) {
 					return
 				} // disposed mid-validation
 			}
-			if (graphClocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {
+			if (clocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {
 				changed = true
 				break
 			}
@@ -1810,7 +1867,7 @@ function runWatcher(w: WatcherNode, flags: Flags): void {
 			setFlags(w, flagsOf(w) & ~Flag.StaleMask)
 			// Invariant: watermark stamped only after every dep was freshened and
 			// compared (freshen-then-stamp order) — same rule as ensureFresh.
-			graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+			clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
 			return
 		}
 	}
@@ -1844,6 +1901,8 @@ function runWatcherCleanup(w: WatcherNode): void {
 }
 
 function executeWatcher(w: WatcherNode): void {
+	const mem = M
+	const clocks = graphClocks
 	const id = w.id
 	if (w.children !== undefined) {
 		disposeWatcherChildren(w)
@@ -1863,10 +1922,10 @@ function executeWatcher(w: WatcherNode): void {
 	const prevScope = activeScope
 	activeConsumer = w
 	activeScope = w
-	const myPass = newEvalPass()
-	M[id + NodeSlot.DepsTail] = 0
+	const myPass: EvalPass = (evalPass = ++evalPassCounter)
+	mem[id + NodeSlot.DepsTail] = 0
 	const cause =
-		traceHook !== null ? traceHook('effect-run', w, M[id + NodeSlot.CauseEvent]) : NO_EVENT
+		traceHook !== null ? traceHook('effect-run', w, mem[id + NodeSlot.CauseEvent]) : NO_EVENT
 	// The validation reading is taken at the PRE-run clock: if the body
 	// itself writes, its deps may have moved under it, and the wave its write
 	// pushed re-schedules this watcher — whose next validation must then see
@@ -1885,7 +1944,7 @@ function executeWatcher(w: WatcherNode): void {
 		activeConsumer = prevConsumer
 		activeScope = prevScope
 		trimDeps(w)
-		graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
+		clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
 	}
 }
 
@@ -1915,16 +1974,18 @@ export function disposeWatcher(w: WatcherNode): void {
 }
 
 function unlinkAllDeps(w: WatcherNode): void {
+	const mem = M
+	const pins = pinnedInternals
 	const id = w.id
-	let l = M[id + NodeSlot.Deps]
-	M[id + NodeSlot.Deps] = 0
-	M[id + NodeSlot.DepsTail] = 0
+	let l = mem[id + NodeSlot.Deps]
+	mem[id + NodeSlot.Deps] = 0
+	mem[id + NodeSlot.DepsTail] = 0
 	while (l !== 0) {
-		const next = M[l + LinkSlot.LinkNextDep]
-		if (M[l + LinkSlot.LinkInSubs] !== 0) {
+		const next = mem[l + LinkSlot.LinkNextDep]
+		if (mem[l + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(l)
 			const dep = linkDep(l)
-			removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
+			removeObserver(pins[dep >> RECORD_SHIFT]!)
 		}
 		freeLink(l)
 		l = next
@@ -1932,35 +1993,38 @@ function unlinkAllDeps(w: WatcherNode): void {
 }
 
 function reclaimNodeRecord(id: number): void {
-	let link = M[id + NodeSlot.Deps]
+	const mem = M
+	const clocks = graphClocks
+	const pins = pinnedInternals
+	let link = mem[id + NodeSlot.Deps]
 	while (link !== 0) {
-		const next = M[link + LinkSlot.LinkNextDep]
-		if (M[link + LinkSlot.LinkInSubs] !== 0) {
+		const next = mem[link + LinkSlot.LinkNextDep]
+		if (mem[link + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(link)
 			const dep = linkDep(link)
-			removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
+			removeObserver(pins[dep >> RECORD_SHIFT]!)
 		}
 		freeLink(link)
 		link = next
 	}
-	pinnedInternals[id >> RECORD_SHIFT] = undefined
+	pins[id >> RECORD_SHIFT] = undefined
 	// Explicit stores for the same reason as freeLink: no builtin call per
 	// reclaimed node. ChangedAt spans two words; the Float64 view clears both.
-	M[id + NodeSlot.Flags] = 0
-	M[id + NodeSlot.Deps] = 0
-	M[id + NodeSlot.DepsTail] = 0
-	M[id + NodeSlot.Subs] = 0
-	M[id + NodeSlot.SubsTail] = 0
-	M[id + NodeSlot.RefCount] = 0
-	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
-	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
-	M[id + NodeSlot.ObserverCount] = 0
-	M[id + NodeSlot.Generation]++
+	mem[id + NodeSlot.Flags] = 0
+	mem[id + NodeSlot.Deps] = 0
+	mem[id + NodeSlot.DepsTail] = 0
+	mem[id + NodeSlot.Subs] = 0
+	mem[id + NodeSlot.SubsTail] = 0
+	mem[id + NodeSlot.RefCount] = 0
+	clocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
+	clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
+	mem[id + NodeSlot.ObserverCount] = 0
+	mem[id + NodeSlot.Generation]++
 	// pokePasses/batchPasses stay stale: pass ids are monotonic and never
 	// reused, so a stale reading can never equal a future pass. causeEvents
 	// stays stale too — it is read only under an attached tracer, and a
 	// recycled record's first wave overwrites it.
-	M[id + NodeSlot.FreeNext] = freeNodes
+	mem[id + NodeSlot.FreeNext] = freeNodes
 	freeNodes = id
 }
 
