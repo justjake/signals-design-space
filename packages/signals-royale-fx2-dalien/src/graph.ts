@@ -519,8 +519,33 @@ function createGraphCore(
 	const graphClocks = clockBase
 	const pinnedInternals = pinBase
 	let nextRecord = FIRST_REAL_RECORD
-	let freeLinks: Link = 0
-	let freeNodes: ReactiveNodeId = 0
+	// Free records as explicit stacks, not intrusive next-pointers threaded
+	// through the records: a stack pop is an independent indexed load, while
+	// an intrusive pop chains a dependent memory read through every
+	// allocation — and mass create/dispose cycles allocate in exactly that
+	// serial pattern.
+	let freeLinkStack = new Int32Array(1024)
+	let freeLinkCount = 0
+	let freeNodeStack = new Int32Array(1024)
+	let freeNodeCount = 0
+
+	function pushFreeLink(id: Link): void {
+		if (freeLinkCount === freeLinkStack.length) {
+			const bigger = new Int32Array(freeLinkStack.length * 2)
+			bigger.set(freeLinkStack)
+			freeLinkStack = bigger
+		}
+		freeLinkStack[freeLinkCount++] = id
+	}
+
+	function pushFreeNode(id: ReactiveNodeId): void {
+		if (freeNodeCount === freeNodeStack.length) {
+			const bigger = new Int32Array(freeNodeStack.length * 2)
+			bigger.set(freeNodeStack)
+			freeNodeStack = bigger
+		}
+		freeNodeStack[freeNodeCount++] = id
+	}
 
 	/** Materialize the arena record of a virgin cell/derived (see above), with
 	 * finalizer registration: the general-purpose, always-safe variant. */
@@ -569,11 +594,8 @@ function createGraphCore(
 	}
 
 	function allocLink(): Link {
-		const mem = M
-		if (freeLinks !== 0) {
-			const id = freeLinks
-			freeLinks = mem[id + LinkSlot.FreeNext]
-			return id
+		if (freeLinkCount !== 0) {
+			return freeLinkStack[--freeLinkCount]
 		}
 		return allocRecord(RECORD_STRIDE)
 	}
@@ -596,8 +618,7 @@ function createGraphCore(
 			mem[dep + NodeSlot.Flags] = 0
 			mem[dep + NodeSlot.Generation]++
 			clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
-			mem[dep + NodeSlot.FreeNext] = freeNodes
-			freeNodes = dep
+			pushFreeNode(dep)
 		}
 		pins[depIndex] = undefined
 	}
@@ -611,19 +632,15 @@ function createGraphCore(
 		// No zeroing: unlinkFromSubs already cleared PrevSub/NextSub/InSubs for
 		// subs-listed links (and they were never set otherwise), and the insert
 		// path assigns LinkDep/LinkSub/LinkNextDep/LinkEvalPass on every reuse.
-		// A free-listed link therefore carries stale-but-dead slot values only.
-		mem[id + LinkSlot.FreeNext] = freeLinks
-		freeLinks = id
+		// A freed link therefore carries stale-but-dead slot values only.
+		pushFreeLink(id)
 	}
 
 	function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
-		const mem = M
-		const id = freeNodes !== 0 ? freeNodes : allocRecord(NODE_STRIDE)
-		if (freeNodes !== 0) {
-			freeNodes = mem[id + NodeSlot.FreeNext]
-			mem[id + NodeSlot.FreeNext] = 0
-		}
-		mem[id + NodeSlot.Flags] = flags
+		// Popped node records were zeroed at reclaim (or provably zero at
+		// re-virginize), so only the flags word needs a store here.
+		const id = freeNodeCount !== 0 ? freeNodeStack[--freeNodeCount] : allocRecord(NODE_STRIDE)
+		M[id + NodeSlot.Flags] = flags
 		;(owner as { id: ReactiveNodeId }).id = id
 		return id
 	}
@@ -2045,8 +2062,7 @@ function createGraphCore(
 		// reused, so a stale reading can never equal a future pass. causeEvents
 		// stays stale too — it is read only under an attached tracer, and a
 		// recycled record's first wave overwrites it.
-		mem[id + NodeSlot.FreeNext] = freeNodes
-		freeNodes = id
+		pushFreeNode(id)
 	}
 
 	let pendingRegistrations: Array<ReactiveNode | undefined> = []
@@ -2102,8 +2118,8 @@ function createGraphCore(
 		renderNotifyCount = 0
 		initVirginRecords()
 		nextRecord = FIRST_REAL_RECORD
-		freeLinks = 0
-		freeNodes = 0
+		freeLinkCount = 0
+		freeNodeCount = 0
 		nodeFinalizer = makeNodeFinalizer()
 		droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWatcher(w))
 	}
