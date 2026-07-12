@@ -82,6 +82,9 @@ jobs:
         working-directory: upstream-alien-signals
         run: |
           npm install
+          # A fresh install resolves a TS 7 without
+          # getParsedCommandLineOfConfigFile, which the build script needs.
+          npm install --no-save typescript@5.8
           npm run build
 
       - name: Build dalien-signals
