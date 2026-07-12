@@ -25,6 +25,7 @@ on:
       - 'packages/cosignals-react/**'
       - 'packages/cosignals-oracle/**'
       - 'packages/dalien-signals'
+      - 'milomg-reactivity-benchmark'
       - '.github/workflows/benchmark.yml'
   workflow_dispatch:
     inputs:
