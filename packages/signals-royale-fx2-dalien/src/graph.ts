@@ -242,9 +242,46 @@ export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
 const graphClocks = new Float64Array(graphMemory.buffer)
 const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
 const M = graphMemory
-let nextRecord = NODE_STRIDE
+
+/**
+ * Lazy records: cells and deriveds are born WITHOUT an arena record — their
+ * id points at one of two shared, immutable "virgin" records that hold the
+ * born flags word (so every flags READ anywhere stays correct) and zeros in
+ * every list/clock slot (no deps, no subs, never changed, never validated).
+ * A real record materializes at the node's first graph participation — its
+ * first edge, first evaluation, or first traced write — which is also when
+ * finalizer registration happens. A handle dropped before that point frees
+ * with ordinary GC: no record, no registry cell, nothing to reclaim.
+ *
+ * Every WRITE of node state must go through a site that materialized the
+ * record first; reads need no care. Watchers keep eager records — they are
+ * roots with edges from their first run.
+ */
+const VIRGIN_CELL: ReactiveNodeId = NODE_STRIDE
+const VIRGIN_DERIVED: ReactiveNodeId = NODE_STRIDE * 2
+const FIRST_REAL_RECORD = NODE_STRIDE * 3
+
+function initVirginRecords(): void {
+	M[VIRGIN_CELL + NodeSlot.Flags] = Flag.KindCell
+	M[VIRGIN_DERIVED + NodeSlot.Flags] = Flag.KindDerived | Flag.StaleDirty
+}
+initVirginRecords()
+
+let nextRecord = FIRST_REAL_RECORD
 let freeLinks: Link = 0
 let freeNodes: ReactiveNodeId = 0
+
+/** Materialize the arena record of a virgin cell/derived (see above). */
+export function ensureNodeRecord(node: ReactiveNode): ReactiveNodeId {
+	const id = node.id
+	if (id >= FIRST_REAL_RECORD) {
+		return id
+	}
+	const born = M[id + NodeSlot.Flags]
+	const real = allocNode(node, born)
+	queueNodeRegistration(node)
+	return real
+}
 
 function allocRecord(stride: number): number {
 	const id = nextRecord
@@ -394,6 +431,16 @@ export function setTraceHook(fn: TraceFn | null): void {
 	traceHook = fn
 }
 
+/** Installed by worlds.ts: true while any draft is live. Virgin cells take
+ * the recordless write fast path only when this reports false — a live
+ * draft world may hold certificate readings of a virgin cell's changedAt,
+ * and the single-draft cutoff relies on the clock ticking for every real
+ * base change. */
+export let hasLiveDrafts: () => boolean = () => false
+export function setHasLiveDrafts(fn: () => boolean): void {
+	hasLiveDrafts = fn
+}
+
 export const NO_EVENT: TraceEventId = 0
 /** Ambient causal parent for the operation in progress (write/effect/settle). */
 export let currentCause: TraceEventId = NO_EVENT
@@ -432,8 +479,7 @@ export function initializeCell<T>(
 	},
 ): CellNode<T> {
 	const lazyInit = typeof initial === 'function'
-	allocNode(cell, Flag.KindCell)
-	queueNodeRegistration(cell)
+	;(cell as { id: ReactiveNodeId }).id = VIRGIN_CELL
 	cell.throwable = null
 	cell.label = opts?.label
 	cell.value = lazyInit ? UNINITIALIZED : (initial as T)
@@ -458,8 +504,7 @@ export function initializeDerived<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
-	allocNode(node, Flag.KindDerived | Flag.StaleDirty)
-	queueNodeRegistration(node)
+	;(node as { id: ReactiveNodeId }).id = VIRGIN_DERIVED
 	node.throwable = null
 	node.label = opts?.label
 	node.value = UNINITIALIZED
@@ -673,7 +718,10 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
 }
 
 function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
-	const depId = dep.id
+	// First edge onto a virgin dep materializes its record. The sub is never
+	// virgin here: it is a recomputing derived (recompute materializes) or a
+	// watcher (eager records).
+	const depId = ensureNodeRecord(dep)
 	const subId = sub.id
 	const tail: Link = M[subId + NodeSlot.DepsTail]
 	const next: Link = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
@@ -1297,7 +1345,21 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	if (cell.equals(cell.value as T, next)) {
 		return false
 	}
-	const id = cell.id
+	let id = cell.id
+	if (id < FIRST_REAL_RECORD) {
+		// A virgin cell has no subscribers, no watchers, and no consumer
+		// holding a changedAt reading of it (edges materialize the record), so
+		// the write is observable only through later reads: store and return.
+		// Two parties CAN observe a recordless cell from outside the edge
+		// graph and force the full path — live draft worlds (certificate
+		// readings and the single-draft cutoff rely on changedAt stamps and
+		// clock ticks) and an attached tracer (write events).
+		if (traceHook === null && !hasLiveDrafts()) {
+			cell.value = next
+			return true
+		}
+		id = ensureNodeRecord(cell)
+	}
 	if (batchDepth > 0 && M[id + NodeSlot.BatchPass] !== batchPass) {
 		// First write to this cell in this batch pass: save the pre-batch state.
 		// The pass stamp stands in for a batchBase.has probe on repeat writes.
@@ -1368,7 +1430,7 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 }
 
 function recompute(node: DerivedNode<unknown>): void {
-	const id = node.id
+	const id = ensureNodeRecord(node)
 	let flags = flagsOf(node)
 	if ((flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -1756,7 +1818,8 @@ export function resetGraphForBenchmark(): void {
 	pendingRegistrations.length = 0
 	pendingRegistrationEnd = 0
 	registrationScheduled = false
-	nextRecord = NODE_STRIDE
+	initVirginRecords()
+	nextRecord = FIRST_REAL_RECORD
 	freeLinks = 0
 	freeNodes = 0
 	nodeFinalizer = makeNodeFinalizer()

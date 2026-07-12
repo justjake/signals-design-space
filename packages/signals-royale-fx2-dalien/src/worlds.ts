@@ -49,6 +49,8 @@ import {
 	setCurrentCause,
 	startBatch,
 	endBatch,
+	ensureNodeRecord,
+	setHasLiveDrafts,
 	traceHook,
 	untracked,
 	writeCell,
@@ -103,6 +105,9 @@ export interface Draft {
 let nextDraftId: DraftId = 1
 /** Open and sealed drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>()
+// Virgin cells may sit in world certificates; the graph asks before taking
+// its recordless write fast path (see writeCell).
+setHasLiveDrafts(() => liveDrafts.size > 0)
 /** Cells with at least one live draft intent. */
 const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>()
 /** Per-cell replay revision. Weak and lazy: untouched cells pay nothing, and
@@ -816,6 +821,9 @@ function draftEvaluate(
 	currentPark = worldUse
 	activeCertificate = certificate
 	certificate.count = 0
+	// A draft evaluation runs untracked, so it can reach a derived that never
+	// evaluated in base state; the flag write below needs a real record.
+	ensureNodeRecord(node)
 	node.flags |= Flag.DraftComputing
 	const prevEvaluation = setActiveEvaluation(node)
 	try {
