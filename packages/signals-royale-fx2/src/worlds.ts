@@ -62,6 +62,7 @@ import {
 	type Brand,
 	type AtomNode,
 	type ComputedNode,
+	type ConsumerNode,
 	type ReactiveNode,
 	type TraceEventId,
 	type GraphChangeClock,
@@ -491,7 +492,7 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 			sources.add(n as AtomNode<unknown>)
 			return
 		}
-		for (let l = n.deps; l !== undefined; l = l.nextDep) {
+		for (let l = (n as ConsumerNode).deps; l !== undefined; l = l.nextDep) {
 			collect(l.dep)
 		}
 	}

@@ -18,7 +18,6 @@ import {
 	type Flags,
 	type GraphChangeClock,
 	type Link,
-	type PokePass,
 	type ReactiveNode,
 	type TraceEventId,
 	type UseFn,
@@ -114,8 +113,6 @@ const Atom = class<T> implements AtomNode<T> {
 	declare throwable: ErrorBox | Suspension | null
 	declare subs: Link | undefined
 	declare subsTail: Link | undefined
-	declare deps: Link | undefined
-	declare depsTail: Link | undefined
 	declare observerCount: number
 	declare causeEvent: TraceEventId
 	declare label: string | undefined
@@ -126,7 +123,6 @@ const Atom = class<T> implements AtomNode<T> {
 	declare lifetimeCleanup: (() => void) | undefined
 	declare lifetimeActive: boolean
 	declare worldMemos: Map<string, unknown> | undefined
-	declare pokePass: PokePass
 
 	constructor(initial: T | (() => T), opts?: AtomOptions<T>) {
 		const lazyInit = typeof initial === 'function'
@@ -135,8 +131,6 @@ const Atom = class<T> implements AtomNode<T> {
 		this.throwable = null
 		this.subs = undefined
 		this.subsTail = undefined
-		this.deps = undefined
-		this.depsTail = undefined
 		this.observerCount = 0
 		this.causeEvent = NO_EVENT
 		this.label = opts?.label
@@ -147,7 +141,6 @@ const Atom = class<T> implements AtomNode<T> {
 		this.lifetimeCleanup = undefined
 		this.lifetimeActive = false
 		this.worldMemos = undefined
-		this.pokePass = 0
 	}
 	/** Tracked read. An active world (draft evaluation or committed-root
 	 * effect) selects that world; otherwise this reads base state. */

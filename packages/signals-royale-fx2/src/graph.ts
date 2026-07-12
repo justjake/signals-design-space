@@ -149,7 +149,7 @@ export type Flags = Brand<number, 'Flags'>
  * (prevSub/nextSub). */
 export interface Link {
 	dep: ReactiveNode
-	sub: ReactiveNode
+	sub: ConsumerNode
 	nextDep: Link | undefined
 	prevSub: Link | undefined
 	nextSub: Link | undefined
@@ -191,9 +191,6 @@ export interface ReactiveNode {
 	/** Subscriber list: watched consumers and store subscriptions. */
 	subs: Link | undefined
 	subsTail: Link | undefined
-	/** Dependency list in first-read order (computeds and watchers only). */
-	deps: Link | undefined
-	depsTail: Link | undefined
 	/** Number of observers: watched consumer edges, effects, and React
 	 * subscriptions. */
 	observerCount: number
@@ -204,6 +201,14 @@ export interface ReactiveNode {
 	/** Per-world resolution memos, managed by worlds.ts; undefined while
 	 * no transition drafts are live. */
 	worldMemos: Map<string, unknown> | undefined
+}
+
+/** State carried only by nodes that read dependencies: computeds and
+ * watchers. Atoms produce dependency values but never consume them. */
+export interface ConsumerNode extends ReactiveNode {
+	/** Dependency list in first-read order. */
+	deps: Link | undefined
+	depsTail: Link | undefined
 	/** The last poke walk that reached this node. Equality with the
 	 * running walk's pass means the walk already visited it. */
 	pokePass: PokePass
@@ -223,7 +228,7 @@ function newEvalPass(): EvalPass {
 }
 /** The node whose dependencies are being tracked right now: reads inside
  * an evaluation register edges against this node. */
-let activeConsumer: ReactiveNode | null = null
+let activeConsumer: ConsumerNode | null = null
 /** Auxiliary watcher collecting draft-world certificate sources for the
  * scheduled effect currently running. Those edges wake comparison only;
  * the primary watcher's deps remain the values the user body read. */
@@ -289,7 +294,7 @@ export interface AtomNode<T> extends ReactiveNode {
 }
 
 /** A cached computed-value node — the engine side of a computed. */
-export interface ComputedNode<T> extends ReactiveNode {
+export interface ComputedNode<T> extends ConsumerNode {
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
@@ -310,7 +315,7 @@ interface EffectOwner {
 
 /** A node that reacts when its dependencies change: effects and
  * render-notify subscribers. */
-export interface WatcherNode extends ReactiveNode, EffectOwner {
+export interface WatcherNode extends ConsumerNode, EffectOwner {
 	/** The clock reading at this watcher's last validation or run; same
 	 * meaning as ComputedNode.validAtGraphChange. */
 	validAtGraphChange: GraphChangeClock
@@ -400,10 +405,11 @@ export function addObserver(node: ReactiveNode): void {
 			// just re-read would look changed-since and seed a false
 			// StaleCheck. The running evaluation stamps fresh staleness and a
 			// current watermark when it finishes.
+			const computed = node as ComputedNode<unknown>
 			const validate = (node.flags & Flag.Computing) === 0
-			const validAt = (node as ComputedNode<unknown>).validAtGraphChange
+			const validAt = computed.validAtGraphChange
 			let invalid = false
-			for (let l = node.deps; l !== undefined; l = l.nextDep) {
+			for (let l = computed.deps; l !== undefined; l = l.nextDep) {
 				linkIntoSubs(l)
 				const dep = l.dep
 				addObserver(dep)
@@ -440,11 +446,12 @@ export function removeObserver(node: ReactiveNode): void {
 	if (node.observerCount === 0) {
 		node.flags &= ~Flag.Watched
 		if ((node.flags & Flag.KindComputed) !== 0) {
-			for (let l = node.deps; l !== undefined; l = l.nextDep) {
+			const computed = node as ComputedNode<unknown>
+			for (let l = computed.deps; l !== undefined; l = l.nextDep) {
 				unlinkFromSubs(l)
 				removeObserver(l.dep)
 			}
-			;(node as ComputedNode<unknown>).validAtGraphChange =
+			computed.validAtGraphChange =
 				(node.flags & Flag.StaleMask) === 0 ? graphChangeClock : 0
 		}
 		noteLifetimeTransition(node)
@@ -521,7 +528,7 @@ export function flushLifetimeTransitions(): void {
  * dependency list is reused in place: depsTail is a cursor that advances
  * as the evaluation re-reads dependencies in the same order as last time,
  * so a stable evaluation allocates nothing. */
-function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
+function trackRead(dep: ReactiveNode, sub: ConsumerNode): Link {
 	const tail = sub.depsTail
 	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
 		return tail
@@ -591,7 +598,7 @@ export function trackWorldSource(node: ReactiveNode): void {
 }
 
 /** Drop dependency edges the just-finished evaluation did not re-read. */
-function trimDeps(sub: ReactiveNode): void {
+function trimDeps(sub: ConsumerNode): void {
 	const tail = sub.depsTail
 	let stale = tail === undefined ? sub.deps : tail.nextDep
 	if (tail !== undefined) {
@@ -1266,13 +1273,14 @@ function chainResolve(start: ComputedNode<unknown>, first: Link): void {
 			) {
 				break
 			}
-			const next = dep.deps
+			const computed = dep as ComputedNode<unknown>
+			const next = computed.deps
 			if (next === undefined || next.nextDep !== undefined) {
 				chainDepth = depth
-				ensureFreshAt(dep as ComputedNode<unknown>, 0)
+				ensureFreshAt(computed, 0)
 				break
 			}
-			node = dep as ComputedNode<unknown>
+			node = computed
 			link = next
 		}
 		do {
@@ -1385,7 +1393,7 @@ export function untracked<T>(fn: () => T): T {
 	}
 }
 
-export function getActiveConsumer(): ReactiveNode | null {
+export function getActiveConsumer(): ConsumerNode | null {
 	return activeConsumer
 }
 

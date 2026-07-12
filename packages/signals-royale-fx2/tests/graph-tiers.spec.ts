@@ -12,6 +12,7 @@ import { describe, expect, test } from 'vitest'
 import {
 	type AtomNode,
 	type ComputedNode,
+	type ConsumerNode,
 	type Link,
 	type ReactiveNode,
 	Flag,
@@ -57,7 +58,7 @@ function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
 }
 
 /** Edges in sub's dependency list pointing at dep (both tiers). */
-function depEdgeCount(sub: ReactiveNode, dep: ReactiveNode): number {
+function depEdgeCount(sub: ConsumerNode, dep: ReactiveNode): number {
 	let n = 0
 	for (let l: Link | undefined = sub.deps; l !== undefined; l = l.nextDep) {
 		if (l.dep === dep) {
@@ -134,6 +135,17 @@ describe('two-tier graph: promote validation', () => {
 })
 
 describe('two-tier graph: promote/demote structure', () => {
+	test('atoms do not carry consumer-only graph state', () => {
+		const source = atom(1)
+		const computed = makeGraphComputed(() => readAtom(source))
+		expect(Object.hasOwn(source, 'deps')).toBe(false)
+		expect(Object.hasOwn(source, 'depsTail')).toBe(false)
+		expect(Object.hasOwn(source, 'pokePass')).toBe(false)
+		expect(Object.hasOwn(computed, 'deps')).toBe(true)
+		expect(Object.hasOwn(computed, 'depsTail')).toBe(true)
+		expect(Object.hasOwn(computed, 'pokePass')).toBe(true)
+	})
+
 	test('T4 [parity] promote links the dep closure; demote reverses it exactly', () => {
 		const c = atom(1)
 		const d1 = makeGraphComputed(() => readAtom(c) + 1)
