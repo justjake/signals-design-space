@@ -143,13 +143,11 @@ export type Flags = Brand<number, 'Flags'>
 export type ReactiveNodeId = Brand<number, 'ReactiveNodeId'>
 export type Link = Brand<number, 'Link'>
 
-/** Node records are 16 words (one 64-byte cache line): every per-node field
- * a hot path touches lives in the record itself, so a validation or wave
- * visit reads one line instead of scattering across side columns. The two
- * clock readings are Float64 values read through the graphClocks view at
- * (id >> ClockSlot.Shift) + ClockSlot.ChangedAt (words 6-7) and
- * ClockSlot.ValidAt (words 8-9). Link records stay 8 words; both sizes share the arena bump pointer
- * and keep separate free lists. */
+/** Node and link records are both 8 words. The changed-at clock reading is
+ * a Float64 value in words 6-7, read through the graphClocks view; the
+ * remaining per-node fields the record cannot fit live in side columns
+ * indexed by record number (validation watermark, observer count, causal
+ * event, walk passes, generation). */
 export const enum NodeSlot {
 	Flags = 0,
 	Deps = 1,
@@ -159,16 +157,6 @@ export const enum NodeSlot {
 	SubsTail = 4,
 	RefCount = 5,
 	ChangedAt = 6,
-	ValidAt = 8,
-	ObserverCount = 10,
-	CauseEvent = 11,
-	PokePass = 12,
-	BatchPass = 13,
-	/** Bumped every time the record is reclaimed or re-virginized (and
-	 * deliberately never zeroed), so an (id, generation) pair names one
-	 * lifetime of one record. The effect queue stores these pairs; an entry
-	 * whose record moved on gen-mismatches and drains as a no-op. */
-	Generation = 14,
 	FreeNext = Deps,
 }
 
@@ -180,7 +168,6 @@ export const enum ClockSlot {
 	/** log2(words per f64): converts a word offset into an f64 slot. */
 	Shift = 1,
 	ChangedAt = NodeSlot.ChangedAt >> Shift,
-	ValidAt = NodeSlot.ValidAt >> Shift,
 }
 
 export const enum LinkSlot {
@@ -223,16 +210,16 @@ export abstract class ReactiveNode {
 		return M[this.id + NodeSlot.Deps] || undefined
 	}
 	get observerCount(): number {
-		return M[this.id + NodeSlot.ObserverCount]
+		return observerColumn[this.id >> RECORD_SHIFT]
 	}
 	get causeEvent(): TraceEventId {
-		return M[this.id + NodeSlot.CauseEvent]
+		return causeColumn[this.id >> RECORD_SHIFT]
 	}
 	set causeEvent(value: TraceEventId) {
-		M[this.id + NodeSlot.CauseEvent] = value
+		causeColumn[this.id >> RECORD_SHIFT] = value
 	}
 	get validAtGraphChange(): GraphChangeClock {
-		return graphClocks[(this.id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+		return validAtColumn[this.id >> RECORD_SHIFT]
 	}
 }
 
@@ -261,7 +248,7 @@ export interface WatcherNode extends ReactiveNode {
 
 export const RECORD_SHIFT = 3
 const RECORD_STRIDE = 1 << RECORD_SHIFT
-const NODE_STRIDE = 16
+const NODE_STRIDE = 8
 // Fixed capacity: virtual pages are committed on first touch, so the unused
 // tail costs address space, not memory. Growth is deliberately omitted so
 // every hot access keeps a constant base binding; it belongs only after the
@@ -269,6 +256,17 @@ const NODE_STRIDE = 16
 const RECORD_CAPACITY = 2_097_152
 export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
 const graphClocks = new Float64Array(graphMemory.buffer)
+// Per-node fields the 8-word record cannot fit, indexed by record number.
+const validAtColumn = new Float64Array(RECORD_CAPACITY)
+const observerColumn = new Int32Array(RECORD_CAPACITY)
+const causeColumn = new Int32Array(RECORD_CAPACITY)
+const pokeColumn = new Int32Array(RECORD_CAPACITY)
+const batchColumn = new Int32Array(RECORD_CAPACITY)
+// Bumped every time a record is reclaimed or re-virginized (and never
+// zeroed), so an (id, generation) pair names one lifetime of one record.
+// The effect queue stores these pairs; an entry whose record moved on
+// gen-mismatches and drains as a no-op.
+const generationColumn = new Int32Array(RECORD_CAPACITY)
 const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
 const M = graphMemory
 // Hot functions open with local views (const mem = M, clocks, pins): a
@@ -522,10 +520,22 @@ function createGraphCore(
 	memBase: Int32Array<ArrayBuffer>,
 	clockBase: Float64Array,
 	pinBase: Array<ReactiveNode | undefined>,
+	validAtBase: Float64Array,
+	observerBase: Int32Array<ArrayBuffer>,
+	causeBase: Int32Array<ArrayBuffer>,
+	pokeBase: Int32Array<ArrayBuffer>,
+	batchStampBase: Int32Array<ArrayBuffer>,
+	generationBase: Int32Array<ArrayBuffer>,
 ) {
 	const M = memBase
 	const graphClocks = clockBase
 	const pinnedInternals = pinBase
+	const validAtColumn = validAtBase
+	const observerColumn = observerBase
+	const causeColumn = causeBase
+	const pokeColumn = pokeBase
+	const batchColumn = batchStampBase
+	const generationColumn = generationBase
 	let nextRecord = FIRST_REAL_RECORD
 	// Free records as explicit stacks, not intrusive next-pointers threaded
 	// through the records: a stack pop is an independent indexed load, while
@@ -624,7 +634,7 @@ function createGraphCore(
 			const owner = pins[depIndex] as { id: ReactiveNodeId }
 			owner.id = VIRGIN_CELL
 			mem[dep + NodeSlot.Flags] = 0
-			mem[dep + NodeSlot.Generation]++
+			generationColumn[dep >> RECORD_SHIFT]++
 			clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
 			pushFreeNode(dep)
 		}
@@ -678,7 +688,7 @@ function createGraphCore(
 	}
 
 	function validAtOf(node: ReactiveNodeId): GraphChangeClock {
-		return graphClocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt]
+		return validAtColumn[node >> RECORD_SHIFT]
 	}
 
 	function linkDep(id: Link): ReactiveNodeId {
@@ -793,7 +803,7 @@ function createGraphCore(
 		const clocks = graphClocks
 		const pins = pinnedInternals
 		const id = node.id
-		const observerCount = ++mem[id + NodeSlot.ObserverCount]
+		const observerCount = ++observerColumn[id >> RECORD_SHIFT]
 		if (observerCount === 1) {
 			const flags = mem[id + NodeSlot.Flags]
 			mem[id + NodeSlot.Flags] = flags | Flag.Watched
@@ -805,7 +815,7 @@ function createGraphCore(
 				// running eval is the validator — its finally stamps fresh staleness
 				// and a current validAt reading.
 				const validate = (flags & Flag.Computing) === 0
-				const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+				const validAt = validAtColumn[id >> RECORD_SHIFT]
 				let invalid = false
 				for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 					linkIntoSubs(l, node)
@@ -846,7 +856,7 @@ function createGraphCore(
 		const clocks = graphClocks
 		const pins = pinnedInternals
 		const id = node.id
-		const observerCount = --mem[id + NodeSlot.ObserverCount]
+		const observerCount = --observerColumn[id >> RECORD_SHIFT]
 		if (observerCount === 0) {
 			mem[id + NodeSlot.Flags] &= ~Flag.Watched
 			if ((mem[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
@@ -855,7 +865,7 @@ function createGraphCore(
 					const dep = linkDep(l)
 					removeObserver(pins[dep >> RECORD_SHIFT]!)
 				}
-				clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] =
+				validAtColumn[id >> RECORD_SHIFT] =
 					(mem[id + NodeSlot.Flags] & Flag.StaleMask) === 0 ? graphChangeClock : 0
 			} else if ((node as CellNode<unknown>).lifetime !== undefined) {
 				// Mirror of the promote branch: only lifetime cells need the note.
@@ -900,7 +910,7 @@ function createGraphCore(
 		const cells = [...pendingLifetimeCells]
 		pendingLifetimeCells.clear()
 		for (const cell of cells) {
-			const shouldBeActive = M[cell.id + NodeSlot.ObserverCount] > 0
+			const shouldBeActive = observerColumn[cell.id >> RECORD_SHIFT] > 0
 			if (shouldBeActive === cell.lifetimeActive) {
 				continue
 			}
@@ -1093,7 +1103,7 @@ function createGraphCore(
 				growEffectQueue()
 			}
 			effectIds[effectCount] = id
-			effectGens[effectCount++] = mem[id + NodeSlot.Generation]
+			effectGens[effectCount++] = generationColumn[id >> RECORD_SHIFT]
 		} else {
 			return
 		}
@@ -1189,7 +1199,7 @@ function createGraphCore(
 			} else {
 				mem[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
 				if (tracing) {
-					mem[sub + NodeSlot.CauseEvent] = cause
+					causeColumn[sub >> RECORD_SHIFT] = cause
 				}
 				if ((flags & Flag.Watching) !== 0) {
 					scheduleWatcher(sub, flags | Flag.StaleCheck)
@@ -1281,8 +1291,8 @@ function createGraphCore(
 			top: do {
 				const sub = linkSub(cur)
 				const subIndex = sub >> RECORD_SHIFT
-				if (M[sub + NodeSlot.PokePass] !== pass) {
-					M[sub + NodeSlot.PokePass] = pass
+				if (pokeColumn[sub >> RECORD_SHIFT] !== pass) {
+					pokeColumn[sub >> RECORD_SHIFT] = pass
 					const flags = M[sub + NodeSlot.Flags]
 					if ((flags & Flag.WatchDraft) !== 0) {
 						const w = pinnedInternals[sub >> RECORD_SHIFT] as WatcherNode
@@ -1297,7 +1307,7 @@ function createGraphCore(
 							scheduleWatcher(sub, nextFlags)
 							M[sub + NodeSlot.Flags] = nextFlags | Flag.Scheduled
 							if (cause !== NO_EVENT) {
-								M[sub + NodeSlot.CauseEvent] = cause
+								causeColumn[sub >> RECORD_SHIFT] = cause
 							}
 							if (wake !== undefined && w.onDraftWake !== undefined) {
 								;(wakes ??= []).push(w)
@@ -1367,7 +1377,7 @@ function createGraphCore(
 		graphChangeClock++
 		const id = node.id
 		setFlags(node, (flagsOf(node) & ~Flag.StaleMask) | Flag.StaleDirty)
-		M[id + NodeSlot.CauseEvent] = cause
+		causeColumn[id >> RECORD_SHIFT] = cause
 		// Invariant: changes are stamped with the CURRENT clock, after the tick.
 		graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
 		propagateWave(subsOf(id), cause)
@@ -1393,7 +1403,7 @@ function createGraphCore(
 	 * The pass stamp stands in for a batchBase.has probe on repeat writes. Out
 	 * of line so writeCell stays under the hot-cluster inlining budget. */
 	function saveBatchBase(cell: CellNode<unknown>, id: ReactiveNodeId): void {
-		M[id + NodeSlot.BatchPass] = batchPass
+		batchColumn[id >> RECORD_SHIFT] = batchPass
 		batchBase.set(cell, {
 			value: cell.value,
 			changedAtGraphChange: changedAtOf(id),
@@ -1468,7 +1478,7 @@ function createGraphCore(
 				}
 				const i = queueHead++
 				const id = effectIds[i]
-				if (mem[id + NodeSlot.Generation] !== effectGens[i]) {
+				if (generationColumn[id >> RECORD_SHIFT] !== effectGens[i]) {
 					continue // record reclaimed since scheduling: dead entry
 				}
 				// Clear Scheduled alone: runWatcher's validation reads StaleCheck.
@@ -1486,7 +1496,7 @@ function createGraphCore(
 			// trigger later.
 			for (let i = queueHead; i < effectCount; i++) {
 				const id = effectIds[i]
-				if (mem[id + NodeSlot.Generation] !== effectGens[i]) {
+				if (generationColumn[id >> RECORD_SHIFT] !== effectGens[i]) {
 					continue
 				}
 				mem[id + NodeSlot.Flags] &= ~(Flag.Scheduled | Flag.StaleMask)
@@ -1601,7 +1611,7 @@ function createGraphCore(
 			}
 			id = ensureNodeRecord(cell)
 		}
-		if (batchDepth > 0 && mem[id + NodeSlot.BatchPass] !== batchPass) {
+		if (batchDepth > 0 && batchColumn[id >> RECORD_SHIFT] !== batchPass) {
 			saveBatchBase(cell as CellNode<unknown>, id)
 		}
 		cell.value = next
@@ -1703,7 +1713,7 @@ function createGraphCore(
 		mem[id + NodeSlot.Flags] =
 			(mem[id + NodeSlot.Flags] & ~Flag.StaleMask) |
 			(graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
-		clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
+		validAtColumn[id >> RECORD_SHIFT] = preGraphChange
 	}
 
 	/**
@@ -1763,12 +1773,12 @@ function createGraphCore(
 		while (true) {
 			if (
 				clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
-				clocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt]
+				validAtColumn[node >> RECORD_SHIFT]
 			) {
 				recompute(pins[node >> RECORD_SHIFT] as DerivedNode<unknown>)
 			} else {
 				mem[node + NodeSlot.Flags] &= ~Flag.StaleMask
-				clocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+				validAtColumn[node >> RECORD_SHIFT] = graphChangeClock
 			}
 			if (node === startDep) {
 				return true
@@ -1816,7 +1826,7 @@ function createGraphCore(
 		// FRESHENED before its reading is compared — a lazy dep may recompute
 		// right here, stamping its changedAt with the current clock, and the
 		// strictly-greater test then reports it correctly.
-		const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+		const validAt = validAtColumn[id >> RECORD_SHIFT]
 		for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 			const depId = linkDep(l)
 			// Same watched-Clean skip as readDerived: such a dep has nothing to
@@ -1836,7 +1846,7 @@ function createGraphCore(
 		setFlags(node, flagsOf(node) & ~Flag.StaleMask)
 		// Invariant: the watermark is stamped only AFTER every dep was freshened
 		// and compared (freshen-then-stamp order).
-		clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+		validAtColumn[id >> RECORD_SHIFT] = graphChangeClock
 	}
 
 	function readDerived<T>(node: DerivedNode<T>): T {
@@ -1904,7 +1914,7 @@ function createGraphCore(
 		// that disposes this very watcher — re-check after every pull.
 		if ((flags & Flag.StaleCheck) !== 0) {
 			let changed = false
-			const validAt = clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
+			const validAt = validAtColumn[id >> RECORD_SHIFT]
 			for (let l = mem[id + NodeSlot.Deps]; l !== 0; l = mem[l + LinkSlot.LinkNextDep]) {
 				const depId = linkDep(l)
 				// Same watched-Clean skip as readDerived: such a dep has nothing to
@@ -1928,7 +1938,7 @@ function createGraphCore(
 				setFlags(w, flagsOf(w) & ~Flag.StaleMask)
 				// Invariant: watermark stamped only after every dep was freshened and
 				// compared (freshen-then-stamp order) — same rule as ensureFresh.
-				clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+				validAtColumn[id >> RECORD_SHIFT] = graphChangeClock
 				return
 			}
 		}
@@ -1986,7 +1996,7 @@ function createGraphCore(
 		const myPass: EvalPass = (evalPass = ++evalPassCounter)
 		w.depsTail = 0
 		const cause =
-			traceHook !== null ? traceHook('effect-run', w, mem[id + NodeSlot.CauseEvent]) : NO_EVENT
+			traceHook !== null ? traceHook('effect-run', w, causeColumn[id >> RECORD_SHIFT]) : NO_EVENT
 		// The validation reading is taken at the PRE-run clock: if the body
 		// itself writes, its deps may have moved under it, and the wave its write
 		// pushed re-schedules this watcher — whose next validation must then see
@@ -2005,7 +2015,7 @@ function createGraphCore(
 			activeConsumer = prevConsumer
 			activeScope = prevScope
 			trimDeps(w)
-			clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
+			validAtColumn[id >> RECORD_SHIFT] = preGraphChange
 		}
 	}
 
@@ -2036,8 +2046,8 @@ function createGraphCore(
 			// validation watermark. They are never anyone's dependency (no
 			// RefCount, no ChangedAt, no Subs, no ObserverCount), and allocation
 			// overwrites Flags — so this slim reclaim replaces the full one.
-			graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
-			M[id + NodeSlot.Generation]++
+			validAtColumn[id >> RECORD_SHIFT] = 0
+			generationColumn[id >> RECORD_SHIFT]++
 			pushFreeNode(id)
 		}
 	}
@@ -2085,9 +2095,9 @@ function createGraphCore(
 		mem[id + NodeSlot.SubsTail] = 0
 		mem[id + NodeSlot.RefCount] = 0
 		clocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
-		clocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
-		mem[id + NodeSlot.ObserverCount] = 0
-		mem[id + NodeSlot.Generation]++
+		validAtColumn[id >> RECORD_SHIFT] = 0
+		observerColumn[id >> RECORD_SHIFT] = 0
+		generationColumn[id >> RECORD_SHIFT]++
 		// pokePasses/batchPasses stay stale: pass ids are monotonic and never
 		// reused, so a stale reading can never equal a future pass. causeEvents
 		// stays stale too — it is read only under an attached tracer, and a
@@ -2135,6 +2145,9 @@ function createGraphCore(
 	 * already be unreachable. This keeps arena capacity out of multi-case runs. */
 	function resetGraphForBenchmark(): void {
 		M.fill(0, 0, nextRecord)
+		const usedRecords = nextRecord >> RECORD_SHIFT
+		validAtColumn.fill(0, 0, usedRecords)
+		observerColumn.fill(0, 0, usedRecords)
 		pinnedInternals.length = 1
 		pinnedInternals[0] = undefined
 		pendingRegistrations.length = 0
@@ -2246,7 +2259,7 @@ function createGraphCore(
 					(node as DerivedNode<unknown>).value !== UNINITIALIZED
 				) {
 					setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
-					M[subId + NodeSlot.CauseEvent] = M[node.id + NodeSlot.CauseEvent]
+					causeColumn[subId >> RECORD_SHIFT] = causeColumn[node.id >> RECORD_SHIFT]
 					scheduleWatcher(subId, flagsOf(sub))
 				}
 			}
@@ -2297,7 +2310,17 @@ function createGraphCore(
 	}
 }
 
-const core = createGraphCore(graphMemory, graphClocks, pinnedInternals)
+const core = createGraphCore(
+	graphMemory,
+	graphClocks,
+	pinnedInternals,
+	validAtColumn,
+	observerColumn,
+	causeColumn,
+	pokeColumn,
+	batchColumn,
+	generationColumn,
+)
 
 export const ensureNodeRecord = core.ensureNodeRecord
 export const nextDependency = core.nextDependency
