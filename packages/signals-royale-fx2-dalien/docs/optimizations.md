@@ -196,7 +196,23 @@ from its context slot, and no access could be folded or reused across a
 function call. This is invisible in source and cost double-digit percentages
 on wide propagation.
 
-**Change.** Two layers of defense. The engine core is one function,
+The rewrite is not a language-target problem a modern toolchain has
+outgrown; it is inherent to bundling. Concatenating many modules into one
+scope reorders module bodies, so one module's initializer can reference
+another module's binding before that binding's own declaration has executed
+in the merged scope. A `const` there would throw a temporal-dead-zone error;
+a hoisted `var` plus an assignment cannot. Emitting `const` safely would
+require proving initialization order across the whole module graph, so the
+esbuild family of tools (and the dev servers and packagers built on it)
+emits `var` unconditionally. A library does not choose its consumers'
+bundlers — and even preserved top-level `const` in unbundled native modules
+is only foldable where the engine has shipped const-tracking for that
+context kind, which has arrived piecemeal. Function-scope `const` is the one
+binding class optimizing compilers have treated as reliably immutable for a
+decade.
+
+**Change.** Two layers of defense, making the engine's performance
+independent of what any toolchain emits. The engine core is one function,
 instantiated exactly once, whose closure binds the arena views as
 function-scope `const`s — a scope bundlers do not rewrite. And each hot
 function additionally opens with local `const` views of the arrays it
