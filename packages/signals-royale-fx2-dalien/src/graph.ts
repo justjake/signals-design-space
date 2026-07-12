@@ -256,9 +256,10 @@ export interface WatcherNode extends ReactiveNode {
 export const RECORD_SHIFT = 3
 const RECORD_STRIDE = 1 << RECORD_SHIFT
 const NODE_STRIDE = 16
-// Fixed like dalien's arena generation: virtual pages are committed on touch.
-// This experiment deliberately omits growth so every hot access keeps a const
-// base binding. Growth comes after the fixed-arena hot path is competitive.
+// Fixed capacity: virtual pages are committed on first touch, so the unused
+// tail costs address space, not memory. Growth is deliberately omitted so
+// every hot access keeps a constant base binding; it belongs only after the
+// fixed-arena hot path is competitive.
 const RECORD_CAPACITY = 2_097_152
 export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
 const graphClocks = new Float64Array(graphMemory.buffer)
@@ -1633,16 +1634,18 @@ function recompute(node: DerivedNode<unknown>): void {
 }
 
 /**
- * Stackless resolution of a pure dependency chain (dalien-signals'
- * chainCheck, in watermark form). From a watched StaleCheck derived, walk
- * DOWN its sole dependency edge while each link lands on another single-dep
- * single-sub StaleCheck derived; stop at the first node with nothing below
- * to resolve (a cell, a Clean derived — compare-ready) or a StaleDirty
- * derived (recompute it), then resolve UPWARD through the unique subscriber
- * links: per level, one changedAt/validAt reading compare decides recompute
- * vs clear-and-stamp — the single-dep specialization of ensureFresh's loop,
- * with no recursion frames. Any shape mismatch bails before mutating
- * anything and the generic path takes over.
+ * Stackless validation of a pure dependency chain. A node with exactly one
+ * dependency needs no general recursion to validate: its staleness question
+ * is one reading compare against that single dependency, and when the
+ * dependency is itself a single-dep, single-subscriber possibly-stale
+ * derived, the same holds one level down. So: walk DOWN the sole dependency
+ * edges while that shape holds; stop at the first node with nothing below
+ * to resolve (a cell, or a Clean derived — compare-ready) or at a
+ * definitely-stale derived (recompute it); then resolve UPWARD through the
+ * unique subscriber links — per level, one changedAt/validAt reading
+ * compare decides recompute vs clear-and-stamp, exactly what ensureFresh's
+ * loop would do for that node, without its call frames. Any shape mismatch
+ * bails before mutating anything and the generic path takes over.
  *
  * Interior nodes need no Watched test: the start is watched, and a watched
  * node's dependency closure is watched (promote installs it).
