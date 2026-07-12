@@ -636,7 +636,7 @@ export function addObserver(node: ReactiveNode): void {
 			const validate = (M[id + NodeSlot.Flags] & Flag.Computing) === 0
 			const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
 			let invalid = false
-			for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
+			for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
 				linkIntoSubs(l, node)
 				const depId = linkDep(l)
 				addObserver(pinnedInternals[depId >> RECORD_SHIFT]!)
@@ -673,7 +673,7 @@ export function removeObserver(node: ReactiveNode): void {
 	if (observerCount === 0) {
 		M[id + NodeSlot.Flags] &= ~Flag.Watched
 		if ((M[id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
-			for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
+			for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
 				unlinkFromSubs(l)
 				const dep = linkDep(l)
 				removeObserver(pinnedInternals[dep >> RECORD_SHIFT]!)
@@ -816,15 +816,15 @@ function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 /** Drop dependency edges not re-read by the eval that just finished. */
 function trimDeps(sub: ReactiveNode): void {
 	const subId = sub.id
-	const tail = depsTailOf(subId)
-	let stale = tail === undefined ? depsOf(subId) : M[tail + LinkSlot.LinkNextDep] || undefined
-	if (tail !== undefined) {
+	const tail = M[subId + NodeSlot.DepsTail]
+	let stale = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
+	if (tail !== 0) {
 		M[tail + LinkSlot.LinkNextDep] = 0
 	} else {
 		M[subId + NodeSlot.Deps] = 0
 	}
-	while (stale !== undefined) {
-		const next = M[stale + LinkSlot.LinkNextDep] || undefined
+	while (stale !== 0) {
+		const next = M[stale + LinkSlot.LinkNextDep]
 		if (M[stale + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(stale)
 			const dep = linkDep(stale)
@@ -1250,7 +1250,7 @@ export function flush(): void {
 			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
 				continue
 			}
-			runWatcher(w)
+			runWatcher(w, flags)
 		}
 		effectCount = 0
 		queueHead = 0
@@ -1561,7 +1561,7 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	// right here, stamping its changedAt with the current clock, and the
 	// strictly-greater test then reports it correctly.
 	const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
-	for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
+	for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
 		const depId = linkDep(l)
 		// Same watched-Clean skip as readDerived: such a dep has nothing to
 		// validate, so don't pay a call to find that out.
@@ -1653,15 +1653,15 @@ function makeWatcher(
 
 let activeScope: WatcherNode | null = null
 
-function runWatcher(w: WatcherNode): void {
+function runWatcher(w: WatcherNode, flags: Flags): void {
 	const id = w.id
 	// Validate: a StaleCheck-marked watcher whose derived deps cut off must
 	// not re-run its body. Validation can itself run user code (computed fns)
 	// that disposes this very watcher — re-check after every pull.
-	if ((flagsOf(w) & Flag.StaleCheck) !== 0) {
+	if ((flags & Flag.StaleCheck) !== 0) {
 		let changed = false
 		const validAt = graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt]
-		for (let l = depsOf(id); l !== undefined; l = M[l + LinkSlot.LinkNextDep] || undefined) {
+		for (let l = M[id + NodeSlot.Deps]; l !== 0; l = M[l + LinkSlot.LinkNextDep]) {
 			const depId = linkDep(l)
 			// Same watched-Clean skip as readDerived: such a dep has nothing to
 			// validate, so don't pay a call to find that out.
@@ -1779,11 +1779,11 @@ export function disposeWatcher(w: WatcherNode): void {
 
 function unlinkAllDeps(w: WatcherNode): void {
 	const id = w.id
-	let l = depsOf(id)
+	let l = M[id + NodeSlot.Deps]
 	M[id + NodeSlot.Deps] = 0
 	M[id + NodeSlot.DepsTail] = 0
-	while (l !== undefined) {
-		const next = M[l + LinkSlot.LinkNextDep] || undefined
+	while (l !== 0) {
+		const next = M[l + LinkSlot.LinkNextDep]
 		if (M[l + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(l)
 			const dep = linkDep(l)
@@ -1795,9 +1795,9 @@ function unlinkAllDeps(w: WatcherNode): void {
 }
 
 function reclaimNodeRecord(id: number): void {
-	let link = M[id + NodeSlot.Deps] || undefined
-	while (link !== undefined) {
-		const next = M[link + LinkSlot.LinkNextDep] || undefined
+	let link = M[id + NodeSlot.Deps]
+	while (link !== 0) {
+		const next = M[link + LinkSlot.LinkNextDep]
 		if (M[link + LinkSlot.LinkInSubs] !== 0) {
 			unlinkFromSubs(link)
 			const dep = linkDep(link)
