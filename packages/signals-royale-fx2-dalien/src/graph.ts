@@ -348,26 +348,31 @@ function allocLink(): Link {
 	return allocRecord(RECORD_STRIDE)
 }
 
+/** Last link onto an unregistered cell: the record's only owners were its
+ * links, so hand it back and point the live handle at the shared virgin
+ * record again. Provably-zero slots stay untouched (no deps ever; refcount
+ * 0 means no subs and no observers); pass stamps are monotonic and
+ * tolerate staleness. Out of line so unpinning stays cheap in freeLink
+ * (hot-cluster inlining budget). */
+function unpinDep(dep: ReactiveNodeId): void {
+	const depIndex = dep >> RECORD_SHIFT
+	const flags = M[dep + NodeSlot.Flags]
+	if ((flags & (Flag.KindCell | Flag.Registered)) === Flag.KindCell) {
+		const owner = pinnedInternals[depIndex] as { id: ReactiveNodeId }
+		owner.id = VIRGIN_CELL
+		M[dep + NodeSlot.Flags] = 0
+		M[dep + NodeSlot.Generation]++
+		graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
+		M[dep + NodeSlot.FreeNext] = freeNodes
+		freeNodes = dep
+	}
+	pinnedInternals[depIndex] = undefined
+}
+
 function freeLink(id: Link): void {
 	const dep = M[id + LinkSlot.LinkDep]
 	if (dep !== 0 && --M[dep + NodeSlot.RefCount] === 0) {
-		const depIndex = dep >> RECORD_SHIFT
-		const flags = M[dep + NodeSlot.Flags]
-		if ((flags & (Flag.KindCell | Flag.Registered)) === Flag.KindCell) {
-			// Last link onto an unregistered cell: the record's only owners
-			// were its links, so hand it back and point the live handle at the
-			// shared virgin record again. Provably-zero slots stay untouched
-			// (no deps ever; refcount 0 means no subs and no observers); pass
-			// stamps are monotonic and tolerate staleness.
-			const owner = pinnedInternals[depIndex] as { id: ReactiveNodeId }
-			owner.id = VIRGIN_CELL
-			M[dep + NodeSlot.Flags] = 0
-			M[dep + NodeSlot.Generation]++
-			graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
-			M[dep + NodeSlot.FreeNext] = freeNodes
-			freeNodes = dep
-		}
-		pinnedInternals[depIndex] = undefined
+		unpinDep(dep)
 	}
 	// No zeroing: unlinkFromSubs already cleared PrevSub/NextSub/InSubs for
 	// subs-listed links (and they were never set otherwise), and the insert
@@ -819,16 +824,25 @@ function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 	}
 }
 
-/** Drop dependency edges not re-read by the eval that just finished. */
+/** Drop dependency edges not re-read by the eval that just finished. The
+ * steady state (every edge re-read) is the two loads and one store here;
+ * the freeing walk lives out of line so trimDeps inlines into recompute
+ * and executeWatcher (hot-cluster inlining budget). */
 function trimDeps(sub: ReactiveNode): void {
 	const subId = sub.id
 	const tail = M[subId + NodeSlot.DepsTail]
-	let stale = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
+	const stale = tail === 0 ? M[subId + NodeSlot.Deps] : M[tail + LinkSlot.LinkNextDep]
 	if (tail !== 0) {
 		M[tail + LinkSlot.LinkNextDep] = 0
 	} else {
 		M[subId + NodeSlot.Deps] = 0
 	}
+	if (stale !== 0) {
+		freeStaleDeps(stale)
+	}
+}
+
+function freeStaleDeps(stale: Link): void {
 	while (stale !== 0) {
 		const next = M[stale + LinkSlot.LinkNextDep]
 		if (M[stale + LinkSlot.LinkInSubs] !== 0) {
@@ -1190,6 +1204,17 @@ const batchBase = new Map<
  * lifetime). Cells store their reading in cell.batchPass. */
 let batchPass: BatchPass = 0
 
+/** First write to this cell in this batch pass: save the pre-batch state.
+ * The pass stamp stands in for a batchBase.has probe on repeat writes. Out
+ * of line so writeCell stays under the hot-cluster inlining budget. */
+function saveBatchBase(cell: CellNode<unknown>, id: ReactiveNodeId): void {
+	M[id + NodeSlot.BatchPass] = batchPass
+	batchBase.set(cell, {
+		value: cell.value,
+		changedAtGraphChange: changedAtOf(id),
+	})
+}
+
 export function startBatch(): void {
 	if (batchDepth === 0) {
 		batchPass++
@@ -1437,13 +1462,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 		id = ensureNodeRecord(cell)
 	}
 	if (batchDepth > 0 && M[id + NodeSlot.BatchPass] !== batchPass) {
-		// First write to this cell in this batch pass: save the pre-batch state.
-		// The pass stamp stands in for a batchBase.has probe on repeat writes.
-		M[id + NodeSlot.BatchPass] = batchPass
-		batchBase.set(cell as CellNode<unknown>, {
-			value: cell.value,
-			changedAtGraphChange: changedAtOf(id),
-		})
+		saveBatchBase(cell as CellNode<unknown>, id)
 	}
 	cell.value = next
 	// Invariant: tick the clock FIRST, then stamp the change with the new
@@ -1505,13 +1524,19 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 	finishComputeImpl = impl
 }
 
+/** Out of line so the cycle path's Error construction and template string
+ * stay out of recompute's bytecode (hot-cluster inlining budget). */
+function throwComputeCycle(node: DerivedNode<unknown>): never {
+	throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
+}
+
 function recompute(node: DerivedNode<unknown>): void {
 	const id = ensureNodeRecord(node)
-	let flags = flagsOf(node)
+	const flags: Flags = M[id + NodeSlot.Flags]
 	if ((flags & Flag.ComputingMask) !== 0) {
-		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
+		throwComputeCycle(node)
 	}
-	setFlags(node, flags | Flag.Computing)
+	M[id + NodeSlot.Flags] = flags | Flag.Computing
 	const prevConsumer = activeConsumer
 	const prevEvaluation = activeEvaluation
 	activeConsumer = node
@@ -1540,7 +1565,7 @@ function recompute(node: DerivedNode<unknown>): void {
 		activeConsumer = prevConsumer
 		activeEvaluation = prevEvaluation
 		trimDeps(node)
-		setFlags(node, flagsOf(node) & ~Flag.Computing)
+		M[id + NodeSlot.Flags] &= ~Flag.Computing
 	}
 	const changed = finishComputeImpl(node, parked, hasError, error, value)
 	// Invariant: only a REAL change advances the reading (equality cutoff
@@ -1553,12 +1578,83 @@ function recompute(node: DerivedNode<unknown>): void {
 	}
 	// A computed whose evaluation wrote state is self-affecting: its inputs
 	// moved under it, so it never caches — every read re-evaluates.
-	flags = flagsOf(node)
-	setFlags(
-		node,
-		(flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0),
-	)
+	M[id + NodeSlot.Flags] =
+		(M[id + NodeSlot.Flags] & ~Flag.StaleMask) |
+		(graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
 	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = preGraphChange
+}
+
+/**
+ * Stackless resolution of a pure dependency chain (dalien-signals'
+ * chainCheck, in watermark form). From a watched StaleCheck derived, walk
+ * DOWN its sole dependency edge while each link lands on another single-dep
+ * single-sub StaleCheck derived; stop at the first node with nothing below
+ * to resolve (a cell, a Clean derived — compare-ready) or a StaleDirty
+ * derived (recompute it), then resolve UPWARD through the unique subscriber
+ * links: per level, one changedAt/validAt reading compare decides recompute
+ * vs clear-and-stamp — the single-dep specialization of ensureFresh's loop,
+ * with no recursion frames. Any shape mismatch bails before mutating
+ * anything and the generic path takes over.
+ *
+ * Interior nodes need no Watched test: the start is watched, and a watched
+ * node's dependency closure is watched (promote installs it).
+ */
+function chainResolve(startDep: ReactiveNodeId): boolean {
+	let node = startDep
+	let link = M[node + NodeSlot.Deps]
+	if (link === 0 || M[link + LinkSlot.LinkNextDep] !== 0) {
+		return false
+	}
+	let dep = 0
+	while (true) {
+		dep = M[link + LinkSlot.LinkDep]
+		const dflags = M[dep + NodeSlot.Flags]
+		if (
+			(dflags & (Flag.KindDerived | Flag.StaleMask)) ===
+			(Flag.KindDerived | Flag.StaleDirty)
+		) {
+			recompute(pinnedInternals[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
+			break
+		}
+		if (
+			(dflags & (Flag.KindDerived | Flag.StaleMask)) !==
+			(Flag.KindDerived | Flag.StaleCheck)
+		) {
+			break // a cell or a Clean derived: fresh as-is, compare-ready
+		}
+		const depDeps = M[dep + NodeSlot.Deps]
+		if (depDeps === 0 || M[depDeps + LinkSlot.LinkNextDep] !== 0) {
+			return false // branching deps: generic validation owns this
+		}
+		const depSubs = M[dep + NodeSlot.Subs]
+		if (depSubs === 0 || M[depSubs + LinkSlot.LinkNextSub] !== 0) {
+			return false // shared node: the climb needs a unique subscriber
+		}
+		node = dep
+		link = depDeps
+	}
+	while (true) {
+		if (
+			graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
+			graphClocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt]
+		) {
+			recompute(pinnedInternals[node >> RECORD_SHIFT] as DerivedNode<unknown>)
+		} else {
+			M[node + NodeSlot.Flags] &= ~Flag.StaleMask
+			graphClocks[(node >> ClockSlot.Shift) + ClockSlot.ValidAt] = graphChangeClock
+		}
+		if (node === startDep) {
+			return true
+		}
+		const up = M[node + NodeSlot.Subs]
+		if (up === 0) {
+			// Restructured by re-entrant user code mid-climb; the untouched
+			// upper marks resolve generically on their own pulls.
+			return true
+		}
+		dep = node
+		node = M[up + LinkSlot.LinkSub]
+	}
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
@@ -1568,6 +1664,13 @@ export function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): voi
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
 		if ((flags & Flag.StaleMask) === 0) {
+			return
+		}
+		if (
+			(flags & Flag.StaleDirty) === 0 &&
+			node.value !== UNINITIALIZED &&
+			chainResolve(id)
+		) {
 			return
 		}
 	} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
@@ -1715,27 +1818,38 @@ function runWatcher(w: WatcherNode, flags: Flags): void {
 	executeWatcher(w)
 }
 
+/** Effects created by the previous run belong to that run. Out of line:
+ * effects with children are the exception, and the loop stays out of
+ * executeWatcher's bytecode (hot-cluster inlining budget). */
+function disposeWatcherChildren(w: WatcherNode): void {
+	const children = w.children!
+	w.children = undefined
+	for (const child of children) {
+		disposeWatcher(child)
+	}
+}
+
+/** A throwing cleanup poisons the effect: dispose it fully so it never
+ * half-runs again, then surface the error. Out of line for the same
+ * inlining-budget reason (and it carries a try/catch). */
+function runWatcherCleanup(w: WatcherNode): void {
+	const c = w.cleanup!
+	w.cleanup = undefined
+	try {
+		untracked(c)
+	} catch (e) {
+		disposeWatcher(w)
+		throw e
+	}
+}
+
 function executeWatcher(w: WatcherNode): void {
 	const id = w.id
-	// Effects created by the previous run belong to that run.
 	if (w.children !== undefined) {
-		const children = w.children
-		w.children = undefined
-		for (const child of children) {
-			disposeWatcher(child)
-		}
+		disposeWatcherChildren(w)
 	}
 	if (w.cleanup !== undefined) {
-		const c = w.cleanup
-		w.cleanup = undefined
-		try {
-			untracked(c)
-		} catch (e) {
-			// A throwing cleanup poisons the effect: dispose it fully so it never
-			// half-runs again, then surface the error.
-			disposeWatcher(w)
-			throw e
-		}
+		runWatcherCleanup(w)
 	}
 	// Only live effect watchers run a body (WatchRunEffect is creation-fixed
 	// and implies fn; Watched = alive).
