@@ -536,7 +536,12 @@ function createGraphCore(
 	const pokeColumn = pokeBase
 	const batchColumn = batchStampBase
 	const generationColumn = generationBase
-	let nextRecord = FIRST_REAL_RECORD
+	// Two-ended allocation: node records grow up from the bottom, link records
+	// grow down from the top. Node ids stay dense and contiguous (validation
+	// walks touch adjacent lines; the pin table and side columns cover only
+	// the node region), and link allocation needs no pin-table growth check.
+	let nextNodeRecord = FIRST_REAL_RECORD
+	let nextLinkRecord = M.length
 	// Free records as explicit stacks, not intrusive next-pointers threaded
 	// through the records: a stack pop is an independent indexed load, while
 	// an intrusive pop chains a dependent memory read through every
@@ -595,10 +600,10 @@ function createGraphCore(
 		return allocNode(dep, Flag.KindCell)
 	}
 
-	function allocRecord(stride: number): number {
-		const id = nextRecord
-		nextRecord += stride
-		if (nextRecord > M.length) {
+	function allocNodeRecord(): number {
+		const id = nextNodeRecord
+		nextNodeRecord += NODE_STRIDE
+		if (nextNodeRecord > nextLinkRecord) {
 			throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
 		}
 		// Grow the pin table in chunks (explicit undefined fill keeps it
@@ -615,7 +620,12 @@ function createGraphCore(
 		if (freeLinkCount !== 0) {
 			return freeLinkStack[--freeLinkCount]
 		}
-		return allocRecord(RECORD_STRIDE)
+		const id = nextLinkRecord - RECORD_STRIDE
+		if (id < nextNodeRecord) {
+			throw new RangeError('signals-royale-fx2-dalien record arena exhausted')
+		}
+		nextLinkRecord = id
+		return id
 	}
 
 	/** Last link onto an unregistered cell: the record's only owners were its
@@ -657,7 +667,7 @@ function createGraphCore(
 	function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
 		// Popped node records were zeroed at reclaim (or provably zero at
 		// detach the record), so only the flags word needs a store here.
-		const id = freeNodeCount !== 0 ? freeNodeStack[--freeNodeCount] : allocRecord(NODE_STRIDE)
+		const id = freeNodeCount !== 0 ? freeNodeStack[--freeNodeCount] : allocNodeRecord()
 		M[id + NodeSlot.Flags] = flags
 		;(owner as { id: ReactiveNodeId }).id = id
 		return id
@@ -2144,8 +2154,9 @@ function createGraphCore(
 	/** Benchmark generation boundary: every handle from the old generation must
 	 * already be unreachable. This keeps arena capacity out of multi-case runs. */
 	function resetGraphForBenchmark(): void {
-		M.fill(0, 0, nextRecord)
-		const usedRecords = nextRecord >> RECORD_SHIFT
+		M.fill(0, 0, nextNodeRecord)
+		M.fill(0, nextLinkRecord)
+		const usedRecords = nextNodeRecord >> RECORD_SHIFT
 		validAtColumn.fill(0, 0, usedRecords)
 		observerColumn.fill(0, 0, usedRecords)
 		pinnedInternals.length = 1
@@ -2160,7 +2171,8 @@ function createGraphCore(
 		queueHead = 0
 		renderNotifyCount = 0
 		initDetachedRecords()
-		nextRecord = FIRST_REAL_RECORD
+		nextNodeRecord = FIRST_REAL_RECORD
+		nextLinkRecord = M.length
 		freeLinkCount = 0
 		freeNodeCount = 0
 		nodeFinalizer = makeNodeFinalizer()
