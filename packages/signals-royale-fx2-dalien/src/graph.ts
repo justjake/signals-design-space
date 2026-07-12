@@ -163,6 +163,11 @@ export const enum NodeSlot {
 	CauseEvent = 11,
 	PokePass = 12,
 	BatchPass = 13,
+	/** Bumped every time the record is reclaimed or re-virginized (and
+	 * deliberately never zeroed), so an (id, generation) pair names one
+	 * lifetime of one record. The effect queue stores these pairs; an entry
+	 * whose record moved on gen-mismatches and drains as a no-op. */
+	Generation = 14,
 	FreeNext = Deps,
 }
 
@@ -357,6 +362,7 @@ function freeLink(id: Link): void {
 			const owner = pinnedInternals[depIndex] as { id: ReactiveNodeId }
 			owner.id = VIRGIN_CELL
 			M[dep + NodeSlot.Flags] = 0
+			M[dep + NodeSlot.Generation]++
 			graphClocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
 			M[dep + NodeSlot.FreeNext] = freeNodes
 			freeNodes = dep
@@ -839,17 +845,23 @@ function trimDeps(sub: ReactiveNode): void {
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
 
-/** Effect watchers scheduled by the current wave. Cleared by logical length
- * (effectCount), never `.length = 0`: V8 right-trims the backing store on a
- * length reset, so a truncated queue re-grows its capacity from zero on
- * every wave (O(log n) reallocations plus copies, garbage proportional to
- * peak wave width). The price of retained capacity is that consumed slots
- * are nulled at drain — a soft-cleared slot must not pin a disposed watcher.
- * Append-then-fully-drain with the drain-time disposed check (Watched clear)
- * as the tombstone; there is no mid-queue removal, so no compaction
- * machinery. */
-const effectQueue: Array<WatcherNode | undefined> = []
+/** Effect watchers scheduled by the current wave, as (record id, generation)
+ * pairs. Ids never pin anything, so retained capacity needs no slot nulling
+ * and enqueue costs two int stores — no handle lookup, no write barrier.
+ * Append-then-fully-drain; a drain entry is dead when its generation moved
+ * (record reclaimed) or its Watched bit dropped (disposed in place). */
+let effectIds = new Int32Array(256)
+let effectGens = new Int32Array(256)
 let effectCount = 0
+
+function growEffectQueue(): void {
+	const ids = new Int32Array(effectIds.length * 2)
+	ids.set(effectIds)
+	effectIds = ids
+	const gens = new Int32Array(effectGens.length * 2)
+	gens.set(effectGens)
+	effectGens = gens
+}
 
 /** Render-notify subscribers scheduled by the current wave; notified after
  * effects settle. Double-buffered under the same retained-capacity
@@ -872,11 +884,18 @@ function scheduleWatcher(id: ReactiveNodeId, flags: Flags): void {
 	if ((flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) {
 		return
 	}
-	const w = pinnedInternals[id >> RECORD_SHIFT] as WatcherNode
 	if ((flags & Flag.WatchRender) !== 0) {
-		renderNotifyQueue[renderNotifyCount++] = w
+		renderNotifyQueue[renderNotifyCount++] = pinnedInternals[id >> RECORD_SHIFT] as WatcherNode
 	} else if ((flags & Flag.WatchRunEffect) !== 0) {
-		effectQueue[effectCount++] = w
+		// Ids, not handles: no lookup and no write barrier here, and no slot
+		// nulling at drain. The generation stamp makes a stale entry (record
+		// reclaimed, possibly reallocated, between schedule and drain) drain
+		// as a no-op instead of touching the record's new owner.
+		if (effectCount === effectIds.length) {
+			growEffectQueue()
+		}
+		effectIds[effectCount] = id
+		effectGens[effectCount++] = M[id + NodeSlot.Generation]
 	} else {
 		return
 	}
@@ -1214,7 +1233,7 @@ export function batch<T>(fn: () => T): T {
 }
 
 let flushing = false
-/** Drain cursor into effectQueue (index, not shift: the queue can be large
+/** Drain cursor into the effect queue (index, not shift: it can be large
  * and repeated shifts would make wide flushes quadratic). */
 let queueHead = 0
 
@@ -1242,25 +1261,29 @@ export function flush(): void {
 				throw new Error('effect flush did not settle (cycle?)')
 			}
 			const i = queueHead++
-			const w = effectQueue[i]!
-			effectQueue[i] = undefined // consumed slot must not pin the watcher
+			const id = effectIds[i]
+			if (M[id + NodeSlot.Generation] !== effectGens[i]) {
+				continue // record reclaimed since scheduling: dead entry
+			}
 			// Clear Scheduled alone: runWatcher's validation reads StaleCheck.
-			const flags = flagsOf(w) & ~Flag.Scheduled
-			setFlags(w, flags)
+			const flags: Flags = M[id + NodeSlot.Flags] & ~Flag.Scheduled
+			M[id + NodeSlot.Flags] = flags
 			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
 				continue
 			}
-			runWatcher(w, flags)
+			runWatcher(pinnedInternals[id >> RECORD_SHIFT] as WatcherNode, flags)
 		}
 		effectCount = 0
 		queueHead = 0
 	} catch (e) {
 		// Preempted effects are skipped, not left armed for unrelated writes to
-		// trigger later; their unconsumed slots get the same nulling discipline.
+		// trigger later.
 		for (let i = queueHead; i < effectCount; i++) {
-			const w = effectQueue[i]!
-			effectQueue[i] = undefined
-			setFlags(w, flagsOf(w) & ~(Flag.Scheduled | Flag.StaleMask))
+			const id = effectIds[i]
+			if (M[id + NodeSlot.Generation] !== effectGens[i]) {
+				continue
+			}
+			M[id + NodeSlot.Flags] &= ~(Flag.Scheduled | Flag.StaleMask)
 		}
 		effectCount = 0
 		queueHead = 0
@@ -1818,6 +1841,7 @@ function reclaimNodeRecord(id: number): void {
 	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
 	graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
 	M[id + NodeSlot.ObserverCount] = 0
+	M[id + NodeSlot.Generation]++
 	// pokePasses/batchPasses stay stale: pass ids are monotonic and never
 	// reused, so a stale reading can never equal a future pass. causeEvents
 	// stays stale too — it is read only under an attached tracer, and a
