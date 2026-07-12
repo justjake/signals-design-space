@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * Lane semantics of the one-channel notification design: a base write
- * re-renders with exactly useState's urgency — the lane comes from the
- * dispatch context, because the wake IS a reducer dispatch made in that
- * context. These tests observe real scheduling (no act), so the act
- * environment flag is turned off per test and restored after.
+ * Scheduling semantics of the notification design: a base write
+ * re-renders with exactly useState's urgency, because the wake is itself
+ * a reducer dispatch made in the write's context. These tests observe
+ * real scheduling (no act), so the act environment flag is turned off per
+ * test and restored after.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, makeHarness, text, tick, React, type Harness } from './helpers.tsx'

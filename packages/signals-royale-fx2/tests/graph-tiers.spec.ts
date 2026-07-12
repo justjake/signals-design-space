@@ -1,13 +1,12 @@
 /**
- * Two-tier graph mechanics: promotion into the watched tier (subscriber
- * edges installed, push marks trustworthy) and demotion back to the
- * unwatched tier (forward edges only, validAt-gated pull validation on read).
+ * Watched/unwatched graph mechanics: promotion into the watched state
+ * (subscriber edges installed, push marks trustworthy) and demotion back
+ * to unwatched (forward edges only, clock-gated validation on read).
  *
- * Regime labels, per standing verification orders:
- * - [falsify-first] tests were run against the pre-rebuild graph and failed
- *   with the quoted output; the rebuild makes them pass.
- * - [parity] tests pin structure or exact counts; the full suites (265
- *   tests, 1200-seed oracle, battery) are the behavioral referee.
+ * Test-name labels:
+ * - [falsify-first]: written to fail against a known-bad implementation
+ *   of the behavior under test, then made to pass.
+ * - [parity]: pins internal structure or exact recompute counts.
  */
 import { describe, expect, test } from 'vitest'
 import {
@@ -83,7 +82,7 @@ describe('two-tier graph: promote validation', () => {
 		const d = makeGraphDerived(() => readCell(a) * 2)
 		expect(readDerived(d)).toBe(2) // caches while unwatched
 		writeCell(a, 2) // no back-edges: no push mark reaches d
-		const stop = observeNode(d, () => {}) // subscribe WITHOUT pulling
+		const stop = observeNode(d, () => {}) // subscribe without pulling
 		expect(readDerived(d)).toBe(4)
 		stop()
 	})
@@ -485,9 +484,10 @@ describe('two-tier graph: render-notify delivery re-entrancy', () => {
 
 describe('watermark validation ordering (the changedAt/validAt discipline)', () => {
 	test('lazy chain: deps freshen before their readings are compared', () => {
-		// a → c1 → c2, all unwatched. After a write, reading c2 must freshen c1
-		// FIRST (whose recompute stamps changedAt with the current clock) and
-		// only then compare — stamp-before-freshen order would miss the change.
+		// a → c1 → c2, all unwatched. After a write, reading c2 must freshen
+		// c1 first (its recompute stamps changedAt with the current clock)
+		// and only then compare; comparing before freshening would miss the
+		// change.
 		let c1Runs = 0
 		let c2Runs = 0
 		const a = cell(1)
@@ -507,7 +507,7 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 	})
 
 	test('equality cutoff does not advance changedAt: downstream skips recompute', () => {
-		// c1 collapses distinct inputs; its recompute must NOT advance its
+		// c1 collapses distinct inputs; its recompute must not advance its
 		// changedAt reading, so c2 validates as unchanged and never re-runs.
 		let c1Runs = 0
 		let c2Runs = 0

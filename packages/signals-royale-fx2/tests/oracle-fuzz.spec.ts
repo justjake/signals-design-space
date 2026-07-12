@@ -1,9 +1,9 @@
 /**
- * Randomized oracle: a naive, memo-free model of THIS engine's semantics —
- * per-atom intent history (urgent and drafted, in dispatch order), worlds as
- * replay folds, computeds as pure rederivation — fuzzed against the real
- * engine. Failures print the seed and a shrunk schedule; found bugs get
- * pinned as named regression tests in oracle-regressions.spec.ts.
+ * Randomized oracle: a naive, memo-free model of the engine's semantics —
+ * per-atom intent history (urgent and drafted, in dispatch order), worlds
+ * as replay folds, computeds as pure rederivation — fuzzed against the
+ * real engine. Failures print the seed and a shrunk schedule; found bugs
+ * get pinned as named regression tests in oracle-regressions.spec.ts.
  *
  * Seed count: ROYALE_FX2_SEEDS (default 300) x ~90 steps.
  */
@@ -248,16 +248,16 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 	const engRead = (ref: Ref): number =>
 		'cell' in ref ? read(engCells[ref.cell]) : read(engComps[ref.comp])
 
-	// Scoped subscribers: the (only) React hook shape. Subscribe with both
-	// channels of useValue — the render-notify channel (predicate compare,
-	// re-read on change: the useSyncExternalStore bail) and the draft-lane
-	// channel (wakes deliver draft ids into a per-subscriber world, exactly
-	// like the per-hook reducer; attach-time joins mirror correctSubscription
-	// for drafts that wrote before the subscription existed). Their rendered
-	// view must match the model's value FOR THEIR WORLD after every rerender —
-	// and silent folds keep them converged with base state without any
-	// storeVersion bump, because retirement flips a draft's intents from world-only to
-	// always-included without moving them ("visibility, never position").
+	// Scoped subscribers mirror the useValue hook shape, with both of its
+	// channels: the render-notify channel (predicate compare, re-read on
+	// change) and the draft-wake channel (wakes deliver draft ids into a
+	// per-subscriber world, exactly like the per-hook reducer; attach-time
+	// joins mirror correctSubscription for drafts that wrote before the
+	// subscription existed). Each subscriber's rendered view must match the
+	// model's value for that subscriber's world after every rerender — and
+	// folds keep them converged with base state without any extra renders,
+	// because retirement changes which worlds include a draft's intents
+	// without moving the intents' positions in the log.
 	interface ScopedSub {
 		ref: Ref
 		/** The reducer world: engine ids of drafts delivered to this sub. */
@@ -318,8 +318,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 		sub.unsub = observeNode(
 			node,
 			() => {
-				// The bindings' notify predicate, mirrored: re-render only when the
-				// resolution of THIS sub's world differs from what it shows.
+				// The bindings' notify predicate, mirrored: re-render only when
+				// the resolution of this sub's own world differs from what it
+				// shows.
 				const ids = [...sub.ids].filter((id) => isLiveDraft(id))
 				const st = resolveState(node, worldOf(ids))
 				if ((st.flags & Flag.AsyncMask) !== 0 || !Object.is(st.value, sub.view)) {
@@ -561,7 +562,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 }
 
 /** Greedy shrink: drop one step at a time while the failure reproduces.
- * A candidate that THROWS inside runSchedule (dropping a creation step
+ * A candidate that throws inside runSchedule (dropping a creation step
  * leaves later steps referencing cells or drafts that never exist) is not
  * a valid reproduction of the returned-string failure — treat it as
  * non-reproducing and move on, never crash the shrink loop. */

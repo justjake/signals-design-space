@@ -100,11 +100,12 @@ describe('draft visibility', () => {
 
 	test('fold loudness is per subscriber: rendered-world resolutions decide who re-renders', () => {
 		// There is no global silent/loud fold state: at retire, the fold's
-		// writes notify subscribers, and each re-renders only if resolving its
-		// OWN rendered world now differs from what it rendered (the bindings'
-		// notify predicate). This pins the engine half of that contract: a
-		// carrier's world resolves the SAME value before and after the fold
-		// (retired ids normalize out), while the base world's resolution moves.
+		// writes notify subscribers, and each re-renders only if resolving
+		// its own rendered world now differs from what it rendered (the
+		// bindings' notify predicate). This pins the engine half of that
+		// contract: a carrier's world resolves the same value before and
+		// after the fold (retired ids normalize out), while the base world's
+		// resolution moves.
 		const a = signal(1)
 		const id = inDraft(() => a.set(9))
 		// Before the fold: the carrier rendered 9 from its world; base shows 1.
@@ -569,10 +570,10 @@ describe('computeds across worlds', () => {
 		expect(read(c)).toBe(18)
 	})
 
-	test('isPending is transitive through computeds (Solid 2.0 status forwarding)', () => {
-		// Solid 2.0's pending rule: a computed over a pending source is itself
-		// pending — status forwards through derivation. A drafted cell two
-		// levels down must surface at the top of the chain.
+	test('isPending is transitive through computeds', () => {
+		// A computed over a pending source is itself pending — status
+		// forwards through derivation. A drafted cell two levels down must
+		// surface at the top of the chain.
 		const a = signal(1)
 		const c1 = computed(() => a.get() * 10)
 		const c2 = computed(() => c1.get() + 1)
@@ -623,9 +624,9 @@ describe('per-root committed views', () => {
 })
 
 describe('latest() context resolution', () => {
-	// The rule: latest() means "newest intent" only in AMBIENT code. Inside an
-	// evaluation context it resolves that context's own world — reading ahead
-	// of your world is a tear.
+	// The rule: latest() means "newest view" only in ambient code. Inside
+	// an evaluation context it resolves that context's own world — reading
+	// ahead of your world is a tear.
 
 	test('inside a base-state computed evaluation, latest() resolves base state — never a draft', () => {
 		const a = signal(1)

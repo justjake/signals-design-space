@@ -1,38 +1,47 @@
 /**
- * The base reactive graph: writable signals, cached computeds, effects.
+ * The core reactive graph: signals (writable values, called "cells" here),
+ * computeds (cached values derived from other nodes, called "deriveds"),
+ * and effects (callbacks that re-run when the values they read change).
  *
- * Design notes
+ * Change moves through the graph in two phases:
  *
- * - Push-pull: writes push a small "dirty" wave through WATCHED edges only;
- *   reads pull values and validate caches by comparing clock readings.
- *   A computed recomputes only when some dependency actually changed after
- *   the computed's last validation (dep.changedAtGraphChange strictly
- *   greater than sub.validAtGraphChange), which is what gives exact
- *   evaluation counts and equality cutoff.
- * - Watched vs unwatched: a computed is linked into its dependencies'
- *   subscriber lists only while something observes it (an effect chain, a
- *   React subscription, or another watched computed). An unwatched computed
- *   holds references dependency-ward only, so dropping the last user
- *   reference makes the whole chain collectible — no registry needed for
- *   reads. Unwatched computeds validate lazily on read against the global
- *   graph change clock.
- * - Effects are the only long-lived graph roots a user can leak by dropping
- *   the disposer without calling it; a FinalizationRegistry on the disposer
- *   reclaims those.
+ * - Push: writing a cell walks its subscriber edges and marks downstream
+ *   nodes "possibly stale". The walk only marks and schedules; it never
+ *   recomputes anything.
+ * - Pull: reading a node checks those marks. A computed re-runs only when
+ *   one of its dependencies actually changed value since the computed last
+ *   validated. A dependency that recomputed to an equal value does not
+ *   count as changed, so its consumers skip recomputation entirely (the
+ *   "equality cutoff").
  *
- * Counter taxonomy — every numeric counter is one of two kinds, and the
- * name says which:
+ * Staleness is decided by comparing clock readings, not by flags alone.
+ * One module-wide counter, `graphChangeClock`, increments on every cell
+ * write and every async settlement. Each node records the clock reading at
+ * its last real value change (`changedAtGraphChange`), and each consumer
+ * records the reading at its last successful validation
+ * (`validAtGraphChange`). "Did this dependency change since I last
+ * checked?" is then a single comparison:
+ * `dep.changedAtGraphChange > sub.validAtGraphChange`. The comparison is
+ * strict: equal readings mean that validation already saw the change.
  *
- * - …ChangeClock: monotone logical clock; ticks when its event class
- *   happens. Records never hold private counters — they hold READINGS of a
- *   clock: validAt<Clock> ("proven current as of") and changedAt<Clock>
- *   ("last real change"). Every staleness question is one comparison:
- *   dep.changedAt<Clock> > sub.validAt<Clock> means changed-since-validated
- *   (strictly greater — equal readings mean that very validation already
- *   consumed the change).
- * - …Pass: identity of a dynamic scope (an evaluation, a walk); saved and
- *   restored on nesting, so NEVER compare for order — equality means
- *   membership in the pass now running.
+ * Nodes are either watched or unwatched. A node is watched while something
+ * observes it — an effect, a React subscription, or another watched
+ * computed. Only watched nodes are linked into their dependencies'
+ * subscriber lists, so the push phase reaches exactly the nodes someone
+ * cares about. An unwatched computed holds references toward its
+ * dependencies only; dropping the last user reference makes the whole
+ * chain garbage-collectible without any registry. Because no push marks
+ * reach it, an unwatched computed instead validates lazily on read against
+ * the clock. Effects are the one thing a user can leak by dropping the
+ * disposer without calling it, so a FinalizationRegistry on the disposer
+ * reclaims those.
+ *
+ * Besides clocks, the module uses "pass" counters (`EvalPass`, `PokePass`,
+ * `BatchPass`). A pass value identifies one dynamic scope — a single
+ * evaluation, a single traversal, a single batch. Passes are monotonic and
+ * never reused; a stored pass value equal to the currently running pass
+ * means "this record was already touched by the pass now running". Passes
+ * are identities, not clocks: never compare them for order.
  */
 
 import type { ErrorBox, Suspension } from './asyncs.ts'
@@ -42,181 +51,189 @@ export type EqualsFn<T> = (a: T, b: T) => boolean
 
 /** Weak number brand. Plain numbers assign in, so creation and increment
  * stay cast-free (`let x: EvalPass = 1; x++`), but a value of one brand
- * does not assign to a slot or parameter of another — counter mixups are
- * type errors. The symbol is declared, never created: purely type-level,
- * and the runtime representation stays a plain number. */
+ * does not assign to a slot or parameter of another brand — mixing up two
+ * counters is a type error. The symbol is declared, never created: it is
+ * purely type-level, and the runtime representation stays a plain number. */
 declare const brand: unique symbol
 export type Brand<T, B extends string> = T & { readonly [brand]?: B }
 
-/** Monotone logical clock: ticks on every base-state change — writes AND
- * settlements. Validation shortcut for unwatched reads. */
+/** The module-wide change clock (see the header): increments on every cell
+ * write and every async settlement. */
 export type GraphChangeClock = Brand<number, 'GraphChangeClock'>
 export type TraceEventId = Brand<number, 'TraceEventId'>
-/** Identity of one evaluation pass; monotonic, never reused (see
- * evalPassCounter). */
+/** Identity of one evaluation pass (see the header on passes). */
 export type EvalPass = Brand<number, 'EvalPass'>
-/** Identity of one poke walk; monotonic, never reused, so no per-walk
- * clearing is needed (same discipline as EvalPass). */
+/** Identity of one poke walk. */
 export type PokePass = Brand<number, 'PokePass'>
+/** Identity of one top-level batch scope. */
 export type BatchPass = Brand<number, 'BatchPass'>
 
 /**
- * One flag bit. `Flag` names a bit; `Flags` (the stored word) stays a
- * branded number because TS5 types const enum unions as the enum, which
- * would force a cast on every |= / &= composition. esbuild inlines members
- * within this file and compiles cross-file consumers to object lookups —
- * the same cost as a const object — while tsc-compiled consumers inline
- * everywhere.
+ * Per-node flag bits. `Flag` names a single bit; the stored word is the
+ * separate `Flags` type, a branded number, because TypeScript types const
+ * enum unions as the enum itself, which would force a cast on every
+ * `|=` / `&=` composition.
  */
 export const enum Flag {
-	// Kinds: exactly one, set at creation, never changed.
-	/** Writable source. */
+	// Node kinds: exactly one is set at creation and never changes.
+	/** Writable source (a signal's backing node). */
 	KindCell = 0b0000_0000_0001,
 	/** Cached computed. */
 	KindDerived = 0b0000_0000_0010,
-	/** Subscriber (alien-signals' name): an effect, a store subscription, or
-	 * a scope anchor. */
+	/** Watcher: an effect, a store subscription, or a scope anchor. */
 	Watching = 0b0000_0000_0100,
 
-	// Watch capabilities: creation-fixed, Watching nodes only; dispatch
-	// routes on these bits, never on callback presence. Component
-	// subscription = Watching|WatchRender|WatchDraft; engine effect =
-	// Watching|WatchRunEffect; scope anchor = Watching alone.
-	/** Schedule into the render-notify queue, delivered after effects
-	 * settle; the subscriber's notify predicate decides whether the delivery
-	 * becomes a re-render. */
+	// Watcher capabilities: fixed at creation, present on Watching nodes
+	// only. Scheduling dispatches on these bits, never on whether a callback
+	// happens to be installed. A component subscription is
+	// Watching|WatchRender|WatchDraft; an engine effect is
+	// Watching|WatchRunEffect; a scope anchor is Watching alone.
+	/** Deliver through the render-notify queue, after effects settle. The
+	 * subscriber's own notify callback decides whether the delivery becomes
+	 * a re-render. */
 	WatchRender = 0b0000_0000_1000,
-	/** Schedule into the validated effect queue (runs the body). */
+	/** Deliver through the effect queue: validate, then run the body. */
 	WatchRunEffect = 0b0000_0001_0000,
-	/** Draft pings and wakes reach this watcher; absent = base-state-only
-	 * (every engine effect today). */
+	/** Draft notifications (see worlds.ts) reach this watcher. Watchers
+	 * without this bit only hear about base-state changes; engine effects
+	 * are all base-state-only. */
 	WatchDraft = 0b0000_0010_0000,
 
-	// Staleness: an exclusive pair; writes clear the whole field before
-	// setting, so a single-bit test reads the exact state.
+	// Staleness: at most one of the pair is set; writers clear the whole
+	// field before setting, so a single-bit test reads the exact state.
 	/** Possibly stale: confirm dependency changedAt readings before
 	 * recomputing. */
 	StaleCheck = 0b0000_0100_0000,
 	/** Definitely stale: recompute on next pull. */
 	StaleDirty = 0b0000_1000_0000,
 
-	// Async value plane: an exclusive pair; both clear = plain value.
+	// Async state: at most one of the pair is set; both clear means the
+	// node holds a plain value.
 	/** Latest evaluation threw; node.throwable holds the ErrorBox to
 	 * rethrow. */
 	AsyncError = 0b0001_0000_0000,
-	/** Latest evaluation parked; node.throwable holds the Suspension. */
+	/** Latest evaluation parked on an unresolved thenable; node.throwable
+	 * holds the Suspension. */
 	AsyncSuspended = 0b0010_0000_0000,
 
-	// State.
-	/** Double role by kind. Cells/deriveds: mirror of observerCount > 0 —
-	 * promote (0→1) sets it, demote (1→0) clears it; the count stays
-	 * authoritative, the bit is the one-load hot-path test. Watchers: ALIVE —
-	 * set at creation, cleared at dispose, so disposal = Watching set,
-	 * Watched clear. */
+	/** Two meanings by node kind. On cells and deriveds it mirrors
+	 * observerCount > 0 (the count is authoritative; the bit is the cheap
+	 * hot-path test). On watchers it means alive: set at creation, cleared
+	 * at dispose. */
 	Watched = 0b0100_0000_0000,
-	/** Watcher sits in a flush queue. */
+	/** Watcher currently sits in a flush queue. */
 	Scheduled = 0b1000_0000_0000,
-	/** Canonical derived evaluation in progress. */
+	/** Base-state derived evaluation in progress. */
 	Computing = 0b1_0000_0000_0000,
-	/** Draft-world derived evaluation in progress. Separate because only a
-	 * canonical evaluation refreshes the graph-validation watermark. */
+	/** Draft-world derived evaluation in progress (worlds.ts). Kept
+	 * separate from Computing because only a base-state evaluation may
+	 * update the node's validation watermark. */
 	DraftComputing = 0b10_0000_0000_0000,
 
-	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
+	/** Both staleness bits; (flags & StaleMask) === 0 means clean. */
 	StaleMask = StaleCheck | StaleDirty,
-	/** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
-	 * state — how DerivedState views are read (see asyncs.ts). */
+	/** Both async bits; (flags & AsyncMask) === 0 means plain value. */
 	AsyncMask = AsyncError | AsyncSuspended,
-	/** Either kind of derived evaluation; any re-entry is a cycle. */
+	/** Either kind of evaluation in progress; re-entry means a cycle. */
 	ComputingMask = Computing | DraftComputing,
 }
 /** The stored per-node word: a composition of Flag bits. */
 export type Flags = Brand<number, 'Flags'>
 
+/** One dependency edge: `sub` read `dep`. Each link sits in two intrusive
+ * doubly/singly linked lists — the subscriber's dependency list (nextDep)
+ * and, while the subscriber is watched, the dependency's subscriber list
+ * (prevSub/nextSub). */
 export interface Link {
 	dep: ReactiveNode
 	sub: ReactiveNode
 	nextDep: Link | undefined
 	prevSub: Link | undefined
 	nextSub: Link | undefined
-	/** Present in dep's subscriber list (only while sub is watched). */
+	/** Whether the link is present in dep's subscriber list (true only
+	 * while sub is watched). */
 	inSubs: boolean
-	/** Reading of the eval pass that last (re)read this edge; equality with
-	 * the running evalPass means the evaluation in progress already touched
-	 * it. */
+	/** The evaluation pass that last read this edge. Equality with the
+	 * running pass means the evaluation in progress already touched it. */
 	evalPass: EvalPass
 }
 
 export interface ReactiveNode {
 	flags: Flags
 	/**
-	 * Reading of graphChangeClock at this node's last REAL value change.
-	 * Equality-cutoff recomputes do not advance it, and a batch net-revert
-	 * restores it — so dep.changedAtGraphChange > sub.validAtGraphChange is
-	 * exactly "changed since that subscriber last validated". Stamped with
-	 * the CURRENT clock at change time (writes tick the clock first, then
-	 * stamp; recomputes stamp without ticking — a recompute is not a base
-	 * event, and any consumer with an older validAt reading still compares
-	 * greater).
+	 * The clock reading at this node's last real value change. A recompute
+	 * that produced an equal value does not advance it, and a batch whose
+	 * writes net out restores it — that is what makes the staleness
+	 * comparison (`dep.changedAtGraphChange > sub.validAtGraphChange`)
+	 * mean "actually changed since that subscriber last validated".
+	 *
+	 * Changes are stamped with the current clock at change time. Writes
+	 * tick the clock first and then stamp; recomputes stamp without
+	 * ticking, because a recompute is a consequence of an earlier write,
+	 * not a new change event, and any consumer that validated before the
+	 * recompute already holds a strictly older reading.
 	 */
 	changedAtGraphChange: GraphChangeClock
 	/**
-	 * The value-plane companion to the AsyncError/AsyncSuspended flags:
-	 * the ErrorBox to rethrow or the Suspension being awaited; null in the
-	 * plain-value state. Initialized null at construction on every node kind
-	 * (uniform shape — no post-construction property addition): cells never
-	 * set the async bits but share the { flags, value, throwable } read
-	 * protocol (DerivedState, asyncs.ts), and watchers carry the slot only
-	 * for shape uniformity.
+	 * The object backing the async flags: the ErrorBox to rethrow
+	 * (AsyncError) or the Suspension being awaited (AsyncSuspended); null
+	 * when the node holds a plain value. Present on every node kind so all
+	 * nodes share one object shape — cells never set the async bits but
+	 * are read through the same { flags, value, throwable } protocol
+	 * (DerivedState, asyncs.ts).
 	 */
 	throwable: ErrorBox | Suspension | null
-	/** Subscriber list (watched edges + store subscriptions). */
+	/** Subscriber list: watched consumers and store subscriptions. */
 	subs: Link | undefined
 	subsTail: Link | undefined
-	/** Dependency list in first-read order (derived/watcher only). */
+	/** Dependency list in first-read order (deriveds and watchers only). */
 	deps: Link | undefined
 	depsTail: Link | undefined
-	/** Count of observers: watched sub-links, effects, React subscriptions. */
+	/** Number of observers: watched consumer edges, effects, and React
+	 * subscriptions. */
 	observerCount: number
-	/** Trace: event that caused the latest invalidation reaching this node. */
+	/** Tracing: the event that caused the latest invalidation to reach
+	 * this node. */
 	causeEvent: TraceEventId
 	label: string | undefined
-	/** World-resolution memos, managed by worlds.ts; undefined while quiescent. */
+	/** Per-world resolution memos, managed by worlds.ts; undefined while
+	 * no transition drafts are live. */
 	worldMemos: Map<string, unknown> | undefined
-	/** Reading of the last poke walk that reached this node; equality with
-	 * the running pokePass means that walk already visited it. */
+	/** The last poke walk that reached this node. Equality with the
+	 * running walk's pass means the walk already visited it. */
 	pokePass: PokePass
 }
 
 let graphChangeClock: GraphChangeClock = 1
 /** Identity of the evaluation pass in progress. */
 let evalPass: EvalPass = 1
-/** Pass counter — monotonic, never reused. Uniqueness is load-bearing for
- * the same-pass dedup probe in trackRead: an evalPass match there asserts
- * "this edge was touched by the pass in progress", and a recycled value could
- * match an edge from a dead pass, whose position may be outside the kept
- * prefix — trimming would then silently drop a dependency the evaluation
- * read. */
+/** Backing counter for evaluation passes — monotonic, never reused. If a
+ * value were recycled, the same-pass check in trackRead could match an
+ * edge left over from a dead pass and skip registering a dependency the
+ * current evaluation actually read. */
 let evalPassCounter: EvalPass = 1
 function newEvalPass(): EvalPass {
 	evalPass = ++evalPassCounter
 	return evalPass
 }
+/** The node whose dependencies are being tracked right now: reads inside
+ * an evaluation register edges against this node. */
 let activeConsumer: ReactiveNode | null = null
-/** The computed body executing now, independent of dependency tracking.
- * untracked() clears activeConsumer but must not bypass computed policies. */
+/** The computed body executing right now, tracked separately from
+ * activeConsumer: untracked() clears activeConsumer but must not disable
+ * per-computed policies (like the no-writes-inside-computeds rule). */
 export let activeEvaluation: DerivedNode<unknown> | null = null
 let batchDepth = 0
 
-/** Bumped and read by the engine layer; here so cells can report writes. */
 export function currentGraphChange(): GraphChangeClock {
 	return graphChangeClock
 }
 
 // ---------------------------------------------------------------------------
-// Tracing seam. tracer.ts installs the hook; a mutable module binding (not
-// an object) so the detached fast path stays one null check per emit site,
-// and the graph itself stays runtime-dependency-free.
+// Tracing seam. tracer.ts installs the hook. A mutable module binding
+// rather than an object property, so the common detached case costs one
+// null check per emit site and the graph has no runtime dependency on the
+// tracer.
 // ---------------------------------------------------------------------------
 
 export type TraceFn = (
@@ -232,7 +249,8 @@ export function setTraceHook(fn: TraceFn | null): void {
 }
 
 export const NO_EVENT: TraceEventId = 0
-/** Ambient causal parent for the operation in progress (write/effect/settle). */
+/** The trace event acting as causal parent for the operation in progress
+ * (a write, an effect run, or a settlement). */
 export let currentCause: TraceEventId = NO_EVENT
 export function setCurrentCause(id: TraceEventId): TraceEventId {
 	const prev = currentCause
@@ -250,11 +268,12 @@ export interface CellNode<T> extends ReactiveNode {
 	value: T | typeof UNINITIALIZED
 	initializer: (() => T) | undefined
 	equals: EqualsFn<T>
-	/** Reading of the batch pass whose base state this cell already saved —
-	 * equality with the running batchPass means the batchBase entry exists, so
-	 * repeat writes in the same batch skip the map probe (same convention as
-	 * pokePass: the record holds the reading of the last pass that touched it). */
+	/** The batch pass that already saved this cell's pre-batch state.
+	 * Equality with the running pass means the batchBase entry exists, so
+	 * repeat writes in the same batch skip the map lookup. */
 	batchPass: BatchPass
+	/** The onObserved option: setup that runs when the cell gains its first
+	 * observer, returning an optional cleanup for when the last one leaves. */
 	lifetime: ((ctx: { get(): T; set(v: T): void }) => void | (() => void)) | undefined
 	lifetimeCleanup: (() => void) | undefined
 	lifetimeActive: boolean
@@ -264,26 +283,27 @@ export interface DerivedNode<T> extends ReactiveNode {
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
-	/** GraphChangeClock reading at last successful validation — the unwatched
-	 * tier's currency gate (validAtGraphChange === clock ⇒ nothing relevant
-	 * happened since; the read short-circuits O(1)). Deriveds only: cells and
-	 * watchers never validate, so they do not carry the slot. */
+	/** The clock reading at this node's last successful validation. When it
+	 * equals the current clock, nothing in the graph changed since, so an
+	 * unwatched read can return immediately without walking dependencies. */
 	validAtGraphChange: GraphChangeClock
 }
 
 export interface WatcherNode extends ReactiveNode {
-	/** Reading at this watcher's last validation or run — the same currency
-	 * gate deriveds use (see DerivedNode.validAtGraphChange). */
+	/** The clock reading at this watcher's last validation or run; same
+	 * meaning as DerivedNode.validAtGraphChange. */
 	validAtGraphChange: GraphChangeClock
 	fn: (() => void | (() => void)) | undefined
 	cleanup: (() => void) | undefined
-	/** Owner scope; disposing the scope disposes the watcher. */
+	/** Child effects created during this watcher's run (when it acts as a
+	 * scope); disposing the watcher disposes them. */
 	children: WatcherNode[] | undefined
-	/** Render-notify delivery (WatchRender watchers). */
+	/** Render-notify callback (WatchRender watchers). */
 	onNotify: (() => void) | undefined
-	/** Draft-lane channel: receives the id of a draft whose new intent touches
-	 * this subscriber's sources. Distinct from onNotify so draft activity never
-	 * looks like a store change to snapshot-comparing subscribers. */
+	/** Draft-wake callback: receives the id of a transition draft whose new
+	 * write touches this subscriber's sources. Separate from onNotify so
+	 * draft activity never looks like a base-state change to subscribers
+	 * that compare snapshots. */
 	onDraftWake: ((id: DraftId) => void) | undefined
 }
 
@@ -330,30 +350,34 @@ function unlinkFromSubs(link: Link): void {
 }
 
 /**
- * Promote: first observer arrives. Links the dep closure depth-first (cycles
- * are impossible — dep edges exist only after an evaluation, and cyclic
- * evaluation throws) and reading-validates each dep once, because the node
- * spent its unwatched span with no back-edges: dependencies changed without
- * any push mark reaching it, so its Clean flags may be lies. The reading
- * comparison alone is insufficient — a stale unwatched dep has not
- * recomputed, so its changedAt reading cannot have moved even when its
- * inputs did; the dep's post-promote staleness carries that information up.
- * Where some dep fails validation, a Clean node is seeded StaleCheck,
- * restoring the watched tier's invariant that flags are trustworthy (the
- * stale-cover invariant: for every watched edge, dep stale ⇒ sub stale or
- * scheduled).
+ * A node's first observer arrived: link it into its dependencies'
+ * subscriber lists, recursively (depth-first; cycles are impossible
+ * because dependency edges only exist after an evaluation, and a cyclic
+ * evaluation throws).
+ *
+ * While the node was unwatched, no push marks could reach it, so its clean
+ * staleness flags cannot be trusted: dependencies may have changed without
+ * it hearing. Each dependency is therefore checked once during promotion,
+ * two ways. The clock comparison catches dependencies that recomputed to a
+ * new value. It cannot catch a stale unwatched dependency that has not
+ * recomputed yet — its changedAt reading has not moved even though its
+ * inputs did — so the dependency's own staleness flag (just restored by
+ * its recursive promotion) is checked as well. If either check fails, a
+ * clean node is marked StaleCheck. This restores the invariant that push
+ * marks rely on: for every watched edge, a stale dependency implies a
+ * stale or scheduled subscriber.
  */
 export function addObserver(node: ReactiveNode): void {
 	node.observerCount++
 	if (node.observerCount === 1) {
 		node.flags |= Flag.Watched
 		if ((node.flags & Flag.KindDerived) !== 0) {
-			// A canonically Computing node was promoted from inside its running body.
-			// Skip history validation: its watermark predates this evaluation, so
-			// deps the eval just re-read
-			// would compare as changed-since and seed a false StaleCheck. The
-			// running eval is the validator — its finally stamps fresh staleness
-			// and a current validAt reading.
+			// If this node's own evaluation is what triggered the promotion
+			// (its body is running now), skip the history check: the node's
+			// watermark predates the running evaluation, so dependencies it
+			// just re-read would look changed-since and seed a false
+			// StaleCheck. The running evaluation stamps fresh staleness and a
+			// current watermark when it finishes.
 			const validate = (node.flags & Flag.Computing) === 0
 			const validAt = (node as DerivedNode<unknown>).validAtGraphChange
 			let invalid = false
@@ -377,15 +401,17 @@ export function addObserver(node: ReactiveNode): void {
 }
 
 /**
- * Demote: last observer leaves. Cascade-unlinks the back-edges promote
- * installed (after this, the chain holds forward references only — dropping
- * user handles collects it whole) and seeds the unwatched tier's
- * validAtGraphChange reading: Clean at demote means no dependency changed since last validation
- * (push marks were reliable while watched), so the next quiet read
- * short-circuits O(1); stale at demote forces the up-walk. Flag distrust
- * across the tier boundary lives entirely at the two crossings — promote
- * validates on re-watch, and unwatched pulls never trust Clean without a
- * current validAtGraphChange — so no staleness seeding happens here.
+ * A node's last observer left: unlink it from its dependencies' subscriber
+ * lists, recursively. Afterwards the chain holds forward references only,
+ * so dropping the user's handles makes it garbage-collectible whole.
+ *
+ * The node also gets a starting watermark for its unwatched life. If it is
+ * clean right now, push marks were reliable up to this moment, so nothing
+ * changed since its last validation and the watermark can be the current
+ * clock — the next read short-circuits if the clock has not moved. If it
+ * is stale, the watermark is zeroed so the next read walks its
+ * dependencies. No staleness needs to be seeded here; the promote path
+ * re-validates whenever the node becomes watched again.
  */
 export function removeObserver(node: ReactiveNode): void {
 	node.observerCount--
@@ -404,24 +430,26 @@ export function removeObserver(node: ReactiveNode): void {
 }
 
 // ---------------------------------------------------------------------------
-// Lifetime effects: an atom option that runs setup when the atom gains its
-// first subscriber of ANY kind (computed chain, effect, or React component)
-// and runs the returned cleanup when the last subscriber of every kind is
-// gone. Exactly one observation is active across the union of kinds.
+// Lifetime effects: the onObserved signal option. Setup runs when the cell
+// gains its first observer of any kind (a computed chain, an effect, or a
+// React component), and the returned cleanup runs when the last observer
+// of every kind is gone.
 //
-// Transitions within one tick coalesce through a microtask, so
-// subscribe/unsubscribe flaps (StrictMode double-mounts, list reorders)
-// net out instead of bouncing the resource.
+// Transitions are settled in a microtask rather than synchronously, so
+// subscribe/unsubscribe flaps within one tick (React StrictMode
+// double-mounts, list reorders) net out instead of tearing the resource
+// down and back up.
 // ---------------------------------------------------------------------------
 
-/** Host microtask scheduler (present in every supported runtime; typed here
- * so the engine's type surface stays lib-agnostic). */
+/** Host microtask scheduler; declared here so the engine typechecks
+ * without a DOM or Node lib. */
 declare const queueMicrotask: (fn: () => void) => void
 
 const pendingLifetimeCells = new Set<CellNode<unknown>>()
 let lifetimeFlushScheduled = false
 
-/** Called at the promote/demote boundary (observation count 0<->1). */
+/** Called whenever a cell's observer count crosses zero in either
+ * direction. */
 function noteLifetimeTransition(node: ReactiveNode): void {
 	if ((node.flags & Flag.KindCell) === 0) {
 		return
@@ -467,7 +495,10 @@ export function flushLifetimeTransitions(): void {
 	}
 }
 
-/** Record "sub read dep" for the eval in progress, reusing edges in place. */
+/** Record "sub read dep" for the evaluation in progress. The subscriber's
+ * dependency list is reused in place: depsTail is a cursor that advances
+ * as the evaluation re-reads dependencies in the same order as last time,
+ * so a stable evaluation allocates nothing. */
 function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 	const tail = sub.depsTail
 	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
@@ -481,13 +512,13 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 	}
 	const watched = (sub.flags & Flag.Watched) !== 0
 	if (watched) {
-		// Same-pass dedup for non-adjacent re-reads: this sub's earlier link
-		// sits at the dep's subs tail (cursor reuse re-marks, new watched edges
-		// land at the tail), so an evalPass match means the edge already exists and
-		// is inside the kept prefix — return it instead of double-registering
-		// the observer. Unwatched edges never enter subs lists, so unwatched
-		// re-reads keep the tolerated duplicate forward edges (reading-
-		// consistent, forward-only garbage).
+		// Deduplicate a non-adjacent re-read within the same evaluation:
+		// when this subscriber already read this dep earlier in the pass,
+		// its link sits at the dep's subscriber-list tail, so an evalPass
+		// match means the edge exists and is inside the kept prefix — reuse
+		// it instead of registering the observer twice. Unwatched edges
+		// never enter subscriber lists, so unwatched re-reads may leave
+		// duplicate forward edges; those are harmless and forward-only.
 		const last = dep.subsTail
 		if (last !== undefined && last.sub === sub && last.evalPass === evalPass) {
 			return last
@@ -515,7 +546,7 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
 	return link
 }
 
-/** Drop dependency edges not re-read by the eval that just finished. */
+/** Drop dependency edges the just-finished evaluation did not re-read. */
 function trimDeps(sub: ReactiveNode): void {
 	const tail = sub.depsTail
 	let stale = tail === undefined ? sub.deps : tail.nextDep
@@ -539,37 +570,36 @@ function trimDeps(sub: ReactiveNode): void {
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
 
-/** Effect watchers scheduled by the current wave. Cleared by logical length
- * (effectCount), never `.length = 0`: V8 right-trims the backing store on a
- * length reset, so a truncated queue re-grows its capacity from zero on
- * every wave (O(log n) reallocations plus copies, garbage proportional to
- * peak wave width). The price of retained capacity is that consumed slots
- * are nulled at drain — a soft-cleared slot must not pin a disposed watcher.
- * Append-then-fully-drain with the drain-time disposed check (Watched clear)
- * as the tombstone; there is no mid-queue removal, so no compaction
- * machinery. */
+/** Effect watchers scheduled by the current invalidation wave. The array's
+ * capacity is retained across waves: it is cleared by resetting
+ * effectCount, never by `.length = 0`, because V8 trims the backing store
+ * on a length reset and the queue would then re-grow from zero capacity on
+ * every wave. The cost of retaining capacity is that consumed slots must
+ * be nulled at drain time so they do not pin disposed watchers. */
 const effectQueue: Array<WatcherNode | undefined> = []
 let effectCount = 0
 
-/** Render-notify subscribers scheduled by the current wave; notified after
- * effects settle. Double-buffered under the same retained-capacity
- * discipline: a draining wave iterates its own buffer while re-marks from
- * onNotify land in the spare, so a wave's iteration never sees entries added
- * during delivery. */
+/** Render-notify subscribers scheduled by the current wave; they are
+ * notified after effects settle. Double-buffered: a draining wave iterates
+ * its own buffer while entries scheduled during delivery land in the
+ * spare, so an iteration never sees entries added mid-delivery. Same
+ * retained-capacity treatment as effectQueue. */
 let renderNotifyQueue: Array<ReactiveNode | undefined> = []
 let renderNotifyCount = 0
-/** The off-duty render-notify buffer; null while checked out by a draining
- * frame. Delivery can nest (onNotify may write, and that flush drains the
- * buffer this frame's re-marks are landing in), so a doubly-nested frame
- * finds the spare checked out and must not reuse a buffer that is
- * mid-iteration. */
+/** The off-duty render-notify buffer; null while a draining flush has it
+ * checked out. Delivery can nest (an onNotify callback may write, and that
+ * write's flush drains the buffer the outer flush is filling), and a
+ * doubly-nested flush must not reuse a buffer that is mid-iteration — it
+ * allocates a fresh one instead. */
 let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
 
 /** Route a watcher into its flush queue by capability bit. Scope anchors
- * carry neither bit and are never scheduled (they track no dependencies). */
+ * carry neither capability and are never scheduled (they track no
+ * dependencies). */
 function scheduleWatcher(w: WatcherNode): void {
 	const flags = w.flags
-	// One masked test: not already queued AND not disposed (Watched = alive).
+	// One masked test covering both "already queued" and "disposed"
+	// (Watched means alive on watchers).
 	if ((flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) {
 		return
 	}
@@ -584,32 +614,31 @@ function scheduleWatcher(w: WatcherNode): void {
 }
 
 // ---------------------------------------------------------------------------
-// The graph walks. Contract matrix:
+// The two graph traversals. Both walk subscriber edges downstream from a
+// node, but they differ in what they do at each visit:
 //
-//                  | marks       | schedules | schedules   | dedup
-//                  | staleness?  | effects?  | render      | mechanism
-//                  |             |           | subscribers?|
-// propagateWave    | StaleCheck  | yes       | yes         | the Clean→StaleCheck
-//                  | on Clean    |           |             | transition (already-
-//                  | nodes       |           |             | stale subtrees are
-//                  |             |           |             | covered, not re-walked)
-// pokeDraftWatchers| StaleCheck  | never     | WatchDraft  | per-node pokePass
-//                  | on poked    |           | only        | reading vs the running
-//                  | watchers    |           |             | walk's id (zero
-//                  | only        |           |             | allocation, no clearing)
+// - propagateWave is the base-state invalidation wave. It marks clean
+//   nodes StaleCheck and schedules every kind of watcher. Its visited-set
+//   is the mark itself: an already-stale subtree is guaranteed to be fully
+//   marked (see the visit rules on propagateWave), so the wave does not
+//   descend into it again.
+// - pokeDraftWatchers notifies draft-aware watchers only, without touching
+//   base state; effects never hear it. Its visited-set is the per-node
+//   pokePass stamp, which needs no clearing because pass values are never
+//   reused.
 //
-// Neither walk decides whether a subscriber RE-RENDERS: render-notify
-// delivery invokes the subscriber's callback, and the React layer compares
-// what it rendered against what it would resolve now (see hooks.ts) — a
-// per-subscriber value predicate, which is how silent draft folds cost no
-// renders without any global suppression state.
+// Neither traversal decides whether a subscriber re-renders. Delivery just
+// invokes the subscriber's callback; the React layer then compares what it
+// rendered against what it would resolve now (see hooks.ts) and only
+// re-renders on a real difference.
 //
-// propagateFrom and invalidateDerived are the wave's entry points: they add
-// the root node's changedAt/clock movement, then run the wave.
+// propagateFrom and invalidateDerived are the wave's entry points: they
+// record the root node's change, then run the wave.
 // ---------------------------------------------------------------------------
 
-/** Suspended traversal positions for the iterative walks (heap, not the JS
- * call stack, so walk depth is bounded by memory rather than stack frames). */
+/** A suspended traversal position. The walks are iterative with an
+ * explicit stack on the heap, so their depth is bounded by memory rather
+ * than by JS call-stack frames. */
 interface WaveFrame {
 	value: Link | undefined
 	prev: WaveFrame | undefined
@@ -621,27 +650,28 @@ interface PokeFrame extends WaveFrame {
 }
 
 /**
- * The invalidation wave: push marks down the watched subs closure.
+ * The invalidation wave: push staleness marks down the watched subscriber
+ * closure of a changed node.
  *
- * Marks are always StaleCheck ("possibly stale"): consumers confirm against
- * dependency changedAt READINGS before recomputing or re-running. Readings —
- * not marks — are the recompute trigger, which is what makes
- * write-then-revert inside a batch a true no-op.
+ * Marks are always StaleCheck ("possibly stale"), never StaleDirty:
+ * consumers confirm against dependency changedAt readings before
+ * recomputing or re-running. Because the readings — not the marks — are
+ * what triggers recomputation, a write that is reverted inside the same
+ * batch ends up a true no-op.
  *
- * Per-node visit rules (the wave's contract, also applied by any site that
- * installs a back-edge onto a stale dep — see observeNode):
- * 1. already stale → re-schedule an unscheduled watcher; do not descend
- *    (sound under the stale-cover invariant: dep stale ⇒ sub stale or
- *    scheduled, so everything below is already marked);
- * 2. Clean → set StaleCheck (never StaleDirty) and record the causal event;
- * 3. Watching → schedule; watchers have no subscribers, so never descend;
- * 4. KindDerived → descend (the Clean→StaleCheck transition is the wave's
- *    visited test).
+ * Visit rules, per node (also applied by any code that installs a
+ * subscriber edge onto an already-stale dependency — see observeNode):
+ * 1. already stale: re-schedule the watcher if it is not scheduled, and do
+ *    not descend — a stale dependency implies its subscribers are already
+ *    stale or scheduled, so everything below is already marked;
+ * 2. clean: set StaleCheck and record the causal event for tracing;
+ * 3. watcher: schedule it; watchers have no subscribers, so never descend;
+ * 4. derived: descend into its subscribers.
  *
- * Iterative in alien-signals' shape: a link cursor, the pending sibling, and
- * an explicit stack of suspended positions — single-child descents reuse the
- * pending sibling instead of pushing, so plain chains run with no stack
- * growth at all.
+ * The traversal is iterative: a link cursor, the pending sibling, and an
+ * explicit stack of suspended positions. A single-child descent reuses the
+ * pending-sibling slot instead of pushing a frame, so plain chains run
+ * with no stack growth at all.
  */
 function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	if (link === undefined) {
@@ -692,36 +722,39 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	} while (true)
 }
 
-/** Identity of the poke walk in progress. Monotonic and never reused, so a
- * node's pokePass reading needs no clearing: a match asserts "this walk
- * already visited the node" and nothing else (same discipline as EvalPass). */
+/** Identity of the poke walk in progress. Monotonic and never reused, so
+ * per-node pokePass stamps need no clearing between walks. */
 let pokePass: PokePass = 0
 
 /**
- * The poke walk: notify draft watchers of a node without touching base
- * state (draft activity — intents appended, retired, or discarded — makes
- * draft readers re-resolve while base-state readers see no change). It shares
- * the wave's cursor + frame-stack skeleton and follows the same watched
- * derived edges down to the subscribers: probes subscribe to the node they
- * probe (a computed, usually), not to the drafted input, so stopping at the
- * cell would leave every downstream subscriber unaware. Base-state-only
- * watchers (no WatchDraft — all effects) stay untouched.
+ * The poke walk: notify draft-aware watchers downstream of a node without
+ * touching base state. Draft activity — a write recorded into a draft, a
+ * draft committing or being discarded — changes what draft readers should
+ * resolve while base-state readers see nothing, so those readers need
+ * their own notification channel.
  *
- * Marking: poked watchers get StaleCheck for parity with the wave. The
- * choice is arbitrary — render-notify watchers are never validated (flush
- * clears staleness unconditionally before delivery), so between here and the
- * drain the bits are write-only; one convention keeps the matrix above
- * single-valued.
+ * The walk shares the wave's cursor-and-frame-stack skeleton and follows
+ * the same watched derived edges down to the subscribers. It must descend
+ * that far because subscribers subscribe to the node they read (usually a
+ * computed), not to the drafted cell underneath it; stopping at the cell
+ * would leave every downstream subscriber unaware. Watchers without the
+ * WatchDraft bit (all effects) are untouched.
  *
- * `wake` requests draft-id delivery to the same frontier in this ONE walk
- * (intent appends need both jobs every time; retire/discard/commit call
- * sites poke without waking). `valueChanged`, when present, supplies the
- * single-draft value cutoff for each producer: value hooks skip equal
- * producers while value-independent probes still hear the poke. The walk
- * runs in the writer's ambient context, so inside a React transition scope
- * the wake dispatches ride that transition's lanes. The notify flush still
- * precedes wake delivery: the flush's effects may dispose subscriptions,
- * and a subscriber disposed by them must not receive the draft id.
+ * Poked watchers get a StaleCheck mark for consistency with the wave; for
+ * render-notify watchers the bits are write-only between here and the
+ * flush, so the exact mark does not matter.
+ *
+ * `wake`, when present, additionally delivers that draft id to the same
+ * watchers in this one walk. Writes into a draft need both notification
+ * and delivery; commit and discard call sites poke without waking.
+ * `valueChanged`, when present, is a per-producer cutoff: subscribers of a
+ * producer whose draft value did not change are skipped, unless they carry
+ * no draft-wake callback (value-independent probes, which must hear every
+ * poke). The walk runs in the writer's ambient context, so inside a React
+ * transition the wake dispatches join that transition's updates. Wake
+ * delivery happens after the notify flush because the flush's effects may
+ * dispose subscriptions, and a disposed subscriber must not receive the
+ * draft id.
  */
 export function pokeDraftWatchers(
 	node: ReactiveNode,
@@ -744,9 +777,11 @@ export function pokeDraftWatchers(
 				const flags = sub.flags
 				if ((flags & Flag.WatchDraft) !== 0) {
 					const w = sub as WatcherNode
-					// Value hooks have a draft-lane callback and can use the optional
-					// computed cutoff. Probes carry no callback: they still need the
-					// poke because pendingness may change while the value stays equal.
+					// Watchers with a draft-wake callback are value subscribers,
+					// so the value cutoff applies to them. Watchers without one
+					// are probes (isPending and the like): they must hear every
+					// poke, because pendingness can change while values stay
+					// equal.
 					if (w.onDraftWake === undefined || changed) {
 						scheduleWatcher(w)
 						if ((w.flags & Flag.StaleMask) === 0) {
@@ -801,7 +836,7 @@ export function pokeDraftWatchers(
 	}
 }
 
-/** Push a change wave from a cell whose base value advanced. */
+/** Push an invalidation wave from a cell whose base value just changed. */
 export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): void {
 	propagateWave(cell.subs, cause)
 	if (batchDepth === 0) {
@@ -810,16 +845,16 @@ export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): voi
 }
 
 /**
- * Invalidate a derived from outside the dependency graph (thenable
- * settlement). Treated exactly like a write: the clock ticks and the node's
- * changedAt reading advances so downstream validation re-pulls, subscribers
- * get marked, effects run.
+ * Invalidate a derived from outside the dependency graph — used when a
+ * thenable it parked on settles. Treated exactly like a write: the clock
+ * ticks and the node's changedAt reading advances so downstream validation
+ * re-pulls, subscribers get marked, effects run.
  */
 export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventId): void {
 	graphChangeClock++
 	node.flags = (node.flags & ~Flag.StaleMask) | Flag.StaleDirty
 	node.causeEvent = cause
-	// Invariant: changes are stamped with the CURRENT clock, after the tick.
+	// Tick first, then stamp with the new reading (see writeCell).
 	node.changedAtGraphChange = graphChangeClock
 	propagateWave(node.subs, cause)
 	if (batchDepth === 0) {
@@ -827,17 +862,18 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
 	}
 }
 
-/** Cells written inside the current batch scope, with their pre-batch state:
- * a net-revert restores the changedAt reading so consumers validate as
- * unchanged. */
+/** Cells written inside the current batch, with the state they had before
+ * it. When a batch's writes net out to the original value, endBatch
+ * restores the cell's changedAt reading so consumers validate the batch as
+ * a no-op. */
 const batchBase = new Map<
 	CellNode<unknown>,
 	{ value: unknown; changedAtGraphChange: GraphChangeClock }
 >()
 
-/** Identity of the current top-level batch scope; ticks when a batch opens
- * at depth 0 (nested batches join the enclosing pass, matching batchBase's
- * lifetime). Cells store their reading in cell.batchPass. */
+/** Identity of the current top-level batch. Increments only when a batch
+ * opens at depth zero; nested batches belong to the enclosing one,
+ * matching batchBase's lifetime. */
 let batchPass: BatchPass = 0
 
 export function startBatch(): void {
@@ -856,9 +892,10 @@ export function endBatch(): void {
 		if (batchBase.size > 0) {
 			for (const [cell, base] of batchBase) {
 				if (cell.value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
-					// Invariant: a net-revert restores the changedAt reading — the
-					// batch produced no real change, so consumers must validate as
-					// unchanged (the clock still ticked; they pay one reading compare).
+					// The batch's writes netted out to the original value: restore
+					// the pre-batch changedAt reading so consumers validate this
+					// cell as unchanged. The clock still ticked; consumers just
+					// pay one reading comparison and skip recomputing.
 					if (cell.equals(cell.value, base.value)) {
 						cell.changedAtGraphChange = base.changedAtGraphChange
 					}
@@ -880,19 +917,21 @@ export function batch<T>(fn: () => T): T {
 }
 
 let flushing = false
-/** Drain cursor into effectQueue (index, not shift: the queue can be large
- * and repeated shifts would make wide flushes quadratic). */
+/** Drain cursor into effectQueue. An index rather than Array#shift: the
+ * queue can be large, and repeated shifts would make wide flushes
+ * quadratic. */
 let queueHead = 0
 
-/** Hard iteration ceiling: converts livelock into a thrown error. */
+/** Hard iteration ceiling: converts a livelock into a thrown error. */
 const enum Limit {
 	/** Queued-effect runs per flush before declaring a non-settling cycle. */
 	FlushRuns = 100_000,
 }
 
-/** Run queued effects until settled, then deliver render notifications. A
- * throwing effect aborts the flush; the effects it preempted are skipped
- * (cleared), not left armed for unrelated writes to trigger later. */
+/** Run queued effects until they settle, then deliver render
+ * notifications. A throwing effect aborts the flush; the effects it
+ * preempted are cleared rather than left scheduled, so an unrelated later
+ * write cannot trigger them with stale marks. */
 export function flush(): void {
 	if (flushing) {
 		return
@@ -910,7 +949,8 @@ export function flush(): void {
 			const i = queueHead++
 			const w = effectQueue[i]!
 			effectQueue[i] = undefined // consumed slot must not pin the watcher
-			// Clear Scheduled alone: runWatcher's validation reads StaleCheck.
+			// Clear only Scheduled; runWatcher's validation still needs the
+			// staleness bits.
 			const flags = (w.flags &= ~Flag.Scheduled)
 			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
 				continue
@@ -920,8 +960,8 @@ export function flush(): void {
 		effectCount = 0
 		queueHead = 0
 	} catch (e) {
-		// Preempted effects are skipped, not left armed for unrelated writes to
-		// trigger later; their unconsumed slots get the same nulling discipline.
+		// Clear the effects the throw preempted (see the function comment);
+		// their unconsumed slots are nulled like consumed ones.
 		for (let i = queueHead; i < effectCount; i++) {
 			const w = effectQueue[i]!
 			effectQueue[i] = undefined
@@ -933,12 +973,12 @@ export function flush(): void {
 	} finally {
 		flushing = false
 		if (renderNotifyCount > 0) {
-			// Take this wave's buffer and swap the spare in as the push target:
-			// subscribers scheduled during delivery land there for the NEXT wave,
-			// so this iteration never sees them. A doubly-nested delivery finds
-			// the spare checked out (null) and takes a fresh array — that rare
-			// frame pays a per-wave allocation rather than clobbering a live
-			// iteration.
+			// Take this wave's buffer and swap the spare in as the push
+			// target: subscribers scheduled during delivery land there for
+			// the next wave, so this iteration never sees them. A
+			// doubly-nested delivery finds the spare checked out (null) and
+			// allocates a fresh array — that rare frame pays an allocation
+			// rather than clobbering a buffer that is mid-iteration.
 			const delivering = renderNotifyQueue
 			const n = renderNotifyCount
 			renderNotifyQueue = spareRenderNotify ?? []
@@ -946,8 +986,8 @@ export function flush(): void {
 			renderNotifyCount = 0
 			for (let i = 0; i < n; i++) {
 				const w = delivering[i] as WatcherNode
-				// Render-notify watchers are never validated, so Scheduled and the
-				// staleness bits clear together in one masked store.
+				// Render-notify watchers are never validated, so Scheduled and
+				// the staleness bits can clear together in one store.
 				w.flags &= ~(Flag.Scheduled | Flag.StaleMask)
 			}
 			try {
@@ -958,8 +998,9 @@ export function flush(): void {
 					}
 				}
 			} finally {
-				// Null consumed slots — retained capacity must not pin watchers —
-				// and hand the buffer back as the spare, also on a throwing notify.
+				// Null the consumed slots (retained capacity must not pin
+				// watchers) and hand the buffer back as the spare, even when a
+				// notify callback threw.
 				for (let i = 0; i < n; i++) {
 					delivering[i] = undefined
 				}
@@ -974,9 +1015,9 @@ export function flush(): void {
 // ---------------------------------------------------------------------------
 
 export class WriteForbiddenError extends Error {}
-/** Policy only. The graph's self-affecting-computed mechanism remains intact;
- * changing this to false restores writes from computeds without changing the
- * evaluation or validation machinery. */
+/** Policy switch only. The machinery for computeds that write state (see
+ * recompute's self-affecting handling) works either way; flipping this to
+ * false allows such writes without any other change. */
 export const FORBID_WRITE_FROM_COMPUTED: boolean = true
 
 let readsForbidden: string | null = null
@@ -1039,7 +1080,7 @@ function materializeCell<T>(cell: CellNode<T>): void {
 	}
 }
 
-/** Untracked base-value read; materializes a lazy cell. */
+/** Untracked base-value read; runs a lazy cell's initializer if needed. */
 export function peekCell<T>(cell: CellNode<T>): T {
 	assertSignalReadAllowed()
 	materializeCell(cell)
@@ -1057,15 +1098,14 @@ export function readCell<T>(cell: CellNode<T>): T {
 
 export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	assertSignalWriteAllowed()
-	// The equality contract compares against the base value, so a write that
-	// arrives before the first read still runs the initializer.
+	// The equality check compares against the current base value, so a
+	// write that arrives before the first read still runs the initializer.
 	materializeCell(cell)
 	if (cell.equals(cell.value as T, next)) {
 		return false
 	}
 	if (batchDepth > 0 && cell.batchPass !== batchPass) {
-		// First write to this cell in this batch pass: save the pre-batch state.
-		// The pass stamp stands in for a batchBase.has probe on repeat writes.
+		// First write to this cell in this batch: save the pre-batch state.
 		cell.batchPass = batchPass
 		batchBase.set(cell as CellNode<unknown>, {
 			value: cell.value,
@@ -1073,9 +1113,9 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 		})
 	}
 	cell.value = next
-	// Invariant: tick the clock FIRST, then stamp the change with the new
-	// reading — a change stamped at a pre-tick reading could compare equal to
-	// a subscriber that validated before this write.
+	// Tick the clock first, then stamp the change with the new reading. A
+	// change stamped with a pre-tick reading could compare equal to a
+	// subscriber that validated before this write, hiding the change.
 	graphChangeClock++
 	cell.changedAtGraphChange = graphChangeClock
 	const cause = traceHook !== null ? traceHook('write', cell, currentCause) : NO_EVENT
@@ -1083,10 +1123,10 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
 	return true
 }
 
-/** Thrown by evaluation when it parks on an unresolved thenable. */
+/** Thrown by an evaluation when it parks on an unresolved thenable. */
 export const PARKED = Symbol('parked')
 
-/** Set by asyncs.ts: called for use(t) inside a base-state evaluation. */
+/** Installed by asyncs.ts: handles use(t) inside a base-state evaluation. */
 export let useImpl: (t: PromiseLike<unknown>, consumer: DerivedNode<unknown>) => unknown = () => {
 	throw new Error('async use() is not installed')
 }
@@ -1094,12 +1134,13 @@ export function setUseImpl(impl: typeof useImpl): void {
 	useImpl = impl
 }
 
-/** The use() argument every base recompute passes to fn: one shared
- * function, no per-node closure — the evaluating computed IS the
- * activeConsumer at call time. (Draft evaluations pass their own worldUse
- * instead; see worlds.ts.) A use() that escapes its evaluation — captured
- * and called later, or called inside untracked() — finds no evaluating
- * computed and throws rather than park the wrong node. */
+/** The use() argument passed to every base-state recompute. One shared
+ * function with no per-node closure: at call time the evaluating computed
+ * is activeConsumer, so the function can find its owner. (Draft
+ * evaluations pass their own use function instead; see worlds.ts.) A
+ * use() that escapes its evaluation — captured and called later, or called
+ * inside untracked() — finds no evaluating computed and throws rather than
+ * park the wrong node. */
 const evalUse: UseFn = (<U>(t: PromiseLike<U>): U => {
 	const consumer = activeConsumer
 	if (consumer === null || (consumer.flags & Flag.KindDerived) === 0) {
@@ -1108,9 +1149,10 @@ const evalUse: UseFn = (<U>(t: PromiseLike<U>): U => {
 	return useImpl(t, consumer as DerivedNode<unknown>) as U
 }) as UseFn
 
-/** Set by asyncs.ts: finish a recompute, folding parks into async state.
- * Positional outcome (parked, hasError, error, value) — this runs once per
- * recompute, so it must not cost an outcome-object allocation. */
+/** Installed by asyncs.ts: finish a recompute, folding a park or a throw
+ * into the node's async state. Takes the outcome as positional arguments
+ * rather than an object because it runs once per recompute and must not
+ * allocate. */
 export let finishComputeImpl: (
 	node: DerivedNode<unknown>,
 	parked: boolean,
@@ -1143,8 +1185,8 @@ function recompute(node: DerivedNode<unknown>): void {
 	activeEvaluation = node
 	const myPass = newEvalPass()
 	node.depsTail = undefined
-	// The validation reading is taken at the PRE-eval clock: if the evaluation
-	// itself writes (self-affecting computed), the next read must revalidate.
+	// The validation watermark is taken before the evaluation runs: if the
+	// body itself writes state, the next read must revalidate.
 	const preGraphChange = graphChangeClock
 	let parked = false
 	let hasError = false
@@ -1160,7 +1202,8 @@ function recompute(node: DerivedNode<unknown>): void {
 			error = e
 		}
 	} finally {
-		// A nested eval advanced the pass id; restore ours so trimming is exact.
+		// A nested evaluation advanced the pass id; restore ours so dep
+		// trimming sees the right pass.
 		evalPass = myPass
 		activeConsumer = prevConsumer
 		activeEvaluation = prevEvaluation
@@ -1168,16 +1211,16 @@ function recompute(node: DerivedNode<unknown>): void {
 		node.flags &= ~Flag.Computing
 	}
 	const changed = finishComputeImpl(node, parked, hasError, error, value)
-	// Invariant: only a REAL change advances the reading (equality cutoff
-	// keeps the old stamp, so downstream validAt comparisons stay equal).
-	// Stamped with the CURRENT clock, not the pre-eval reading: recomputes do
-	// not tick the clock, and any consumer that validated before this
-	// recompute holds a strictly older validAt reading.
+	// Only a real value change advances the changedAt reading; an
+	// equal-value recompute keeps the old stamp so downstream consumers
+	// validate as unchanged. Stamped with the current clock (see the
+	// changedAtGraphChange doc for why recomputes stamp without ticking).
 	if (changed) {
 		node.changedAtGraphChange = graphChangeClock
 	}
-	// A computed whose evaluation wrote state is self-affecting: its inputs
-	// moved under it, so it never caches — every read re-evaluates.
+	// A computed whose evaluation wrote state saw its own inputs move under
+	// it, so it can never trust its cache: it is left StaleDirty and every
+	// read re-evaluates it.
 	node.flags =
 		(node.flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
 	node.validAtGraphChange = preGraphChange
@@ -1241,7 +1284,8 @@ function chainResolve(start: DerivedNode<unknown>, first: Link): void {
 	}
 }
 
-/** Bring a derived up to date; exact recompute counts are the contract. */
+/** Bring a derived up to date, recomputing only when a dependency truly
+ * changed — exact recompute counts are part of the engine's contract. */
 export function ensureFresh(node: DerivedNode<unknown>): void {
 	ensureFreshAt(node, 0)
 }
@@ -1249,7 +1293,8 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 function ensureFreshAt(node: DerivedNode<unknown>, depth: number): void {
 	const flags = node.flags
 	if ((flags & Flag.Watched) !== 0) {
-		// Watched: push marks are trustworthy (promote validated the closure).
+		// Watched: push marks are trustworthy (promotion validated the
+		// dependency closure), so clean means fresh.
 		if ((flags & Flag.StaleMask) === 0) {
 			return
 		}
@@ -1271,16 +1316,16 @@ function ensureFreshAt(node: DerivedNode<unknown>, depth: number): void {
 		recompute(node)
 		return
 	}
-	// StaleCheck state (or unwatched revalidation): confirm dependencies
-	// upward, in first-read order, recomputing only if some dependency truly
-	// changed after this node's last validation. Invariant: a dep is
-	// FRESHENED before its reading is compared — a lazy dep may recompute
-	// right here, stamping its changedAt with the current clock, and the
-	// strictly-greater test then reports it correctly.
+	// Possibly stale (StaleCheck, or an unwatched node needing
+	// revalidation): confirm dependencies in first-read order, recomputing
+	// only if one truly changed after this node's last validation. Each
+	// dependency is freshened before its reading is compared — a lazy
+	// dependency may recompute right here, stamping its changedAt with the
+	// current clock, and the strictly-greater test then sees it.
 	for (let l = node.deps; l !== undefined; l = l.nextDep) {
 		const dep = l.dep
-		// Same watched-Clean skip as readDerived: such a dep has nothing to
-		// validate, so don't pay a call to find that out.
+		// Skip the call for a watched clean derived — it has nothing to
+		// validate (same shortcut as readDerived).
 		const dflags = dep.flags
 		if (
 			(dflags & Flag.KindDerived) !== 0 &&
@@ -1294,16 +1339,17 @@ function ensureFreshAt(node: DerivedNode<unknown>, depth: number): void {
 		}
 	}
 	node.flags &= ~Flag.StaleMask
-	// Invariant: the watermark is stamped only AFTER every dep was freshened
-	// and compared (freshen-then-stamp order).
+	// The watermark is stamped only after every dependency was freshened
+	// and compared; stamping earlier could hide a change a lazy dependency
+	// is about to surface.
 	node.validAtGraphChange = graphChangeClock
 }
 
 export function readDerived<T>(node: DerivedNode<T>): T {
 	assertSignalReadAllowed()
-	// Watched + Clean is the hot steady state (push marks are trustworthy,
-	// nothing to validate) — skip the ensureFresh call entirely. Everything
-	// else (stale, or unwatched needing the currency check) takes the call.
+	// Watched and clean is the hot steady state: push marks are
+	// trustworthy and there is nothing to validate, so skip the ensureFresh
+	// call entirely.
 	if ((node.flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
 		ensureFreshAt(node as DerivedNode<unknown>, 0)
 	}
@@ -1348,10 +1394,9 @@ function makeWatcher(
 	capabilities: number,
 ): WatcherNode {
 	return {
-		// Watchers are born watched — for a watcher the bit means ALIVE, and it
-		// drops at dispose; their edges never go through promote/demote
-		// counting. Capability bits are creation-fixed: they route scheduling
-		// for the watcher's whole life.
+		// Watchers are born watched: on a watcher the bit means alive, and
+		// it drops at dispose. Capability bits are fixed at creation and
+		// route scheduling for the watcher's whole life.
 		flags: Flag.Watching | Flag.Watched | capabilities,
 		changedAtGraphChange: 0,
 		validAtGraphChange: 0,
@@ -1376,15 +1421,16 @@ function makeWatcher(
 let activeScope: WatcherNode | null = null
 
 function runWatcher(w: WatcherNode): void {
-	// Validate: a StaleCheck-marked watcher whose derived deps cut off must
-	// not re-run its body. Validation can itself run user code (computed fns)
-	// that disposes this very watcher — re-check after every pull.
+	// Validate first: a possibly-stale watcher whose derived dependencies
+	// all recomputed to equal values must not re-run its body. Validation
+	// itself runs user code (computed bodies) that may dispose this very
+	// watcher, so aliveness is re-checked after every pull.
 	if ((w.flags & Flag.StaleCheck) !== 0) {
 		let changed = false
 		for (let l = w.deps; l !== undefined; l = l.nextDep) {
 			const dep = l.dep
-			// Same watched-Clean skip as readDerived: such a dep has nothing to
-			// validate, so don't pay a call to find that out.
+			// Skip the call for a watched clean derived — it has nothing to
+			// validate (same shortcut as readDerived).
 			const dflags = dep.flags
 			if (
 				(dflags & Flag.KindDerived) !== 0 &&
@@ -1402,8 +1448,8 @@ function runWatcher(w: WatcherNode): void {
 		}
 		if (!changed) {
 			w.flags &= ~Flag.StaleMask
-			// Invariant: watermark stamped only after every dep was freshened and
-			// compared (freshen-then-stamp order) — same rule as ensureFresh.
+			// Stamped only after every dependency was freshened and compared,
+			// same rule as ensureFresh.
 			w.validAtGraphChange = graphChangeClock
 			return
 		}
@@ -1433,8 +1479,8 @@ function executeWatcher(w: WatcherNode): void {
 			throw e
 		}
 	}
-	// Only live effect watchers run a body (WatchRunEffect is creation-fixed
-	// and implies fn; Watched = alive).
+	// Only live effect watchers run a body. The cleanup above may have
+	// disposed this watcher, so aliveness is checked here, after it.
 	if ((w.flags & (Flag.WatchRunEffect | Flag.Watched)) !== (Flag.WatchRunEffect | Flag.Watched)) {
 		return
 	}
@@ -1445,10 +1491,11 @@ function executeWatcher(w: WatcherNode): void {
 	const myPass = newEvalPass()
 	w.depsTail = undefined
 	const cause = traceHook !== null ? traceHook('effect-run', w, w.causeEvent) : NO_EVENT
-	// The validation reading is taken at the PRE-run clock: if the body
-	// itself writes, its deps may have moved under it, and the wave its write
-	// pushed re-schedules this watcher — whose next validation must then see
-	// those deps as changed-since (their stamps exceed the pre-run reading).
+	// The validation watermark is taken before the body runs: if the body
+	// itself writes, its dependencies may change during the run, the write's
+	// wave re-schedules this watcher, and the next validation must see those
+	// dependencies as changed since this run (their stamps exceed the
+	// pre-run reading).
 	const preGraphChange = graphChangeClock
 	const prevCause = setCurrentCause(cause)
 	try {
@@ -1467,7 +1514,7 @@ function executeWatcher(w: WatcherNode): void {
 }
 
 export function disposeWatcher(w: WatcherNode): void {
-	// Disposal state is the Watched bit: Watching set + Watched clear = dead.
+	// On watchers the Watched bit means alive; clear means already disposed.
 	if ((w.flags & Flag.Watched) === 0) {
 		return
 	}
@@ -1506,8 +1553,9 @@ function unlinkAllDeps(w: WatcherNode): void {
 
 /**
  * Reclaims effects whose disposer was dropped without being called. The
- * watcher node is held by the graph (its dependencies' subscriber lists), so
- * only the disposer's collectibility tells us the user is done with it.
+ * watcher node itself is held alive by the graph (it sits in its
+ * dependencies' subscriber lists), so the disposer's collectibility is the
+ * only signal that the user is done with the effect.
  */
 const droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWatcher(w))
 
@@ -1522,10 +1570,11 @@ export function makeEffect(fn: () => void | (() => void)): () => void {
 		droppedDisposers.unregister(dispose)
 		disposeWatcher(w)
 	}
-	// An effect created inside a scope (or another effect) lives and dies
-	// with its owner; dropping the per-effect disposer is normal usage there,
-	// not abandonment. Only ownerless effects arm the reclamation registry —
-	// a collected disposer must never kill an effect something still owns.
+	// An effect created inside a scope (or inside another effect) lives and
+	// dies with its owner, and dropping its individual disposer is normal
+	// usage, not abandonment. Only ownerless effects arm the reclamation
+	// registry — a collected disposer must never kill an effect something
+	// still owns.
 	if (!owned) {
 		droppedDisposers.register(dispose, w, dispose)
 	}
@@ -1554,13 +1603,13 @@ export function makeScope(fn: () => void): () => void {
 }
 
 /**
- * A store subscription: subscribes a callback to a node's invalidation wave
- * without pulling it. This is the React (and committed-view) channel; the
- * callback runs after the wave and its effects settle, so subscribers can
- * re-read a consistent graph. Subscriptions are the full component shape —
- * render-notified and draft-aware (WatchRender|WatchDraft) — regardless of
- * whether a draft-lane callback is installed: draft pings must reach probes
- * (isPending, committed views) that carry no wake channel.
+ * A store subscription: attach a callback to a node's invalidation wave
+ * without evaluating the node. This is how the React bindings observe the
+ * graph. The callback runs after the wave and its effects settle, so
+ * subscribers re-read a consistent graph. Every subscription is both
+ * render-notified and draft-aware (WatchRender|WatchDraft) even when no
+ * draft-wake callback is given, because draft pokes must reach probes
+ * (isPending, committed views) that install none.
  */
 export function observeNode(
 	node: ReactiveNode,
@@ -1578,18 +1627,16 @@ export function observeNode(
 		if ((node.flags & Flag.KindCell) !== 0) {
 			readCell(node as CellNode<unknown>)
 		} else if ((node.flags & Flag.KindDerived) !== 0) {
-			// Subscribe to invalidation only; do not force evaluation here.
+			// Subscribe to invalidation only; do not force an evaluation here.
 			trackRead(node, sub)
-			// This installed a back-edge without a pull, so the stale-cover
-			// invariant is on this site: a stale node means the staleness edge
-			// this subscriber cares about already fired (or, for promote-seeded
-			// StaleCheck, could never fire while unwatched) — apply the wave's
-			// visit rules to the new subscriber so it hears it once. A pull
-			// re-arms; edge-triggered semantics are preserved. Never-computed
-			// nodes are exempt: they are born StaleDirty with no dependency
-			// edges, so no wave was ever swallowed and there is no missed edge —
-			// exactly the edge-triggered contract's "no Clean→stale transition
-			// happened yet".
+			// This installed a subscriber edge without pulling the node. If
+			// the node is already stale, the invalidation this subscriber
+			// cares about already happened (or, while the node was unwatched,
+			// could never be delivered), and no future wave will re-enter the
+			// stale subtree — so apply the wave's visit rules to the new
+			// subscriber now, once. Never-computed nodes are exempt: they are
+			// born StaleDirty with no dependency edges, so there is no missed
+			// invalidation to deliver.
 			if (
 				(node.flags & Flag.StaleMask) !== 0 &&
 				(node as DerivedNode<unknown>).value !== UNINITIALIZED

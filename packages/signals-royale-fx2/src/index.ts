@@ -1,14 +1,14 @@
 /**
- * signals-royale-fx2 — a concurrent signal engine designed to ride React's
- * own scheduling machinery instead of forking it.
+ * signals-royale-fx2 — the public API: signals, computeds, effects, and
+ * the read/write functions that connect them to React transitions.
  *
- * Base state lives in a conventional signal graph (lazy cached
- * computeds, effects, batching). Concurrency is a thin overlay: writes
- * issued inside a React transition become DRAFTS (ordered logs of write
- * intents), and readers resolve values in a WORLD — base state plus
- * the drafts a specific render pass is allowed to see. Draft intents
- * replay over the live base value, so urgent writes rebase pending
- * transitions by construction. See worlds.ts for the full model.
+ * Base state lives in a conventional signal graph (graph.ts: lazy cached
+ * computeds, effects, batching). React-transition support is a thin
+ * overlay on top (worlds.ts): writes issued inside a transition are
+ * recorded into a draft instead of hitting the cell, and readers resolve
+ * values in a world — base state plus the drafts a specific render pass
+ * is allowed to see. See the worlds.ts header for the full model; this
+ * file only decides which path each read and write takes.
  */
 
 import {
@@ -137,8 +137,9 @@ const Signal = class<T> implements CellNode<T> {
 		this.worldMemos = undefined
 		this.pokePass = 0
 	}
-	/** Base-state read (tracked inside computations); in a draft evaluation,
-	 * resolves that evaluation's own world. */
+	/** Base-state read, tracked as a dependency inside computations. Inside
+	 * a draft-world evaluation, resolves that evaluation's own world
+	 * instead. */
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
@@ -150,8 +151,9 @@ const Signal = class<T> implements CellNode<T> {
 	set(value: T): void {
 		set(this, value)
 	}
-	/** Functional update. Inside a transition the function is recorded and
-	 * REPLAYS against each world's base value (React updater-queue rules). */
+	/** Functional update. Inside a transition the function itself is
+	 * recorded and later replays against each world's starting value, the
+	 * way React replays queued useState updaters. */
 	update(fn: (prev: T) => T): void {
 		update(this, fn)
 	}
@@ -258,9 +260,9 @@ export function nodeOf(x: AnyReadable): ReactiveNode {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** Cold tail of a computed read that is in an async state: rethrow errors,
- * park an evaluating consumer on the suspension, serve stale data when a
- * settled value exists, otherwise suspend (first load). */
+/** Finish a computed read that found the node in an async state: rethrow
+ * errors, park an evaluating consumer on the suspension, serve stale data
+ * when a settled value exists, otherwise suspend (first load). */
 function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
 	if ((node.flags & Flag.AsyncError) !== 0) {
 		throw (node.throwable as ErrorBox).error
@@ -277,27 +279,28 @@ function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
 	throw suspension.promise // never settled: suspend
 }
 
-/** The value slot of a state view, sentinel normalized: a suspended state
- * with no settled value reads as undefined on the never-suspending channels
- * (latest, committed). */
+/** The value slot of a state view, with the uninitialized sentinel
+ * normalized to undefined — latest() and committed() never suspend, so a
+ * suspended state with no settled value reads as undefined there. */
 function stateValue(st: DerivedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
-/** Newest intent: base state plus every live draft; never suspends. That is
- * the AMBIENT meaning — inside an evaluation context, latest() resolves that
- * context's own world instead, because reading ahead of your world is a
- * tear: a draft evaluation sees its draft world, a base-state computed or
- * effect evaluation sees base state, a render pass sees the pass's world. */
+/** The newest view of x: base state plus every live draft. Never
+ * suspends. That meaning only applies outside any evaluation or render —
+ * inside one, latest() resolves that context's own world instead, because
+ * reading ahead of your world would tear: a draft evaluation sees its
+ * draft's world, a base-state computed or effect sees base state, and a
+ * render pass sees the pass's world. */
 export function latest<T>(x: Readable<T>): T {
 	const node = nodeOf(x)
 	let world = getCurrentWorld()
 	if (world === null) {
 		if (getActiveConsumer() !== null) {
-			// A base-state evaluation (computed or effect) is running. Its context
-			// world is the base world, and this read is a real dependency: track it so
-			// a later change to x re-runs the consumer rather than leaving it
-			// permanently stale.
+			// A base-state evaluation (computed or effect) is running. Its
+			// world is base state, and this read is a real dependency: track
+			// it so a later change to x re-runs the consumer rather than
+			// leaving it permanently stale.
 			world = BASE_WORLD
 			if ((node.flags & Flag.KindCell) !== 0) {
 				readCell(node as CellNode<unknown>)
@@ -315,7 +318,8 @@ export function latest<T>(x: Readable<T>): T {
 	return stateValue(st) as T
 }
 
-/** What is on screen: per-root when a container is given. Never subscribes. */
+/** What the committed screen shows for x — per root when a container is
+ * given, base state otherwise. Never subscribes, never suspends. */
 export function committed<T>(x: Readable<T>, container?: object): T {
 	const node = nodeOf(x)
 	if (activeEvaluation === node) {
@@ -333,9 +337,9 @@ export function committed<T>(x: Readable<T>, container?: object): T {
 	return stateValue(st) as T
 }
 
-/** Committed-view snapshot with stable identity: the value, or the ErrorBox
- * itself (identity-stable for the whole error span — see isErrorBox) whose
- * error the caller rethrows. The React bindings' useCommitted snapshot. */
+/** Committed-view snapshot with stable identity, used by the React
+ * bindings' useCommitted: the value, or the ErrorBox itself — identity-
+ * stable for the whole error span — whose error the caller rethrows. */
 export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
 	const st = resolveState(node, committedWorldOf(container))
 	if ((st.flags & Flag.AsyncError) !== 0) {
@@ -344,16 +348,17 @@ export function committedSnapshot(node: ReactiveNode, container: object | undefi
 	return stateValue(st)
 }
 
-/** Cheap flip-only probe: true while newer data exists behind what is on
- * screen — a pending transition draft on this atom, or an async refetch
- * loading behind a stale value. Passive by contract: never evaluates,
- * never refetches, never suspends. */
+/** True while newer data exists behind what is on screen — a pending
+ * transition draft on this atom, or an async refetch loading behind a
+ * stale value. Passive by contract: never evaluates, never refetches,
+ * never suspends. */
 export function isPending(x: AnyReadable): boolean {
 	return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld())
 }
 
-/** Node-level pendingness probe; `world` scopes the suspended-memo check
- * (null = ambient). The React bindings' useIsPending snapshot. */
+/** Node-level pendingness probe, also used by the React bindings'
+ * useIsPending. `world` scopes the suspended-memo check; null means
+ * ambient. */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.KindCell) !== 0) {
@@ -362,10 +367,10 @@ export function isPendingPassive(node: ReactiveNode, world: World | null): boole
 	if ((node.flags & Flag.KindDerived) === 0) {
 		return false
 	}
-	// Pending means "stale data exists while newer data loads" (Solid 2.0's
-	// rule): a suspension with settled history is pending; a FIRST LOAD is
-	// not — it has no stale data to indicate over, and suspending is
-	// Suspense's job, not the indicator's.
+	// Pending means "stale data exists while newer data loads". A
+	// suspension with settled history is pending; a first load is not — it
+	// has no stale data to indicate over, and suspending is Suspense's
+	// job, not the indicator's.
 	if ((node.flags & Flag.AsyncSuspended) !== 0) {
 		return !isUninitialized((node as DerivedNode<unknown>).value)
 	}
@@ -375,9 +380,9 @@ export function isPendingPassive(node: ReactiveNode, world: World | null): boole
 			return !isUninitialized(memo.value)
 		}
 	}
-	// A drafted input anywhere in the dependency closure means newer data is
-	// pending behind this computed's base value — transitive, like Solid's
-	// status forwarding: a computed over a pending source is itself pending.
+	// A drafted input anywhere in the dependency closure means newer data
+	// is pending behind this computed's base value. Pendingness is
+	// transitive: a computed over a pending source is itself pending.
 	return draftsAffecting(node).length > 0
 }
 
@@ -403,11 +408,13 @@ export function set<T>(x: Signal<T>, value: T): void {
 		appendDraftIntent(draft, cell, 'set', value)
 		return
 	}
-	// Urgent: base state moves now; pending worlds replay it in dispatch order.
+	// Urgent write: base state moves now, and pending worlds will replay
+	// the intent in dispatch order.
 	const rebased = appendUrgentIntent(cell, 'set', value)
 	const changed = writeCell(cell, value)
-	// Equality cutoff with pending drafts: base state did not move (no wave
-	// ran) but the drafted replays did — their audiences must still hear it.
+	// When the write was a base-state no-op (equality) but the cell has
+	// pending drafts, the drafted replays still changed — their audiences
+	// must hear about it even though no wave ran.
 	if (rebased && !changed) {
 		pokeRebasedCell(cell)
 	}
@@ -501,19 +508,22 @@ export { attachTracer, getActiveTracer, Tracer }
 export type { TraceEvent }
 
 // ---------------------------------------------------------------------------
-// Render-world provider (installed by the ./react bindings, which import
-// engine modules directly — the react directory is part of the library).
+// Render-world provider, installed by the ./react bindings (which import
+// engine modules directly — the react directory is part of this library).
 // ---------------------------------------------------------------------------
 
-/** Installed by the bindings: answers "what world is rendering right now".
- * - draft ids: the pass's world was noted by this pass and is still valid;
- * - 'base': a component render is executing but no valid note exists
- *   (the note expired or belongs to another pass) — plain latest()/
- *   isPending() must fall back to BASE rather than read a stale world
- *   or read ahead into live drafts;
- * - null: no render is executing — ambient reads see newest intent.
- * A provider (not a sticky setter) because only the host knows when React
- * is rendering and which notes a pass refreshed. */
+/** Answers "what world is rendering right now":
+ * - draft ids: the current render pass declared its world and the
+ *   declaration is still valid;
+ * - 'base': a component render is executing but no valid declaration
+ *   exists (it expired or belongs to another pass). Plain latest() and
+ *   isPending() calls must then fall back to base state — wrong-toward-
+ *   base is safe, while reading a stale world or reading ahead into live
+ *   drafts is not;
+ * - null: no render is executing, so ambient reads see the newest view.
+ * A provider function rather than a sticky setter, because only the React
+ * host knows when React is rendering and which declarations a pass
+ * refreshed. */
 let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null
 
 export function setRenderWorldProvider(
@@ -536,8 +546,9 @@ function renderWorld(): World | null {
 	return worldOf(ids)
 }
 
-/** Reset seam for tests: discard live drafts, settle lifetime flaps, drop
- * ambient classification, detach any tracer. Existing atoms stay valid. */
+/** Test seam: discard live drafts, settle pending lifetime transitions,
+ * drop ambient classification, detach any tracer. Existing atoms stay
+ * valid. */
 export function resetEngineForTest(): void {
 	discardAllDrafts()
 	flushLifetimeTransitions()
@@ -548,8 +559,9 @@ export function resetEngineForTest(): void {
 }
 
 export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
-/** The DerivedState read protocol: the Flag bit constants (test async bits
- * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
- * check, and the never-settled sentinel test. */
+/** For consumers reading DerivedState views directly: the Flag bit
+ * constants (test async bits via Flag.AsyncMask/AsyncError/
+ * AsyncSuspended), the error-box identity check, and the uninitialized
+ * sentinel test. */
 export { Flag, isErrorBox, isUninitialized }
 export { BASE_WORLD }

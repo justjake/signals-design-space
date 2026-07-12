@@ -193,9 +193,9 @@ describe('scenario 15 — causality traces', () => {
 	})
 })
 
-// Scenario 16 (the DOM mutation window) is intentionally absent: bracketing
-// React's mutation phase needs reconciler cooperation, which is out of scope
-// for a stock-React package. Owner-ruled exemption; see README + REPORT.
+// Scenario 16 (the DOM mutation window) is intentionally absent:
+// bracketing React's mutation phase needs reconciler cooperation, which
+// is out of scope for a stock-React package.
 
 describe('scenario 17 — lazy initializers under React', () => {
 	test('initializer runs at first render read, once', async () => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The real-React gate: RULES scenarios 1-18 against this package's own fork
- * build, written with raw createRoot + act (no RTL).
+ * End-to-end scenarios against real React, written with raw
+ * createRoot + act (no React Testing Library).
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
@@ -205,10 +205,11 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 
 describe('the latest() context rule', () => {
 	// With a transition draft held over base state, each context must
-	// resolve its OWN world: the transition's render sees the draft, an
-	// urgent render body does not, a base-state computed evaluation resolves
-	// base state (and stays live — the read is tracked), and ambient code sees
-	// newest intent. Reading ahead of your world is a tear.
+	// resolve its own world: the transition's render sees the draft, an
+	// urgent render body does not, a base-state computed evaluation
+	// resolves base state (and stays live — the read is tracked), and
+	// ambient code sees the newest view. Reading ahead of your world is a
+	// tear.
 	test('urgent bodies, base-state computeds, the transition render, and ambient code', async () => {
 		const a = signal(1)
 		const b = signal(0) // unrelated urgent driver
@@ -428,10 +429,10 @@ describe('scenario 7 — one transition across two roots', () => {
 })
 
 describe('silent folds must repair subscribers the render-pass worlds never reached', () => {
-	// A retirement is silent for a subscriber because its rendered world
-	// resolves the same values the fold produced. That premise
-	// only holds for subscribers whose root carried the draft. The shape below
-	// never carried it, so the fold is its ONLY delivery channel — it must
+	// A retirement is silent for a subscriber when its rendered world
+	// resolves the same values the fold produced — which only holds for
+	// subscribers whose root carried the draft. The shape below never
+	// carried it, so the fold is its only delivery channel: it must
 	// converge, not stay stale until the next write.
 	test('a scope mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
 		const a = signal(1)

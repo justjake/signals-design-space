@@ -111,10 +111,10 @@ describe('leak audit', () => {
 	})
 
 	test('a retired draft id in long-lived state retains neither the Draft record nor its logged intents', async () => {
-		// The React bindings' contract: long-lived React state (reducer worlds,
-		// committed id sets) holds draft IDS, never Draft records — a record
-		// captured in a committed reducer state that never updates again would
-		// be retained forever, while a stale id is inert.
+		// The React bindings' contract: long-lived React state (reducer
+		// worlds, committed id sets) holds draft ids, never Draft records —
+		// a record captured in a committed reducer state that never updates
+		// again would be retained forever, while a stale id is inert.
 		const a = signal({ n: 0 })
 		const committedReducerState: DraftId[] = [] // stands in for React state that never updates again
 		let draftRef!: WeakRef<object>

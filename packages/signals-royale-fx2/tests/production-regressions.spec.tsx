@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 /**
- * Production-round regressions.
+ * Regression tests.
  *
- * Tear family: latest()/isPending() in ANY render body must resolve that
- * pass's world or fall back to BASE. Wrong-toward-base is
+ * Tear family: latest()/isPending() in any render body must resolve that
+ * pass's world or fall back to base state. Wrong-toward-base is
  * acceptable; wrong-toward-stale-world or wrong-toward-drafts never is.
- * Each shape below renders a component that did NOT refresh the scope's
+ * Each shape below renders a component that did not refresh the scope's
  * render-world note and asserts it cannot consume a stale one.
  *
- * Wake family: a transition's render passes re-render ONLY subscribers of
- * cells the transition drafted (plus what React re-renders for its own
+ * Wake family: a transition's render passes re-render only subscribers
+ * of cells the transition drafted (plus what React re-renders for its own
  * reasons: pending uncommitted updates, cascades). Render counts on every
  * subscriber are the proof.
  */
@@ -81,7 +81,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			</>,
 		)
 		await start() // held: the transition pass noted its world and suspended
-		// Urgent pass dirties ONLY the probe; the scope (and every fx2 hook)
+		// The urgent pass dirties only the probe; the scope (and every hook)
 		// bails out, so nothing refreshed the note for this pass.
 		await act(() => bump())
 		expect(text(container)).toContain('p:1;')
@@ -144,7 +144,8 @@ describe('tear: the render-world note is validity-gated', () => {
 			)
 		}
 		const { container } = await h.mount(<List />)
-		// Root B: no scope, no fx2 hooks; re-rendered by flushSync mid-slice.
+		// Root B: no scope, none of our hooks; re-rendered by flushSync
+		// mid-slice.
 		const sampled: number[] = []
 		let bump!: () => void
 		function Probe() {
@@ -280,13 +281,14 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 					cells[0].set(1)
 					hold.set(true)
 				})
-				// Deliberately NOT sealed: the batch continues below.
+				// Deliberately not sealed: the batch continues below.
 			})
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held, invisible
-		// Late append from a plain event context (no ambient transition): the
-		// wake must ride the OWNING transition's lane, so the committed DOM
-		// stays untouched and untouched subscribers stay asleep.
+		// Late append from a plain event context (no ambient transition):
+		// the wake must join the owning transition's updates, so the
+		// committed DOM stays untouched and untouched subscribers stay
+		// asleep.
 		await act(() => {
 			runInDraft(draft, () => cells[1].set(2))
 			sealDraft(draft)
@@ -389,9 +391,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 	})
 
 	test('late append to a cell the transition pass already rendered re-dispatches and lands', async () => {
-		// Guards the dedup's clear-on-render contract: after a pass consumed the
-		// draft, a new intent on the SAME cell must re-dispatch (a swallowed wake
-		// would let React bail out and commit a stale frame).
+		// Guards the dedup's clear-on-render contract: after a pass consumed
+		// the draft, a new intent on the same cell must re-dispatch — a
+		// swallowed wake would let React bail out and commit a stale frame.
 		const { cells, renders, grid } = makeGrid()
 		const hold = signal(false)
 		const gate = deferred<void>()

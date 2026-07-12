@@ -1,21 +1,24 @@
 /**
- * Async values: pending and error are graph STATE, not control flow.
+ * Async support for computeds. A computed body can call use(promise) to
+ * read an async value. Rather than modeling this as control flow, the
+ * engine records "pending" and "error" as node state, alongside the value.
  *
- * A computed that touches an unresolved thenable evaluates-to-pending: the
- * evaluation parks, the computed keeps serving its last settled value
- * ("stale"), and a stable suspension promise represents the pending span.
- * Settlement behaves like a write: it invalidates the parked computeds and
- * propagates, so downstream computeds and subscribers converge. Reading a
- * pending computed from inside another evaluation parks the reader too
- * (pending forwards); reading it from outside serves the stale value when
- * one exists.
+ * When a computed touches an unresolved thenable, its evaluation parks:
+ * the body's throw is caught, the node is marked suspended, and it keeps
+ * serving its last settled value (its "stale" value) to readers outside
+ * any evaluation. Reading a pending computed from inside another
+ * evaluation parks the reader as well, so pendingness forwards up chains.
+ * When the thenable settles, settlement behaves like a write: the parked
+ * computeds are invalidated and re-evaluated, and the change propagates so
+ * downstream computeds and subscribers converge.
  *
- * Stability contracts:
- * - One suspension promise per pending span per computed: a Suspense retry that
- *   re-reads the computed gets the SAME thenable, so React neither loops nor
- *   re-issues fetches.
- * - Errors rethrow the SAME reason object every time (reference stable),
- *   held in a box the engine keeps until the value actually changes.
+ * Two identity guarantees matter to React:
+ * - One suspension promise per pending span per computed. A Suspense retry
+ *   that re-reads the computed must get the same thenable it suspended on,
+ *   or React would loop and fetches would be re-issued.
+ * - An erroring computed rethrows the same reason object on every read,
+ *   held in a box the engine keeps until the value actually changes, so
+ *   error boundaries and memo comparisons see a stable reference.
  */
 
 import {
@@ -49,7 +52,8 @@ export interface ThenableBox {
 }
 
 /** One pending span: a stable promise that resolves when the span makes
- * progress, so a suspended React render retries exactly then. */
+ * progress, so a suspended React render retries exactly then and not
+ * before. */
 export interface Suspension {
 	promise: Promise<void>
 	resolve: () => void
@@ -60,12 +64,9 @@ export interface ErrorBox {
 	error: unknown
 }
 
-/** Box identity is the rethrow-same-reference contract: every read of an
- * erroring computed rethrows the same reason, and identity-comparing
- * consumers (snapshot equality, memo reconciliation) rely on the box staying
- * the same object for the whole error span. Boxes are registered so value
- * channels that hand a box to a caller (committedSnapshot) can be told apart
- * from user values without a marker allocation. */
+/** Every ErrorBox ever made, so code that receives a box through a value
+ * channel (committedSnapshot hands boxes to callers) can tell it apart
+ * from a user value without adding a marker property to the box. */
 const errorBoxes = new WeakSet<object>()
 
 export function makeErrorBox(error: unknown): ErrorBox {
@@ -79,20 +80,21 @@ export function isErrorBox(v: unknown): v is ErrorBox {
 }
 
 /**
- * The uniform read protocol for a resolved value — one shape for the graph's
- * own nodes (cells and deriveds ARE this shape; resolving the base world
- * allocates nothing) and per-world memo records:
+ * The uniform shape a resolved value is read through. Graph nodes (cells
+ * and deriveds) satisfy this interface directly, so resolving base state
+ * allocates nothing; per-world memo records (worlds.ts) are separate
+ * objects of the same shape.
  *
- * - flags: read via the async bits ONLY (`flags & Flag.AsyncMask`); node-backed
- *   views carry type/staleness/tier bits in the same word. Both async bits
- *   clear = plain value state.
- * - value: the settled value; the UNINITIALIZED sentinel when none exists
- *   yet. A suspended state with a settled value is "stale" — the previous
- *   value keeps serving while the refetch runs (stale ⇔ value is not the
- *   sentinel; unwrap sites normalize the sentinel to undefined).
- * - throwable: the value-plane companion — the ErrorBox whose .error every
- *   read rethrows (AsyncError), the Suspension whose .promise suspends a
- *   reader (AsyncSuspended), null in the value state.
+ * - flags: consumers read only the async bits (`flags & Flag.AsyncMask`);
+ *   node-backed views carry kind and staleness bits in the same word.
+ *   Both async bits clear means a plain value.
+ * - value: the settled value, or the UNINITIALIZED sentinel when none
+ *   exists yet. A suspended state whose value is not the sentinel is
+ *   "stale": the previous value keeps serving while the refetch runs.
+ *   Unwrap sites normalize the sentinel to undefined.
+ * - throwable: the ErrorBox whose .error every read rethrows (AsyncError),
+ *   or the Suspension whose .promise suspends a reader (AsyncSuspended);
+ *   null for a plain value.
  */
 export interface DerivedState {
 	flags: Flags
@@ -102,7 +104,7 @@ export interface DerivedState {
 
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()
 
-/** Installed by worlds.ts: settlement also invalidates world memos. */
+/** Installed by worlds.ts so settlement also invalidates its world memos. */
 let onSettlement: (() => void) | null = null
 export function setOnSettlement(fn: () => void): void {
 	onSettlement = fn
@@ -153,11 +155,12 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	return fresh
 }
 
-/** Settlement is a write: invalidate parked computeds and eagerly bring
- * them up to date (progressive evaluations park on their NEXT thenable
- * without waiting for a reader, and passive probes observe final state when
- * the wave's notifications run), then release the suspensions so suspended
- * renders retry against the settled graph. */
+/** A thenable settled. Treat it like a write: invalidate the parked
+ * computeds and eagerly re-evaluate them — eagerly, so a computed that
+ * awaits several thenables in sequence parks on the next one without
+ * waiting for a reader, and so passive probes observe the final state when
+ * the wave's notifications run. Then release the suspensions, so suspended
+ * renders retry against the already-settled graph. */
 function settle(box: ThenableBox): void {
 	const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT
 	onSettlement?.()
@@ -173,8 +176,8 @@ function settle(box: ThenableBox): void {
 			try {
 				untracked(() => ensureFresh(node))
 			} catch {
-				// Evaluation state (pending/error) is recorded on the node; readers
-				// see it at their own read sites.
+				// The evaluation outcome (pending or error) is recorded on the
+				// node; readers encounter it at their own read sites.
 			}
 		}
 	} finally {
@@ -186,7 +189,7 @@ function settle(box: ThenableBox): void {
 	}
 }
 
-/** use(t) inside a base-state evaluation. */
+/** Handles use(t) inside a base-state evaluation. */
 function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
@@ -197,8 +200,9 @@ function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unkno
 	}
 	box.parkedNodes.add(consumer)
 	const flags = consumer.flags
-	// Reuse the span's suspension so Suspense retries see one stable thenable —
-	// but never a settled one, or a suspended render would retry in a loop.
+	// Reuse the pending span's suspension so Suspense retries see one
+	// stable thenable — but never a settled one, or a suspended render
+	// would retry in a loop.
 	const suspension =
 		(flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
 			? (consumer.throwable as Suspension)
@@ -218,8 +222,9 @@ function finishCompute(
 ): boolean {
 	const flags = node.flags
 	if (parked) {
-		// baseUse installed the suspended state. Advance the version so
-		// downstream readers re-pull and park on the (possibly fresh) suspension.
+		// baseUse already installed the suspended state. Report a change so
+		// downstream readers re-pull and park on the (possibly fresh)
+		// suspension.
 		return true
 	}
 	if (hasError) {
@@ -249,5 +254,5 @@ function finishCompute(
 	return (flags & Flag.AsyncMask) !== 0
 }
 
-setUseImpl(baseUse as never)
-setFinishComputeImpl(finishCompute as never)
+setUseImpl(baseUse)
+setFinishComputeImpl(finishCompute)

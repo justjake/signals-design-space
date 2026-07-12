@@ -32,8 +32,8 @@ describe('pending as graph state', () => {
 		}
 		expect(typeof (thrown1 as PromiseLike<void>).then).toBe('function')
 		expect(thrown1).toBe(thrown2) // stable suspension thenable across retries
-		// Solid 2.0's pending rule: a FIRST LOAD is not pending — there is no
-		// stale data to indicate over; suspending is Suspense's job.
+		// A first load is not pending — there is no stale data to indicate
+		// over; suspending is Suspense's job.
 		expect(isPending(c)).toBe(false)
 		gate.resolve('done')
 		await tick()
@@ -72,7 +72,7 @@ describe('pending as graph state', () => {
 		const outer = computed(() => inner.get() + 1)
 		expect(isPending(outer)).toBe(false)
 		expect(() => read(outer)).toThrow()
-		// Forwarded first load is still a first load: not pending (Solid rule).
+		// A forwarded first load is still a first load: not pending.
 		expect(isPending(outer)).toBe(false)
 		gate.resolve(41)
 		await tick()

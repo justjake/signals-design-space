@@ -1,4 +1,4 @@
-/** RoyaleAdapter: the shared cross-entrant battery surface for fx2. */
+/** This package's adapter for the shared cross-entrant test battery. */
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -148,9 +148,9 @@ const adapter = {
 			},
 		}
 	},
-	// onDomMutation is intentionally absent: bracketing React's DOM mutation
-	// phase needs reconciler cooperation, and this package runs on stock React
-	// by design. The shared battery's scenario 16 is exempt by owner ruling.
+	// onDomMutation is intentionally absent: bracketing React's DOM
+	// mutation phase needs reconciler cooperation, and this package runs
+	// on stock React by design.
 }
 
 export default adapter
