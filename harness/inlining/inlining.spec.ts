@@ -31,6 +31,36 @@ import { expectations } from './expects'
 const NODE_MAJOR = Number(process.versions.node.split('.')[0])
 const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = path.resolve(harnessRoot, '..')
+const INLINE_LIMIT = 460
+
+// Node 24.16 bytecode length plus narrow slack. Every ordinary budget stays
+// below V8's per-function inline ceiling; an over-limit function is pinned
+// separately so growth remains explicit.
+const FX2_BYTECODE_BUDGETS: Record<string, number> = {
+	readAtom: 50,
+	trackWorldRead: 90,
+	readComputed: 100,
+	getComputed: 110,
+	writeAtom: 120,
+	scheduleWatcher: 170,
+	trackRead: 260,
+	propagateWave: 280,
+	runWatcher: 300,
+	chainResolve: 390,
+	ensureFreshAt: 400,
+	recompute: 420,
+	executeWatcher: 440,
+}
+
+const FX2_WORLD_BYTECODE_BUDGETS: Record<string, number> = {
+	memoFor: 40,
+	trackWorldSource: 60,
+	inheritCertificate: 80,
+	recordSource: 90,
+	trackWorldSources: 120,
+	unwrapComputedWorldState: 140,
+	memoValid: 260,
+}
 
 const cleanups: Array<() => void> = []
 afterAll(() => {
@@ -39,38 +69,44 @@ afterAll(() => {
 	}
 })
 
+/** Emit FX2 with the same explicit TypeScript 7 invocation used by its
+ * performance probes. */
+function emitFx2Smoke(dir: string, entry = 'fx2-smoke'): string {
+	writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n')
+	const config = path.join(dir, 'tsconfig.json')
+	writeFileSync(
+		config,
+		JSON.stringify({
+			extends: path.join(repoRoot, 'packages/signals-royale-fx2/tsconfig.perf.json'),
+			compilerOptions: {
+				rootDir: repoRoot,
+				outDir: dir,
+				noEmit: false,
+				incremental: false,
+				declaration: false,
+				sourceMap: false,
+				inlineSourceMap: false,
+				types: ['node'],
+				typeRoots: [path.join(harnessRoot, 'node_modules/@types')],
+			},
+			files: [path.join(harnessRoot, `inlining/${entry}.ts`)],
+			include: [],
+		}),
+	)
+	execFileSync(
+		process.execPath,
+		[path.join(harnessRoot, 'node_modules/typescript/bin/tsc'), '-p', config],
+		{ cwd: repoRoot },
+	)
+	return path.join(dir, `harness/inlining/${entry}.js`)
+}
+
 async function probeFramework(framework: string, chainDepth: number): Promise<OptTrace> {
 	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-${chainDepth}-`))
 	cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
 	if (framework === 'fx2') {
-		writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n')
-		const config = path.join(dir, 'tsconfig.json')
-		writeFileSync(
-			config,
-			JSON.stringify({
-				extends: path.join(repoRoot, 'packages/signals-royale-fx2/tsconfig.perf.json'),
-				compilerOptions: {
-					rootDir: repoRoot,
-					outDir: dir,
-					noEmit: false,
-					incremental: false,
-					declaration: false,
-					sourceMap: false,
-					inlineSourceMap: false,
-					types: ['node'],
-					typeRoots: [path.join(harnessRoot, 'node_modules/@types')],
-				},
-				files: [path.join(harnessRoot, 'inlining/fx2-smoke.ts')],
-				include: [],
-			}),
-		)
-		execFileSync(
-			process.execPath,
-			[path.join(harnessRoot, 'node_modules/typescript/bin/tsc'), '-p', config],
-			{ cwd: repoRoot },
-		)
 		return traceOptimization({
-			script: path.join(dir, 'harness/inlining/fx2-smoke.js'),
+			script: emitFx2Smoke(dir),
 			env: { SMOKE_DEPTH: String(chainDepth) },
 		})
 	}
@@ -88,6 +124,106 @@ async function probeFramework(framework: string, chainDepth: number): Promise<Op
 	cleanups.push(bundle.cleanup)
 	return traceOptimization({ script: bundle.script })
 }
+
+function bytecodeLength(script: string, name: string): number {
+	const output = execFileSync(
+		process.execPath,
+		['--print-bytecode', `--print-bytecode-filter=${name}`, script],
+		{
+			cwd: repoRoot,
+			encoding: 'utf8',
+			env: { ...process.env, SMOKE_DEPTH: '32', SMOKE_WARM: '2000', SMOKE_STEADY: '1' },
+			maxBuffer: 32 * 1024 * 1024,
+		},
+	)
+	let size: number | undefined
+	for (const match of output.matchAll(/^Bytecode length: (\d+)$/gm)) {
+		const candidate = Number(match[1])
+		size = size === undefined ? candidate : Math.max(size, candidate)
+	}
+	expect(size, `bytecode length of ${name}`).toBeDefined()
+	return size!
+}
+
+describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Node 24)', () => {
+	let script: string
+	let worldScript: string
+	beforeAll(() => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'fx2-bytecode-'))
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+		script = emitFx2Smoke(dir)
+		const worldDir = mkdtempSync(path.join(tmpdir(), 'fx2-world-bytecode-'))
+		cleanups.push(() => rmSync(worldDir, { recursive: true, force: true }))
+		worldScript = emitFx2Smoke(worldDir, 'fx2-world-smoke')
+	}, 180_000)
+
+	for (const [name, budget] of Object.entries(FX2_BYTECODE_BUDGETS)) {
+		test(`${name} <= ${budget}`, () => {
+			expect(bytecodeLength(script, name)).toBeLessThanOrEqual(budget)
+			expect(budget).toBeLessThanOrEqual(INLINE_LIMIT)
+		})
+	}
+
+	for (const [name, budget] of Object.entries(FX2_WORLD_BYTECODE_BUDGETS)) {
+		test(`${name} <= ${budget}`, () => {
+			expect(bytecodeLength(worldScript, name)).toBeLessThanOrEqual(budget)
+			expect(budget).toBeLessThanOrEqual(INLINE_LIMIT)
+		})
+	}
+
+	test('flush pinned at 620 (over the inline limit)', () => {
+		const size = bytecodeLength(script, 'flush')
+		expect(size).toBeLessThanOrEqual(620)
+		expect(size).toBeGreaterThan(INLINE_LIMIT)
+	})
+
+	test('resolveState pinned at 780 (over the inline limit)', () => {
+		const size = bytecodeLength(worldScript, 'resolveState')
+		expect(size).toBeLessThanOrEqual(780)
+		expect(size).toBeGreaterThan(INLINE_LIMIT)
+	})
+})
+
+describe.skipIf(NODE_MAJOR !== 24)('fx2 committed-world inlining (tsc-emitted, Node 24)', () => {
+	let trace: OptTrace
+	beforeAll(() => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'fx2-world-inline-'))
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+		trace = traceOptimization({ script: emitFx2Smoke(dir, 'fx2-world-smoke') })
+	}, 180_000)
+
+	test('inlines committed-world read and source-tracking helpers', () => {
+		const inlined = new Set(trace.inlined.map((edge) => edge.callee))
+		const required = [
+			'getComputed',
+			'unwrapComputedWorldState',
+			'trackWorldRead',
+			'trackWorldSources',
+			'trackWorldSource',
+			'refresh',
+		]
+		expect(
+			required.filter((name) => !inlined.has(name)),
+			`not inlined; inlined callees: ${[...inlined].sort().join(', ')}`,
+		).toEqual([])
+	})
+
+	test('world kernel reaches top tier', () => {
+		const inlined = new Set(trace.inlined.map((edge) => edge.callee))
+		const required = ['resolveState', 'trackRead']
+		expect(
+			required.filter((name) => !trace.optimized.has(name) && !inlined.has(name)),
+			`not top-tier; optimized: ${[...trace.optimized].sort().join(', ')}`,
+		).toEqual([])
+	})
+
+	test('steady committed-world execution is free of eager deopts', () => {
+		expect(
+			steadyEagerDeopts(trace).map((d) => `${d.fn}: ${d.reason}`),
+			'eager deopts inside the committed-world steady bracket',
+		).toEqual([])
+	})
+})
 
 describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () => {
 	for (const { framework, minInlinedPairs, mustInline, mustReachTopTier } of expectations) {
