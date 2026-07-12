@@ -1895,6 +1895,12 @@ export function resetGraphForBenchmark(): void {
 	pendingRegistrations.length = 0
 	pendingRegistrationEnd = 0
 	registrationScheduled = false
+	// The arena fill zeroed every generation stamp, so a leftover queue entry
+	// from the old generation could false-match a fresh record: drop the
+	// queues with it.
+	effectCount = 0
+	queueHead = 0
+	renderNotifyCount = 0
 	initVirginRecords()
 	nextRecord = FIRST_REAL_RECORD
 	freeLinks = 0
