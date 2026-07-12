@@ -1,0 +1,221 @@
+# Data-oriented graph experiment
+
+This package ports the `signals-royale-fx2` node/link graph to numeric records while keeping JavaScript state on the public `Signal` and `Computed` handles. The handle is the node: `.node` is only a compatibility alias and no second `ReactiveNode` object is allocated.
+
+## Result
+
+The port is correct but slower than the object graph on V8. On 2026-07-11, three isolated rounds of `milomg-reactivity-benchmark` produced a 1.405x geometric-mean ratio and a 1.403x aggregate-time ratio (Dalien fork divided by current FX2).
+
+| Benchmark | FX2 ms | fork ms | ratio |
+| --- | ---: | ---: | ---: |
+| create signals | 4.42 | 5.68 | 1.29x |
+| create computations | 77.10 | 146.61 | 1.90x |
+| update signals | 324.06 | 528.88 | 1.63x |
+| avoidable propagation | 137.63 | 182.08 | 1.32x |
+| broad propagation | 96.87 | 170.26 | 1.76x |
+| deep propagation | 42.74 | 70.55 | 1.65x |
+| diamond | 100.70 | 147.24 | 1.46x |
+| mux | 86.66 | 125.48 | 1.45x |
+| repeated observers | 22.08 | 25.62 | 1.16x |
+| molBench | 15.30 | 14.80 | 0.97x |
+| 4-1000x12, dynamic 5% | 270.38 | 326.26 | 1.21x |
+| 25-1000x5 | 324.26 | 362.25 | 1.12x |
+
+Command:
+
+```sh
+cd milomg-reactivity-benchmark
+node packages/node/dist/isolated.js --rounds 3 --no-memory "Royale FX2" "Royale FX2 Dalien"
+```
+
+All 329 package tests, 179 conformance cases, the oracle fuzz suite, GC tests, React tests, and the 150,000-node iterative traversal test pass.
+
+## What the port established
+
+- Nodes and links share an interleaved, 8-word `Int32Array` arena. Link identity is a numeric record offset.
+- `Signal` and `Computed` own `value`, `fn`, equality, async, lifetime, and world state. There is no JS internals object per arena record.
+- A dense `pinnedInternals` table is still required. A numeric link keeps only a dependency ID, so a live graph edge must pin and recover the corresponding handle. Reference counts clear the pin with the last link.
+- Dropped handles require `FinalizationRegistry` registration to return node and link IDs. The object graph gets this tracing and reclamation directly from the JS collector.
+- Records are 32 bytes instead of 64. Changed clocks use a `Float64Array` view; validation clocks and cold numeric passes use typed columns.
+- Capacity is deliberately fixed at 2,097,152 records while tuning. The typed buffers reserve 112 MiB: 64 MiB for records, 16 MiB for validation clocks, and 32 MiB for four `Int32` columns. Growth was not added because it cannot repair the remaining hot-path gap and would complicate measurements.
+
+## Why it is slower
+
+The initial port was 1.598x slower geometrically. The following changes reduced it to 1.405x:
+
+- packed 16-word records to 8 words;
+- removed an unused unregister token from finalizer registration and deferred registration in bounded batches;
+- split dependency insertion from retracking, reducing `trackRead` from 183 to 165 V8 bytecodes and confirming that V8 inlines it into signal/computed reads;
+- kept the ID-to-handle table dense rather than holey;
+- passed already-read flags into validation frames.
+
+The remaining costs are structural. Creation pays for arena allocation bookkeeping and a finalizer cell per GC-owned handle. Reads traverse typed numeric records, then perform an ID-to-handle lookup before executing handle-owned `fn`, `equals`, or value logic. FX2's object links hold those object references directly, and V8 optimizes their stable hidden-class fields well. A CPU profile after the creation fix attributed 17.6% of non-library samples to dependency tracking, 15.0% to validation, and 8.6% to writes.
+
+### Per-field JS column follow-up
+
+A follow-up kept the public object handles but moved `value`, `initializer`, `equals`, and computed `fn` into canonical per-field JS arrays. Handle properties became compatibility accessors; graph reads, writes, equality checks, and computed invocation consumed the columns directly.
+
+The naive record-indexed columns wrote four entries for every interleaved link and regressed construction badly. A corrected layout gave only cells/computeds a dense host index stored in their node record, moved link reference counts to a typed column, and retained a handle only for validation frames that could execute user code. It passed conformance, fuzz, graph-tier, and GC tests.
+
+That best column layout was still slower. Three isolated rounds measured 1.477x geometric mean and 1.451x aggregate time versus FX2, compared with 1.405x and 1.403x for handle-owned fields. Signal creation moved from 5.68 to 8.43 ms, while computation creation was essentially unchanged at 148.20 versus 146.61 ms. The implementation commits (`a32a82b`, `67edd18`, and `3d7759b`) are preserved and then reverted by `173fefd`, `c005c52`, and `35223b8`.
+
+The lifetime constraint prevents columns from eliminating handle recovery: validating a dependency can run user code that removes the current computed's last graph pin. The active validation frame must acquire and strongly retain that object before descending. Columns therefore added host-index loads and array maintenance without removing the required handle ownership path. A single `SignalInternals`/`ComputedInternals` column has the same limitation. Numeric public handles could avoid it, but are outside the required API.
+
+## Complexity
+
+Compared with the current object package, `graph.ts` grows from 1,601 to 1,834 lines while `index.ts` shrinks from 540 to 495: a net increase of 188 lines in the two core files. The added mechanisms are record layout, free lists, pin reference counts, finalizer registration, arena reset, and typed auxiliary columns. Big-O graph behavior is unchanged; constant factors and lifetime machinery increase.
+
+The useful result is therefore not a replacement recommendation. The object graph remains the baseline for this object-handle API. Both handle-owned fields and per-field indexed columns were measured; the columns made this hybrid slower. Arena growth should not be implemented unless another design first closes the fixed-arena execution gap.
+
+## 2026-07-12 optimization round: 1.405x to 1.06x
+
+A second round revised the conclusion above. The gap was not structural; it
+was a set of identifiable per-operation costs, each with a fix that keeps
+the arena design and the full test surface (329 package tests, 179
+conformance cases, oracle fuzz at 5,000 seeds, GC/leak suite) green.
+
+Measured on the same three-round isolated `milomg-reactivity-benchmark`
+protocol, the geometric-mean ratio against `signals-royale-fx2` moved from
+1.405x to 1.0618x, with the arena now winning eight of twenty rows outright
+(signal creation 0.74x, the three large dynamic-graph cases 0.78-0.91x,
+update-heavy writes 0.93x). Both packages were under active development
+during the round; the reference numbers name the fx2 working tree at
+measurement time. Machine load was elevated but shared by the alternating
+protocol.
+
+What closed the gap, in landing order:
+
+- **Persistent integer stack for the invalidation wave.** The wave never
+  runs user code, so one module-lifetime `Int32Array` replaces a heap cons
+  cell per branching descent.
+- **Trace-guarded cause stores.** The per-visit causal-event store only
+  runs while a tracer is attached.
+- **No `fill()` builtins in reclaim.** Freed records are cleared with
+  explicit stores of exactly the slots each record kind can have dirtied —
+  a freed watcher record, for instance, provably dirties only its dep list
+  head/tail and validation watermark.
+- **Lazy records.** Cells and computeds are born pointing at a shared,
+  immutable detached-state record that carries their born flags word; the real
+  record and finalizer registration materialize at first graph
+  participation. A handle dropped before that point frees with ordinary
+  GC. Writes to a recordless cell store the value and skip the clock
+  entirely unless a draft world is live or a tracer is attached (both can
+  observe a cell from outside the edge graph).
+- **Cell record detachment.** A cell record's only owners are its incoming
+  links, so when the last one drops, the record returns to the free pool
+  and the live handle points back at the detached-state record. Cells linked by
+  reads therefore never touch the FinalizationRegistry at all; only
+  computeds (whose records own dep links a dead handle must free) and
+  tracer/draft-materialized cells register.
+- **Generation-stamped typed effect queue.** The flush queue stores
+  (record id, generation) pairs instead of handles: enqueueing is two int
+  stores with no handle lookup and no write barrier, and a record
+  reclaimed between schedule and drain gen-mismatches into a no-op.
+- **Bytecode diet.** Typed-array field access compiles to roughly double
+  the bytecode of a named-property access, which starved V8's inlining
+  budgets. Moving cold bodies (cycle throw, children/cleanup disposal,
+  stale-edge freeing, batch-base save, detach) out of hot functions
+  restored inlining across the validate/recompute/track cluster.
+- **Stackless chain validation.** A node with exactly one dependency
+  validates with one reading compare, and a chain of single-dep,
+  single-subscriber possibly-stale computeds validates with one descent
+  and one climb — no recursion frames. Deep-chain propagation went from
+  1.4x to parity.
+- **Plain-success recompute inline.** The seam that folds async outcomes
+  into node state is only called for async-touched evaluations; a plain
+  successful evaluation resolves to the equality cutoff inline.
+- **Engine core in a single-instantiation closure + local const views.**
+  Bundlers emit module state as mutable top-level `var`s, so every arena
+  access compiled to a context-slot load that could not be folded or
+  reused across calls. Binding the arena views as function-scope consts
+  (and opening hot functions with local views) removed most of those
+  loads; wide fan-out propagation improved from ~1.4x to ~1.2x.
+- **Free-record stacks.** Intrusive free lists chain a dependent memory
+  read through every allocation; explicit stack arrays make each pop an
+  independent indexed load. The dense create/dispose lifecycle driver
+  (100 effects x 1000 reads) went from 11.3 ms to 3.7 ms.
+
+What remains (the current 1.06x): the read-and-validate paths still pay
+more per operation than object fields — a tracked read costs an id load
+plus a typed-array flags load where the object graph pays one field load,
+and the same multiplier applies through validation loops and effect
+re-runs. The rows still losing are exactly the small, cache-resident
+graphs dominated by those paths (wide fan-out 1.43x, effect
+create+dispose 1.38x, equality-cutoff chains 1.34x). The identified next
+step, not taken in this round, is a hybrid split: keep links, clocks, and
+propagation in the arena (where the large-graph rows are won) and move
+per-node hot words (flags, dep-cursor) onto the handles.
+
+Two claims from the earlier conclusion did not survive re-testing.
+Typed-array bounds checks were already exonerated by the masking
+experiment and remain exonerated. The finalizer-registration cost, judged
+inherent above, was removable for the dominant cell lifecycle via
+record detachment.
+
+## 2026-07-12, continued: 1.06x measured frontier
+
+Follow-up work after the first table: dependency cursors moved to handle
+fields, watcher reclaim slimmed to its three dirty slots, watched-edge
+insertion fused, node records returned to 8 words with side columns
+(the 16-word colocation had doubled creation's arena footprint for no
+measured walk gain), and two-ended arena allocation (nodes grow up,
+links grow down) so node records stay dense, the pin table spans only
+the node region, and link allocation is a bare bump.
+
+Result, on a quiet machine against the object-graph package at the same
+commit, three independent 3-round isolated runs: geometric-mean ratios
+1.0455, 1.0794, 1.0571 — mean 1.0607. The arena wins signal creation
+(0.93), every large dynamic-graph row (0.86-0.96), and update-heavy
+writes (1.00); it loses the small cache-resident validate/recompute rows
+by a uniform 1.10-1.28.
+
+Why the remaining gap does not close within this design: the split
+representation pays double addressing at its boundary. A node's hot
+state is consulted two ways — by handle (reads, recomputes) and by raw
+record id (the invalidation wave, dependency-validation loops, chain
+climbs). Any field moved onto the handle makes the handle-side cheaper
+by one load and the id-side more expensive by at least two (an owner
+lookup plus the field), and the id-side loops dominate exactly the rows
+that are behind. Counting loads per operation for every candidate split
+(flags on handles with per-link owner arrays; clocks as handle doubles)
+gives a non-positive net on this suite. The object graph's advantage on
+small hot graphs is that all per-node state sits behind one pointer at
+fixed offsets; the arena's advantage is density and no garbage-collector
+coupling, which is why it wins every row whose working set outgrows the
+cache. The two designs are each optimal on their own side of that line,
+and this suite weighs the small-graph side 12 rows to 6.
+
+## 2026-07-12 source convergence
+
+The fork now carries the source package's deterministic watcher ownership,
+conservative batch-revert semantics, structural `Atom`/`Computed` API,
+explicit signal policy errors, lazy ambient transition ownership, and
+React-phase tracked signal effects. The latter use two arena watchers per
+mounted effect: one owns the user's dependency edges and cleanup, while the
+other owns flattened draft-world source edges used only to wake root-relative
+comparisons. No per-node column or internals object was added.
+
+One representation experiment was rejected before commit. Making computed
+handles with `Object.create(ReactiveNode.prototype)` and storing `get` and
+`peek` as own fields, like the object-graph source package, regressed the
+isolated suite to 1.3015x geometric / 1.2619x aggregate. Keeping the same
+structural public type but using a private, non-exported class expression puts
+the shared methods on its prototype and restored the previous handle shape.
+The committed result measured 1.0395x geometric / 1.0049x aggregate over the
+20-row, three-round isolated comparison.
+
+The React seam benchmark also runs under the fork now (its child processes
+need Node's transform-types mode for the arena's `const enum`). One adjacent
+source/fork sample measured:
+
+| scenario | source fx2 | arena fork |
+| --- | ---: | ---: |
+| fanout median write-to-commit | 4.095 ms | 4.626 ms |
+| transition p95 urgent latency | 10.434 ms | 10.270 ms |
+| transition completion | 1664.513 ms | 1752.093 ms |
+| 5000-cell median mount | 60.032 ms | 65.303 ms |
+
+These single React samples are direction checks, not stable estimates; the
+isolated graph comparison is the repeatable performance gate. Typecheck and
+all 337 package tests, including the nine adversarial scheduled-effect cases,
+pass at this point.

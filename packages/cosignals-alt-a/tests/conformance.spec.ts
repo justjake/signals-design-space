@@ -14,31 +14,31 @@
  * invisible when it contains everything and when it contains nothing
  * relevant.
  */
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest'
 import {
 	SkipTest,
 	setExpect,
 	testSuite,
 	type ReactiveFramework,
-} from 'reactive-framework-test-suite';
-import { createCosignalEngine, type CosignalEngine, type EngineOptions } from '../src/engine';
-import { createForkDouble } from '../src/fork-double';
+} from 'reactive-framework-test-suite'
+import { createCosignalEngine, type CosignalEngine, type EngineOptions } from '../src/engine'
+import { createForkDouble } from '../src/fork-double'
 
-setExpect(expect);
+setExpect(expect)
 
 type Episode = {
-	name: string;
-	make(): { engine: CosignalEngine; write: (doWrite: () => void) => void };
-};
+	name: string
+	make(): { engine: CosignalEngine; write: (doWrite: () => void) => void }
+}
 
 function directEpisode(name: string, options?: EngineOptions): Episode {
 	return {
 		name,
 		make() {
-			const engine = createCosignalEngine(options);
-			return { engine, write: (doWrite) => doWrite() };
+			const engine = createCosignalEngine(options)
+			return { engine, write: (doWrite) => doWrite() }
 		},
-	};
+	}
 }
 
 const episodes: Episode[] = [
@@ -51,47 +51,47 @@ const episodes: Episode[] = [
 	{
 		name: 'logged synthetic-retire (17.5a)',
 		make() {
-			const engine = createCosignalEngine();
-			const fork = createForkDouble();
-			engine.attachFork(fork);
-			fork.registerRoot('root');
+			const engine = createCosignalEngine()
+			const fork = createForkDouble()
+			engine.attachFork(fork)
+			fork.registerRoot('root')
 			// Top-level writes ride a fresh deferred batch retired immediately;
 			// nested writes (effect cascades inside the outer write's stack)
 			// go through as plain urgent writes.
-			let writing = false;
+			let writing = false
 			return {
 				engine,
 				write(doWrite) {
 					if (writing) {
-						doWrite();
-						return;
+						doWrite()
+						return
 					}
-					writing = true;
+					writing = true
 					try {
-						const b = fork.openBatch('deferred');
-						b.run(doWrite);
-						b.retire(true);
+						const b = fork.openBatch('deferred')
+						b.run(doWrite)
+						b.retire(true)
 					} finally {
-						writing = false;
+						writing = false
 					}
 				},
-			};
+			}
 		},
 	},
 	{
 		name: 'logged unrelated-live-batch (17.5b)',
 		make() {
-			const engine = createCosignalEngine();
-			const fork = createForkDouble();
-			engine.attachFork(fork);
-			fork.registerRoot('root');
-			const unrelated = engine.atom(0);
-			const t = fork.openBatch('deferred');
-			t.run(() => unrelated.set(1)); // a live log + marks elsewhere, forever
-			return { engine, write: (doWrite) => doWrite() };
+			const engine = createCosignalEngine()
+			const fork = createForkDouble()
+			engine.attachFork(fork)
+			fork.registerRoot('root')
+			const unrelated = engine.atom(0)
+			const t = fork.openBatch('deferred')
+			t.run(() => unrelated.set(1)) // a live log + marks elsewhere, forever
+			return { engine, write: (doWrite) => doWrite() }
 		},
 	},
-];
+]
 
 for (const episode of episodes) {
 	describe(`§17.1 conformance :: ${episode.name}`, () => {
@@ -99,38 +99,40 @@ for (const episode of episodes) {
 			describe(section, () => {
 				for (const [name, fn] of Object.entries(cases)) {
 					test(name, () => {
-						const { engine, write } = episode.make();
+						const { engine, write } = episode.make()
 						const framework: ReactiveFramework = {
 							name: `cosignals-alt-a ${episode.name}`,
 							signal<T>(initialValue: T) {
-								const a = engine.atom<T>(initialValue);
+								const a = engine.atom<T>(initialValue)
 								return {
 									read: () => a.state,
 									write: (v: T) => write(() => a.set(v)),
-								};
+								}
 							},
 							computed<T>(fnc: () => T) {
-								const c = engine.computed<T>(fnc);
-								return { read: () => c.state };
+								const c = engine.computed<T>(fnc)
+								return { read: () => c.state }
 							},
 							effect: (fne) => engine.effect(fne),
 							run(fnr) {
-								engine.effectScope(fnr)();
+								engine.effectScope(fnr)()
 							},
 							batch: (fnb) => {
-								engine.batch(fnb);
+								engine.batch(fnb)
 							},
 							untracked: (fnu) => engine.untracked(fnu),
-						};
-						try {
-							framework.run(() => fn(framework));
-						} catch (e) {
-							if (e instanceof SkipTest) return;
-							throw e;
 						}
-					});
+						try {
+							framework.run(() => fn(framework))
+						} catch (e) {
+							if (e instanceof SkipTest) {
+								return
+							}
+							throw e
+						}
+					})
 				}
-			});
+			})
 		}
-	});
+	})
 }

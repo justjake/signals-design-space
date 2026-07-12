@@ -1,0 +1,145 @@
+framework                        , test                                                         , time    
+Alien Signals                    , avoidablePropagation                                         , 102.52  
+Cosignal                         , avoidablePropagation                                         , 110.31  
+Cosignal Alt A                   , avoidablePropagation                                         , 136.12  
+Cosignal Alt B                   , avoidablePropagation                                         , 133.73  
+Royale FM1                       , avoidablePropagation                                         , 183.11  
+Royale FM2                       , avoidablePropagation                                         , 166.72  
+Royale FH1                       , avoidablePropagation                                         , 179.81  
+Royale FH2                       , avoidablePropagation                                         , 118.72  
+Royale FX1                       , avoidablePropagation                                         , 154.87  
+Royale FX2                       , avoidablePropagation                                         , 173.44  
+Royale SH1                       , avoidablePropagation                                         , 209.71  
+Royale SH2                       , avoidablePropagation                                         , 232.96  
+Royale SX1                       , avoidablePropagation                                         , 263.38  
+Royale SX2                       , avoidablePropagation                                         , 267.88  
+Royale SM1                       , avoidablePropagation                                         , 293.70  
+Royale SM2                       , avoidablePropagation                                         , 232.86  
+Alien Signals                    , broadPropagation                                             , 85.12   
+Cosignal                         , broadPropagation                                             , 79.53   
+Cosignal Alt A                   , broadPropagation                                             , 121.63  
+Cosignal Alt B                   , broadPropagation                                             , 117.39  
+Royale FM1                       , broadPropagation                                             , 192.15  
+Royale FM2                       , broadPropagation                                             , 183.75  
+Royale FH1                       , broadPropagation                                             , 212.70  
+Royale FH2                       , broadPropagation                                             , 111.21  
+Royale FX1                       , broadPropagation                                             , 121.93  
+Royale FX2                       , broadPropagation                                             , 105.54  
+Royale SH1                       , broadPropagation                                             , 400.66  
+Royale SH2                       , broadPropagation                                             , 193.34  
+Royale SX1                       , broadPropagation                                             , 344.90  
+Royale SX2                       , broadPropagation                                             , 541.02  
+Royale SM1                       , broadPropagation                                             , 766.62  
+Royale SM2                       , broadPropagation                                             , 372.64  
+Alien Signals                    , deepPropagation                                              , 34.42   
+Cosignal                         , deepPropagation                                              , 30.79   
+Cosignal Alt A                   , deepPropagation                                              , 51.38   
+Cosignal Alt B                   , deepPropagation                                              , 50.16   
+Royale FM1                       , deepPropagation                                              , 96.16   
+Royale FM2                       , deepPropagation                                              , 129.72  
+Royale FH1                       , deepPropagation                                              , 79.19   
+Royale FH2                       , deepPropagation                                              , 46.99   
+Royale FX1                       , deepPropagation                                              , 51.63   
+Royale FX2                       , deepPropagation                                              , 53.34   
+Royale SH1                       , deepPropagation                                              , 116.70  
+Royale SH2                       , deepPropagation                                              , 68.18   
+Royale SX1                       , deepPropagation                                              , 122.70  
+Royale SX2                       , deepPropagation                                              , 170.68  
+Royale SM1                       , deepPropagation                                              , 233.82  
+Royale SM2                       , deepPropagation                                              , 117.34  
+Alien Signals                    , diamond                                                      , 89.21   
+Cosignal                         , diamond                                                      , 97.06   
+Cosignal Alt A                   , diamond                                                      , 107.39  
+Cosignal Alt B                   , diamond                                                      , 118.36  
+Royale FM1                       , diamond                                                      , 146.12  
+Royale FM2                       , diamond                                                      , 150.68  
+Royale FH1                       , diamond                                                      , 142.61  
+Royale FH2                       , diamond                                                      , 128.73  
+Royale FX1                       , diamond                                                      , 121.48  
+Royale FX2                       , diamond                                                      , 117.05  
+Royale SH1                       , diamond                                                      , 236.24  
+Royale SH2                       , diamond                                                      , 188.02  
+Royale SX1                       , diamond                                                      , 274.82  
+Royale SX2                       , diamond                                                      , 269.42  
+Royale SM1                       , diamond                                                      , 398.12  
+Royale SM2                       , diamond                                                      , 239.26  
+Alien Signals                    , mux                                                          , 78.12   
+Cosignal                         , mux                                                          , 68.79   
+Cosignal Alt A                   , mux                                                          , 93.54   
+Cosignal Alt B                   , mux                                                          , 89.99   
+Royale FM1                       , mux                                                          , 139.77  
+Royale FM2                       , mux                                                          , 137.70  
+Royale FH1                       , mux                                                          , 152.08  
+Royale FH2                       , mux                                                          , 99.44   
+Royale FX1                       , mux                                                          , 118.72  
+Royale FX2                       , mux                                                          , 98.40   
+Royale SH1                       , mux                                                          , 227.35  
+Royale SH2                       , mux                                                          , 116.85  
+Royale SX1                       , mux                                                          , 205.07  
+Royale SX2                       , mux                                                          , 290.82  
+Royale SM1                       , mux                                                          , 242.19  
+Royale SM2                       , mux                                                          , 232.36  
+Alien Signals                    , repeatedObservers                                            , 22.17   
+Cosignal                         , repeatedObservers                                            , 18.03   
+Cosignal Alt A                   , repeatedObservers                                            , 19.77   
+Cosignal Alt B                   , repeatedObservers                                            , 19.89   
+Royale FM1                       , repeatedObservers                                            , 20.85   
+Royale FM2                       , repeatedObservers                                            , 24.18   
+Royale FH1                       , repeatedObservers                                            , 29.24   
+Royale FH2                       , repeatedObservers                                            , 19.94   
+Royale FX1                       , repeatedObservers                                            , 21.13   
+Royale FX2                       , repeatedObservers                                            , 24.14   
+Royale SH1                       , repeatedObservers                                            , 26.83   
+Royale SH2                       , repeatedObservers                                            , 34.50   
+Royale SX1                       , repeatedObservers                                            , 38.16   
+Royale SX2                       , repeatedObservers                                            , 34.23   
+Royale SM1                       , repeatedObservers                                            , 44.68   
+Royale SM2                       , repeatedObservers                                            , 29.57   
+Alien Signals                    , triangle                                                     , 24.14   
+Cosignal                         , triangle                                                     , 28.82   
+Cosignal Alt A                   , triangle                                                     , 34.16   
+Cosignal Alt B                   , triangle                                                     , 34.63   
+Royale FM1                       , triangle                                                     , 41.62   
+Royale FM2                       , triangle                                                     , 45.89   
+Royale FH1                       , triangle                                                     , 43.49   
+Royale FH2                       , triangle                                                     , 29.47   
+Royale FX1                       , triangle                                                     , 34.73   
+Royale FX2                       , triangle                                                     , 33.76   
+Royale SH1                       , triangle                                                     , 84.27   
+Royale SH2                       , triangle                                                     , 48.83   
+Royale SX1                       , triangle                                                     , 80.46   
+Royale SX2                       , triangle                                                     , 102.46  
+Royale SM1                       , triangle                                                     , 121.66  
+Royale SM2                       , triangle                                                     , 83.43   
+Alien Signals                    , unstable                                                     , 23.43   
+Cosignal                         , unstable                                                     , 20.21   
+Cosignal Alt A                   , unstable                                                     , 25.74   
+Cosignal Alt B                   , unstable                                                     , 27.30   
+Royale FM1                       , unstable                                                     , 27.33   
+Royale FM2                       , unstable                                                     , 89.05   
+Royale FH1                       , unstable                                                     , 74.49   
+Royale FH2                       , unstable                                                     , 20.71   
+Royale FX1                       , unstable                                                     , 25.87   
+Royale FX2                       , unstable                                                     , 65.25   
+Royale SH1                       , unstable                                                     , 33.21   
+Royale SH2                       , unstable                                                     , 37.79   
+Royale SX1                       , unstable                                                     , 64.62   
+Royale SX2                       , unstable                                                     , 42.37   
+Royale SM1                       , unstable                                                     , 60.55   
+Royale SM2                       , unstable                                                     , 39.05   
+Alien Signals                    , molBench                                                     , 14.22   
+Cosignal                         , molBench                                                     , 13.66   
+Cosignal Alt A                   , molBench                                                     , 13.92   
+Cosignal Alt B                   , molBench                                                     , 14.16   
+Royale FM1                       , molBench                                                     , 14.43   
+Royale FM2                       , molBench                                                     , 14.64   
+Royale FH1                       , molBench                                                     , 14.90   
+Royale FH2                       , molBench                                                     , 13.64   
+Royale FX1                       , molBench                                                     , 14.21   
+Royale FX2                       , molBench                                                     , 14.20   
+Royale SH1                       , molBench                                                     , 14.59   
+Royale SH2                       , molBench                                                     , 14.17   
+Royale SX1                       , molBench                                                     , 14.89   
+Royale SX2                       , molBench                                                     , 14.61   
+Royale SM1                       , molBench                                                     , 18.59   
+Royale SM2                       , molBench                                                     , 14.45   

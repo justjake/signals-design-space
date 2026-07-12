@@ -20,7 +20,11 @@
  * This view is where the two meet, so it derives the Sets — render-pass wrappers
  * with `maskSlots`, and the `VisibilityHost` the imported rule reads.
  */
-import { visible, type VisibilityHost, type World as ModelWorld } from '../../cosignals-oracle/src/model.js';
+import {
+	visible,
+	type VisibilityHost,
+	type World as ModelWorld,
+} from '../../cosignals-oracle/src/model.js'
 import type {
 	AnyInternals as EInternals,
 	AtomInternals,
@@ -34,94 +38,98 @@ import type {
 	BatchSlotSet,
 	Value,
 	World,
-} from '../src/CosignalEngine.js';
+} from '../src/CosignalEngine.js'
 
 /** The full-history mirror a lockstep driver owns and feeds. */
 export class RefereeMirror {
-	private origins = new Map<AtomInternals, Value>();
-	private archives = new Map<AtomInternals, WriteLogEntry[]>();
+	private origins = new Map<AtomInternals, Value>()
+	private archives = new Map<AtomInternals, WriteLogEntry[]>()
 
 	/** Install the drop feed on an engine (call once, at driver setup): every
 	 * entry leaving a write log — fold-valve fold or episode drop —
 	 * archives here. */
 	attach(engine: CosignalEngine): void {
-		engine.onLogEntryDrop = (atom, entry) => this.archiveOf(atom).push(entry);
+		engine.onLogEntryDrop = (atom, entry) => this.archiveOf(atom).push(entry)
 	}
 
 	/** Record an atom's origin (at creation; refreshed by originsFromBase). */
 	setOrigin(atom: AtomInternals, value: Value): void {
-		this.origins.set(atom, value);
+		this.origins.set(atom, value)
 	}
 
 	/** The quiescence episode reset sets origin to base (matching the model's episode reset). */
 	originsFromBase(engine: CosignalEngine): void {
 		for (const n of engine.idToInternals.values()) {
-			if (n.kind === 'atom') this.origins.set(n, n.base);
+			if (n.kind === 'atom') {
+				this.origins.set(n, n.base)
+			}
 		}
 	}
 
 	/** Quiescence: archives belong to the dead episode (as in the model's episode reset). */
 	clearArchives(): void {
-		this.archives.clear();
+		this.archives.clear()
 	}
 
 	originOf(atom: AtomInternals): Value {
-		return this.origins.get(atom);
+		return this.origins.get(atom)
 	}
 
 	archiveOf(atom: AtomInternals): WriteLogEntry[] {
-		let a = this.archives.get(atom);
+		let a = this.archives.get(atom)
 		if (a === undefined) {
-			a = [];
-			this.archives.set(atom, a);
+			a = []
+			this.archives.set(atom, a)
 		}
-		return a;
+		return a
 	}
 }
 
 /** A view node: the model-shaped face of one engine atom. */
 type ViewAtom = {
-	kind: 'atom';
-	name: string;
-	readonly log: WriteLogEntry[];
-	readonly baseSeq: number;
-	readonly archive: WriteLogEntry[];
-	readonly origin: Value;
-	__engine: AtomInternals;
-};
-type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: EInternals };
+	kind: 'atom'
+	name: string
+	readonly log: WriteLogEntry[]
+	readonly baseSeq: number
+	readonly archive: WriteLogEntry[]
+	readonly origin: Value
+	__engine: AtomInternals
+}
+type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: EInternals }
 
 /** A view render pass: the model-shaped face of one engine render pass — the Set-valued
  * `maskSlots` the oracle's tenancy check reads, derived from the bit form. */
 type ViewRenderPass = {
-	id: RenderPassId;
-	root: RootId;
-	pin: Seq;
-	state: RenderPass['state'];
-	maskBatches: RenderPass['maskBatches'];
-	maskSlots: Set<BatchSlot>;
-	__engine: RenderPass;
-};
+	id: RenderPassId
+	root: RootId
+	pin: Seq
+	state: RenderPass['state']
+	maskBatches: RenderPass['maskBatches']
+	maskSlots: Set<BatchSlot>
+	__engine: RenderPass
+}
 
 /** View face → the engine record behind it (pass-through when already bare). */
 function unwrap<T>(n: unknown): T {
-	const e = (n as { __engine?: T }).__engine;
-	return e !== undefined ? e : (n as T);
+	const e = (n as { __engine?: T }).__engine
+	return e !== undefined ? e : (n as T)
 }
 
 /** Slot-set bits → the model's Set form (bit i = slot i). */
 function slotsOf(bits: BatchSlotSet): Set<BatchSlot> {
-	const out = new Set<BatchSlot>();
+	const out = new Set<BatchSlot>()
 	for (let s = 0; bits !== 0; s++, bits >>>= 1) {
-		if ((bits & 1) === 1) out.add(s);
+		if ((bits & 1) === 1) {
+			out.add(s)
+		}
 	}
-	return out;
+	return out
 }
 
 /** Worlds built by the oracle's checkers carry VIEW render passes; the engine folds
  * over its own render records. */
 function engineWorld(w: World): World {
-	return w.kind === 'render' ? { kind: 'render', render: unwrap<RenderPass>(w.render) } : w;
+	return w.kind === 'render' ? { kind: 'render', render: unwrap<RenderPass>(w.render) } : w
 }
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
@@ -131,9 +139,9 @@ function engineWorld(w: World): World {
 function applyOp(atom: AtomInternals, op: WriteLogEntry['op'], prev: Value): Value {
 	switch (op.kind) {
 		case 'set':
-			return op.value;
+			return op.value
 		case 'update':
-			return op.fn(prev);
+			return op.fn(prev)
 	}
 }
 
@@ -144,81 +152,103 @@ function applyOp(atom: AtomInternals, op: WriteLogEntry['op'], prev: Value): Val
  */
 export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record<string, unknown> {
 	const viewNode = (n: EInternals): ViewNode => {
-		if (n.kind !== 'atom') return { kind: 'computed', name: n.name, __engine: n };
+		if (n.kind !== 'atom') {
+			return { kind: 'computed', name: n.name, __engine: n }
+		}
 		return {
 			kind: 'atom',
 			name: n.name,
 			get log(): WriteLogEntry[] {
-				return n.log.materialize();
+				return n.log.materialize()
 			},
 			get baseSeq(): number {
-				return n.baseSeq;
+				return n.baseSeq
 			},
 			get archive(): WriteLogEntry[] {
-				return mirror.archiveOf(n);
+				return mirror.archiveOf(n)
 			},
 			get origin(): Value {
-				return mirror.originOf(n);
+				return mirror.originOf(n)
 			},
 			__engine: n,
-		};
-	};
+		}
+	}
 	const viewRenderPass = (p: RenderPass): ViewRenderPass => ({
-		id: p.id, root: p.root, pin: p.pin, state: p.state,
-		maskBatches: p.maskBatches, maskSlots: slotsOf(p.maskBits),
+		id: p.id,
+		root: p.root,
+		pin: p.pin,
+		state: p.state,
+		maskBatches: p.maskBatches,
+		maskSlots: slotsOf(p.maskBits),
 		__engine: p,
-	});
+	})
 	/** The imported visibility rule's host, answered from the engine's bit
 	 * masks (the two set-valued lookups the render/committed clauses read). */
 	const host: VisibilityHost = {
 		includedSet: (render) => slotsOf(unwrap<RenderPass>(render).includedBits),
 		committedSlotsNow: (root) => slotsOf(engine.root(root).committedBits),
-	};
+	}
 	return {
 		get idToNode(): Map<number, ViewNode> {
-			const out = new Map<number, ViewNode>();
-			for (const [id, n] of engine.idToInternals) out.set(id, viewNode(n));
-			return out;
+			const out = new Map<number, ViewNode>()
+			for (const [id, n] of engine.idToInternals) {
+				out.set(id, viewNode(n))
+			}
+			return out
 		},
 		get idToRenderPass(): Map<RenderPassId, ViewRenderPass> {
-			const out = new Map<RenderPassId, ViewRenderPass>();
-			for (const [id, p] of engine.idToRenderPass) out.set(id, viewRenderPass(p));
-			return out;
+			const out = new Map<RenderPassId, ViewRenderPass>()
+			for (const [id, p] of engine.idToRenderPass) {
+				out.set(id, viewRenderPass(p))
+			}
+			return out
 		},
 		get roots() {
-			return engine.roots;
+			return engine.roots
 		},
 		get slots() {
-			return engine.slots;
+			return engine.slots
 		},
 		get idToBatch() {
-			return engine.idToBatch;
+			return engine.idToBatch
 		},
 		get seq() {
-			return engine.seq;
+			return engine.seq
 		},
 		quiescent: () => engine.quiescent(),
 		evaluate: (n: unknown, w: World) => engine.evaluate(unwrap<EInternals>(n), engineWorld(w)),
-		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap<EInternals>(n) as AtomInternals, engineWorld(w)),
+		foldAtom: (n: unknown, w: World) =>
+			engine.foldAtom(unwrap<EInternals>(n) as AtomInternals, engineWorld(w)),
 		newestValue: (n: unknown) => engine.newestValue(unwrap<EInternals>(n)),
-		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<EInternals>(n), root),
-		renderValue: (n: unknown, p: unknown) => engine.renderValue(unwrap<EInternals>(n), unwrap<RenderPass>(p)),
+		committedValue: (n: unknown, root: string) =>
+			engine.committedValue(unwrap<EInternals>(n), root),
+		renderValue: (n: unknown, p: unknown) =>
+			engine.renderValue(unwrap<EInternals>(n), unwrap<RenderPass>(p)),
 		/** The retention invariant's full-history fold: origin + archive + write log. */
 		shadowFoldAtom(n: unknown, world: World): Value {
-			const atom = unwrap<EInternals>(n) as AtomInternals;
+			const atom = unwrap<EInternals>(n) as AtomInternals
 			// The rule is WriteLogEntry/Set-shaped; worlds arrive bit-shaped (mountFix)
 			// or carrying view render passes (whose host lookups unwrap) — translate here.
 			const w: ModelWorld =
 				world.kind === 'mountFix'
-					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root }
-					: (world as unknown as ModelWorld);
-			let value = mirror.originOf(atom);
+					? {
+							kind: 'mountFix',
+							maskSlots: slotsOf(world.maskBits),
+							pin: world.pin,
+							root: world.root,
+						}
+					: (world as unknown as ModelWorld)
+			let value = mirror.originOf(atom)
 			for (const e of [...mirror.archiveOf(atom), ...atom.log.materialize()]) {
-				if (!visible(host, e, w)) continue;
-				const next = applyOp(atom, e.op, value);
-				if (!atom.equals(next, value)) value = next;
+				if (!visible(host, e, w)) {
+					continue
+				}
+				const next = applyOp(atom, e.op, value)
+				if (!atom.equals(next, value)) {
+					value = next
+				}
 			}
-			return value;
+			return value
 		},
-	};
+	}
 }

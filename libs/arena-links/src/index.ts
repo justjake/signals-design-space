@@ -54,64 +54,63 @@
  */
 
 export interface ReactiveNode {
-	id: number;
-	deps: number;
-	depsTail: number;
-	subs: number;
-	subsTail: number;
-	flags: number;
+	id: number
+	deps: number
+	depsTail: number
+	subs: number
+	subsTail: number
+	flags: number
 }
 
-interface EffectScopeNode extends ReactiveNode {
-}
+interface EffectScopeNode extends ReactiveNode {}
 
 interface EffectNode extends ReactiveNode {
-	fn(): (() => void) | void;
-	cleanup: (() => void) | void;
+	fn(): (() => void) | void
+	cleanup: (() => void) | void
 }
 
 interface ComputedNode<T = any> extends ReactiveNode {
-	value: T | undefined;
-	getter: (previousValue?: T) => T;
+	value: T | undefined
+	getter: (previousValue?: T) => T
 }
 
 interface SignalNode<T = any> extends ReactiveNode {
-	currentValue: T;
-	pendingValue: T;
+	currentValue: T
+	pendingValue: T
 }
 
 // ReactiveFlags (plain consts so esbuild/V8 always inline them).
-const Mutable = 1;
-const Watching = 2;
-const RecursedCheck = 4;
-const Recursed = 8;
-const Dirty = 16;
-const Pending = 32;
+const Mutable = 1
+const Watching = 2
+const RecursedCheck = 4
+const Recursed = 8
+const Dirty = 16
+const Pending = 32
 // API-layer bit, outside the system flags' range (see upstream index.ts).
-const HasChildEffect = 64;
+const HasChildEffect = 64
 
 // Link record field offsets (stride 8; slot 7 is padding).
-const F_VERSION = 0;
-const F_DEP = 1;
-const F_SUB = 2;
-const F_PREV_SUB = 3;
-const F_NEXT_SUB = 4;
-const F_PREV_DEP = 5;
-const F_NEXT_DEP = 6;
+const F_VERSION = 0
+const F_DEP = 1
+const F_SUB = 2
+const F_PREV_SUB = 3
+const F_NEXT_SUB = 4
+const F_PREV_DEP = 5
+const F_NEXT_DEP = 6
 
 /** VERSION value marking a freed/unlinked record. `cycle` wraps as int32 and
  * passes -1 only once per 2^32 updates; the dedup that reads VERSION also
  * matches dep/sub ids, so a collision cannot produce a false positive link. */
-const TOMBSTONE = -1;
+const TOMBSTONE = -1
 
 /** Initial arena capacity in records. Overridable via env so the growth +
  * epoch-restart machinery can be stress-tested (e.g. conformance with 2). */
 const INITIAL_LINK_RECORDS = (() => {
-	const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-		.process?.env?.ARENA_LINKS_INITIAL_RECORDS;
-	const n = raw === undefined ? 0 : Number(raw);
-	return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 1024;
-})();
+	const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+		?.env?.ARENA_LINKS_INITIAL_RECORDS
+	const n = raw === undefined ? 0 : Number(raw)
+	return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 1024
+})()
 
 // ---------------------------------------------------------------------------
 // Module-level state. Everything mutable lives here so a closure rebuild
@@ -120,122 +119,122 @@ const INITIAL_LINK_RECORDS = (() => {
 
 /** id -> node. Index 0 burned. Entries are cleared (set undefined, stays
  * PACKED) when a node's id is recycled. */
-const nodesById: (ReactiveNode | undefined)[] = [undefined];
-const nodeFree: number[] = [];
-let nodeFreeTop = 0;
+const nodesById: (ReactiveNode | undefined)[] = [undefined]
+const nodeFree: number[] = []
+let nodeFreeTop = 0
 
 /** Link allocator: bump pointer (in ints) + free-list head (link id). */
-let linkTop = 8; // record 0 burned
-let linkFreeHead = 0;
-let linkRecordCap = INITIAL_LINK_RECORDS;
+let linkTop = 8 // record 0 burned
+let linkFreeHead = 0
+let linkRecordCap = INITIAL_LINK_RECORDS
 
 /** Deferred frees while a guarded walk (checkDirty/purge/dispose) is active:
  * records/ids must stay frozen so stale traversals behave like upstream's
  * stale-but-intact Link objects. Drained when guardDepth returns to 0. */
-let guardDepth = 0;
-const pendingLinks: number[] = [];
-let pendingLinkTop = 0;
-const pendingNodes: (ReactiveNode | undefined)[] = [];
-let pendingNodeTop = 0;
+let guardDepth = 0
+const pendingLinks: number[] = []
+let pendingLinkTop = 0
+const pendingNodes: (ReactiveNode | undefined)[] = []
+let pendingNodeTop = 0
 
 /** Bumped on every growth; walks compare it to detect a stale L binding. */
-let arenaEpoch = 0;
+let arenaEpoch = 0
 
 // Persistent traversal scratch stacks (Int32Array, doubling growth, base-
 // pointer save/restore per activation so re-entrant calls stay isolated).
-let propStack = new Int32Array(1024);
-let propTop = 0;
-let cdStack = new Int32Array(1024);
-let cdTop = 0;
+let propStack = new Int32Array(1024)
+let propTop = 0
+let cdStack = new Int32Array(1024)
+let cdTop = 0
 
 // API-layer state (transliterated from upstream index.ts).
-let cycle = 0;
-let runDepth = 0;
-let batchDepth = 0;
-let notifyIndex = 0;
-let queuedLength = 0;
-let activeSub: ReactiveNode | undefined;
-const queued: (EffectNode | undefined)[] = [];
+let cycle = 0
+let runDepth = 0
+let batchDepth = 0
+let notifyIndex = 0
+let queuedLength = 0
+let activeSub: ReactiveNode | undefined
+const queued: (EffectNode | undefined)[] = []
 
 // The ONE mutable engine reference + a module alias of its buffer for the
 // rare L reads that happen outside the closure (notify, drain, epoch-restart
 // glue). Hot walks never read these.
-let engine = createEngine(linkRecordCap, undefined);
-let LM = engine.L;
+let engine = createEngine(linkRecordCap, undefined)
+let LM = engine.L
 
 // ---------------------------------------------------------------------------
 // Allocation helpers (module level; no L access except via LM in drain).
 // ---------------------------------------------------------------------------
 
 function registerNode(node: ReactiveNode): number {
-	let id: number;
+	let id: number
 	if (nodeFreeTop !== 0) {
-		id = nodeFree[--nodeFreeTop];
-		nodesById[id] = node;
+		id = nodeFree[--nodeFreeTop]
+		nodesById[id] = node
 	} else {
-		id = nodesById.length;
-		nodesById.push(node);
+		id = nodesById.length
+		nodesById.push(node)
 	}
-	node.id = id;
-	return id;
+	node.id = id
+	return id
 }
 
 /** Recycle a node's id once it is fully unlinked. Deferred while a guarded
  * walk is active (stale link records may still name this id). */
 function maybeFreeNodeId(node: ReactiveNode): void {
 	if (node.id === 0 || node.subs !== 0 || node.deps !== 0 || node.depsTail !== 0) {
-		return;
+		return
 	}
 	if (guardDepth > 0) {
-		pendingNodes[pendingNodeTop++] = node;
-		return;
+		pendingNodes[pendingNodeTop++] = node
+		return
 	}
-	nodesById[node.id] = undefined;
-	nodeFree[nodeFreeTop++] = node.id;
-	node.id = 0;
+	nodesById[node.id] = undefined
+	nodeFree[nodeFreeTop++] = node.id
+	node.id = 0
 }
 
 function drainPendingFrees(): void {
 	for (let i = 0; i < pendingLinkTop; ++i) {
-		const id = pendingLinks[i];
-		LM[id + F_NEXT_DEP] = linkFreeHead;
-		linkFreeHead = id;
+		const id = pendingLinks[i]
+		LM[id + F_NEXT_DEP] = linkFreeHead
+		linkFreeHead = id
 	}
-	pendingLinkTop = 0;
+	pendingLinkTop = 0
 	for (let i = 0; i < pendingNodeTop; ++i) {
-		const node = pendingNodes[i]!;
-		pendingNodes[i] = undefined;
+		const node = pendingNodes[i]!
+		pendingNodes[i] = undefined
 		// Re-check: the node may have been re-linked inside the guarded window,
 		// and duplicates are filtered by the id === 0 check.
-		maybeFreeNodeId(node);
+		maybeFreeNodeId(node)
 	}
-	pendingNodeTop = 0;
+	pendingNodeTop = 0
 }
 
 function pushProp(value: number): void {
 	if (propTop === propStack.length) {
-		const bigger = new Int32Array(propStack.length << 1);
-		bigger.set(propStack);
-		propStack = bigger;
+		const bigger = new Int32Array(propStack.length << 1)
+		bigger.set(propStack)
+		propStack = bigger
 	}
-	propStack[propTop++] = value;
+	propStack[propTop++] = value
 }
 
 function pushCd(value: number): void {
 	if (cdTop === cdStack.length) {
-		const bigger = new Int32Array(cdStack.length << 1);
-		bigger.set(cdStack);
-		cdStack = bigger;
+		const bigger = new Int32Array(cdStack.length << 1)
+		bigger.set(cdStack)
+		cdStack = bigger
 	}
-	cdStack[cdTop++] = value;
+	cdStack[cdTop++] = value
 }
 
 function grow(): void {
-	linkRecordCap <<= 1;
-	const next = createEngine(linkRecordCap, LM);
-	engine = next;
-	LM = next.L;
-	++arenaEpoch;
+	linkRecordCap <<= 1
+	const next = createEngine(linkRecordCap, LM)
+	engine = next
+	LM = next.L
+	++arenaEpoch
 }
 
 // ---------------------------------------------------------------------------
@@ -244,11 +243,11 @@ function grow(): void {
 // ---------------------------------------------------------------------------
 
 function createEngine(recordCap: number, old: Int32Array | undefined) {
-	const L = new Int32Array(recordCap << 3);
+	const L = new Int32Array(recordCap << 3)
 	if (old !== undefined) {
-		L.set(old);
+		L.set(old)
 	}
-	const END = recordCap << 3;
+	const END = recordCap << 3
 
 	return {
 		L,
@@ -261,17 +260,17 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		purgeDeps,
 		disposeAllDepsInReverse,
 		purgeChildDeps,
-	};
+	}
 
 	/** Recycle or thread a freed record. Deferred while a guarded walk is
 	 * active so stale traversals see frozen fields. VERSION is already
 	 * TOMBSTONE (set by unlink) by the time this runs. */
 	function freeLink(link: number): void {
 		if (guardDepth > 0) {
-			pendingLinks[pendingLinkTop++] = link;
+			pendingLinks[pendingLinkTop++] = link
 		} else {
-			L[link + F_NEXT_DEP] = linkFreeHead;
-			linkFreeHead = link;
+			L[link + F_NEXT_DEP] = linkFreeHead
+			linkFreeHead = link
 		}
 	}
 
@@ -279,56 +278,56 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		// Growth check BEFORE any L state enters locals: this is the only
 		// allocation site, hence the only place a rebuild can originate.
 		if (linkFreeHead === 0 && linkTop === END) {
-			grow();
-			engine.link(dep, sub, version);
-			return;
+			grow()
+			engine.link(dep, sub, version)
+			return
 		}
-		const prevDep = sub.depsTail;
+		const prevDep = sub.depsTail
 		// Live records always carry nonzero DEP/SUB ids, so comparing against a
 		// (possibly 0) node id can never false-positive.
 		if (prevDep !== 0 && L[prevDep + F_DEP] === dep.id) {
-			return;
+			return
 		}
-		const nextDep = prevDep !== 0 ? L[prevDep + F_NEXT_DEP] : sub.deps;
+		const nextDep = prevDep !== 0 ? L[prevDep + F_NEXT_DEP] : sub.deps
 		if (nextDep !== 0 && L[nextDep + F_DEP] === dep.id) {
-			L[nextDep + F_VERSION] = version;
-			sub.depsTail = nextDep;
-			return;
+			L[nextDep + F_VERSION] = version
+			sub.depsTail = nextDep
+			return
 		}
-		const prevSub = dep.subsTail;
+		const prevSub = dep.subsTail
 		if (prevSub !== 0 && L[prevSub + F_VERSION] === version && L[prevSub + F_SUB] === sub.id) {
-			return;
+			return
 		}
-		const depId = dep.id !== 0 ? dep.id : registerNode(dep);
-		const subId = sub.id !== 0 ? sub.id : registerNode(sub);
-		let newLink = linkFreeHead;
+		const depId = dep.id !== 0 ? dep.id : registerNode(dep)
+		const subId = sub.id !== 0 ? sub.id : registerNode(sub)
+		let newLink = linkFreeHead
 		if (newLink !== 0) {
-			linkFreeHead = L[newLink + F_NEXT_DEP];
+			linkFreeHead = L[newLink + F_NEXT_DEP]
 		} else {
-			newLink = linkTop;
-			linkTop += 8;
+			newLink = linkTop
+			linkTop += 8
 		}
-		sub.depsTail = newLink;
-		dep.subsTail = newLink;
-		L[newLink + F_VERSION] = version;
-		L[newLink + F_DEP] = depId;
-		L[newLink + F_SUB] = subId;
-		L[newLink + F_PREV_SUB] = prevSub;
-		L[newLink + F_NEXT_SUB] = 0;
-		L[newLink + F_PREV_DEP] = prevDep;
-		L[newLink + F_NEXT_DEP] = nextDep;
+		sub.depsTail = newLink
+		dep.subsTail = newLink
+		L[newLink + F_VERSION] = version
+		L[newLink + F_DEP] = depId
+		L[newLink + F_SUB] = subId
+		L[newLink + F_PREV_SUB] = prevSub
+		L[newLink + F_NEXT_SUB] = 0
+		L[newLink + F_PREV_DEP] = prevDep
+		L[newLink + F_NEXT_DEP] = nextDep
 		if (nextDep !== 0) {
-			L[nextDep + F_PREV_DEP] = newLink;
+			L[nextDep + F_PREV_DEP] = newLink
 		}
 		if (prevDep !== 0) {
-			L[prevDep + F_NEXT_DEP] = newLink;
+			L[prevDep + F_NEXT_DEP] = newLink
 		} else {
-			sub.deps = newLink;
+			sub.deps = newLink
 		}
 		if (prevSub !== 0) {
-			L[prevSub + F_NEXT_SUB] = newLink;
+			L[prevSub + F_NEXT_SUB] = newLink
 		} else {
-			dep.subs = newLink;
+			dep.subs = newLink
 		}
 	}
 
@@ -337,183 +336,183 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		// corners) degrades to a graceful walk-terminating no-op instead of
 		// corrupting the free list.
 		if (L[link + F_VERSION] === TOMBSTONE) {
-			return 0;
+			return 0
 		}
-		const dep = nodesById[L[link + F_DEP]]!;
-		const prevDep = L[link + F_PREV_DEP];
-		const nextDep = L[link + F_NEXT_DEP];
-		const nextSub = L[link + F_NEXT_SUB];
-		const prevSub = L[link + F_PREV_SUB];
-		L[link + F_VERSION] = TOMBSTONE;
+		const dep = nodesById[L[link + F_DEP]]!
+		const prevDep = L[link + F_PREV_DEP]
+		const nextDep = L[link + F_NEXT_DEP]
+		const nextSub = L[link + F_NEXT_SUB]
+		const prevSub = L[link + F_PREV_SUB]
+		L[link + F_VERSION] = TOMBSTONE
 		if (nextDep !== 0) {
-			L[nextDep + F_PREV_DEP] = prevDep;
+			L[nextDep + F_PREV_DEP] = prevDep
 		} else {
-			sub.depsTail = prevDep;
+			sub.depsTail = prevDep
 		}
 		if (prevDep !== 0) {
-			L[prevDep + F_NEXT_DEP] = nextDep;
+			L[prevDep + F_NEXT_DEP] = nextDep
 		} else {
-			sub.deps = nextDep;
+			sub.deps = nextDep
 		}
 		if (nextSub !== 0) {
-			L[nextSub + F_PREV_SUB] = prevSub;
+			L[nextSub + F_PREV_SUB] = prevSub
 		} else {
-			dep.subsTail = prevSub;
+			dep.subsTail = prevSub
 		}
-		freeLink(link);
+		freeLink(link)
 		if (prevSub !== 0) {
-			L[prevSub + F_NEXT_SUB] = nextSub;
+			L[prevSub + F_NEXT_SUB] = nextSub
 		} else if ((dep.subs = nextSub) === 0) {
-			unwatched(dep);
+			unwatched(dep)
 		}
-		return nextDep;
+		return nextDep
 	}
 
 	function propagate(link: number, innerWrite: boolean): void {
-		let next = L[link + F_NEXT_SUB];
-		const base = propTop;
+		let next = L[link + F_NEXT_SUB]
+		const base = propTop
 
 		try {
 			top: do {
-				const sub = nodesById[L[link + F_SUB]]!;
-				let flags = sub.flags;
+				const sub = nodesById[L[link + F_SUB]]!
+				let flags = sub.flags
 
 				if (!(flags & (RecursedCheck | Recursed | Dirty | Pending))) {
-					sub.flags = flags | Pending;
+					sub.flags = flags | Pending
 					if (innerWrite) {
-						sub.flags |= Recursed;
+						sub.flags |= Recursed
 					}
 				} else if (!(flags & (RecursedCheck | Recursed))) {
-					flags = 0;
+					flags = 0
 				} else if (!(flags & RecursedCheck)) {
-					sub.flags = (flags & ~Recursed) | Pending;
+					sub.flags = (flags & ~Recursed) | Pending
 				} else if (!(flags & (Dirty | Pending)) && isValidLink(link, sub)) {
-					sub.flags = flags | (Recursed | Pending);
-					flags &= Mutable;
+					sub.flags = flags | (Recursed | Pending)
+					flags &= Mutable
 				} else {
-					flags = 0;
+					flags = 0
 				}
 
 				if (flags & Watching) {
-					notify(sub as EffectNode);
+					notify(sub as EffectNode)
 				}
 
 				if (flags & Mutable) {
-					const subSubs = sub.subs;
+					const subSubs = sub.subs
 					if (subSubs !== 0) {
-						const nextSub = L[(link = subSubs) + F_NEXT_SUB];
+						const nextSub = L[(link = subSubs) + F_NEXT_SUB]
 						if (nextSub !== 0) {
-							pushProp(next);
-							next = nextSub;
+							pushProp(next)
+							next = nextSub
 						}
-						continue;
+						continue
 					}
 				}
 
 				if ((link = next) !== 0) {
-					next = L[link + F_NEXT_SUB];
-					continue;
+					next = L[link + F_NEXT_SUB]
+					continue
 				}
 
 				while (propTop > base) {
-					link = propStack[--propTop];
+					link = propStack[--propTop]
 					if (link !== 0) {
-						next = L[link + F_NEXT_SUB];
-						continue top;
+						next = L[link + F_NEXT_SUB]
+						continue top
 					}
 				}
 
-				break;
-			} while (true);
+				break
+			} while (true)
 		} finally {
-			propTop = base;
+			propTop = base
 		}
 	}
 
 	function checkDirty(link: number, sub: ReactiveNode): boolean {
-		const rootSub = sub;
-		const epoch = arenaEpoch;
-		const base = cdTop;
-		let dirty = false;
+		const rootSub = sub
+		const epoch = arenaEpoch
+		const base = cdTop
+		let dirty = false
 
-		++guardDepth;
+		++guardDepth
 		try {
 			top: do {
-				const dep = nodesById[L[link + F_DEP]]!;
-				const depFlags = dep.flags;
+				const dep = nodesById[L[link + F_DEP]]!
+				const depFlags = dep.flags
 
 				if (sub.flags & Dirty) {
-					dirty = true;
+					dirty = true
 				} else if ((depFlags & (Mutable | Dirty)) === (Mutable | Dirty)) {
-					const subs = dep.subs;
-					const changed = update(dep);
+					const subs = dep.subs
+					const changed = update(dep)
 					if (arenaEpoch !== epoch) {
 						// The arena grew inside update(): this closure's L is stale.
 						// Finish the mandatory sibling upgrade through the current
 						// engine, then restart verification from the root — updates
 						// already performed read as clean, so no getter reruns.
 						if (changed && LM[subs + F_NEXT_SUB] !== 0) {
-							engine.shallowPropagate(subs);
+							engine.shallowPropagate(subs)
 						}
-						return engine.checkDirtyRestart(rootSub);
+						return engine.checkDirtyRestart(rootSub)
 					}
 					if (changed) {
 						if (L[subs + F_NEXT_SUB] !== 0) {
-							shallowPropagate(subs);
+							shallowPropagate(subs)
 						}
-						dirty = true;
+						dirty = true
 					}
 				} else if ((depFlags & (Mutable | Pending)) === (Mutable | Pending)) {
-					pushCd(link);
-					link = dep.deps;
-					sub = dep;
-					continue;
+					pushCd(link)
+					link = dep.deps
+					sub = dep
+					continue
 				}
 
 				if (!dirty) {
-					const nextDep = L[link + F_NEXT_DEP];
+					const nextDep = L[link + F_NEXT_DEP]
 					if (nextDep !== 0) {
-						link = nextDep;
-						continue;
+						link = nextDep
+						continue
 					}
 				}
 
 				while (cdTop > base) {
-					link = cdStack[--cdTop];
+					link = cdStack[--cdTop]
 					if (dirty) {
-						const subs = sub.subs;
-						const changed = update(sub);
+						const subs = sub.subs
+						const changed = update(sub)
 						if (arenaEpoch !== epoch) {
 							if (changed && LM[subs + F_NEXT_SUB] !== 0) {
-								engine.shallowPropagate(subs);
+								engine.shallowPropagate(subs)
 							}
-							return engine.checkDirtyRestart(rootSub);
+							return engine.checkDirtyRestart(rootSub)
 						}
 						if (changed) {
 							if (L[subs + F_NEXT_SUB] !== 0) {
-								shallowPropagate(subs);
+								shallowPropagate(subs)
 							}
-							sub = nodesById[L[link + F_SUB]]!;
-							continue;
+							sub = nodesById[L[link + F_SUB]]!
+							continue
 						}
-						dirty = false;
+						dirty = false
 					} else {
-						sub.flags &= ~Pending;
+						sub.flags &= ~Pending
 					}
-					sub = nodesById[L[link + F_SUB]]!;
-					const nextDep = L[link + F_NEXT_DEP];
+					sub = nodesById[L[link + F_SUB]]!
+					const nextDep = L[link + F_NEXT_DEP]
 					if (nextDep !== 0) {
-						link = nextDep;
-						continue top;
+						link = nextDep
+						continue top
 					}
 				}
 
-				return dirty && !!sub.flags;
-			} while (true);
+				return dirty && !!sub.flags
+			} while (true)
 		} finally {
-			cdTop = base;
+			cdTop = base
 			if (--guardDepth === 0) {
-				drainPendingFrees();
+				drainPendingFrees()
 			}
 		}
 	}
@@ -521,32 +520,32 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 	/** Restart glue for growth-during-checkDirty; always entered through the
 	 * CURRENT engine reference. */
 	function checkDirtyRestart(sub: ReactiveNode): boolean {
-		const deps = sub.deps;
-		return deps !== 0 && checkDirty(deps, sub);
+		const deps = sub.deps
+		return deps !== 0 && checkDirty(deps, sub)
 	}
 
 	function shallowPropagate(link: number): void {
 		do {
-			const sub = nodesById[L[link + F_SUB]]!;
-			const flags = sub.flags;
+			const sub = nodesById[L[link + F_SUB]]!
+			const flags = sub.flags
 			if ((flags & (Pending | Dirty)) === Pending) {
-				sub.flags = flags | Dirty;
+				sub.flags = flags | Dirty
 				if ((flags & (Watching | RecursedCheck)) === Watching) {
-					notify(sub as EffectNode);
+					notify(sub as EffectNode)
 				}
 			}
-		} while ((link = L[link + F_NEXT_SUB]) !== 0);
+		} while ((link = L[link + F_NEXT_SUB]) !== 0)
 	}
 
 	function isValidLink(checkLink: number, sub: ReactiveNode): boolean {
-		let link = sub.depsTail;
+		let link = sub.depsTail
 		while (link !== 0) {
 			if (link === checkLink) {
-				return true;
+				return true
 			}
-			link = L[link + F_PREV_DEP];
+			link = L[link + F_PREV_DEP]
 		}
-		return false;
+		return false
 	}
 
 	/** Upstream purgeDeps: trim every dep past the depsTail cursor. Guarded +
@@ -554,25 +553,25 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 	 * arena; the cursor re-derives from node fields, so resuming through the
 	 * current engine continues exactly where this one stopped). */
 	function purgeDeps(sub: ReactiveNode): void {
-		const depsTail = sub.depsTail;
-		let dep = depsTail !== 0 ? L[depsTail + F_NEXT_DEP] : sub.deps;
+		const depsTail = sub.depsTail
+		let dep = depsTail !== 0 ? L[depsTail + F_NEXT_DEP] : sub.deps
 		if (dep === 0) {
 			// Stable-graph fast path: nothing past the cursor, skip the guard.
-			return;
+			return
 		}
-		const epoch = arenaEpoch;
-		++guardDepth;
+		const epoch = arenaEpoch
+		++guardDepth
 		try {
 			while (dep !== 0) {
-				dep = unlink(dep, sub);
+				dep = unlink(dep, sub)
 				if (arenaEpoch !== epoch) {
-					engine.purgeDeps(sub);
-					return;
+					engine.purgeDeps(sub)
+					return
 				}
 			}
 		} finally {
 			if (--guardDepth === 0) {
-				drainPendingFrees();
+				drainPendingFrees()
 			}
 		}
 	}
@@ -580,25 +579,25 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 	/** Upstream disposeAllDepsInReverse. Same guard + resume discipline;
 	 * unlinking the tail keeps sub.depsTail as the resume cursor. */
 	function disposeAllDepsInReverse(sub: ReactiveNode): void {
-		let link = sub.depsTail;
+		let link = sub.depsTail
 		if (link === 0) {
-			return;
+			return
 		}
-		const epoch = arenaEpoch;
-		++guardDepth;
+		const epoch = arenaEpoch
+		++guardDepth
 		try {
 			while (link !== 0) {
-				const prev = L[link + F_PREV_DEP];
-				unlink(link, sub);
+				const prev = L[link + F_PREV_DEP]
+				unlink(link, sub)
 				if (arenaEpoch !== epoch) {
-					engine.disposeAllDepsInReverse(sub);
-					return;
+					engine.disposeAllDepsInReverse(sub)
+					return
 				}
-				link = prev;
+				link = prev
 			}
 		} finally {
 			if (--guardDepth === 0) {
-				drainPendingFrees();
+				drainPendingFrees()
 			}
 		}
 	}
@@ -607,25 +606,25 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 	 * every dep that is neither a computed nor a signal (i.e. child effects/
 	 * scopes), in reverse. Restart-from-tail is idempotent. */
 	function purgeChildDeps(sub: ReactiveNode): void {
-		const epoch = arenaEpoch;
-		++guardDepth;
+		const epoch = arenaEpoch
+		++guardDepth
 		try {
-			let link = sub.depsTail;
+			let link = sub.depsTail
 			while (link !== 0) {
-				const prev = L[link + F_PREV_DEP];
-				const dep = nodesById[L[link + F_DEP]]!;
+				const prev = L[link + F_PREV_DEP]
+				const dep = nodesById[L[link + F_DEP]]!
 				if (!('getter' in dep) && !('currentValue' in dep)) {
-					unlink(link, sub);
+					unlink(link, sub)
 					if (arenaEpoch !== epoch) {
-						engine.purgeChildDeps(sub);
-						return;
+						engine.purgeChildDeps(sub)
+						return
 					}
 				}
-				link = prev;
+				link = prev
 			}
 		} finally {
 			if (--guardDepth === 0) {
-				drainPendingFrees();
+				drainPendingFrees()
 			}
 		}
 	}
@@ -639,100 +638,100 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 
 function update(node: ReactiveNode): boolean {
 	if ('getter' in node) {
-		return updateComputed(node as ComputedNode);
+		return updateComputed(node as ComputedNode)
 	}
 	if ('currentValue' in node) {
-		return updateSignal(node as SignalNode);
+		return updateSignal(node as SignalNode)
 	}
-	node.flags = Mutable;
-	return true;
+	node.flags = Mutable
+	return true
 }
 
 function notify(effect: EffectNode): void {
-	let insertIndex = queuedLength;
-	let firstInsertedIndex = insertIndex;
+	let insertIndex = queuedLength
+	let firstInsertedIndex = insertIndex
 
 	do {
-		queued[insertIndex++] = effect;
-		effect.flags &= ~Watching;
-		const subs = effect.subs;
+		queued[insertIndex++] = effect
+		effect.flags &= ~Watching
+		const subs = effect.subs
 		if (subs === 0) {
-			break;
+			break
 		}
-		const parent = nodesById[LM[subs + F_SUB]] as EffectNode;
+		const parent = nodesById[LM[subs + F_SUB]] as EffectNode
 		if (!(parent.flags & Watching)) {
-			break;
+			break
 		}
-		effect = parent;
-	} while (true);
+		effect = parent
+	} while (true)
 
-	queuedLength = insertIndex;
+	queuedLength = insertIndex
 
 	while (firstInsertedIndex < --insertIndex) {
-		const left = queued[firstInsertedIndex];
-		queued[firstInsertedIndex++] = queued[insertIndex];
-		queued[insertIndex] = left;
+		const left = queued[firstInsertedIndex]
+		queued[firstInsertedIndex++] = queued[insertIndex]
+		queued[insertIndex] = left
 	}
 }
 
 function unwatched(node: ReactiveNode): void {
 	if ('getter' in node) {
 		if (node.depsTail !== 0) {
-			node.flags = Mutable | Dirty;
-			engine.disposeAllDepsInReverse(node);
+			node.flags = Mutable | Dirty
+			engine.disposeAllDepsInReverse(node)
 		}
-		maybeFreeNodeId(node);
+		maybeFreeNodeId(node)
 	} else if ('currentValue' in node) {
 		// Nothing to do for signals semantically; just recycle the id.
-		maybeFreeNodeId(node);
+		maybeFreeNodeId(node)
 	} else if ('fn' in node) {
-		effectOper.call(node as EffectNode);
+		effectOper.call(node as EffectNode)
 	} else {
-		effectScopeOper.call(node as EffectScopeNode);
+		effectScopeOper.call(node)
 	}
 }
 
 export function getActiveSub(): ReactiveNode | undefined {
-	return activeSub;
+	return activeSub
 }
 
 export function setActiveSub(sub?: ReactiveNode): ReactiveNode | undefined {
-	const prevSub = activeSub;
-	activeSub = sub;
-	return prevSub;
+	const prevSub = activeSub
+	activeSub = sub
+	return prevSub
 }
 
 export function startBatch(): void {
-	++batchDepth;
+	++batchDepth
 }
 
 export function endBatch(): void {
 	if (!--batchDepth) {
-		flush();
+		flush()
 	}
 }
 
 export function untracked<T>(fn: () => T): T {
-	const prevSub = activeSub;
-	activeSub = undefined;
+	const prevSub = activeSub
+	activeSub = undefined
 	try {
-		return fn();
+		return fn()
 	} finally {
-		activeSub = prevSub;
+		activeSub = prevSub
 	}
 }
 
 export function signal<T>(): {
-	(): T | undefined;
-	(value: T | undefined): void;
-};
+	(): T | undefined
+	(value: T | undefined): void
+}
 export function signal<T>(initialValue: T): {
-	(): T;
-	(value: T): void;
-};
+	(): T
+	(value: T): void
+}
 export function signal<T>(initialValue?: T): {
-	(): T | undefined;
-	(value: T | undefined): void;
+	(): T | undefined
+	(value: T | undefined): void
 } {
 	return signalOper.bind({
 		id: 0,
@@ -743,7 +742,7 @@ export function signal<T>(initialValue?: T): {
 		subs: 0,
 		subsTail: 0,
 		flags: Mutable,
-	} as SignalNode<T | undefined>) as () => T | undefined;
+	} as SignalNode<T | undefined>) as () => T | undefined
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {
@@ -756,7 +755,7 @@ export function computed<T>(getter: (previousValue?: T) => T): () => T {
 		subsTail: 0,
 		flags: 0,
 		getter: getter as (previousValue?: unknown) => unknown,
-	} as ComputedNode) as () => T;
+	} as ComputedNode) as () => T
 }
 
 export function effect(fn: () => void | (() => void)): () => void {
@@ -769,22 +768,22 @@ export function effect(fn: () => void | (() => void)): () => void {
 		subs: 0,
 		subsTail: 0,
 		flags: Watching | RecursedCheck,
-	};
-	const prevSub = activeSub;
-	activeSub = e;
+	}
+	const prevSub = activeSub
+	activeSub = e
 	if (prevSub !== undefined) {
-		engine.link(e, prevSub, 0);
-		prevSub.flags |= HasChildEffect;
+		engine.link(e, prevSub, 0)
+		prevSub.flags |= HasChildEffect
 	}
 	try {
-		++runDepth;
-		e.cleanup = e.fn();
+		++runDepth
+		e.cleanup = e.fn()
 	} finally {
-		--runDepth;
-		activeSub = prevSub;
-		e.flags &= ~RecursedCheck;
+		--runDepth
+		activeSub = prevSub
+		e.flags &= ~RecursedCheck
 	}
-	return effectOper.bind(e);
+	return effectOper.bind(e)
 }
 
 export function effectScope(fn: () => void): () => void {
@@ -795,192 +794,181 @@ export function effectScope(fn: () => void): () => void {
 		subs: 0,
 		subsTail: 0,
 		flags: Mutable,
-	};
-	const prevSub = activeSub;
-	activeSub = e;
+	}
+	const prevSub = activeSub
+	activeSub = e
 	if (prevSub !== undefined) {
-		engine.link(e, prevSub, 0);
-		prevSub.flags |= HasChildEffect;
+		engine.link(e, prevSub, 0)
+		prevSub.flags |= HasChildEffect
 	}
 	try {
-		fn();
+		fn()
 	} finally {
-		activeSub = prevSub;
+		activeSub = prevSub
 	}
-	return effectScopeOper.bind(e);
+	return effectScopeOper.bind(e)
 }
 
 function updateComputed(c: ComputedNode): boolean {
 	if (c.flags & HasChildEffect) {
-		engine.purgeChildDeps(c);
+		engine.purgeChildDeps(c)
 	}
-	c.depsTail = 0;
-	c.flags = Mutable | RecursedCheck;
-	const prevSub = activeSub;
-	activeSub = c;
+	c.depsTail = 0
+	c.flags = Mutable | RecursedCheck
+	const prevSub = activeSub
+	activeSub = c
 	try {
 		// Mask keeps the int32 cycle non-negative so it can never collide with
 		// the TOMBSTONE (-1) sentinel stored in the same VERSION field.
-		cycle = (cycle + 1) & 0x7fffffff;
-		const oldValue = c.value;
-		return oldValue !== (c.value = c.getter(oldValue));
+		cycle = (cycle + 1) & 0x7fffffff
+		const oldValue = c.value
+		return oldValue !== (c.value = c.getter(oldValue))
 	} finally {
-		activeSub = prevSub;
-		c.flags &= ~RecursedCheck;
-		engine.purgeDeps(c);
+		activeSub = prevSub
+		c.flags &= ~RecursedCheck
+		engine.purgeDeps(c)
 	}
 }
 
 function updateSignal(s: SignalNode): boolean {
-	s.flags = Mutable;
-	return s.currentValue !== (s.currentValue = s.pendingValue);
+	s.flags = Mutable
+	return s.currentValue !== (s.currentValue = s.pendingValue)
 }
 
 function run(e: EffectNode): void {
-	const flags = e.flags;
-	if (
-		flags & Dirty
-		|| (
-			flags & Pending
-			&& engine.checkDirty(e.deps, e)
-		)
-	) {
+	const flags = e.flags
+	if (flags & Dirty || (flags & Pending && engine.checkDirty(e.deps, e))) {
 		if (flags & HasChildEffect) {
-			engine.purgeChildDeps(e);
+			engine.purgeChildDeps(e)
 		}
 		if (e.cleanup) {
-			runCleanup(e);
+			runCleanup(e)
 			if (!e.flags) {
-				return;
+				return
 			}
 		}
-		e.depsTail = 0;
-		e.flags = Watching | RecursedCheck;
-		const prevSub = activeSub;
-		activeSub = e;
+		e.depsTail = 0
+		e.flags = Watching | RecursedCheck
+		const prevSub = activeSub
+		activeSub = e
 		try {
-			cycle = (cycle + 1) & 0x7fffffff;
-			++runDepth;
-			e.cleanup = e.fn();
+			cycle = (cycle + 1) & 0x7fffffff
+			++runDepth
+			e.cleanup = e.fn()
 		} finally {
-			--runDepth;
-			activeSub = prevSub;
-			e.flags &= ~RecursedCheck;
-			engine.purgeDeps(e);
+			--runDepth
+			activeSub = prevSub
+			e.flags &= ~RecursedCheck
+			engine.purgeDeps(e)
 		}
 	} else if (e.deps !== 0) {
-		e.flags = Watching | (flags & HasChildEffect);
+		e.flags = Watching | (flags & HasChildEffect)
 	}
 }
 
 function flush(): void {
 	try {
 		while (notifyIndex < queuedLength) {
-			const effect = queued[notifyIndex]!;
-			queued[notifyIndex++] = undefined;
-			run(effect);
+			const effect = queued[notifyIndex]!
+			queued[notifyIndex++] = undefined
+			run(effect)
 		}
 	} finally {
 		while (notifyIndex < queuedLength) {
-			const effect = queued[notifyIndex]!;
-			queued[notifyIndex++] = undefined;
-			effect.flags |= Watching | Recursed;
+			const effect = queued[notifyIndex]!
+			queued[notifyIndex++] = undefined
+			effect.flags |= Watching | Recursed
 		}
-		notifyIndex = 0;
-		queuedLength = 0;
+		notifyIndex = 0
+		queuedLength = 0
 	}
 }
 
 function computedOper<T>(this: ComputedNode<T>): T {
-	const flags = this.flags;
+	const flags = this.flags
 	if (
-		flags & Dirty
-		|| (
-			flags & Pending
-			&& (
-				engine.checkDirty(this.deps, this)
-				|| (this.flags = flags & ~Pending, false)
-			)
-		)
+		flags & Dirty ||
+		(flags & Pending &&
+			(engine.checkDirty(this.deps, this) || ((this.flags = flags & ~Pending), false)))
 	) {
 		if (updateComputed(this)) {
-			const subs = this.subs;
+			const subs = this.subs
 			if (subs !== 0) {
-				engine.shallowPropagate(subs);
+				engine.shallowPropagate(subs)
 			}
 		}
 	} else if (!flags) {
-		this.flags = Mutable | RecursedCheck;
-		const prevSub = activeSub;
-		activeSub = this;
+		this.flags = Mutable | RecursedCheck
+		const prevSub = activeSub
+		activeSub = this
 		try {
-			this.value = this.getter();
+			this.value = this.getter()
 		} finally {
-			activeSub = prevSub;
-			this.flags &= ~RecursedCheck;
+			activeSub = prevSub
+			this.flags &= ~RecursedCheck
 		}
 	}
-	const sub = activeSub;
+	const sub = activeSub
 	if (sub !== undefined) {
-		engine.link(this, sub, cycle);
+		engine.link(this, sub, cycle)
 	}
-	return this.value!;
+	return this.value!
 }
 
 function signalOper<T>(this: SignalNode<T>, ...value: [T]): T | void {
 	if (value.length) {
 		if (this.pendingValue !== (this.pendingValue = value[0])) {
-			this.flags = Mutable | Dirty;
-			const subs = this.subs;
+			this.flags = Mutable | Dirty
+			const subs = this.subs
 			if (subs !== 0) {
-				engine.propagate(subs, runDepth !== 0);
+				engine.propagate(subs, runDepth !== 0)
 				if (!batchDepth) {
-					flush();
+					flush()
 				}
 			}
 		}
 	} else {
 		if (this.flags & Dirty) {
 			if (updateSignal(this)) {
-				const subs = this.subs;
+				const subs = this.subs
 				if (subs !== 0) {
-					engine.shallowPropagate(subs);
+					engine.shallowPropagate(subs)
 				}
 			}
 		}
-		const sub = activeSub;
+		const sub = activeSub
 		if (sub !== undefined) {
-			engine.link(this, sub, cycle);
+			engine.link(this, sub, cycle)
 		}
-		return this.currentValue;
+		return this.currentValue
 	}
 }
 
 function runCleanup(e: EffectNode): void {
-	const cleanup = e.cleanup!;
-	e.cleanup = undefined;
-	const prevSub = activeSub;
-	activeSub = undefined;
+	const cleanup = e.cleanup!
+	e.cleanup = undefined
+	const prevSub = activeSub
+	activeSub = undefined
 	try {
-		cleanup();
+		cleanup()
 	} finally {
-		activeSub = prevSub;
+		activeSub = prevSub
 	}
 }
 
 function effectOper(this: EffectNode): void {
-	effectScopeOper.call(this);
+	effectScopeOper.call(this)
 	if (this.cleanup) {
-		runCleanup(this);
+		runCleanup(this)
 	}
 }
 
 function effectScopeOper(this: EffectScopeNode): void {
-	this.flags = 0;
-	engine.disposeAllDepsInReverse(this);
-	const sub = this.subs;
+	this.flags = 0
+	engine.disposeAllDepsInReverse(this)
+	const sub = this.subs
 	if (sub !== 0) {
-		engine.unlink(sub);
+		engine.unlink(sub)
 	}
-	maybeFreeNodeId(this);
+	maybeFreeNodeId(this)
 }

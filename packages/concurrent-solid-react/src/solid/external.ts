@@ -1,19 +1,19 @@
-export type ExternalSourceFactory = (fn: (prev: any) => any, trigger: () => void) => ExternalSource;
+export type ExternalSourceFactory = (fn: (prev: any) => any, trigger: () => void) => ExternalSource
 
 export interface ExternalSource {
-  track: (prev: any) => any;
-  dispose: () => void;
+	track: (prev: any) => any
+	dispose: () => void
 }
 
 export interface ExternalSourceConfig {
-  factory: ExternalSourceFactory;
-  untrack?: <T>(fn: () => T) => T;
+	factory: ExternalSourceFactory
+	untrack?: <T>(fn: () => T) => T
 }
 
 export let externalSourceConfig: {
-  factory: ExternalSourceFactory;
-  untrack: <T>(fn: () => T) => T;
-} | null = null;
+	factory: ExternalSourceFactory
+	untrack: <T>(fn: () => T) => T
+} | null = null
 
 /**
  * Registers a factory that bridges external reactive systems (e.g. MobX, Vue refs)
@@ -46,28 +46,28 @@ export let externalSourceConfig: {
  * ```
  */
 export function enableExternalSource(config: ExternalSourceConfig): void {
-  const { factory, untrack: untrackFn = fn => fn() } = config;
-  if (externalSourceConfig) {
-    const { factory: oldFactory, untrack: oldUntrack } = externalSourceConfig;
-    externalSourceConfig = {
-      factory: (fn, trigger) => {
-        const oldSource = oldFactory(fn, trigger);
-        const source = factory(x => oldSource.track(x), trigger);
-        return {
-          track: x => source.track(x),
-          dispose() {
-            source.dispose();
-            oldSource.dispose();
-          }
-        };
-      },
-      untrack: fn => oldUntrack(() => untrackFn(fn))
-    };
-  } else {
-    externalSourceConfig = { factory, untrack: untrackFn };
-  }
+	const { factory, untrack: untrackFn = (fn) => fn() } = config
+	if (externalSourceConfig) {
+		const { factory: oldFactory, untrack: oldUntrack } = externalSourceConfig
+		externalSourceConfig = {
+			factory: (fn, trigger) => {
+				const oldSource = oldFactory(fn, trigger)
+				const source = factory((x) => oldSource.track(x), trigger)
+				return {
+					track: (x) => source.track(x),
+					dispose() {
+						source.dispose()
+						oldSource.dispose()
+					},
+				}
+			},
+			untrack: (fn) => oldUntrack(() => untrackFn(fn)),
+		}
+	} else {
+		externalSourceConfig = { factory, untrack: untrackFn }
+	}
 }
 
 export function _resetExternalSourceConfig(): void {
-  externalSourceConfig = null;
+	externalSourceConfig = null
 }

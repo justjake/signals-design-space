@@ -19,16 +19,16 @@
  * All helpers assume the page was opened with `gotoApp` (?test=1), which the
  * app's testkit reads to install `window.__store` and the test panel.
  */
-import type { Page, TestInfo } from '@playwright/test';
-import { expect } from './fixtures';
-import type { BatteryEntry } from './entries';
-import type { TestStore } from '../src/testkit';
+import type { Page, TestInfo } from '@playwright/test'
+import { expect } from './fixtures'
+import type { BatteryEntry } from './entries'
+import type { TestStore } from '../src/testkit'
 
 declare global {
 	interface Window {
-		__store: TestStore;
-		__torn: number[];
-		__trace: Record<string, string[]>;
+		__store: TestStore
+		__torn: number[]
+		__trace: Record<string, string[]>
 	}
 }
 
@@ -40,33 +40,33 @@ export async function gotoApp(
 	entry: BatteryEntry,
 	options?: { query?: Record<string, string> },
 ): Promise<void> {
-	const params = new URLSearchParams({ test: '1', ...options?.query });
-	await page.goto(`${entry.path}?${params.toString()}`);
-	await expect(page.getByTestId('impl-name')).toHaveText(entry.name);
+	const params = new URLSearchParams({ test: '1', ...options?.query })
+	await page.goto(`${entry.path}?${params.toString()}`)
+	await expect(page.getByTestId('impl-name')).toHaveText(entry.name)
 }
 
 /** The app's own testid text, trimmed. */
 export async function testidText(page: Page, testid: string): Promise<string> {
-	return ((await page.getByTestId(testid).first().textContent()) ?? '').trim();
+	return ((await page.getByTestId(testid).first().textContent()) ?? '').trim()
 }
 
 // ---- store access (window.__store, testkit-installed) --------------------------------
 
 /** Outside-render read of a labeled signal — a foreign (evaluate) call stack, the RT4 posture. */
 export function storeRead(page: Page, label: string): Promise<unknown> {
-	return page.evaluate((l) => window.__store.read(l), label);
+	return page.evaluate((l) => window.__store.read(l), label)
 }
 
 /** Urgent write to a labeled atom from a foreign call stack. */
 export function storeWrite(page: Page, label: string, value: unknown): Promise<void> {
-	return page.evaluate(([l, v]) => window.__store.write(l, v), [label, value] as const);
+	return page.evaluate(([l, v]) => window.__store.write(l, v), [label, value] as const)
 }
 
 // ---- clocks and liveness --------------------------------------------------------------
 
 /** True when the 100ms clock tile advances within `withinMs` — the cheapest liveness probe. */
 export async function clockTicks(page: Page, withinMs = 2000): Promise<boolean> {
-	const before = await testidText(page, 'clock');
+	const before = await testidText(page, 'clock')
 	return page
 		.waitForFunction(
 			(prev) => document.querySelector('[data-testid="clock"]')?.textContent?.trim() !== prev,
@@ -74,14 +74,14 @@ export async function clockTicks(page: Page, withinMs = 2000): Promise<boolean> 
 			{ timeout: withinMs },
 		)
 		.then(() => true)
-		.catch(() => false);
+		.catch(() => false)
 }
 
 export interface RafHealth {
 	/** requestAnimationFrame callbacks observed per second; a wedged main thread scores 0. */
-	framesPerSec: number;
+	framesPerSec: number
 	/** Committed-render tally drift over the window. */
-	rendersDelta: number;
+	rendersDelta: number
 }
 
 /**
@@ -92,32 +92,33 @@ export async function rafHealth(page: Page, windowMs = 1000): Promise<RafHealth 
 	const probe = page.evaluate(
 		(ms) =>
 			new Promise<RafHealth>((resolve) => {
-				const start = performance.now();
-				let frames = 0;
+				const start = performance.now()
+				let frames = 0
 				const rendersBefore = Number(
 					document.querySelector('[data-testid="renders-committed"]')?.textContent ?? '0',
-				);
+				)
 				function frame(): void {
-					frames += 1;
-					if (performance.now() - start < ms) requestAnimationFrame(frame);
-					else {
+					frames += 1
+					if (performance.now() - start < ms) {
+						requestAnimationFrame(frame)
+					} else {
 						resolve({
 							framesPerSec: Math.round(frames / (ms / 1000)),
 							rendersDelta:
 								Number(
 									document.querySelector('[data-testid="renders-committed"]')?.textContent ?? '0',
 								) - rendersBefore,
-						});
+						})
 					}
 				}
-				requestAnimationFrame(frame);
+				requestAnimationFrame(frame)
 			}),
 		windowMs,
-	);
+	)
 	return Promise.race([
 		probe,
 		new Promise<null>((resolve) => setTimeout(() => resolve(null), windowMs + 3000)),
-	]);
+	])
 }
 
 // ---- transient DOM capture -----------------------------------------------------------
@@ -125,39 +126,45 @@ export async function rafHealth(page: Page, windowMs = 1000): Promise<RafHealth 
 /** Record every flip of the consistency verdict to TORN (transients included). */
 export async function armTornWatch(page: Page): Promise<void> {
 	await page.evaluate(() => {
-		window.__torn = [];
-		const el = document.querySelector('[data-testid="consistency"]');
-		if (el === null) throw new Error('armTornWatch: no consistency tile');
+		window.__torn = []
+		const el = document.querySelector('[data-testid="consistency"]')
+		if (el === null) {
+			throw new Error('armTornWatch: no consistency tile')
+		}
 		new MutationObserver(() => {
-			if (el.textContent === 'TORN') window.__torn.push(performance.now());
-		}).observe(el, { characterData: true, subtree: true, childList: true });
-	});
+			if (el.textContent === 'TORN') {
+				window.__torn.push(performance.now())
+			}
+		}).observe(el, { characterData: true, subtree: true, childList: true })
+	})
 }
 
 /** TORN flips observed since armTornWatch, including ones later overwritten. */
 export function tornFlips(page: Page): Promise<number> {
-	return page.evaluate(() => window.__torn.length);
+	return page.evaluate(() => window.__torn.length)
 }
 
 /** Record every committed text of a testid element (transients included). */
 export async function armTextTrace(page: Page, testid: string): Promise<void> {
 	await page.evaluate((tid) => {
-		window.__trace ??= {};
-		const el = document.querySelector(`[data-testid="${tid}"]`);
-		if (el === null) throw new Error(`armTextTrace: no element for testid ${tid}`);
-		const log: string[] = [];
-		window.__trace[tid] = log;
-		log.push(el.textContent ?? '');
+		window.__trace ??= {}
+		const el = document.querySelector(`[data-testid="${tid}"]`)
+		if (el === null) {
+			throw new Error(`armTextTrace: no element for testid ${tid}`)
+		}
+		const log: string[] = []
+		window.__trace[tid] = log
+		log.push(el.textContent ?? '')
 		new MutationObserver(() => log.push(el.textContent ?? '')).observe(el, {
 			characterData: true,
 			subtree: true,
 			childList: true,
-		});
-	}, testid);
+		})
+	}, testid)
 }
 
 export function readTextTrace(page: Page, testid: string): Promise<string[]> {
-	return page.evaluate((tid) => window.__trace[tid] ?? [], testid);
+	return page.evaluate((tid) => window.__trace[tid] ?? [], testid)
 }
 
 // ---- instant-of-commit snapshots ------------------------------------------------------
@@ -180,22 +187,22 @@ export async function snapshotWhen<Arg, T>(
 			pageFn as Parameters<Page['waitForFunction']>[0],
 			arg,
 			{ timeout: timeoutMs },
-		);
-		return (await handle.jsonValue()) as T;
+		)
+		return (await handle.jsonValue()) as T
 	} catch {
-		return null;
+		return null
 	}
 }
 
 // ---- app-level navigation shapes -------------------------------------------------------
 
-export type RouteName = 'dashboard' | 'table' | 'detail';
+export type RouteName = 'dashboard' | 'table' | 'detail'
 
 /** Engage latency=hold and navigate; resolves once the pending window is open. */
 export async function holdNavigate(page: Page, route: RouteName): Promise<void> {
-	await page.getByTestId('latency-hold').click();
-	await page.getByTestId(`view-tab-${route}`).click();
-	await expect(page.getByTestId('pending')).toHaveText('yes');
+	await page.getByTestId('latency-hold').click()
+	await page.getByTestId(`view-tab-${route}`).click()
+	await expect(page.getByTestId('pending')).toHaveText('yes')
 }
 
 /**
@@ -211,23 +218,23 @@ export async function settleNav(page: Page, route: RouteName, timeoutMs = 30_000
 			/\d+ ms/.test(document.querySelector('[data-testid="last-nav-ms"]')?.textContent ?? ''),
 		route,
 		{ timeout: timeoutMs },
-	);
+	)
 }
 
 /** Release a held navigation and wait for it to settle on `route`. */
 export async function releaseAndSettle(page: Page, route: RouteName): Promise<void> {
-	await page.getByTestId('release').click();
-	await settleNav(page, route);
+	await page.getByTestId('release').click()
+	await settleNav(page, route)
 }
 
 // ---- wedge watchdogs -------------------------------------------------------------------
 
 export interface WatchdogOutcome<T> {
-	wedged: boolean;
+	wedged: boolean
 	/** Present when the action completed in time. */
-	value?: T;
+	value?: T
 	/** Main-thread stack captured at the moment of the hang. */
-	stack?: readonly string[];
+	stack?: readonly string[]
 }
 
 /**
@@ -245,7 +252,7 @@ export async function withWatchdog<T>(
 	timeoutMs: number,
 	action: () => Promise<T>,
 ): Promise<WatchdogOutcome<T>> {
-	const cdp = await page.context().newCDPSession(page);
+	const cdp = await page.context().newCDPSession(page)
 	const paused = new Promise<string[]>((resolve) => {
 		cdp.on('Debugger.paused', (event) =>
 			resolve(
@@ -257,38 +264,40 @@ export async function withWatchdog<T>(
 							.join('/')}:${frame.location.lineNumber + 1}`,
 				),
 			),
-		);
-	});
-	await cdp.send('Debugger.enable');
+		)
+	})
+	await cdp.send('Debugger.enable')
 	try {
-		let timer: NodeJS.Timeout | undefined;
+		let timer: NodeJS.Timeout | undefined
 		const timedOut = new Promise<'timeout'>((resolve) => {
-			timer = setTimeout(() => resolve('timeout'), timeoutMs);
-		});
-		const raced = await Promise.race([action().then((value) => ({ value })), timedOut]);
-		clearTimeout(timer);
-		if (raced !== 'timeout') return { wedged: false, value: raced.value };
+			timer = setTimeout(() => resolve('timeout'), timeoutMs)
+		})
+		const raced = await Promise.race([action().then((value) => ({ value })), timedOut])
+		clearTimeout(timer)
+		if (raced !== 'timeout') {
+			return { wedged: false, value: raced.value }
+		}
 
-		await cdp.send('Debugger.pause').catch(() => {});
+		await cdp.send('Debugger.pause').catch(() => {})
 		const stack = await Promise.race([
 			paused,
 			new Promise<string[]>((resolve) =>
 				setTimeout(() => resolve(['<no pause within 5s — main thread appears idle>']), 5000),
 			),
-		]);
-		await cdp.send('Debugger.resume').catch(() => {});
+		])
+		await cdp.send('Debugger.resume').catch(() => {})
 		await testInfo.attach(`${label}-wedge-stack`, {
 			body: stack.join('\n'),
 			contentType: 'text/plain',
-		});
-		return { wedged: true, stack };
+		})
+		return { wedged: true, stack }
 	} finally {
 		// A wedged renderer never acks the detach; don't let cleanup hang the
 		// test on it.
 		await Promise.race([
 			cdp.detach().catch(() => {}),
 			new Promise((resolve) => setTimeout(resolve, 1000)),
-		]);
+		])
 	}
 }
 
@@ -297,7 +306,7 @@ export async function mainThreadResponsive(page: Page, timeoutMs = 3000): Promis
 	return Promise.race([
 		page.evaluate(() => 0).then(() => true),
 		new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-	]);
+	])
 }
 
 /**
@@ -308,10 +317,12 @@ export async function mainThreadResponsive(page: Page, timeoutMs = 3000): Promis
  */
 export function dispatchFilterInput(page: Page, value: string): Promise<void> {
 	return page.evaluate((v) => {
-		const input = document.querySelector<HTMLInputElement>('[data-testid="filter-input"]');
-		if (input === null) throw new Error('dispatchFilterInput: no filter input');
-		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-		setter.call(input, v);
-		input.dispatchEvent(new Event('input', { bubbles: true }));
-	}, value);
+		const input = document.querySelector<HTMLInputElement>('[data-testid="filter-input"]')
+		if (input === null) {
+			throw new Error('dispatchFilterInput: no filter input')
+		}
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+		setter.call(input, v)
+		input.dispatchEvent(new Event('input', { bubbles: true }))
+	}, value)
 }

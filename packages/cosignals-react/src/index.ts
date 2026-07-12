@@ -1,8 +1,8 @@
 /**
  * cosignals-react — public surface. The bindings couple `cosignals`'s
- * default concurrent engine to the external-runtime protocol of a patched
- * React build: `registerCosignalReact()` attaches the engine's driver and
- * subscribes to the protocol's events, and the hooks below are the
+ * default concurrent engine to the private signals taps of a patched React
+ * build: `registerCosignalReact()` attaches the engine's driver and
+ * subscribes to React's scheduling events, and the hooks below are the
  * component-side surface.
  */
 
@@ -16,8 +16,8 @@ export {
 	startSignalTransition,
 	type CosignalReactHandle,
 	type SignalSource,
-} from './hooks.js';
-export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js';
+} from './hooks.js'
+export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js'
 
 // Curated re-export of the engine surface an app using these bindings
 // actually consumes: the signal constructors the hooks accept (kernel
@@ -43,4 +43,4 @@ export {
 	type ComputedOptions,
 	type ReducerAtomOptions,
 	type CosignalEngine,
-} from 'cosignals';
+} from 'cosignals'

@@ -14,37 +14,43 @@
  * The contender registry dynamic-imports this module so no other contender's
  * process ever loads it.
  */
-import 'react-dom/client';
-import { Atom, batch, defaultApi } from 'cosignals-alt-a';
-import { registerAltAReact, startSignalTransition, useSignal } from 'cosignals-alt-a/react';
-import type { Contender } from './types.js';
+import 'react-dom/client'
+import { Atom, batch, defaultApi } from 'cosignals-alt-a'
+import { registerAltAReact, startSignalTransition, useSignal } from 'cosignals-alt-a/react'
+import type { Contender } from './types.js'
 
-registerAltAReact(defaultApi);
+registerAltAReact(defaultApi)
 
 const altAReact: Contender = {
 	name: 'alt-a-react',
 	createCells(n) {
-		const atoms: InstanceType<typeof Atom<number>>[] = [];
-		for (let i = 0; i < n; i++) atoms.push(new Atom({ state: 0 }));
+		const atoms: InstanceType<typeof Atom<number>>[] = []
+		for (let i = 0; i < n; i++) {
+			atoms.push(new Atom({ state: 0 }))
+		}
 		return {
 			useCell: (i) => useSignal<number>(atoms[i]),
 			writeCell: (i, v) => atoms[i].set(v),
 			writeMany(updates) {
 				batch(() => {
-					for (const [i, v] of updates) atoms[i].set(v);
-				});
+					for (const [i, v] of updates) {
+						atoms[i].set(v)
+					}
+				})
 			},
 			// Writes inside startSignalTransition classify into the transition
 			// batch through the write classifier (one drain per batch), and the
 			// corrective/broadcast re-renders land in the transition's own lanes.
 			writeManyInTransition(updates) {
 				startSignalTransition(() => {
-					for (const [i, v] of updates) atoms[i].set(v);
-				});
+					for (const [i, v] of updates) {
+						atoms[i].set(v)
+					}
+				})
 			},
 			dispose() {},
-		};
+		}
 	},
-};
+}
 
-export default altAReact;
+export default altAReact

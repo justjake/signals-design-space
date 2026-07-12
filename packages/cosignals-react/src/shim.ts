@@ -1,92 +1,31 @@
 /**
- * cosignals-react — the protocol shim. One Shim instance couples cosignals'
- * default browser engine to a React build implementing the cosignals
- * external-runtime protocol.
- * Stock React never reveals when it starts, pauses, commits, or discards a
- * render pass — which is exactly what an external store must know to stay
- * tear-free — so a patched React build provides those events, and this shim
- * is the adapter between them and the engine. Its jobs:
+ * Connects raw React scheduling facts to one cosignals engine. React owns
+ * lanes and root render/commit timing; ReactBatchRegistry turns those facts
+ * into stable batch identities; the engine owns worlds and subscriptions.
  *
- *  - fork detection: refuse stock React loudly at startup (the protocol's
- *    entry points simply don't exist there). Degrading silently would
- *    reintroduce tearing (a single rendered frame mixing old and new
- *    state) later, with no error pointing at the cause.
- *  - protocol events -> engine: onRenderPassStart(includedBatches) ->
- *    renderStart; yield/resume -> renderYield/renderResume;
- *    onRenderPassEnd(committed) -> renderEnd('commit') at the moment the
- *    render commits — before that commit's per-root report and before any
- *    retirement, which is what lets the engine snapshot committed state as
- *    the baseline for mount fixups (the engine's commit-time reconciliation
- *    of freshly mounted components against updates that were in flight
- *    while they mounted); onRenderPassEnd(discarded) -> renderEnd('discard');
- *    onBatchRetired -> retire (or settleAction for a parked async action —
- *    one kept pending until its promise settles) — React's committed/
- *    abandoned bit stops in that handler, the site where the fact is born:
- *    retirement is disposition-blind (recorded writes never revert either
- *    way), and the handler records the report as a batch-disposition trace
- *    record when a tracer is attached; onRootCommitted ->
- *    idempotent reconciliation of the root's committed-batch table +
- *    effect re-checks.
- *  - The driver: the constructor builds one EngineDriver record and installs
- *    it with `attachDriver` — the engine's single attachment surface (one
- *    driver per engine composition; a second attach throws; only the
- *    test-only engine reset clears the slot). The record carries:
- *      - currentBatch() — the write context, consulted by the engine once
- *        per classified public write (the core's Atom.set/update — dispatch
- *        is a thin layer over update — capture host-attributable writes as
- *        whole operations, because worlds replay log entries, and the engine
- *        dispatches them internally after this one foreign call). The shim
- *        answers from the protocol's write-context API
- *        (unstable_getCurrentWriteBatch — the engine BatchId itself,
- *        allocator-opened at the batch's creation); a write during render
- *        throws here; see `currentBatch` for the BATCH_NONE edge.
- *      - worldFor() — the ambient world for routed reads. Raw `.state` reads
- *        route through the core's read seams into the engine's effective
- *        world (evaluation world, else this provider's answer, resolved from
- *        the live render context) — no prototype patching anywhere.
- *      - onDelivery / onMountCorrective / onCorrection — the consumption
- *        listeners: the engine invokes them at each operation's end, and the
- *        shim turns deliveries and mount correctives into setStates via
- *        unstable_runInBatch, so each corrective re-render is scheduled in
- *        the lane of the batch that caused it and the whole update renders
- *        and commits together. Deliveries are value-blind: the engine
- *        decides who must re-render, the shim only schedules. Batches with
- *        no live protocol counterpart take unstable_runInBatch's
- *        discrete-urgent fallback. The protocol permits scheduling updates
- *        from its yield and commit callbacks, so listening at those points
- *        is legal (writes during render are not, and throw).
- *      - protocolReset() — test-only: scrubs React's batch registry; the
- *        engine reset invokes it first, before scrubbing engine state, so
- *        no stale protocol slot survives into the next composition.
- *    The engine's TraceEvent stream is a test/tracing surface only: it
- *    does not create unless a test retains it or a tracer attaches.
- *  - batch identity (protocol v2) — one id space, no translation: the shim
- *    registers a BATCH-ID ALLOCATOR on the protocol
- *    (unstable_registerBatchIdAllocator). At every React batch's creation
- *    the fork calls it with the batch's deferred classification; the
- *    allocator opens an engine batch (recording `deferred` on it) and
- *    returns the engine BatchId, which React stores as THE batch's identity
- *    for its whole life. Every protocol surface — getCurrentWriteBatch,
- *    runInBatch, the retirement and per-root commit reports, the render
- *    events' included-batch lists — speaks engine BatchIds directly, with
- *    no mapping tables anywhere. BATCH_NONE (0),
- *    named on both sides, is the "no batch context" sentinel.
- *  - Suspense: the core's `ctx.use` is the ONE implementation (two forms:
- *    caller-cached thenable, and a per-key cache scoped to the living node —
- *    see ComputedCtx.use in cosignals). Bound computeds delegate to it with a
- *    node-scoped cache holder that lives and dies with the node. The shim's
- *    only suspense job is translation: background world evaluations fold a
- *    pending suspension to its stable SuspendedRead sentinel (so "still
- *    pending" caches and compares like any value), while hook-initiated
- *    evaluations let it unwind so the hooks can rethrow the thenable into
- *    React Suspense.
+ * Registry and engine identities are deliberately separate. The two bounded
+ * maps below translate while a batch is live because the engine can also
+ * create ambient batches. Render events select an engine world, writes read
+ * the current registry batch, and deliveries schedule back into its live
+ * React lane. Suspense evaluation remains entirely engine-owned.
  */
 
-import * as React from 'react';
-import { Atom, BATCH_NONE, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignals';
+import * as React from 'react'
+import { ReactBatchRegistry } from 'react-signals-utils'
+import {
+	BATCH_NONE,
+	Computed,
+	ReducerAtom,
+	SuspendedRead,
+	attachDriver,
+	engine,
+	type ComputedCtx,
+} from 'cosignals'
 import type {
 	AnyInternals,
+	Atom,
 	AtomInternals,
+	Cosignals,
 	CosignalEngine,
 	EngineDriver,
 	RenderPass,
@@ -94,23 +33,23 @@ import type {
 	BatchId,
 	Value,
 	Watcher,
-} from 'cosignals';
+} from 'cosignals'
 
 // ---- fork detection --------------------------------------------------------------
 
-/**
- * Asserts the loaded React build implements the external-runtime protocol
- * (feature detection: the entry points simply do not exist on stock React).
- * Failing fast is deliberate: without the protocol the bindings could only
- * fall back to a single current value, which is exactly the tearing this
- * package exists to prevent — one descriptive startup error beats silently
- * wrong frames later.
- */
+/** Rejects React builds without the private signals taps. */
 export function assertForkPresent(): void {
-	if (typeof React.unstable_subscribeToExternalRuntime !== 'function') {
+	const channel = (
+		React as unknown as {
+			__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
+				E?: { forkProtocolVersion?: unknown } | null
+			}
+		}
+	).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.E
+	if (channel?.forkProtocolVersion !== 1) {
 		throw new Error(
-			'cosignals-react: this React build has no external-runtime support — cosignals-react requires a React build with external-runtime support (stock React has none).',
-		);
+			'cosignals-react requires the patched React signals protocol; stock React is unsupported.',
+		)
 	}
 }
 
@@ -121,82 +60,91 @@ export function assertForkPresent(): void {
  * the owning component. */
 export type WatcherTarget = {
 	/** Schedules a re-render of the owning component (a setState bump). */
-	bump: () => void;
-	live: boolean;
-};
+	bump: () => void
+	live: boolean
+}
 
 type RootRec = {
-	id: RootId;
+	id: RootId
 	/** The open engine render mirroring the protocol host's in-progress render, if any. */
-	renderPass: RenderPass | undefined;
+	renderPass: RenderPass | undefined
 	/** Watcher ids created during the current/most recent render, for the orphan sweep. */
-	created: Set<number>;
-};
+	created: Set<number>
+}
 
 /** Fallback root id for effects/watchers created outside any tracked
  * render (defensive paths; both packages name it through this one
  * constant). */
-export const ROOT_UNKNOWN: RootId = 'root-unknown';
+export const ROOT_UNKNOWN: RootId = 'root-unknown'
 
-let nextRootSerial = 1;
+let nextRootSerial = 1
 
 /** The one active shim (module registry; hooks.ts manages activation). */
-let activeShim: Shim | undefined;
+let activeShim: Shim | undefined
 
 export function setActiveShim(shim: Shim): void {
-	activeShim = shim;
+	activeShim = shim
 }
 
 /** Clears the active-shim slot only if it still points at `shim` — a
  * disposed predecessor's late unregister must never clobber a successor's
  * registration. */
 export function unregisterShim(shim: Shim): void {
-	if (activeShim === shim) activeShim = undefined;
+	if (activeShim === shim) {
+		activeShim = undefined
+	}
 }
 
 /** The active shim if it is still live. (A shim disposed directly — without
  * its handle's dispose, which unregisters it — can linger in the slot; the
  * liveness filter keeps it from being served or from blocking re-registration.) */
 export function getActiveShim(): Shim | undefined {
-	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined;
+	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined
 }
 
 // ---- the shim --------------------------------------------------------------------
 
 export class Shim {
-	/** The default browser engine surface; the field
-	 * keeps the bindings' historical name to spare every call site). */
-	readonly bridge: CosignalEngine;
-	/** Development-time checks (the engine's EngineResetOptions.devChecks,
-	 * snapshotted at registration): armed, protocol-edge states the
-	 * integration contract makes unreachable throw, and the post-await
-	 * orphan-write warning runs; off, each guarded site is one boolean branch
-	 * and the defined fall-through. */
-	readonly devChecks: boolean;
-	disposed = false;
+	/** The engine surface this shim is bound to — the default browser instance,
+	 * or the per-request instance passed to registerCosignalReact() for
+	 * synchronous SSR. The field keeps the bindings' historical name to spare
+	 * every call site. */
+	readonly bridge: CosignalEngine
+	/** The bound instance's public Computed/ReducerAtom classes (the default
+	 * instance's when none was passed). The creating hooks (useComputed,
+	 * useReducerAtom) create handles from THESE so a per-instance-bound shim never
+	 * produces a handle owned by a different engine than it routes through. */
+	readonly Computed: typeof Computed
+	readonly ReducerAtom: typeof ReducerAtom
+	/** Enables unreachable-state checks and the post-await write warning. */
+	readonly devChecks: boolean
+	disposed = false
 	/** Listener/translation errors (recorded, not thrown across React's commit). */
-	errors: unknown[] = [];
+	errors: unknown[] = []
 	/** Dev warnings surfaced (shim-local heuristics; console-warned once per message). */
-	devWarnings: string[] = [];
-	private warned = new Set<string>();
+	devWarnings: string[] = []
+	private warned = new Set<string>()
 
-	private unsubscribe: () => void;
-	private unregisterAllocator: () => void;
-	private rootsByContainer = new Map<unknown, RootRec>();
+	private readonly registry: ReactBatchRegistry
+	private readonly registryToEngine = new Map<number, BatchId>()
+	private readonly engineToRegistry = new Map<BatchId, number>()
+	private unsubscribe: () => void
+	private rootsByContainer = new Map<unknown, RootRec>()
 	/** watcher id -> delivery target (registered at render, claimed at layout). */
-	targets = new Map<number, WatcherTarget>();
+	targets = new Map<number, WatcherTarget>()
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
-	claimed = new Set<number>();
+	claimed = new Set<number>()
 	/** SignalEffect id -> its hook-owned stable cleanup/body runner. */
-	private effectRunners = new Map<number, () => void>();
-	constructor() {
-		this.bridge = engine;
-		this.devChecks = engine.devChecks;
-		assertForkPresent();
-		// THE DRIVER RECORD — the engine's one attachment surface (see the
-		// module header). Installed before any React-side registration, so a
-		// second registration fails cleanly here (attachDriver throws: one
-		// driver per composition) with no protocol listeners left behind.
+	private effectRunners = new Map<number, () => void>()
+	constructor(instance?: Cosignals) {
+		this.bridge = instance?.engine ?? engine
+		this.Computed = instance?.Computed ?? Computed
+		this.ReducerAtom = instance?.ReducerAtom ?? ReducerAtom
+		this.devChecks = this.bridge.devChecks
+		assertForkPresent()
+		this.registry = new ReactBatchRegistry(React)
+		// Install the engine driver before subscribing to React so a duplicate
+		// attachment cannot leave a registry subscription behind.
 		const driver: EngineDriver = {
 			// The write context — the one foreign call the engine makes per
 			// classified public write (dispatch is engine-internal after it).
@@ -211,11 +159,11 @@ export class Shim {
 			// mechanism), and the engine consults its own frame before this
 			// provider.
 			worldFor: () => {
-				const rendering = this.renderingRoot();
+				const rendering = this.renderingRoot()
 				if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
-					return { kind: 'render', render: rendering.renderPass };
+					return { kind: 'render', render: rendering.renderPass }
 				}
-				return undefined;
+				return undefined
 			},
 			// Direct listeners — the load-bearing consumption surface. The
 			// engine's trace stream stays a test/tracing artifact (it does not
@@ -233,115 +181,115 @@ export class Shim {
 			// Test-only: the engine reset invokes this first, before scrubbing
 			// engine state, so React's batch registry drops its slot tenancy
 			// while the engine composition those ids point into still exists.
-			protocolReset: () => React.unstable_resetBatchRegistryForTest(),
-		};
-		attachDriver(driver);
-		// Protocol v2: the shim is the batch-id allocator. React calls this at
-		// every batch's creation (which can sit mid-render, mid-commit, or
-		// inside protocol listeners — the engine's openBatch is allocation-only
-		// bookkeeping and legal at all three); the engine batch opens with the
-		// fork's deferred classification recorded, and the returned engine
-		// BatchId is the identity both sides speak from then on.
-		this.unregisterAllocator = React.unstable_registerBatchIdAllocator(
-			(deferred: boolean) => this.bridge.openBatch({ deferred }).id,
-		);
-		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
+			protocolReset: () => {
+				this.registry.reset()
+				this.registryToEngine.clear()
+				this.engineToRegistry.clear()
+			},
+		}
+		try {
+			;(instance?.attachDriver ?? attachDriver)(driver)
+		} catch (error) {
+			this.registry.dispose()
+			throw error
+		}
+		this.unsubscribe = this.registry.subscribe({
+			onBatchOpened: (registryBatch) =>
+				this.guard(() => {
+					const batch = this.bridge.openBatch({ deferred: (registryBatch & 1) !== 0 })
+					this.registryToEngine.set(registryBatch, batch.id)
+					this.engineToRegistry.set(batch.id, registryBatch)
+				}),
 			onRenderPassStart: (container, includedBatches) =>
 				this.guard(() => this.handleRenderStart(container, includedBatches)),
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
 			onRenderPassResume: (container) => this.guard(() => this.handleResume(container)),
-			onRenderPassEnd: (container, committed) => this.guard(() => this.handleRenderEnd(container, committed)),
-			onBatchRetired: (batch, committed) => this.guard(() => this.handleBatchRetired(batch, committed)),
-			onRootCommitted: (container, committedBatches, generation) =>
-				this.guard(() => this.handleRootCommitted(container, committedBatches, generation)),
-		});
+			onRenderPassEnd: (container, committed) =>
+				this.guard(() => this.handleRenderEnd(container, committed)),
+			onBatchRetired: (registryBatch, committed) =>
+				this.guard(() => this.handleBatchRetired(registryBatch, committed)),
+			onRootCommitted: (container, committedBatches) =>
+				this.guard(() => this.handleRootCommitted(container, committedBatches)),
+		})
 	}
 
-	/**
-	 * Releases every React-side registration (the protocol listeners, the
-	 * batch-id allocator) and drops the shim's delivery targets. The DRIVER
-	 * RECORD stays attached: the engine owns that slot and only the test-only
-	 * engine reset clears it (there is deliberately no detach — one driver
-	 * per composition). A disposed shim's driver is harmless: its listeners
-	 * no-op through guard(), and its write context only reads protocol state.
-	 */
+	/** Releases the registry subscription and all shim-owned references. */
 	dispose(): void {
-		this.disposed = true;
-		this.unsubscribe();
-		this.unregisterAllocator();
-		this.targets.clear();
-		this.effectRunners.clear();
+		this.disposed = true
+		this.unsubscribe()
+		this.registry.dispose()
+		this.registryToEngine.clear()
+		this.engineToRegistry.clear()
+		this.targets.clear()
+		this.effectRunners.clear()
 	}
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
 	private guard(fn: () => void): void {
-		if (this.disposed) return;
+		if (this.disposed) {
+			return
+		}
 		try {
-			fn();
+			fn()
 		} catch (error) {
-			this.errors.push(error);
+			this.errors.push(error)
 		}
 	}
 
 	/** Errors recorded since the last call (tests assert this stays empty). */
 	takeErrors(): unknown[] {
-		const out = this.errors;
-		this.errors = [];
-		return out;
+		const out = this.errors
+		this.errors = []
+		return out
 	}
 
 	private devWarn(message: string): void {
-		this.devWarnings.push(message);
+		this.devWarnings.push(message)
 		if (!this.warned.has(message)) {
-			this.warned.add(message);
+			this.warned.add(message)
 			// eslint-disable-next-line no-console
-			console.warn(`cosignals: ${message}`);
+			console.warn(`cosignals: ${message}`)
 		}
 	}
 
 	// ---- roots and batches ----------------------------------------------------
 
 	rootRec(container: unknown): RootRec {
-		let rec = this.rootsByContainer.get(container);
+		let rec = this.rootsByContainer.get(container)
 		if (rec === undefined) {
 			rec = {
 				id: `root-${nextRootSerial++}`,
 				renderPass: undefined,
 				created: new Set(),
-			};
-			this.rootsByContainer.set(container, rec);
-			this.bridge.root(rec.id); // materialize the per-root committed table
+			}
+			this.rootsByContainer.set(container, rec)
+			this.bridge.root(rec.id) // materialize the per-root committed table
 		}
-		return rec;
+		return rec
 	}
 
-	/**
-	 * Upgrades a live batch to async-action semantics in place (parked — kept
-	 * pending — until the action settles). The batch already exists: with
-	 * protocol v2 every React batch is engine-opened at creation by this
-	 * shim's allocator, and every transition started inside one event shares
-	 * one batch, so an action start never creates — it only marks. Ids with
-	 * no live engine batch (already retired; foreign) are ignored.
-	 */
+	/** Keeps an existing live engine batch pending until its action settles. */
 	upgradeToAction(batchId: BatchId): void {
-		const t = this.bridge.idToBatch.get(batchId);
+		const t = this.bridge.idToBatch.get(batchId)
 		if (t !== undefined && t.state === 'live') {
-			t.action = true;
-			t.parked = true;
+			t.action = true
+			t.parked = true
 		}
 	}
 
 	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
-		const ctx = React.unstable_getRenderContext();
-		if (ctx === null) return undefined;
-		return this.rootsByContainer.get(ctx.container);
+		const ctx = this.registry.getRenderContext()
+		if (ctx === null) {
+			return undefined
+		}
+		return this.rootsByContainer.get(ctx.container)
 	}
 
 	// ---- protocol listener -> bridge --------------------------------------------
 
 	private handleRenderStart(container: unknown, includedBatches: readonly number[]): void {
-		const rec = this.rootRec(container);
+		const rec = this.rootRec(container)
 		if (rec.renderPass !== undefined && rec.renderPass.state !== 'ended') {
 			// The protocol host closes a render frame (onRenderPassEnd) before
 			// restarting the root, so a still-open render here means the two
@@ -349,54 +297,59 @@ export class Shim {
 			if (this.devChecks) {
 				throw new Error(
 					`cosignals-react: protocol violation — render pass started on ${rec.id} while its previous render is still open`,
-				);
+				)
 			}
 			// Defined fall-through: discard the stale render. A discarded render
 			// contributes nothing to committed truth (its batch set never locks
 			// into the root's committed table; render-owned mounts die), so this
 			// cannot double-account — while leaving it open would pin the
 			// engine's pending window forever.
-			this.bridge.renderEnd(rec.renderPass.id, 'discard');
+			this.bridge.renderEnd(rec.renderPass.id, 'discard')
 		}
-		const known: BatchId[] = [];
-		for (const batchId of includedBatches) {
-			// The protocol speaks engine BatchIds directly (this shim's allocator
-			// opened every one at its React batch's creation). The liveness
-			// filter is defensive: a batch can retire between React capturing
-			// the included list and this listener running only in exotic
-			// schedules, and stale ids (a test registry that missed its reset)
-			// must never enter a render's batch set.
-			if (this.bridge.idToBatch.get(batchId)?.state === 'live') known.push(batchId);
+		const known: BatchId[] = []
+		for (const registryBatch of includedBatches) {
+			const batchId = this.registryToEngine.get(registryBatch)
+			if (batchId !== undefined && this.bridge.idToBatch.get(batchId)?.state === 'live') {
+				known.push(batchId)
+			}
 		}
-		rec.renderPass = this.bridge.renderStart(rec.id, known);
-		rec.created = new Set();
+		rec.renderPass = this.bridge.renderStart(rec.id, known)
+		rec.created = new Set()
 	}
 
 	private handleYield(container: unknown): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		this.bridge.renderYield(rec.renderPass.id);
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
+		this.bridge.renderYield(rec.renderPass.id)
 	}
 
 	private handleResume(container: unknown): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		this.bridge.renderResume(rec.renderPass.id);
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
+		this.bridge.renderResume(rec.renderPass.id)
 	}
 
 	private handleRenderEnd(container: unknown, committed: boolean): void {
-		const rec = this.rootsByContainer.get(container);
-		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
-		const render = rec.renderPass;
+		const rec = this.rootsByContainer.get(container)
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') {
+			return
+		}
+		const render = rec.renderPass
 		if (!committed) {
 			// Discard: render-owned mounts die in the bridge; drop their targets too.
-			this.bridge.renderEnd(render.id, 'discard');
+			this.bridge.renderEnd(render.id, 'discard')
 			for (const wid of rec.created) {
-				if (!this.claimed.has(wid)) this.targets.delete(wid);
+				if (!this.claimed.has(wid)) {
+					this.targets.delete(wid)
+				}
 			}
-			rec.created = new Set();
-			rec.renderPass = undefined;
-			return;
+			rec.created = new Set()
+			rec.renderPass = undefined
+			return
 		}
 		// The end(commit) event is where the bridge captures its baseline:
 		// bridge.renderEnd snapshots committed state and the root's commit
@@ -406,8 +359,8 @@ export class Shim {
 		// for watchers created this render runs inside renderEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
 		// (delivered at the operation boundary, inside this call).
-		this.bridge.renderEnd(render.id, 'commit');
-		rec.renderPass = undefined;
+		this.bridge.renderEnd(render.id, 'commit')
+		rec.renderPass = undefined
 		// (ctx.previous cells update inside bridge.renderEnd — the
 		// cells live on the engine's computed nodes, beside their ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
@@ -416,41 +369,61 @@ export class Shim {
 		// effects run synchronously inside the commit, so by the time this
 		// microtask runs every claim has happened — any watcher created by this
 		// render and still unclaimed is dead.
-		const created = rec.created;
-		rec.created = new Set();
+		const created = rec.created
+		rec.created = new Set()
 		queueMicrotask(() => {
-			if (this.disposed) return;
+			if (this.disposed) {
+				return
+			}
 			for (const wid of created) {
-				if (this.claimed.has(wid)) continue;
+				if (this.claimed.has(wid)) {
+					continue
+				}
 				// removeWatcher, never a bare watchers.delete: the engine keeps a
 				// per-node watcher index next to the id map, and a map-only delete
 				// strands the index entry (dead watchers then seed the engine's
 				// sweeps and quiescence refreshes forever).
-				this.bridge.removeWatcher(wid);
-				this.targets.delete(wid);
+				this.bridge.removeWatcher(wid)
+				this.targets.delete(wid)
 			}
-		});
+		})
 	}
 
-	private handleBatchRetired(batchId: BatchId, committed: boolean): void {
-		const t = this.bridge.idToBatch.get(batchId);
-		if (t === undefined || t.state !== 'live') return; // already retired, or a stale/foreign id — nothing to do
+	private handleBatchRetired(registryBatch: number, committed: boolean): void {
+		const batchId = this.registryToEngine.get(registryBatch)
+		if (batchId === undefined) {
+			return
+		}
+		const t = this.bridge.idToBatch.get(batchId)
+		if (t === undefined || t.state !== 'live') {
+			this.registryToEngine.delete(registryBatch)
+			this.engineToRegistry.delete(batchId)
+			return
+		}
 		// The committed/abandoned fact is BORN here — React's own report about
 		// its batch. Retirement is disposition-blind (recorded writes never
 		// revert either way), so the flag goes no further than this diagnostic
 		// record, created straight into the bridge's tracer when one is
 		// attached. Batches with no protocol report (the engine-side ambient
 		// batch) create none.
-		const tr = this.bridge.trace;
-		if (tr !== undefined) tr.batchDisposition(batchId, committed);
+		const tr = this.bridge.trace
+		if (tr !== undefined) {
+			tr.batchDisposition(batchId, committed)
+		}
 		// Retirement/settlement flush dirty SignalEffect terminals and deliver
 		// their runner requests at this operation boundary.
-		if (t.parked) this.bridge.settleAction(batchId); // async action reached settlement
-		else this.bridge.retire(batchId); // batch done everywhere: its writes become permanent history
+		if (t.parked) {
+			this.bridge.settleAction(batchId)
+		} // async action reached settlement
+		else {
+			this.bridge.retire(batchId)
+		} // batch done everywhere: its writes become permanent history
+		this.registryToEngine.delete(registryBatch)
+		this.engineToRegistry.delete(batchId)
 	}
 
-	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
-		const rec = this.rootRec(container);
+	private handleRootCommitted(container: unknown, committedBatches: readonly number[]): void {
+		const rec = this.rootRec(container)
 		// The bridge already locked the committing render's batch set into the
 		// root's committed table at renderEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
@@ -462,14 +435,16 @@ export class Shim {
 		// bit mask, generation, commit clock, arena fan-out, drain — never a
 		// partial table write from here). Defensive: for React batches with
 		// engine batches the render's set already covers the delta by construction.
-		const reported: BatchId[] = [];
-		for (const batchId of committedBatches) {
-			// Engine BatchIds directly; the liveness filter mirrors v1's
-			// mapping check (the mapping was deleted at retirement, so a
-			// retired batch never re-entered commitBatches from here).
-			if (this.bridge.idToBatch.get(batchId)?.state === 'live') reported.push(batchId);
+		const reported: BatchId[] = []
+		for (const registryBatch of committedBatches) {
+			const batchId = this.registryToEngine.get(registryBatch)
+			if (batchId !== undefined && this.bridge.idToBatch.get(batchId)?.state === 'live') {
+				reported.push(batchId)
+			}
 		}
-		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
+		if (reported.length !== 0) {
+			this.bridge.commitBatches(rec.id, reported)
+		}
 		// commitBatches is itself a boundary operation: when the report
 		// actually moved committed truth, the engine re-checked that root's
 		// committed SignalEffects inside the call.
@@ -484,18 +459,15 @@ export class Shim {
 	// lives HERE only, in currentBatch — the engine and the reference model
 	// emit no dev events.)
 
-	/**
-	 * Schedules a re-render (a setState bump) in the batch's own lane via
-	 * unstable_runInBatch — the engine BatchId is the protocol id, so it
-	 * passes straight through. Batches React no longer (or never) holds —
-	 * an already-retired batch, an engine-created batch such as the ambient
-	 * one, or BATCH_NONE for no batch at all — take unstable_runInBatch's
-	 * documented discrete-urgent fallback.
-	 */
+	/** Schedules a re-render in the batch's lane, or urgently if it is gone. */
 	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
-		const target = this.targets.get(watcherId);
-		if (target === undefined || !target.live) return;
-		React.unstable_runInBatch(batchId ?? BATCH_NONE, () => target.bump());
+		const target = this.targets.get(watcherId)
+		if (target === undefined || !target.live) {
+			return
+		}
+		const registryBatch =
+			batchId === undefined ? BATCH_NONE : (this.engineToRegistry.get(batchId) ?? BATCH_NONE)
+		this.registry.runInBatch(registryBatch, () => target.bump())
 	}
 
 	// ---- the write context ----------------------------------------------------
@@ -511,24 +483,20 @@ export class Shim {
 	 * validates their dirty graph edges at the next boundary (retirement, settlement,
 	 * per-root commit), never mid-write. */
 	currentBatch(): BatchId {
-		if (React.unstable_getRenderContext() !== null) {
-			throw new Error('cosignals: signal write during render — write from an event handler or effect instead');
+		if (this.registry.getRenderContext() !== null) {
+			throw new Error(
+				'cosignals: signal write during render — write from an event handler or effect instead',
+			)
 		}
-		// The protocol id is the engine BatchId: the fork created the batch
-		// through this shim's allocator (which opened the engine batch) the
-		// first time any write asked for this batch, this call included.
-		const batchId = React.unstable_getCurrentWriteBatch();
-		// BATCH_NONE is UNREACHABLE in practice: it means "no renderer
-		// provider registered" (ReactExternalRuntime returns it only then),
-		// and a renderer registers its provider at module load — after that,
-		// getCurrentWriteBatch() creates a batch id for every write (any
-		// call context) with a guaranteed close edge, so no write in the React
-		// path is ever context-free. Dev checks make reaching it explode;
-		// without them it returns to the engine's no-context arm.
+		const registryBatch = this.registry.getCurrentWriteBatch()
+		const batchId = this.registryToEngine.get(registryBatch) ?? BATCH_NONE
+		// Once the renderer installs its taps, every write context has a
+		// registry batch with a close edge. Keep the no-context fall-through
+		// for production builds with development checks disabled.
 		if (this.devChecks && batchId === BATCH_NONE) {
 			throw new Error(
-				'cosignals: protocol violation — signal write with no batch context after registration (the renderer provided no external-runtime write batch)',
-			);
+				'cosignals: protocol violation — signal write with no batch context after the renderer installed its signals taps',
+			)
 		}
 		if (this.devChecks) {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
@@ -536,27 +504,28 @@ export class Shim {
 			// urgent — while an async action is pending that is usually a bug
 			// (the author meant the write to join the action; the fix is a
 			// fresh startTransition). Warn on a non-deferred write while any
-			// action is parked. Deferredness is the classification the fork
-			// told the allocator at the batch's creation, stored on the engine
-			// batch record; one bit cannot distinguish a discrete handler's
+			// action is parked. Deferredness comes from React when the registry
+			// opens the batch; one bit cannot distinguish a discrete handler's
 			// batch from a timer's ambient one, so this lint can over-trigger
 			// on genuine handler writes during someone else's action —
 			// accepted imprecision for a dev-only warning.
-			const t = this.bridge.idToBatch.get(batchId);
-			let parked = false;
+			const t = this.bridge.idToBatch.get(batchId)
+			let parked = false
 			if (t !== undefined && !t.action && !t.deferred) {
 				for (const live of this.bridge.liveBatches()) {
 					if (live.parked) {
-						parked = true;
-						break;
+						parked = true
+						break
 					}
 				}
 			}
 			if (parked) {
-				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
+				this.devWarn(
+					'a signal write after await landed outside the action — wrap it in startTransition',
+				)
 			}
 		}
-		return batchId;
+		return batchId
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------
@@ -565,25 +534,29 @@ export class Shim {
 	// here is React closure and passive-effect ownership.
 
 	registerEffect(root: RootId, refire: () => void): number {
-		this.bridge.root(root); // materialize the per-root committed table (as before)
-		const effect = this.bridge.mountSignalEffect(root, `effect@${root}`);
-		this.effectRunners.set(effect.id, refire);
-		return effect.id;
+		this.bridge.root(root) // materialize the per-root committed table (as before)
+		const effect = this.bridge.mountSignalEffect(root, `effect@${root}`)
+		this.effectRunners.set(effect.id, refire)
+		return effect.id
 	}
 
 	renderSignalEffect(renderPassId: number, id: number, willRun: boolean): void {
-		this.bridge.renderSignalEffect(renderPassId, id, willRun);
+		this.bridge.renderSignalEffect(renderPassId, id, willRun)
 	}
 
 	unregisterEffect(id: number): void {
-		this.effectRunners.delete(id);
-		if (this.bridge.idToSignalEffect.has(id)) this.bridge.removeSignalEffect(id);
+		this.effectRunners.delete(id)
+		if (this.bridge.idToSignalEffect.has(id)) {
+			this.bridge.removeSignalEffect(id)
+		}
 	}
 
 	/** Runs an effect body while its committed graph terminal retracks. */
 	captureEffectRun(id: number, body: () => void): void {
-		if (!this.bridge.idToSignalEffect.has(id)) return; // torn down between queue and run
-		this.bridge.captureSignalEffectRun(id, body);
+		if (!this.bridge.idToSignalEffect.has(id)) {
+			return
+		} // torn down between queue and run
+		this.bridge.captureSignalEffectRun(id, body)
 	}
 
 	// ---- node resolution --------------------------------------------------------
@@ -596,7 +569,7 @@ export class Shim {
 	 * Kept as a method so the hooks and the suites name one resolution point.
 	 */
 	internalsForAtom(atom: Atom<unknown>): AtomInternals {
-		return this.bridge.internalsForAtom(atom);
+		return this.bridge.internalsForAtom(atom)
 	}
 
 	// ---- suspense translation ----------------------------------------------------------
@@ -612,81 +585,106 @@ export class Shim {
 	 * folding it to a sentinel value, and a SuspendedRead carrier unwraps to
 	 * its thenable so React suspends the component. */
 	hookRead(fn: () => Value): Value {
-		this.bridge.suspendDepth++;
+		this.bridge.suspendDepth++
 		try {
-			return fn();
+			return fn()
 		} catch (err) {
-			if (err instanceof SuspendedRead) throw err.thenable;
-			throw err;
+			if (err instanceof SuspendedRead) {
+				throw err.thenable
+			}
+			throw err
 		} finally {
-			this.bridge.suspendDepth--;
+			this.bridge.suspendDepth--
 		}
 	}
 
 	/** Register a watcher created during the current render (orphan-sweep set). */
 	noteCreated(rootRec: RootRec, watcherId: number): void {
-		rootRec.created.add(watcherId);
+		rootRec.created.add(watcherId)
 	}
 
 	// ---- watcher claim / unsubscribe ------------------------------------------------
 
 	/** Layout-effect claim: the committed hook instance owns this watcher. */
-	claimWatcher(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean; root: RootId | undefined; lastValue: unknown }): void {
-		rec.pendingUnsub = false;
-		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
+	claimWatcher(rec: {
+		node: AnyInternals
+		watcherId: number | undefined
+		target: WatcherTarget
+		pendingUnsub: boolean
+		root: RootId | undefined
+		lastValue: unknown
+	}): void {
+		rec.pendingUnsub = false
+		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId)
 		if (w === undefined) {
 			// Reveal without a re-render (React bailed out) or a swept
 			// subscription: create a fresh watcher outside any React render and take
 			// the conservative reveal path — compare what the committed DOM shows
 			// against committed truth, and fix urgently, before paint.
-			this.resubscribeAtLayout(rec);
-			return;
+			this.resubscribeAtLayout(rec)
+			return
 		}
-		this.claimed.add(w.id);
-		rec.target.live = true;
-		this.targets.set(w.id, rec.target);
+		this.claimed.add(w.id)
+		rec.target.live = true
+		this.targets.set(w.id, rec.target)
 	}
 
-	private resubscribeAtLayout(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
-		const root = rec.root ?? ROOT_UNKNOWN;
-		const render = this.bridge.renderStart(root, []);
-		let created: Watcher | undefined;
+	private resubscribeAtLayout(rec: {
+		node: AnyInternals
+		watcherId: number | undefined
+		target: WatcherTarget
+		root: RootId | undefined
+		lastValue: unknown
+	}): void {
+		const root = rec.root ?? ROOT_UNKNOWN
+		const render = this.bridge.renderStart(root, [])
+		let created: Watcher | undefined
 		try {
-			created = this.bridge.mountWatcher(render.id, rec.node, 'w?');
-			created.name = `w${created.id}`;
-			this.bridge.deferMountEffects(created.id); // keep it out of the degenerate render
+			created = this.bridge.mountWatcher(render.id, rec.node, 'w?')
+			created.name = `w${created.id}`
+			this.bridge.deferMountEffects(created.id) // keep it out of the degenerate render
 		} finally {
-			this.bridge.renderEnd(render.id, 'discard');
+			this.bridge.renderEnd(render.id, 'discard')
 		}
-		if (created === undefined) return;
-		created.live = true;
-		created.lastRenderedValue = rec.lastValue; // what the committed DOM shows
-		rec.watcherId = created.id;
-		this.claimed.add(created.id);
-		rec.target.live = true;
-		this.targets.set(created.id, rec.target);
+		if (created === undefined) {
+			return
+		}
+		created.live = true
+		created.lastRenderedValue = rec.lastValue // what the committed DOM shows
+		rec.watcherId = created.id
+		this.claimed.add(created.id)
+		rec.target.live = true
+		this.targets.set(created.id, rec.target)
 		// Conservative reveal compare: fix any drift urgently, pre-paint.
-		const now = this.bridge.committedValue(rec.node, root);
-		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(created.id, undefined);
+		const now = this.bridge.committedValue(rec.node, root)
+		if (!Object.is(now, rec.lastValue)) {
+			this.bumpInBatch(created.id, undefined)
+		}
 	}
 
 	/** Debounce-finalized unsubscription (or immediate teardown for retired recs). */
-	finalizeUnsub(rec: { watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean }): void {
-		rec.pendingUnsub = false;
-		rec.target.live = false;
-		const wid = rec.watcherId;
-		if (wid === undefined) return;
-		rec.watcherId = undefined;
-		this.claimed.delete(wid);
-		this.targets.delete(wid);
+	finalizeUnsub(rec: {
+		watcherId: number | undefined
+		target: WatcherTarget
+		pendingUnsub: boolean
+	}): void {
+		rec.pendingUnsub = false
+		rec.target.live = false
+		const wid = rec.watcherId
+		if (wid === undefined) {
+			return
+		}
+		rec.watcherId = undefined
+		this.claimed.delete(wid)
+		this.targets.delete(wid)
 		// One engine call retires the watcher from every store it lives in
 		// (liveness/observation retain, id map, per-node walk index, open
 		// mounted lists) — see the engine's removeWatcher.
-		this.bridge.removeWatcher(wid);
+		this.bridge.removeWatcher(wid)
 	}
 }
 
 /** The evaluation context bound computed functions receive — the core's
  * ComputedCtx verbatim (`previous` hint + the two-form `ctx.use`), served
  * over the bound node's own state. */
-export type BoundCtx<T> = ComputedCtx<T>;
+export type BoundCtx<T> = ComputedCtx<T>

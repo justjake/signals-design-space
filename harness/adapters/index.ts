@@ -2,9 +2,9 @@
  * Registry mapping framework name -> lazy adapter loader. Loading is a
  * dynamic import per adapter so one broken library cannot break the others.
  */
-import type { FrameworkAdapter } from './types';
+import type { FrameworkAdapter } from './types'
 
-export type { AdapterComputed, AdapterSignal, FrameworkAdapter } from './types';
+export type { AdapterComputed, AdapterSignal, FrameworkAdapter } from './types'
 
 export const adapterNames = [
 	'alien-v3',
@@ -24,9 +24,10 @@ export const adapterNames = [
 	'cosignals-alt-a',
 	'cosignals-alt-b',
 	'strata',
-] as const;
+	'fx2',
+] as const
 
-export type AdapterName = (typeof adapterNames)[number];
+export type AdapterName = (typeof adapterNames)[number]
 
 const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>> = {
 	'alien-v3': () => import('./alien-v3'),
@@ -46,18 +47,19 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	'cosignals-alt-a': () => import('./cosignals-alt-a'),
 	'cosignals-alt-b': () => import('./cosignals-alt-b'),
 	strata: () => import('./strata'),
-};
+	fx2: () => import('./fx2'),
+}
 
 export function isAdapterName(name: string): name is AdapterName {
-	return (adapterNames as readonly string[]).includes(name);
+	return (adapterNames as readonly string[]).includes(name)
 }
 
 export async function loadAdapter(name: string): Promise<FrameworkAdapter> {
 	if (!isAdapterName(name)) {
 		throw new Error(
 			`Unknown framework ${JSON.stringify(name)}. Known frameworks: ${adapterNames.join(', ')}`,
-		);
+		)
 	}
-	const mod = await loaders[name]();
-	return mod.default;
+	const mod = await loaders[name]()
+	return mod.default
 }

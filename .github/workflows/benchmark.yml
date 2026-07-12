@@ -7,13 +7,13 @@
 # This is the family-wide sibling of packages/dalien-signals'
 # .github/workflows/benchmark.yml (which benchmarks dalien against upstream
 # on that repo's own pushes — it cannot measure cosignals because this repo
-# is private). Both share the same harness: the milomg js-reactivity-
-# benchmark plus the fork patch stored at
-# packages/dalien-signals/benchs/ci/milomg-fork.patch (median-of-N
-# estimator, interleaved isolated runner, family adapters). See that repo's
-# benchs/ci/README.md for the methodology and the do-not-shard-frameworks
-# rationale: cross-machine times are not comparable, so Node vs Bun is the
-# only parallel axis.
+# is private). Both use the same harness: the justjake/js-reactivity-
+# benchmark fork (median-of-N estimator, interleaved isolated runner,
+# family adapters — all committed on the fork, no patch step), which the
+# milomg-reactivity-benchmark submodule pointer pins. See
+# packages/dalien-signals/benchs/ci/README.md for the methodology and the
+# do-not-shard-frameworks rationale: cross-machine times are not
+# comparable, so Node vs Bun is the only parallel axis.
 
 name: benchmark
 
@@ -58,15 +58,15 @@ jobs:
       - uses: actions/checkout@v4
 
       # Only the three submodules the benchmark needs — a full recursive
-      # init would pull the react fork and every vendor library.
+      # init would pull the react fork and every vendor library. The milomg
+      # pointer pins the harness fork lineage directly (adapters and
+      # runner committed there), so there is no patch step.
       - name: Init benchmark submodules
         run: |
           git submodule update --init \
             packages/dalien-signals \
             milomg-reactivity-benchmark \
             upstream-alien-signals
-          git -C milomg-reactivity-benchmark apply \
-            "$GITHUB_WORKSPACE/packages/dalien-signals/benchs/ci/milomg-fork.patch"
 
       - uses: actions/setup-node@v4
         with:

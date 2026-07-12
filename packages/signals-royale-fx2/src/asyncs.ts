@@ -1,236 +1,263 @@
 /**
- * Async values: pending and error are graph STATE, not control flow.
+ * Async support for computeds. A computed body can call use(promise) to
+ * read an async value. Rather than modeling this as control flow, the
+ * engine records "pending" and "error" as node state, alongside the value.
  *
- * A computed that touches an unresolved thenable evaluates-to-pending: the
- * evaluation parks, the computed keeps serving its last settled value
- * ("stale"), and a stable episode promise represents the pending span.
- * Settlement behaves like a write: it invalidates the parked computeds and
- * propagates, so downstream computeds and subscribers converge. Reading a
- * pending computed from inside another evaluation parks the reader too
- * (pending forwards); reading it from outside serves the stale value when
- * one exists.
+ * When a computed touches an unresolved thenable, its evaluation parks:
+ * the body's throw is caught, the node is marked suspended, and it keeps
+ * serving its last settled value (its "stale" value) to readers outside
+ * any evaluation. Reading a pending computed from inside another
+ * evaluation parks the reader as well, so pendingness forwards up chains.
+ * When the thenable settles, settlement behaves like a write: the parked
+ * computeds are invalidated and re-evaluated, and the change propagates so
+ * downstream computeds and subscribers converge.
  *
- * Stability contracts:
- * - One episode promise per pending span per computed: a Suspense retry that
- *   re-reads the computed gets the SAME thenable, so React neither loops nor
- *   re-issues fetches.
- * - Errors rethrow the SAME reason object every time (reference stable),
- *   held in a box the engine keeps until the value actually changes.
+ * Two identity guarantees matter to React:
+ * - One suspension promise per pending span per computed. A Suspense retry
+ *   that re-reads the computed must get the same thenable it suspended on,
+ *   or React would loop and fetches would be re-issued.
+ * - An erroring computed rethrows the same reason object on every read,
+ *   held in a box the engine keeps until the value actually changes, so
+ *   error boundaries and memo comparisons see a stable reference.
  */
 
 import {
-  type CellNode,
-  type DerivedNode,
-  PARKED,
-  adoptDepLink,
-  ensureFresh,
-  hooks,
-  invalidateDerived,
-  isUninitialized,
-  makeCell,
-  NO_EVENT,
-  setCurrentCause,
-  setFinishComputeImpl,
-  setUseImpl,
-  startBatch,
-  endBatch,
-  untracked,
-} from './graph.ts';
+	type ComputedNode,
+	type Flags,
+	Flag,
+	PARKED,
+	ensureFresh,
+	invalidateComputed,
+	isUninitialized,
+	NO_EVENT,
+	setCurrentCause,
+	setFinishComputeImpl,
+	setUseImpl,
+	startBatch,
+	endBatch,
+	traceHook,
+	untracked,
+} from './graph.ts'
 
-export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected';
+/** Settlement state recorded for a tracked thenable. */
+export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected'
 
+/** Per-thenable tracking record: its settlement state plus everything
+ * currently parked on it. */
 export interface ThenableBox {
-  status: ThenableStatus;
-  value: unknown;
-  reason: unknown;
-  /** Canonical computeds whose latest evaluation parked on this thenable. */
-  parkedNodes: Set<DerivedNode<unknown>>;
-  /** Episodes (canonical or per-world) waiting on this thenable. */
-  parkedEpisodes: Set<Episode>;
+	status: ThenableStatus
+	value: unknown
+	reason: unknown
+	/** Computeds whose latest base-state evaluation parked on this thenable. */
+	parkedNodes: Set<ComputedNode<unknown>>
+	/** Suspensions (base-state or per-world) waiting on this thenable. */
+	parkedSuspensions: Set<Suspension>
 }
 
 /** One pending span: a stable promise that resolves when the span makes
- * progress, so a suspended React render retries exactly then. */
-export interface Episode {
-  promise: Promise<void>;
-  resolve: () => void;
-  settled: boolean;
+ * progress, so a suspended React render retries exactly then and not
+ * before. */
+export interface Suspension {
+	promise: Promise<void>
+	resolve: () => void
+	settled: boolean
 }
 
+/** A thrown error, boxed so an erroring evaluation has one stable result
+ * object to compare and rethrow (see the header on stability). */
 export interface ErrorBox {
-  error: unknown;
+	error: unknown
 }
 
-export type AsyncState =
-  | { kind: 'pending'; episode: Episode }
-  | { kind: 'error'; box: ErrorBox };
+/** Every ErrorBox ever made, so code that receives a box through a value
+ * channel (committedSnapshot hands boxes to callers) can tell it apart
+ * from a user value without adding a marker property to the box. */
+const errorBoxes = new WeakSet<object>()
 
-const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>();
-
-/** Installed by worlds.ts: settlement also invalidates world memos. */
-let onSettlementEpoch: (() => void) | null = null;
-export function setOnSettlementEpoch(fn: () => void): void {
-  onSettlementEpoch = fn;
+export function makeErrorBox(error: unknown): ErrorBox {
+	const box: ErrorBox = { error }
+	errorBoxes.add(box)
+	return box
 }
 
-export function makeEpisode(): Episode {
-  let resolveRaw!: () => void;
-  const promise = new Promise<void>((r) => (resolveRaw = r));
-  const ep: Episode = {
-    promise,
-    settled: false,
-    resolve: () => {
-      if (ep.settled) return;
-      ep.settled = true;
-      resolveRaw();
-    },
-  };
-  return ep;
-}
-
-export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
-  let box = boxes.get(t);
-  if (box !== undefined) return box;
-  const fresh: ThenableBox = {
-    status: 'pending',
-    value: undefined,
-    reason: undefined,
-    parkedNodes: new Set(),
-    parkedEpisodes: new Set(),
-  };
-  boxes.set(t, fresh);
-  t.then(
-    (v) => {
-      fresh.status = 'fulfilled';
-      fresh.value = v;
-      settle(fresh);
-    },
-    (r) => {
-      fresh.status = 'rejected';
-      fresh.reason = r;
-      settle(fresh);
-    },
-  );
-  return fresh;
-}
-
-/** Settlement is a write: invalidate parked computeds and eagerly bring
- * them up to date (progressive evaluations park on their NEXT thenable
- * without waiting for a reader, and passive probes observe final state when
- * the wave's notifications run), then release the episodes so suspended
- * renders retry against the settled graph. */
-function settle(box: ThenableBox): void {
-  const cause = hooks.trace !== null ? hooks.trace('settle', null, NO_EVENT) : NO_EVENT;
-  onSettlementEpoch?.();
-  const nodes = [...box.parkedNodes];
-  box.parkedNodes.clear();
-  const episodes = [...box.parkedEpisodes];
-  box.parkedEpisodes.clear();
-  const prevCause = setCurrentCause(cause);
-  startBatch();
-  try {
-    for (const node of nodes) {
-      invalidateDerived(node, cause);
-      try {
-        untracked(() => ensureFresh(node));
-      } catch {
-        // Evaluation state (pending/error) is recorded on the node; readers
-        // see it at their own read sites.
-      }
-    }
-  } finally {
-    endBatch();
-    setCurrentCause(prevCause);
-    for (const ep of episodes) ep.resolve();
-  }
-}
-
-export function asyncStateOf(node: DerivedNode<unknown>): AsyncState | null {
-  return node.asyncState as AsyncState | null;
-}
-
-/** use(t) inside a canonical evaluation. */
-function canonicalUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
-  const box = trackThenable(t);
-  if (box.status === 'fulfilled') return box.value;
-  if (box.status === 'rejected') throw box.reason;
-  box.parkedNodes.add(consumer);
-  const prior = consumer.asyncState as AsyncState | null;
-  // Reuse the span's episode so Suspense retries see one stable thenable —
-  // but never a settled one, or a suspended render would retry in a loop.
-  const episode =
-    prior !== null && prior.kind === 'pending' && !prior.episode.settled
-      ? prior.episode
-      : makeEpisode();
-  box.parkedEpisodes.add(episode);
-  consumer.asyncState = { kind: 'pending', episode } satisfies AsyncState;
-  throw PARKED;
-}
-
-function finishCompute(
-  node: DerivedNode<unknown>,
-  outcome: { parked: boolean; error: unknown; hasError: boolean; value: unknown },
-): boolean {
-  const prior = node.asyncState as AsyncState | null;
-  if (outcome.parked) {
-    // canonicalUse installed the pending state. Advance the version so
-    // downstream readers re-pull and park on the (possibly fresh) episode.
-    return true;
-  }
-  if (outcome.hasError) {
-    if (prior !== null && prior.kind === 'pending') prior.episode.resolve();
-    const sameError = prior !== null && prior.kind === 'error' && prior.box.error === outcome.error;
-    node.asyncState = sameError
-      ? prior
-      : ({ kind: 'error', box: { error: outcome.error } } satisfies AsyncState);
-    return !sameError;
-  }
-  if (prior !== null && prior.kind === 'pending') prior.episode.resolve();
-  node.asyncState = null;
-  const prev = node.value;
-  if (isUninitialized(prev) || !node.equals(prev, outcome.value)) {
-    node.value = outcome.value;
-    return true;
-  }
-  // The value itself is unchanged; downstream still re-pulls when this ends
-  // a pending or error span (readers may have parked or thrown).
-  return prior !== null;
-}
-
-setUseImpl(canonicalUse as never);
-setFinishComputeImpl(finishCompute as never);
-
-/** A derived's canonical result envelope, after ensureFresh. */
-export type Envelope =
-  | { kind: 'value'; value: unknown }
-  | { kind: 'pending'; episode: Episode; stale: boolean; value: unknown }
-  | { kind: 'error'; box: ErrorBox };
-
-export function envelopeOf(node: DerivedNode<unknown>): Envelope {
-  const st = node.asyncState as AsyncState | null;
-  if (st === null) return { kind: 'value', value: node.value };
-  if (st.kind === 'error') return { kind: 'error', box: st.box };
-  return {
-    kind: 'pending',
-    episode: st.episode,
-    stale: !isUninitialized(node.value),
-    value: isUninitialized(node.value) ? undefined : node.value,
-  };
+export function isErrorBox(v: unknown): v is ErrorBox {
+	return typeof v === 'object' && v !== null && errorBoxes.has(v)
 }
 
 /**
- * Force a refetch with unchanged inputs. The hidden nonce cell is a real
- * tracked dependency, so the bump routes through write classification: an
- * urgent refresh invalidates canonically, a refresh inside a transition
- * writes a draft op and the refetch belongs to that world until it commits.
+ * Every resolved value is read through this one shape. Graph nodes (atoms
+ * and computeds) satisfy the interface directly, so resolving base state
+ * allocates nothing; per-world memo records (worlds.ts) are separate
+ * objects of the same shape.
+ *
+ * - flags: consumers read only the async bits (`flags & Flag.AsyncMask`);
+ *   node-backed views carry kind and staleness bits in the same word.
+ *   Both async bits clear means a plain value.
+ * - value: the settled value, or the UNINITIALIZED sentinel when none
+ *   exists yet. A suspended state whose value is not the sentinel is
+ *   "stale": the previous value keeps serving while the refetch runs.
+ *   Unwrap sites normalize the sentinel to undefined.
+ * - throwable: the ErrorBox whose .error every read rethrows (AsyncError),
+ *   or the Suspension whose .promise suspends a reader (AsyncSuspended);
+ *   null for a plain value.
  */
-export function ensureRefreshNonce(node: DerivedNode<unknown>): CellNode<number> {
-  if (node.refreshNonce === undefined) {
-    node.refreshNonce = makeCell(0, {
-      label: node.label !== undefined ? `${node.label}.refresh` : 'refresh',
-      lazy: false,
-    });
-    adoptDepLink(node.refreshNonce, node);
-  }
-  return node.refreshNonce;
+export interface ResolvedState {
+	flags: Flags
+	value: unknown
+	throwable: ErrorBox | Suspension | null
 }
+
+const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()
+
+/** Installed by worlds.ts so settlement also invalidates its world memos. */
+let onSettlement: (() => void) | null = null
+export function setOnSettlement(fn: () => void): void {
+	onSettlement = fn
+}
+
+export function makeSuspension(): Suspension {
+	let resolveRaw!: () => void
+	const promise = new Promise<void>((r) => (resolveRaw = r))
+	const ep: Suspension = {
+		promise,
+		settled: false,
+		resolve: () => {
+			if (ep.settled) {
+				return
+			}
+			ep.settled = true
+			resolveRaw()
+		},
+	}
+	return ep
+}
+
+export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
+	let box = boxes.get(t)
+	if (box !== undefined) {
+		return box
+	}
+	const fresh: ThenableBox = {
+		status: 'pending',
+		value: undefined,
+		reason: undefined,
+		parkedNodes: new Set(),
+		parkedSuspensions: new Set(),
+	}
+	boxes.set(t, fresh)
+	t.then(
+		(v) => {
+			fresh.status = 'fulfilled'
+			fresh.value = v
+			settle(fresh)
+		},
+		(r) => {
+			fresh.status = 'rejected'
+			fresh.reason = r
+			settle(fresh)
+		},
+	)
+	return fresh
+}
+
+/** A thenable settled. Treat it like a write: invalidate the parked
+ * computeds and eagerly re-evaluate them — eagerly, so a computed that
+ * awaits several thenables in sequence parks on the next one without
+ * waiting for a reader, and so passive probes observe the final state when
+ * the wave's notifications run. Then release the suspensions, so suspended
+ * renders retry against the already-settled graph. */
+function settle(box: ThenableBox): void {
+	const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT
+	onSettlement?.()
+	const nodes = [...box.parkedNodes]
+	box.parkedNodes.clear()
+	const suspensions = [...box.parkedSuspensions]
+	box.parkedSuspensions.clear()
+	const prevCause = setCurrentCause(cause)
+	startBatch()
+	try {
+		for (const node of nodes) {
+			invalidateComputed(node, cause)
+			try {
+				untracked(() => ensureFresh(node))
+			} catch {
+				// The evaluation outcome (pending or error) is recorded on the
+				// node; readers encounter it at their own read sites.
+			}
+		}
+	} finally {
+		endBatch()
+		setCurrentCause(prevCause)
+		for (const ep of suspensions) {
+			ep.resolve()
+		}
+	}
+}
+
+/** Handles use(t) inside a base-state evaluation. */
+function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unknown {
+	const box = trackThenable(t)
+	if (box.status === 'fulfilled') {
+		return box.value
+	}
+	if (box.status === 'rejected') {
+		throw box.reason
+	}
+	box.parkedNodes.add(consumer)
+	const flags = consumer.flags
+	// Reuse the pending span's suspension so Suspense retries see one
+	// stable thenable — but never a settled one, or a suspended render
+	// would retry in a loop.
+	const suspension =
+		(flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+			? (consumer.throwable as Suspension)
+			: makeSuspension()
+	box.parkedSuspensions.add(suspension)
+	consumer.throwable = suspension
+	consumer.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended
+	throw PARKED
+}
+
+function finishCompute(
+	node: ComputedNode<unknown>,
+	parked: boolean,
+	hasError: boolean,
+	error: unknown,
+	value: unknown,
+): boolean {
+	const flags = node.flags
+	if (parked) {
+		// baseUse already installed the suspended state. Report a change so
+		// downstream readers re-pull and park on the (possibly fresh)
+		// suspension.
+		return true
+	}
+	if (hasError) {
+		if ((flags & Flag.AsyncSuspended) !== 0) {
+			;(node.throwable as Suspension).resolve()
+		}
+		const sameError =
+			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
+		if (!sameError) {
+			node.throwable = makeErrorBox(error)
+		}
+		node.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncError
+		return !sameError
+	}
+	if ((flags & Flag.AsyncSuspended) !== 0) {
+		;(node.throwable as Suspension).resolve()
+	}
+	node.flags = flags & ~Flag.AsyncMask
+	node.throwable = null
+	const prev = node.value
+	if (isUninitialized(prev) || !node.equals(prev, value)) {
+		node.value = value
+		return true
+	}
+	// The value itself is unchanged; downstream still re-pulls when this ends
+	// a pending or error span (readers may have parked or thrown).
+	return (flags & Flag.AsyncMask) !== 0
+}
+
+setUseImpl(baseUse)
+setFinishComputeImpl(finishCompute)

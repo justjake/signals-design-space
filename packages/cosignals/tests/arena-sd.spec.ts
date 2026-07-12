@@ -29,207 +29,242 @@
  * Every engine reset runs with the divergence check armed: arena-served ≡
  * fold-truth after every public operation, plus the structural validator.
  */
-import { describe, expect, it } from 'vitest';
-import { __TEST__ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine, type EngineResetOptions } from '../src/CosignalEngine.js';
-import { armArenaCheck } from './arena-checker.js';
+import { describe, expect, it } from 'vitest'
+import { __TEST__ctxUse, SuspendedRead } from '../src/index.js'
+import {
+	engine,
+	__TEST__resetEngine,
+	type AnyInternals,
+	type CosignalEngine,
+	type EngineResetOptions,
+} from '../src/CosignalEngine.js'
+import { armArenaCheck } from './arena-checker.js'
 
-const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
+const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0))
 
 function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
-	engine.discardAllWip();
+	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id);
-		else engine.retire(t.id);
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
-	__TEST__resetEngine(options);
-	const b = engine;
-	armArenaCheck(b);
-	return b;
+	__TEST__resetEngine(options)
+	const b = engine
+	armArenaCheck(b)
+	return b
 }
 
 function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
-	const p = b.renderStart(root, []);
-	const w = b.mountWatcher(p.id, node, name);
-	b.renderEnd(p.id, 'commit');
-	return w;
+	const p = b.renderStart(root, [])
+	const w = b.mountWatcher(p.id, node, name)
+	b.renderEnd(p.id, 'commit')
+	return w
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
 function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): void {
-	const t = b.openBatch();
-	b.write(t.id, node as never, 0, value);
-	b.retire(t.id);
+	const t = b.openBatch()
+	b.write(t.id, node as never, 0, value)
+	b.retire(t.id)
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-	let resolve!: (v: T) => void;
+	let resolve!: (v: T) => void
 	const promise = new Promise<T>((res) => {
-		resolve = res;
-	});
-	return { promise, resolve };
+		resolve = res
+	})
+	return { promise, resolve }
 }
 
 /** The shim-wrapper analog: a background suspension folds to the thenable's
  * stable sentinel VALUE instead of unwinding (battery 16d's rule). */
-function suspendingUse(b: CosignalEngine, name: string, thenable: () => PromiseLike<unknown>): AnyInternals {
+function suspendingUse(
+	b: CosignalEngine,
+	name: string,
+	thenable: () => PromiseLike<unknown>,
+): AnyInternals {
 	const node: AnyInternals = b.computed(name, () => {
 		try {
-			return __TEST__ctxUse(node.ix, 'k', thenable); // the id-keyed ctx.use request cache (per node)
+			return __TEST__ctxUse(node.ix, 'k', thenable) // the id-keyed ctx.use request cache (per node)
 		} catch (err) {
-			if (err instanceof SuspendedRead) return err;
-			throw err;
+			if (err instanceof SuspendedRead) {
+				return err
+			}
+			throw err
 		}
-	});
-	return node;
+	})
+	return node
 }
 
 /** Length of a sub's deps chain counted from its FIRST dep's link (the fn
  * must read that dep first, making its link the chain head). A same-eval
  * dedup miss would create a duplicate link and lengthen the chain. */
-function depsChainLen(b: CosignalEngine, root: string, firstDep: AnyInternals, sub: AnyInternals): number {
-	let cur = b.__TEST__arenaLinkId(root, firstDep, sub);
-	let n = 0;
+function depsChainLen(
+	b: CosignalEngine,
+	root: string,
+	firstDep: AnyInternals,
+	sub: AnyInternals,
+): number {
+	let cur = b.__TEST__arenaLinkId(root, firstDep, sub)
+	let n = 0
 	while (cur !== 0) {
-		n++;
-		cur = b.__TEST__arenaLinkNextDep(root, cur);
+		n++
+		cur = b.__TEST__arenaLinkNextDep(root, cur)
 	}
-	return n;
+	return n
 }
 
 describe('S-D pool shell reuse (§4.8)', () => {
 	it('release scrubs totally, keeps capacity, bumps claimGen to at-rest parity; re-claim serves current truth', () => {
-		const b = freshEngine();
-		const a0 = b.atom('a', 1);
-		const c = b.computed('c', (read) => read(a0));
-		const w = mount(b, 'R', c, 'W');
-		const shell = b.__TEST__arena('R')!;
-		expect(shell.alive).toBe(true);
-		expect(shell.claimGen % 2).toBe(1); // live tenancy = odd (claimed once more than released)
-		commitWrite(b, a0, 2);
-		expect(w.lastRenderedValue).toBe(2);
-		const genLive = shell.claimGen;
-		const buf = shell.memory;
-		const valsCap = shell.vals.length;
-		expect(valsCap).toBeGreaterThan(0);
-		w.live = false;
-		b.quiesce(); // zero consumers: the sweep releases the arena to the pool
-		expect(b.__TEST__arenaPool()).toContain(shell);
-		expect(shell.alive).toBe(false);
-		expect(shell.claimGen).toBe(genLive + 1); // release bump: even = at rest
-		expect(shell.memory).toBe(buf); // the buffer rides the pooled shell
+		const b = freshEngine()
+		const a0 = b.atom('a', 1)
+		const c = b.computed('c', (read) => read(a0))
+		const w = mount(b, 'R', c, 'W')
+		const shell = b.__TEST__arena('R')!
+		expect(shell.alive).toBe(true)
+		expect(shell.claimGen % 2).toBe(1) // live tenancy = odd (claimed once more than released)
+		commitWrite(b, a0, 2)
+		expect(w.lastRenderedValue).toBe(2)
+		const genLive = shell.claimGen
+		const buf = shell.memory
+		const valsCap = shell.vals.length
+		expect(valsCap).toBeGreaterThan(0)
+		w.live = false
+		b.quiesce() // zero consumers: the sweep releases the arena to the pool
+		expect(b.__TEST__arenaPool()).toContain(shell)
+		expect(shell.alive).toBe(false)
+		expect(shell.claimGen).toBe(genLive + 1) // release bump: even = at rest
+		expect(shell.memory).toBe(buf) // the buffer rides the pooled shell
 		// The scrub is TOTAL — dead-tenancy residue cannot validate…
-		expect(shell.memory.every((x) => x === 0)).toBe(true); // written prefix zeroed; past it was fresh-zero
-		expect(shell.vals.every((v) => v === undefined)).toBe(true); // value refs released (no pooled leak)
-		expect(shell.nodeToShadow.every((x) => x === 0)).toBe(true);
-		expect(shell.suspIdx.every((x) => x === 0)).toBe(true);
-		expect(shell.walk.every((x) => x === 0)).toBe(true);
-		expect(shell.weakSubs.every((x) => x === 0)).toBe(true);
-		expect(shell.weakSubsTail.every((x) => x === 0)).toBe(true);
-		expect(shell.dirty.length).toBe(0);
-		expect(shell.suspended.length).toBe(0);
-		expect(shell.linkFree).toBe(0);
-		expect(shell.readClock).toBe(0);
-		expect(shell.cycle).toBe(0);
+		expect(shell.memory.every((x) => x === 0)).toBe(true) // written prefix zeroed; past it was fresh-zero
+		expect(shell.vals.every((v) => v === undefined)).toBe(true) // value refs released (no pooled leak)
+		expect(shell.nodeToShadow.every((x) => x === 0)).toBe(true)
+		expect(shell.suspIdx.every((x) => x === 0)).toBe(true)
+		expect(shell.walk.every((x) => x === 0)).toBe(true)
+		expect(shell.weakSubs.every((x) => x === 0)).toBe(true)
+		expect(shell.weakSubsTail.every((x) => x === 0)).toBe(true)
+		expect(shell.dirty.length).toBe(0)
+		expect(shell.suspended.length).toBe(0)
+		expect(shell.linkFree).toBe(0)
+		expect(shell.readClock).toBe(0)
+		expect(shell.cycle).toBe(0)
 		// …while CAPACITY persists (the B1 shave: no re-push storm next tenancy).
-		expect(shell.vals.length).toBe(valsCap);
+		expect(shell.vals.length).toBe(valsCap)
 		// Advance committed truth while nothing is materialized, then remount
 		// under a DIFFERENT root: the claimed shell (this one or the mount
 		// render's recycled shell — render arenas share the pool) must refold
 		// fresh truth, never tenancy-1 residue.
-		commitWrite(b, a0, 3);
-		const w2 = mount(b, 'S', c, 'W2');
-		expect(w2.lastRenderedValue).toBe(3);
-		expect(b.committedValue(c, 'S')).toBe(3);
-		expect(shell.claimGen).toBeGreaterThan(genLive + 1); // the shell WAS re-claimed (render or committed tenancy)
-		const s = b.__TEST__arena('S')!;
-		expect(s.claimGen % 2).toBe(1); // live parity again
-		expect(s.root).toBe('S');
-	});
+		commitWrite(b, a0, 3)
+		const w2 = mount(b, 'S', c, 'W2')
+		expect(w2.lastRenderedValue).toBe(3)
+		expect(b.committedValue(c, 'S')).toBe(3)
+		expect(shell.claimGen).toBeGreaterThan(genLive + 1) // the shell WAS re-claimed (render or committed tenancy)
+		const s = b.__TEST__arena('S')!
+		expect(s.claimGen % 2).toBe(1) // live parity again
+		expect(s.root).toBe('S')
+	})
 
 	it('pool cap: releases beyond 8 drop the shell instead of pooling it', () => {
-		const b = freshEngine();
-		const a0 = b.atom('a', 1);
-		const watchers = [];
+		const b = freshEngine()
+		const a0 = b.atom('a', 1)
+		const watchers = []
 		for (let i = 0; i < 10; i++) {
-			const c = b.computed(`c${i}`, (read) => read(a0));
-			watchers.push(mount(b, `R${i}`, c, `W${i}`));
+			const c = b.computed(`c${i}`, (read) => read(a0))
+			watchers.push(mount(b, `R${i}`, c, `W${i}`))
 		}
-		expect(b.__TEST__arenaStats().committed).toBe(10);
-		for (const w of watchers) w.live = false;
-		b.quiesce(); // ≥10 releases land on a pool that caps at 8
-		const stats = b.__TEST__arenaStats();
-		expect(stats.committed).toBe(0);
-		expect(stats.pooled).toBe(8);
-	});
+		expect(b.__TEST__arenaStats().committed).toBe(10)
+		for (const w of watchers) {
+			w.live = false
+		}
+		b.quiesce() // ≥10 releases land on a pool that caps at 8
+		const stats = b.__TEST__arenaStats()
+		expect(stats.committed).toBe(0)
+		expect(stats.pooled).toBe(8)
+	})
 
 	it('growth across pooled tenancies: a grown buffer re-claims at capacity and keeps growing mid-op', () => {
-		const b = freshEngine({ arenaInitInts: 16 }); // 2 records: forces real mid-operation doubling in both tenancies
-		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
-		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
-		const w1 = mount(b, 'R', sum, 'W1');
-		expect(w1.lastRenderedValue).toBe(66);
-		const shell = b.__TEST__arena('R')!;
-		const grownLen = shell.memory.length;
-		expect(grownLen).toBeGreaterThan(16); // tenancy 1 grew the buffer
-		w1.live = false;
-		b.quiesce();
-		expect(shell.memory.length).toBe(grownLen); // pooled at grown capacity
+		const b = freshEngine({ arenaInitInts: 16 }) // 2 records: forces real mid-operation doubling in both tenancies
+		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i))
+		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0))
+		const w1 = mount(b, 'R', sum, 'W1')
+		expect(w1.lastRenderedValue).toBe(66)
+		const shell = b.__TEST__arena('R')!
+		const grownLen = shell.memory.length
+		expect(grownLen).toBeGreaterThan(16) // tenancy 1 grew the buffer
+		w1.live = false
+		b.quiesce()
+		expect(shell.memory.length).toBe(grownLen) // pooled at grown capacity
 		// Tenancy 2 under another root: a WIDER cone — whatever pooled shell
 		// serves it starts at pooled capacity and grows further, with the
 		// fresh-record invariant enforced by the armed check + validator.
-		const more = Array.from({ length: 24 }, (_, i) => b.atom(`b${i}`, i));
-		const sum2 = b.computed('sum2', (read) => more.reduce((s, n) => s + (read(n) as number), 0));
-		const w2 = mount(b, 'S', sum2, 'W2');
-		expect(w2.lastRenderedValue).toBe(276);
-		commitWrite(b, more[7]!, 1007); // fanout + refold across the re-grown arena
-		expect(b.committedValue(sum2, 'S')).toBe(276 - 7 + 1007);
-	});
+		const more = Array.from({ length: 24 }, (_, i) => b.atom(`b${i}`, i))
+		const sum2 = b.computed('sum2', (read) => more.reduce((s, n) => s + (read(n) as number), 0))
+		const w2 = mount(b, 'S', sum2, 'W2')
+		expect(w2.lastRenderedValue).toBe(276)
+		commitWrite(b, more[7], 1007) // fanout + refold across the re-grown arena
+		expect(b.committedValue(sum2, 'S')).toBe(276 - 7 + 1007)
+	})
 
 	it('wide SignalEffect over a grown arena: dependency-link stamps survive growth and validation gates exactly once', () => {
-		const b = freshEngine({ arenaInitInts: 16 });
-		const atoms = Array.from({ length: 24 }, (_, i) => b.atom(`a${i}`, i));
+		const b = freshEngine({ arenaInitInts: 16 })
+		const atoms = Array.from({ length: 24 }, (_, i) => b.atom(`a${i}`, i))
 		// A committed consumer materializes the root's arena and shadows every
 		// atom, doubling the buffers repeatedly; the terminal's packed links and
 		// read-time stamps must stay coherent across every doubling.
-		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
-		mount(b, 'R', sum, 'W');
-		const e = b.mountSignalEffect('R', 'E');
+		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0))
+		mount(b, 'R', sum, 'W')
+		const shell = b.__TEST__arena('R')!
+		const beforeCapture = shell.memory.length // buffer capacity once sum has shadowed its 24 deps
+		const e = b.mountSignalEffect('R', 'E')
 		e.body = () => {
-			for (const at of atoms) void b.readSignalEffectDep(at);
-		};
-		b.captureSignalEffectRun(e.id, e.body);
-		expect(e.deps.length).toBe(24);
-		expect(e.runs).toBe(0); // runs counts RE-fires (the mount capture is run zero)
+			for (const at of atoms) {
+				void b.readSignalEffectDep(at)
+			}
+		}
+		b.captureSignalEffectRun(e.id, e.body)
+		// The capture close appends one arena link per dep, threaded through the
+		// terminal's subscription record. With 24 deps landing on an arena that
+		// already sits near its grown capacity, that loop MUST double the buffer
+		// MID-CAPTURE — the exact shape where a stale cached view of the arena
+		// would keep writing into the orphaned (pre-doubling) buffer. Pinning
+		// real growth here is what makes "stamps survive growth" a claim and not
+		// a tautology: without it the deps/re-fire checks below could all pass on
+		// an arena that never actually grew.
+		expect(shell.memory.length).toBeGreaterThan(beforeCapture)
+		expect(e.deps.length).toBe(24)
+		expect(e.runs).toBe(0) // runs counts RE-fires (the mount capture is run zero)
 		// Validation walks the wide dependency chain: a write to a LATE
 		// dep — its shadow was allocated after several doublings — re-fires
 		// exactly once...
-		commitWrite(b, atoms[20]!, 999);
-		expect(e.runs).toBe(1);
+		commitWrite(b, atoms[20], 999)
+		expect(e.runs).toBe(1)
 		// ...and an identity-equal write (rejected at acceptance) leaves every
 		// dep clean: the fast negative guard skips the chain.
-		commitWrite(b, atoms[20]!, 999);
-		expect(e.runs).toBe(1);
-	});
+		commitWrite(b, atoms[20], 999)
+		expect(e.runs).toBe(1)
+	})
 
 	it('suspended bookkeeping: release returns the global count to zero; a post-release settlement is a no-op', async () => {
-		const b = freshEngine();
-		const gate = deferred<string>();
-		const c = suspendingUse(b, 'c', () => gate.promise);
-		const w = mount(b, 'R', c, 'W');
-		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
-		expect(b.__TEST__arenaStats().suspended).toBe(1);
-		w.live = false;
-		b.quiesce(); // releaseArena must give back the suspended count with the list
-		expect(b.__TEST__arenaStats().suspended).toBe(0);
-		expect(b.__TEST__arenaStats().committed).toBe(0);
-		gate.resolve('DATA'); // settles into a world with NO arena: tap must no-op cleanly
-		await tick();
-		expect(b.__TEST__arenaStats().suspended).toBe(0);
-		expect(b.committedValue(c, 'R')).toBe('DATA'); // fresh fold sees settled truth
-	});
-});
+		const b = freshEngine()
+		const gate = deferred<string>()
+		const c = suspendingUse(b, 'c', () => gate.promise)
+		const w = mount(b, 'R', c, 'W')
+		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead)
+		expect(b.__TEST__arenaStats().suspended).toBe(1)
+		w.live = false
+		b.quiesce() // releaseArena must give back the suspended count with the list
+		expect(b.__TEST__arenaStats().suspended).toBe(0)
+		expect(b.__TEST__arenaStats().committed).toBe(0)
+		gate.resolve('DATA') // settles into a world with NO arena: tap must no-op cleanly
+		await tick()
+		expect(b.__TEST__arenaStats().suspended).toBe(0)
+		expect(b.committedValue(c, 'R')).toBe('DATA') // fresh fold sees settled truth
+	})
+})
 
 describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
 	// Settlement creates no log entry, so with no direct arena re-marking an
@@ -238,90 +273,92 @@ describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
 	// arenas directly, so no such staleness window exists. These pins
 	// are the regression: re-watch before any other state motion sees data.
 	it('unwatched suspending derived + settle + re-watch before any state motion → data, never stale loading', async () => {
-		const b = freshEngine();
-		const gate = deferred<string>();
-		const c = suspendingUse(b, 'c', () => gate.promise);
-		const w1 = mount(b, 'R', c, 'W1');
-		expect(w1.lastRenderedValue).toBeInstanceOf(SuspendedRead); // sentinel cached while watched
-		expect(b.__TEST__arenaStats().suspended).toBe(1);
-		w1.live = false; // UNWATCHED while still suspended (no quiesce: the arena persists)
-		gate.resolve('DATA'); // settles with zero live consumers anywhere
-		await tick();
+		const b = freshEngine()
+		const gate = deferred<string>()
+		const c = suspendingUse(b, 'c', () => gate.promise)
+		const w1 = mount(b, 'R', c, 'W1')
+		expect(w1.lastRenderedValue).toBeInstanceOf(SuspendedRead) // sentinel cached while watched
+		expect(b.__TEST__arenaStats().suspended).toBe(1)
+		w1.live = false // UNWATCHED while still suspended (no quiesce: the arena persists)
+		gate.resolve('DATA') // settles with zero live consumers anywhere
+		await tick()
 		// The tap re-marked the persisting arena's shadow even with no watcher
 		// to correct; nothing CONSUMES an unwatched cone, so the box legally
 		// persists (marks ARE the invalidation — evict-don't-serve laziness).
-		expect(b.__TEST__arenaStats().suspended).toBe(1);
+		expect(b.__TEST__arenaStats().suspended).toBe(1)
 		// RE-WATCH with no other state motion in between: the mount's own
 		// evaluation must refold to the settled value — the memo-era wart
 		// would have served the cached sentinel here until a real write.
-		const w2 = mount(b, 'R', c, 'W2');
-		expect(w2.lastRenderedValue).toBe('DATA');
-		expect(b.committedValue(c, 'R')).toBe('DATA');
-		expect(b.__TEST__arenaStats().suspended).toBe(0); // consumption unwound the box
-	});
+		const w2 = mount(b, 'R', c, 'W2')
+		expect(w2.lastRenderedValue).toBe('DATA')
+		expect(b.committedValue(c, 'R')).toBe('DATA')
+		expect(b.__TEST__arenaStats().suspended).toBe(0) // consumption unwound the box
+	})
 
 	it('never-watched variant: a committedValue-cached sentinel + settle + first watch → data', async () => {
-		const b = freshEngine();
-		const gate = deferred<string>();
-		const c = suspendingUse(b, 'c', () => gate.promise);
+		const b = freshEngine()
+		const gate = deferred<string>()
+		const c = suspendingUse(b, 'c', () => gate.promise)
 		// Cache the sentinel in the committed world WITHOUT ever mounting.
-		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
-		gate.resolve('DATA');
-		await tick();
-		const w = mount(b, 'R', c, 'W'); // first watcher ever, before any other motion
-		expect(w.lastRenderedValue).toBe('DATA');
-		expect(b.committedValue(c, 'R')).toBe('DATA');
-	});
-});
+		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead)
+		gate.resolve('DATA')
+		await tick()
+		const w = mount(b, 'R', c, 'W') // first watcher ever, before any other motion
+		expect(w.lastRenderedValue).toBe('DATA')
+		expect(b.committedValue(c, 'R')).toBe('DATA')
+	})
+})
 
 describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 	it('readClock at the ceiling: the renumber fires, marks reset, delivery stays exact across the boundary', () => {
-		const b = freshEngine();
-		const a0 = b.atom('a', 0);
-		const gatee = b.atom('g', 100);
-		const c = b.computed('c', (read) => (read(a0) as number) + (read(gatee) as number));
-		const w = mount(b, 'R', c, 'W');
-		const shell = b.__TEST__arena('R')!;
-		const layout = b.__TEST__checkerInternals().layout; // the engine-owned constants (no hand copies)
-		shell.readClock = layout.ArenaGeom.CLOCK_LIMIT - 3; // a hair under the ceiling
+		const b = freshEngine()
+		const a0 = b.atom('a', 0)
+		const gatee = b.atom('g', 100)
+		const c = b.computed('c', (read) => (read(a0) as number) + (read(gatee) as number))
+		const w = mount(b, 'R', c, 'W')
+		const shell = b.__TEST__arena('R')!
+		const layout = b.__TEST__checkerInternals().layout // the engine-owned constants (no hand copies)
+		shell.readClock = layout.ArenaGeom.CLOCK_LIMIT - 3 // a hair under the ceiling
 		for (let i = 1; i <= 6; i++) {
-			commitWrite(b, a0, i); // each write: fan (stamps MARK = clock) + serves (bump the clock)
-			expect(w.lastRenderedValue).toBe(100 + i); // exact through the renumber
+			commitWrite(b, a0, i) // each write: fan (stamps MARK = clock) + serves (bump the clock)
+			expect(w.lastRenderedValue).toBe(100 + i) // exact through the renumber
 		}
-		expect(shell.readClock).toBeGreaterThan(0);
-		expect(shell.readClock).toBeLessThan(1000); // the renumber restarted the clock
+		expect(shell.readClock).toBeGreaterThan(0)
+		expect(shell.readClock).toBeLessThan(1000) // the renumber restarted the clock
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
 		for (let nid = 0; nid < shell.nodeToShadow.length; nid++) {
-			const sh = shell.nodeToShadow[nid]!;
-			if (sh !== 0) expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock);
+			const sh = shell.nodeToShadow[nid]
+			if (sh !== 0) {
+				expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock)
+			}
 		}
-	});
+	})
 
 	it('cycle at the ceiling: link versions renumber; same-eval dedup keeps deps chains duplicate-free', () => {
-		const b = freshEngine();
-		const x = b.atom('x', 1);
-		const y = b.atom('y', 10);
-		const z = b.atom('z', 100);
+		const b = freshEngine()
+		const x = b.atom('x', 1)
+		const y = b.atom('y', 10)
+		const z = b.atom('z', 100)
 		// x is read FIRST (its link heads the chain) and AGAIN nonadjacently —
 		// the arenaLinkInsert tail probes carry the same-eval dedup that a wrapped
 		// VERSION stamp would break.
 		const c = b.computed('c', (read) => {
-			const first = read(x) as number;
-			const mid = read(y) as number;
-			const again = read(x) as number;
-			return first + mid + again + (read(z) as number);
-		});
-		const w = mount(b, 'R', c, 'W');
-		expect(w.lastRenderedValue).toBe(112);
-		expect(depsChainLen(b, 'R', x, c)).toBe(3); // x, y, z — the duplicate read reused, not re-created
-		const shell = b.__TEST__arena('R')!;
-		shell.cycle = b.__TEST__checkerInternals().layout.ArenaGeom.CLOCK_LIMIT - 2;
+			const first = read(x) as number
+			const mid = read(y) as number
+			const again = read(x) as number
+			return first + mid + again + (read(z) as number)
+		})
+		const w = mount(b, 'R', c, 'W')
+		expect(w.lastRenderedValue).toBe(112)
+		expect(depsChainLen(b, 'R', x, c)).toBe(3) // x, y, z — the duplicate read reused, not re-created
+		const shell = b.__TEST__arena('R')!
+		shell.cycle = b.__TEST__checkerInternals().layout.ArenaGeom.CLOCK_LIMIT - 2
 		for (let i = 2; i <= 6; i++) {
-			commitWrite(b, x, i); // re-evals bump the cycle across the ceiling
-			expect(w.lastRenderedValue).toBe(2 * i + 110);
-			expect(depsChainLen(b, 'R', x, c)).toBe(3); // dedup exact through the renumber
+			commitWrite(b, x, i) // re-evals bump the cycle across the ceiling
+			expect(w.lastRenderedValue).toBe(2 * i + 110)
+			expect(depsChainLen(b, 'R', x, c)).toBe(3) // dedup exact through the renumber
 		}
-		expect(shell.cycle).toBeGreaterThan(0);
-		expect(shell.cycle).toBeLessThan(1000); // the renumber restarted the cycle
-	});
-});
+		expect(shell.cycle).toBeGreaterThan(0)
+		expect(shell.cycle).toBeLessThan(1000) // the renumber restarted the cycle
+	})
+})

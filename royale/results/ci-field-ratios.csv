@@ -1,0 +1,16 @@
+framework,tests,total_ms,ratio_vs_alien
+Royale SM1,1,60,0.017
+Cosignal,20,3414,0.947
+Alien Signals,20,3604,1.000
+Royale FH2,20,3994,1.108
+Cosignal Alt A,20,4254,1.180
+Cosignal Alt B,20,4383,1.216
+Royale FX2,20,4784,1.327
+Royale FX1,20,5141,1.426
+Royale FM1,20,5574,1.546
+Royale FH1,20,6612,1.834
+Royale FM2,20,6642,1.843
+Royale SH2,20,7296,2.024
+Royale SM2,20,13740,3.812
+Royale SH1,20,14252,3.954
+Royale SX2,20,17026,4.724

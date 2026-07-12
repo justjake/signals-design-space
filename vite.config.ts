@@ -9,9 +9,8 @@
 // the typed `defineConfig` form.
 
 // Vendored code, git submodules, generated results, and prose that Vite+
-// tooling must never touch. This is a shared working tree: `vp check --fix`
-// or `vp fmt` (write mode) must not be run wholesale — use `vp check`
-// (check-only) instead.
+// tooling must never touch. Whole-repo format and lint passes operate only on
+// the remaining first-party source.
 const vendored = [
 	'vendor/**',
 	'upstream-alien-signals/**',
@@ -26,33 +25,35 @@ const vendored = [
 	'reviews/**',
 	'spec/**',
 	'harness/results/**',
+	'**/src/debug/layout.debug.ts',
 	'**/dist/**',
 	'**/*.md',
-];
+]
 
 export default {
 	test: {
 		// `vp test` at the repo root runs exactly these suites, each with its
 		// own existing vitest.config.ts (vitest 4 projects). Per-package
 		// `pnpm test` / `pnpm -C harness conformance` are unaffected.
-		projects: [
-			'./harness',
-			'./packages/cosignals-alt-a',
-			'./packages/cosignals-alt-b',
-		],
+		projects: ['./harness', './packages/cosignals-alt-a', './packages/cosignals-alt-b'],
 	},
 	fmt: {
-		// Match the prevailing repo style so `vp check` reports minimal drift.
+		// Tabs render at two columns; statements do not end in semicolons.
 		useTabs: true,
+		tabWidth: 2,
 		singleQuote: true,
-		semi: true,
+		semi: false,
 		ignorePatterns: vendored,
 	},
 	lint: {
 		ignorePatterns: vendored,
+		rules: {
+			curly: 'error',
+			'typescript/no-unnecessary-type-assertion': 'error',
+		},
 		options: {
 			typeAware: true,
 			typeCheck: true,
 		},
 	},
-};
+}

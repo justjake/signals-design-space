@@ -16,12 +16,12 @@
  *   z9-wedge.spec.ts so anything they break happens after every clean
  *   scenario has reported.
  */
-import { fileURLToPath } from 'node:url';
-import { defineConfig } from '@playwright/test';
-import { ENTRIES, type BatteryEntry } from './entries';
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from '@playwright/test'
+import { ENTRIES, type BatteryEntry } from './entries'
 
-const PREVIEW_PORT = 4599;
-const packageDir = fileURLToPath(new URL('..', import.meta.url));
+const PREVIEW_PORT = 4599
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
 export default defineConfig<{ entry: BatteryEntry }>({
 	testDir: fileURLToPath(new URL('./specs', import.meta.url)),
@@ -32,9 +32,7 @@ export default defineConfig<{ entry: BatteryEntry }>({
 	// Retries would hide flakes in exactly the timing-sensitive behavior this
 	// battery exists to pin; a flaky scenario is a bug in the scenario.
 	retries: 0,
-	reporter: process.env.CI
-		? [['list'], ['html', { open: 'never' }]]
-		: [['list']],
+	reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
 	timeout: 90_000,
 	expect: { timeout: 10_000 },
 	use: {
@@ -65,4 +63,4 @@ export default defineConfig<{ entry: BatteryEntry }>({
 		reuseExistingServer: !process.env.CI,
 		timeout: 180_000,
 	},
-});
+})

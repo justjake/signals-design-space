@@ -9,29 +9,29 @@
  * the attached paths. Routes through the same public class API as the
  * `cosignals` adapter.
  */
-import * as lib from 'cosignals';
-import type { FrameworkAdapter } from './types';
+import * as lib from 'cosignals'
+import type { FrameworkAdapter } from './types'
 
-lib.attachDriver({ currentBatch: () => lib.BATCH_NONE, worldFor: () => undefined }); // attach the driver; it stays idle forever
+lib.attachDriver({ currentBatch: () => lib.BATCH_NONE, worldFor: () => undefined }) // attach the driver; it stays idle forever
 
 const adapter: FrameworkAdapter = {
 	name: 'cosignals-concurrent',
 	signal(initialValue) {
-		const a = new lib.Atom(initialValue);
+		const a = new lib.Atom(initialValue)
 		return {
 			read: () => a.state,
 			write: (v) => a.set(v),
-		};
+		}
 	},
 	computed(fn) {
-		const c = new lib.Computed(fn);
-		return { read: () => c.state };
+		const c = new lib.Computed(fn)
+		return { read: () => c.state }
 	},
 	effect: lib.effect,
 	effectScope: lib.effectScope,
 	startBatch: lib.startBatch,
 	endBatch: lib.endBatch,
 	untracked: lib.untracked,
-};
+}
 
-export default adapter;
+export default adapter

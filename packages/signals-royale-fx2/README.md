@@ -3,46 +3,53 @@
 A reactive state engine with first-class support for React concurrent
 rendering. It is two layers:
 
-- a conventional signal graph — writable signals, lazy cached computeds,
-  effects, batching — with exact recompute counts and equality cutoff;
-- a small concurrency overlay — WORLDS — that lets speculative writes (React
+- a conventional signal graph — writable atoms, lazy cached computeds,
+  effects, batching — with equality cutoff and batched delivery;
+- a small concurrency overlay — WORLDS — that lets drafted writes (React
   transitions) stay invisible to committed readers until they land, while
   every reader still sees an internally consistent snapshot.
 
-The package is React-free and dependency-free. TypeScript source is the
-artifact (`exports` points at `src/index.ts`); every syntax used is erasable,
-so it also runs directly under Node's type stripping.
+The root entry (`signals-royale-fx2`) is React-free and dependency-free.
+React bindings ship as a subpath — `signals-royale-fx2/react` — with
+`react`/`react-dom` (>= 19) as peer dependencies; they run on stock React,
+no patches or build flags. TypeScript source is the artifact (`exports`
+points at `src/`): consume it with any TypeScript-compiling toolchain
+(bundlers, vitest, tsc). Numeric constant families are `const enum`s, so
+loaders that only strip types (Node's `--experimental-strip-types`) are not
+supported.
 
 ## Core API
 
 ```ts
-import { signal, computed, effect, batch, untracked } from 'signals-royale-fx2';
+import { createAtom, createComputed, effect, batch, untracked } from 'signals-royale-fx2';
 
-const count = signal(1);
-const double = computed(() => count.get() * 2);
+const count = createAtom(1);
+const double = createComputed(() => count.get() * 2);
 const stop = effect(() => console.log(double.get())); // runs now, then on change
 
 count.set(2);                 // effect logs 4
 count.update((x) => x + 1);   // functional update
 batch(() => {                 // one flush for the whole scope
   count.set(10);
-  count.set(1);               // net no-op: nothing recomputes, nothing runs
+  count.set(3);               // net revert: effects see only the final value
 });
 stop();
 ```
 
 - **Equality:** writes that compare equal are dropped. Pass
-  `{ equals }` to customize; pass `{ label }` to name a signal in traces.
-- **Lazy initializers:** `signal(() => expensive())` runs the function once,
+  `{ equals }` to customize; pass `{ label }` to name an atom in traces.
+- **Lazy initializers:** `createAtom(() => expensive())` runs the function once,
   untracked, at first use (read, write, or subscription — never at
   construction). A `set` before the first read still runs it, because the
   equality contract needs the base value. Initializers must not write.
 - **Computeds** are lazy and cached, track dependencies dynamically (a
   branch not taken this evaluation is not a dependency), and only recompute
   when an input's value generation actually advanced.
-- **Effects** re-run when their dependencies change; returning a function
-  registers a cleanup. `effectScope(fn)` collects every effect created
-  inside and returns one disposer.
+- **Effects** re-run after accepted dependency changes; returning a function
+  registers a cleanup. A batch that changes and then restores a dependency
+  may conservatively re-run an effect once, but the effect observes only the
+  final value. `effectScope(fn)` collects every effect created inside and
+  returns one disposer.
 
 ## Intents, drafts, and worlds
 
@@ -56,7 +63,7 @@ value in a world replays, in original dispatch order, the intents that world
 is allowed to see. That single rule produces React's updater-queue behavior:
 
 ```ts
-const n = signal(1);
+const n = createAtom(1);
 // transition records: update(x => x + 2)     (draft D)
 // urgent write:       update(x => x * 2)
 n.get()      // 2      — urgent skipped the draft: 1 * 2
@@ -67,7 +74,7 @@ When a draft RETIRES (its transition committed everywhere), the full replay
 folds into committed state through the ordinary write path — effects run,
 equality applies — and renders still holding the draft's id resolve the same
 values, so retirement is invisible to them. A discarded draft rolls back:
-speculative readers are re-notified and re-resolve without it. When the last
+draft readers are re-notified and re-resolve without it. When the last
 draft dies, every per-draft structure is dropped; a quiescent engine holds
 nothing extra.
 
@@ -78,12 +85,11 @@ count.get()        // committed state plus applied urgent writes; drafts hidden
 latest(count)      // newest intent, drafts included; never suspends
 committed(count)   // what is on screen (per root with committed(x, container))
 isPending(count)   // true while newer data exists behind the shown value
-refresh(query)     // force a refetch with unchanged inputs; stale keeps serving
 ```
 
 Inside a computed evaluation (or a render pass, through the React bindings)
 `latest` and `get` resolve that context's own world — reading ahead of your
-world would be a tear. In a canonical computed or effect, `latest(x)` is
+world would be a tear. In a base-state computed or effect, `latest(x)` is
 also a tracked dependency: when `x` changes, the reader re-runs. What
 distinguishes `latest` from `get` is that it never suspends, not that it
 reads a different world from inside an evaluation.
@@ -93,7 +99,7 @@ reads a different world from inside an evaluation.
 Pending and error are graph STATE, not control flow:
 
 ```ts
-const user = computed((use) => use(fetchUser(id.get())));
+const user = createComputed((use) => use(fetchUser(id.get())));
 ```
 
 - `use(thenable)` returns the settled value, or parks the evaluation. A
@@ -109,10 +115,32 @@ const user = computed((use) => use(fetchUser(id.get())));
   refetch on every settlement — that is a data-layer bug this engine cannot
   paper over.
 
+## Refetching
+
+To refetch with unchanged inputs, own the trigger: keep a version atom,
+read it inside the computed, and bump it to fetch again. There is no
+dedicated refetch API because a version bump is an ordinary write, and
+ordinary writes already do everything a refetch needs.
+
+```ts
+const userVersion = createAtom(0);
+const user = createComputed((use) => use(fetchUser(id.get(), userVersion.get())));
+
+userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
+```
+
+- While the new fetch is pending the computed serves its last value and
+  `isPending(user)` is true — exactly as if `id` had changed.
+- It composes with transitions for free: the bump is classified like any
+  other write, so a bump inside a transition refetches in that transition's
+  world — the current screen holds, and the result commits with it.
+- Include the version in the request's cache key (as in `fetchUser` above)
+  so each bump creates exactly one new request.
+
 ## Observed lifecycle
 
 ```ts
-const price = signal(0, {
+const price = createAtom(0, {
   onObserved: ({ get, set }) => {
     const socket = subscribePrices(set);
     return () => socket.close();
@@ -157,9 +185,142 @@ capacity and overflow is counted, never silent.
 - Computeds hold references toward their dependencies only, and join
   subscriber lists only while observed. Dropping the last reference to an
   unobserved computed chain makes the whole chain collectible.
-- Effect disposers are FinalizationRegistry-backed: a dropped, uncalled
-  disposer reclaims its effect. Calling it is still deterministic and
-  preferred.
+- Effects, effect scopes, and subscriptions retain graph edges until their
+  returned disposer is called.
 - Draft retirement clears rebase logs and world memos (see above).
 
 Leaks are bugs here, not optimizations.
+
+# React bindings: `signals-royale-fx2/react`
+
+Bindings for stock React — no patches, no build flags, no globals.
+Developed and tested against the React 19.3 canary
+(`19.3.0-canary-e71a6393-20260702`); any React >= 19 satisfies the peer
+range.
+
+## The design premise: React is the world clock
+
+Most signal bindings treat React as a display driver: the store changes, the
+binding forces components to re-render. That model collapses under
+concurrent rendering — React may be preparing several futures at once
+(transitions), and a store that changes mid-flight either tears or forces
+everything synchronous (`useSyncExternalStore` renders every store change
+at sync priority, no matter where the write came from).
+
+These bindings invert the relationship. The engine never decides what a
+render pass may see; React does:
+
+- Each root gets a `SignalScopeProvider` (installed automatically by the packaged
+  `createRoot` wrapper). Its only state is a list of TRANSITION DRAFT ids,
+  managed by `useReducer`; its context value is an identity-stable record,
+  so the scope itself never re-renders its subtree.
+- A transition write opens an engine draft. The draft id is dispatched from
+  inside `React.startTransition` to each root's scope AND — per written
+  atom — to exactly the subscribers of that atom (and of computeds over
+  it), each through its own `useReducer`. The dispatches ride the
+  transition's own lanes, so React's update queues — not this library —
+  decide which render passes include the draft: urgent passes skip it, the
+  transition's passes carry it, interrupted work recomputes it. A
+  transition's render passes therefore re-render only the components its
+  writes actually touch, not every subscriber in the app.
+- Reads resolve against exactly the drafts in the current pass's React
+  state. Urgent writes land immediately and pending drafts REPLAY over
+  them in dispatch order, which is how a counter at 1 with a pending "+2"
+  transition shows 2 after an urgent doubling and settles at 6 — never a
+  reorder, never a torn 3.
+- Base-state changes travel the SAME channel: the engine notifies a
+  subscriber, and the hook dispatches into its own reducer only if
+  re-rendering would actually show the committed tree something different
+  (a per-subscriber compare — equal resolutions, foreign transitions, and
+  already-delivered folds all stay silent). There is no
+  `useSyncExternalStore` underneath and no store snapshot: subscriptions
+  attach in effects, and the gap between rendering and attaching is closed
+  by a commit-time repair.
+
+### Writes re-render with exactly `useState`'s urgency
+
+Because every wake is a reducer dispatch made in the write's own context,
+the re-render gets the lane React would give a `setState` from the same
+place: synchronous before paint from a click handler, default priority from
+a timeout, a promise, or a network callback (it may land after a paint —
+wrap the write in `flushSync` when you need the DOM updated immediately,
+exactly as for React state), and the owning transition's lanes for drafted
+writes. An atom write and a `setState` in the same async callback commit
+in ONE render. This deliberately diverges from `useSyncExternalStore`-based
+stores, which escalate every store change to sync priority.
+
+A draft retires when every root that received it has committed it; the
+engine then folds it into committed state, and passes still holding the id
+resolve identical values. What is on screen per root is queryable at any
+time (`committed(x, container)`, `useCommitted`).
+
+Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
+current pass's world through a validity-gated note: the note is written by
+the pass that owns it and expires at the end of its synchronous window, so
+a pass that did not refresh it (an urgent pass over an untouched subtree,
+another root's render, an interleaved flush) falls back to BASE rather
+than consuming a stale world or leaking live drafts into an urgent frame.
+
+Every scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
+`useCommitted`) requires a `SignalScopeProvider` above it and throws without one:
+the scope is the world carrier, and a subscriber outside any scope would
+have no channel for transition worlds at all. Create roots with
+`wrapCreateRoot(createRoot)` (the packaged wrapper installs the scope per
+root) or wrap the tree in `<SignalScopeProvider>` yourself. Plain function reads
+(`latest`, `committed`, `isPending`) work anywhere, scope or not.
+
+## Out of scope: DOM-mutation attribution
+
+Bracketing exactly React's own DOM mutation phase per commit (so a
+`MutationObserver` client could blind itself to React's mutations while
+still catching everyone else's) needs cooperation from inside the
+reconciler: stock React exposes no signal at mutation-phase entry or exit,
+and anything observable from userland (snapshot lifecycles, layout effects,
+the observer's own async records) fires either on the wrong fibers or too
+late to disconnect. This package deliberately does not patch React, so it
+does not offer a DOM mutation window.
+
+## React API
+
+```tsx
+import { createRoot } from 'react-dom/client';
+import {
+  registerReactSignals, wrapCreateRoot,
+  useValue, useComputed, useSignalEffect, useSignalLayoutEffect,
+  useIsPending, useCommitted, useAtom,
+  startSignalTransition, useSignalTransition,
+} from 'signals-royale-fx2/react';
+import { createAtom } from 'signals-royale-fx2';
+
+registerReactSignals(); // stock React; idempotent
+
+const root = wrapCreateRoot(createRoot)(container);
+const count = createAtom(0);
+
+function Counter() {
+  const n = useValue(count);            // this render pass's world
+  const pending = useIsPending(count);  // newer data behind the screen?
+  return <button onClick={() => count.set(n + 1)}>{n}{pending ? '…' : ''}</button>;
+}
+
+startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
+```
+
+- `useValue(x)` — subscribing read; resolves the pass's world; suspends by
+  handing React the engine's stable pending promise (a transition holds; an
+  urgent render with settled history serves stale instead — no fallback
+  flash).
+- `useComputed(fn, deps)` — component-scoped computed.
+- `useSignalEffect(fn)` / `useSignalLayoutEffect(fn)` — tracked effects on
+  this root's committed values, run in React's passive or layout phase;
+  cleanup honored; StrictMode nets one.
+- `useIsPending(x)` / `useCommitted(x)` — the pending probe and the
+  per-root committed view.
+- `useAtom(initial, opts?)` — component-owned atom, reclaimed after
+  unmount.
+- `startSignalTransition(scope)` / `useSignalTransition()` — transition
+  batches. Plain `React.startTransition` also works: the first engine write
+  inside any transition context is classified into a draft automatically.
+- Writing during render throws.
+- Multiple roots are supported; one transition can span them, and each
+  root's committed view stays internally consistent.

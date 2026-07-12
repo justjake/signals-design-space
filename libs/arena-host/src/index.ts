@@ -105,101 +105,101 @@ const enum Kind {
 }
 
 // ---- shared mutable state (survives engine rebuilds) ------------------------
-let recNext = 8; // bump pointer, shared by nodes and links (record 0 burned)
-let nodeFreeHead = 0; // free list threaded through M[id + C.DEPS]
-let linkFreeHead = 0; // free list threaded through M[id + C.NEXT_DEP]
-let growPending = false;
+let recNext = 8 // bump pointer, shared by nodes and links (record 0 burned)
+let nodeFreeHead = 0 // free list threaded through M[id + C.DEPS]
+let linkFreeHead = 0 // free list threaded through M[id + C.NEXT_DEP]
+let growPending = false
 
-let cycle = 0;
-let runDepth = 0;
-let batchDepth = 0;
-let notifyIndex = 0;
-let queuedLength = 0;
-let activeSub = 0;
-let enterDepth = 0; // live engine frames that captured M; 0 = op boundary
+let cycle = 0
+let runDepth = 0
+let batchDepth = 0
+let notifyIndex = 0
+let queuedLength = 0
+let activeSub = 0
+let enterDepth = 0 // live engine frames that captured M; 0 = op boundary
 
-const queued: number[] = [];
-const pendingFree: number[] = []; // disposed effect/scope records awaiting sweep
+const queued: number[] = []
+const pendingFree: number[] = [] // disposed effect/scope records awaiting sweep
 
 // ---- policy entity table ------------------------------------------------------
 // Dense handle-indexed, single hidden class: every entity is created with the
 // same five-field literal shape and slots are RECYCLED in place (fields
 // overwritten, object reused) so the table never goes polymorphic.
 interface Ent {
-	kind: number; // Kind.*; Kind.Dead marks disposed/free slots
-	value: unknown; // signal current value / computed value
-	pending: unknown; // signal pending value
-	fn: Function | undefined; // computed getter / effect fn
-	cleanup: unknown; // effect cleanup fn (result of the last run)
+	kind: number // Kind.*; Kind.Dead marks disposed/free slots
+	value: unknown // signal current value / computed value
+	pending: unknown // signal pending value
+	fn: Function | undefined // computed getter / effect fn
+	cleanup: unknown // effect cleanup fn (result of the last run)
 }
 
 // Handle 0 burned to mirror the kernel's burned record 0.
 const entities: Ent[] = [
 	{ kind: Kind.Dead, value: undefined, pending: undefined, fn: undefined, cleanup: undefined },
-];
-const freeHandles: number[] = [];
+]
+const freeHandles: number[] = []
 
 // Persistent scratch stacks (kernel-owned; module level so they survive
 // engine rebuilds). Re-entrant walks push above the caller's base and
 // restore it on exit.
-let propStack = new Int32Array(4096);
-let propSp = 0;
-let checkStack = new Int32Array(4096);
-let checkSp = 0;
+let propStack = new Int32Array(4096)
+let propSp = 0
+let checkStack = new Int32Array(4096)
+let checkSp = 0
 
 // ---- the closed kernel ----------------------------------------------------------
 
 /** The four upcalls out of the kernel. Registered once at kernel creation. */
 interface Host {
-	refresh(node: number, handle: number): boolean;
-	notify(node: number, handle: number): void;
-	watched(node: number, handle: number): void;
-	unwatched(node: number, handle: number): void;
+	refresh(node: number, handle: number): boolean
+	notify(node: number, handle: number): void
+	watched(node: number, handle: number): void
+	unwatched(node: number, handle: number): void
 }
 
 interface Kernel {
-	records: number;
-	buffer(): Int32Array;
-	alloc(flags: number, handle: number): number;
-	free(id: number): void;
-	gen(id: number): number;
-	handle(id: number): number;
-	getFlags(id: number): number;
-	setFlags(id: number, flags: number): void;
-	orFlags(id: number, mask: number): void;
-	andFlags(id: number, mask: number): void;
-	deps(id: number): number;
-	depsTail(id: number): number;
-	setDepsTail(id: number, link: number): void;
-	subs(id: number): number;
-	linkDep(l: number): number;
-	linkSub(l: number): number;
-	linkPrevDep(l: number): number;
-	link(dep: number, sub: number, version: number): void;
-	unlink(l: number, sub?: number): number;
-	propagate(startLink: number, innerWrite: boolean): void;
-	checkDirty(startLink: number, startSub: number): boolean;
-	shallowPropagate(startLink: number): void;
-	purgeDeps(sub: number): void;
-	disposeAllDepsInReverse(sub: number): void;
+	records: number
+	buffer(): Int32Array
+	alloc(flags: number, handle: number): number
+	free(id: number): void
+	gen(id: number): number
+	handle(id: number): number
+	getFlags(id: number): number
+	setFlags(id: number, flags: number): void
+	orFlags(id: number, mask: number): void
+	andFlags(id: number, mask: number): void
+	deps(id: number): number
+	depsTail(id: number): number
+	setDepsTail(id: number, link: number): void
+	subs(id: number): number
+	linkDep(l: number): number
+	linkSub(l: number): number
+	linkPrevDep(l: number): number
+	link(dep: number, sub: number, version: number): void
+	unlink(l: number, sub?: number): number
+	propagate(startLink: number, innerWrite: boolean): void
+	checkDirty(startLink: number, startSub: number): boolean
+	shallowPropagate(startLink: number): void
+	purgeDeps(sub: number): void
+	disposeAllDepsInReverse(sub: number): void
 }
 
 function createKernel(records: number, host: Host, carry?: Int32Array): Kernel {
-	const M = new Int32Array(records * 8);
+	const M = new Int32Array(records * 8)
 	// Host callbacks bound ONCE as function-scope consts: one property load at
 	// creation, every upcall thereafter is a direct monomorphic closure call.
-	const hostRefresh = host.refresh;
-	const hostNotify = host.notify;
-	const hostWatched = host.watched;
-	const hostUnwatched = host.unwatched;
+	const hostRefresh = host.refresh
+	const hostNotify = host.notify
+	const hostWatched = host.watched
+	const hostUnwatched = host.unwatched
 	if (carry !== undefined) {
-		M.set(carry);
+		M.set(carry)
 	}
 	// Allocators flag growth once the bump pointer crosses the watermark:
 	// keep at least C.REC_SLACK records AND half the plane free at every boundary.
-	const WM = Math.min(M.length >> 1, M.length - C.REC_SLACK * 8);
+	const WM = Math.min(M.length >> 1, M.length - C.REC_SLACK * 8)
 	if (recNext > WM) {
-		growPending = true;
+		growPending = true
 	}
 
 	return {
@@ -211,18 +211,18 @@ function createKernel(records: number, host: Host, carry?: Int32Array): Kernel {
 		handle: (id) => M[id + C.HANDLE],
 		getFlags: (id) => M[id + C.FLAGS],
 		setFlags: (id, flags) => {
-			M[id + C.FLAGS] = flags;
+			M[id + C.FLAGS] = flags
 		},
 		orFlags: (id, mask) => {
-			M[id + C.FLAGS] |= mask;
+			M[id + C.FLAGS] |= mask
 		},
 		andFlags: (id, mask) => {
-			M[id + C.FLAGS] &= mask;
+			M[id + C.FLAGS] &= mask
 		},
 		deps: (id) => M[id + C.DEPS],
 		depsTail: (id) => M[id + C.DEPS_TAIL],
 		setDepsTail: (id, l) => {
-			M[id + C.DEPS_TAIL] = l;
+			M[id + C.DEPS_TAIL] = l
 		},
 		subs: (id) => M[id + C.SUBS],
 		linkDep: (l) => M[l + C.DEP],
@@ -235,274 +235,284 @@ function createKernel(records: number, host: Host, carry?: Int32Array): Kernel {
 		shallowPropagate,
 		purgeDeps,
 		disposeAllDepsInReverse,
-	};
+	}
 
 	// ---- allocation ----------------------------------------------------------
 
 	function alloc(flags: number, handle: number): number {
-		let id: number;
+		let id: number
 		if (nodeFreeHead !== 0) {
-			id = nodeFreeHead;
-			nodeFreeHead = M[id + C.DEPS];
-			M[id + C.DEPS] = 0;
+			id = nodeFreeHead
+			nodeFreeHead = M[id + C.DEPS]
+			M[id + C.DEPS] = 0
 		} else {
-			id = recNext;
+			id = recNext
 			if (id >= M.length) {
-				throw new Error('@lab/arena-host: arena exhausted mid-operation; raise ARENA_INITIAL_RECORDS');
+				throw new Error(
+					'@lab/arena-host: arena exhausted mid-operation; raise ARENA_INITIAL_RECORDS',
+				)
 			}
-			recNext = id + 8;
+			recNext = id + 8
 			if (recNext > WM) {
-				growPending = true;
+				growPending = true
 			}
 		}
-		M[id + C.FLAGS] = flags;
-		M[id + C.HANDLE] = handle;
-		return id;
+		M[id + C.FLAGS] = flags
+		M[id + C.HANDLE] = handle
+		return id
 	}
 
 	function free(id: number): void {
-		M[id + C.FLAGS] = 0;
-		M[id + C.DEPS_TAIL] = 0;
-		M[id + C.SUBS] = 0;
-		M[id + C.SUBS_TAIL] = 0;
-		M[id + C.HANDLE] = 0;
-		++M[id + C.GEN];
-		M[id + C.DEPS] = nodeFreeHead;
-		nodeFreeHead = id;
+		M[id + C.FLAGS] = 0
+		M[id + C.DEPS_TAIL] = 0
+		M[id + C.SUBS] = 0
+		M[id + C.SUBS_TAIL] = 0
+		M[id + C.HANDLE] = 0
+		++M[id + C.GEN]
+		M[id + C.DEPS] = nodeFreeHead
+		nodeFreeHead = id
 	}
 
 	function allocLink(): number {
-		let id: number;
+		let id: number
 		if (linkFreeHead !== 0) {
-			id = linkFreeHead;
-			linkFreeHead = M[id + C.NEXT_DEP];
+			id = linkFreeHead
+			linkFreeHead = M[id + C.NEXT_DEP]
 		} else {
-			id = recNext;
+			id = recNext
 			if (id >= M.length) {
-				throw new Error('@lab/arena-host: arena exhausted mid-operation; raise ARENA_INITIAL_RECORDS');
+				throw new Error(
+					'@lab/arena-host: arena exhausted mid-operation; raise ARENA_INITIAL_RECORDS',
+				)
 			}
-			recNext = id + 8;
+			recNext = id + 8
 			if (recNext > WM) {
-				growPending = true;
+				growPending = true
 			}
 		}
-		return id;
+		return id
 	}
 
 	function freeLink(id: number): void {
-		M[id + C.NEXT_DEP] = linkFreeHead;
-		linkFreeHead = id;
+		M[id + C.NEXT_DEP] = linkFreeHead
+		linkFreeHead = id
 	}
 
 	// ---- system.ts transliteration -------------------------------------------
 
 	function link(dep: number, sub: number, version: number): void {
-		const prevDep = M[sub + C.DEPS_TAIL];
+		const prevDep = M[sub + C.DEPS_TAIL]
 		if (prevDep !== 0 && M[prevDep + C.DEP] === dep) {
-			return;
+			return
 		}
-		const nextDep = prevDep !== 0 ? M[prevDep + C.NEXT_DEP] : M[sub + C.DEPS];
+		const nextDep = prevDep !== 0 ? M[prevDep + C.NEXT_DEP] : M[sub + C.DEPS]
 		if (nextDep !== 0 && M[nextDep + C.DEP] === dep) {
-			M[nextDep + C.VERSION] = version;
-			M[sub + C.DEPS_TAIL] = nextDep;
-			return;
+			M[nextDep + C.VERSION] = version
+			M[sub + C.DEPS_TAIL] = nextDep
+			return
 		}
-		linkInsert(dep, sub, version, prevDep, nextDep);
+		linkInsert(dep, sub, version, prevDep, nextDep)
 	}
 
 	// Insertion tail of link(): kept out of line so the steady-state re-track
 	// fast path above stays under V8's inlining bytecode budget (donor note).
-	function linkInsert(dep: number, sub: number, version: number, prevDep: number, nextDep: number): void {
-		const prevSub = M[dep + C.SUBS_TAIL];
+	function linkInsert(
+		dep: number,
+		sub: number,
+		version: number,
+		prevDep: number,
+		nextDep: number,
+	): void {
+		const prevSub = M[dep + C.SUBS_TAIL]
 		if (prevSub !== 0 && M[prevSub + C.VERSION] === version && M[prevSub + C.SUB] === sub) {
-			return;
+			return
 		}
-		const newLink = allocLink();
-		M[sub + C.DEPS_TAIL] = newLink;
-		M[dep + C.SUBS_TAIL] = newLink;
-		M[newLink + C.VERSION] = version;
-		M[newLink + C.DEP] = dep;
-		M[newLink + C.SUB] = sub;
-		M[newLink + C.PREV_DEP] = prevDep;
-		M[newLink + C.NEXT_DEP] = nextDep;
-		M[newLink + C.PREV_SUB] = prevSub;
-		M[newLink + C.NEXT_SUB] = 0;
+		const newLink = allocLink()
+		M[sub + C.DEPS_TAIL] = newLink
+		M[dep + C.SUBS_TAIL] = newLink
+		M[newLink + C.VERSION] = version
+		M[newLink + C.DEP] = dep
+		M[newLink + C.SUB] = sub
+		M[newLink + C.PREV_DEP] = prevDep
+		M[newLink + C.NEXT_DEP] = nextDep
+		M[newLink + C.PREV_SUB] = prevSub
+		M[newLink + C.NEXT_SUB] = 0
 		if (nextDep !== 0) {
-			M[nextDep + C.PREV_DEP] = newLink;
+			M[nextDep + C.PREV_DEP] = newLink
 		}
 		if (prevDep !== 0) {
-			M[prevDep + C.NEXT_DEP] = newLink;
+			M[prevDep + C.NEXT_DEP] = newLink
 		} else {
-			M[sub + C.DEPS] = newLink;
+			M[sub + C.DEPS] = newLink
 		}
 		if (prevSub !== 0) {
-			M[prevSub + C.NEXT_SUB] = newLink;
+			M[prevSub + C.NEXT_SUB] = newLink
 		} else {
-			M[dep + C.SUBS] = newLink;
+			M[dep + C.SUBS] = newLink
 			// dep just gained its FIRST subscriber: host protocol upcall.
-			hostWatched(dep, M[dep + C.HANDLE]);
+			hostWatched(dep, M[dep + C.HANDLE])
 		}
 	}
 
 	function unlink(id: number, sub = M[id + C.SUB]): number {
-		const dep = M[id + C.DEP];
-		const prevDep = M[id + C.PREV_DEP];
-		const nextDep = M[id + C.NEXT_DEP];
-		const nextSub = M[id + C.NEXT_SUB];
-		const prevSub = M[id + C.PREV_SUB];
+		const dep = M[id + C.DEP]
+		const prevDep = M[id + C.PREV_DEP]
+		const nextDep = M[id + C.NEXT_DEP]
+		const nextSub = M[id + C.NEXT_SUB]
+		const prevSub = M[id + C.PREV_SUB]
 		if (nextDep !== 0) {
-			M[nextDep + C.PREV_DEP] = prevDep;
+			M[nextDep + C.PREV_DEP] = prevDep
 		} else {
-			M[sub + C.DEPS_TAIL] = prevDep;
+			M[sub + C.DEPS_TAIL] = prevDep
 		}
 		if (prevDep !== 0) {
-			M[prevDep + C.NEXT_DEP] = nextDep;
+			M[prevDep + C.NEXT_DEP] = nextDep
 		} else {
-			M[sub + C.DEPS] = nextDep;
+			M[sub + C.DEPS] = nextDep
 		}
 		if (nextSub !== 0) {
-			M[nextSub + C.PREV_SUB] = prevSub;
+			M[nextSub + C.PREV_SUB] = prevSub
 		} else {
-			M[dep + C.SUBS_TAIL] = prevSub;
+			M[dep + C.SUBS_TAIL] = prevSub
 		}
-		freeLink(id);
+		freeLink(id)
 		if (prevSub !== 0) {
-			M[prevSub + C.NEXT_SUB] = nextSub;
+			M[prevSub + C.NEXT_SUB] = nextSub
 		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
-			hostUnwatched(dep, M[dep + C.HANDLE]);
+			hostUnwatched(dep, M[dep + C.HANDLE])
 		}
-		return nextDep;
+		return nextDep
 	}
 
 	function propagate(startLink: number, innerWrite: boolean): void {
 		// No try/finally: propagate never runs user code (host notify only
 		// queues), so it cannot throw and always drains the stack to its base.
-		let cur = startLink;
-		let next = M[cur + C.NEXT_SUB];
-		const stackBase = propSp;
+		let cur = startLink
+		let next = M[cur + C.NEXT_SUB]
+		const stackBase = propSp
 
 		top: do {
-			const sub = M[cur + C.SUB];
-			let flags = M[sub + C.FLAGS];
+			const sub = M[cur + C.SUB]
+			let flags = M[sub + C.FLAGS]
 
 			if (!(flags & (C.RECURSED_CHECK | C.RECURSED | C.DIRTY | C.PENDING))) {
-				M[sub + C.FLAGS] = flags | C.PENDING;
+				M[sub + C.FLAGS] = flags | C.PENDING
 				if (innerWrite) {
-					M[sub + C.FLAGS] |= C.RECURSED;
+					M[sub + C.FLAGS] |= C.RECURSED
 				}
 			} else if (!(flags & (C.RECURSED_CHECK | C.RECURSED))) {
-				flags = 0;
+				flags = 0
 			} else if (!(flags & C.RECURSED_CHECK)) {
-				M[sub + C.FLAGS] = (flags & ~C.RECURSED) | C.PENDING;
+				M[sub + C.FLAGS] = (flags & ~C.RECURSED) | C.PENDING
 			} else if (!(flags & (C.DIRTY | C.PENDING)) && isValidLink(cur, sub)) {
-				M[sub + C.FLAGS] = flags | (C.RECURSED | C.PENDING);
-				flags &= C.MUTABLE;
+				M[sub + C.FLAGS] = flags | (C.RECURSED | C.PENDING)
+				flags &= C.MUTABLE
 			} else {
-				flags = 0;
+				flags = 0
 			}
 
 			if (flags & C.WATCHING) {
-				hostNotify(sub, M[sub + C.HANDLE]);
+				hostNotify(sub, M[sub + C.HANDLE])
 			}
 
 			if (flags & C.MUTABLE) {
-				const subSubs = M[sub + C.SUBS];
+				const subSubs = M[sub + C.SUBS]
 				if (subSubs !== 0) {
-					cur = subSubs;
-					const nextSub = M[cur + C.NEXT_SUB];
+					cur = subSubs
+					const nextSub = M[cur + C.NEXT_SUB]
 					if (nextSub !== 0) {
 						if (propSp === propStack.length) {
-							const bigger = new Int32Array(propStack.length * 2);
-							bigger.set(propStack);
-							propStack = bigger;
+							const bigger = new Int32Array(propStack.length * 2)
+							bigger.set(propStack)
+							propStack = bigger
 						}
-						propStack[propSp++] = next;
-						next = nextSub;
+						propStack[propSp++] = next
+						next = nextSub
 					}
-					continue;
+					continue
 				}
 			}
 
 			if ((cur = next) !== 0) {
-				next = M[cur + C.NEXT_SUB];
-				continue;
+				next = M[cur + C.NEXT_SUB]
+				continue
 			}
 
 			while (propSp > stackBase) {
-				cur = propStack[--propSp];
+				cur = propStack[--propSp]
 				if (cur !== 0) {
-					next = M[cur + C.NEXT_SUB];
-					continue top;
+					next = M[cur + C.NEXT_SUB]
+					continue top
 				}
 			}
 
-			break;
-		} while (true);
+			break
+		} while (true)
 	}
 
 	function checkDirty(startLink: number, startSub: number): boolean {
-		let cur = startLink;
-		let sub = startSub;
-		const stackBase = checkSp;
-		let checkDepth = 0;
-		let dirty = false;
+		let cur = startLink
+		let sub = startSub
+		const stackBase = checkSp
+		let checkDepth = 0
+		let dirty = false
 
 		try {
 			top: do {
-				const dep = M[cur + C.DEP];
-				const depFlags = M[dep + C.FLAGS];
+				const dep = M[cur + C.DEP]
+				const depFlags = M[dep + C.FLAGS]
 
 				if (M[sub + C.FLAGS] & C.DIRTY) {
-					dirty = true;
+					dirty = true
 				} else if ((depFlags & (C.MUTABLE | C.DIRTY)) === (C.MUTABLE | C.DIRTY)) {
-					const depSubs = M[dep + C.SUBS];
+					const depSubs = M[dep + C.SUBS]
 					if (hostRefresh(dep, M[dep + C.HANDLE])) {
 						if (M[depSubs + C.NEXT_SUB] !== 0) {
-							shallowPropagate(depSubs);
+							shallowPropagate(depSubs)
 						}
-						dirty = true;
+						dirty = true
 					}
 				} else if ((depFlags & (C.MUTABLE | C.PENDING)) === (C.MUTABLE | C.PENDING)) {
 					if (checkSp === checkStack.length) {
-						const bigger = new Int32Array(checkStack.length * 2);
-						bigger.set(checkStack);
-						checkStack = bigger;
+						const bigger = new Int32Array(checkStack.length * 2)
+						bigger.set(checkStack)
+						checkStack = bigger
 					}
-					checkStack[checkSp++] = cur;
-					cur = M[dep + C.DEPS];
-					sub = dep;
-					++checkDepth;
-					continue;
+					checkStack[checkSp++] = cur
+					cur = M[dep + C.DEPS]
+					sub = dep
+					++checkDepth
+					continue
 				}
 
 				if (!dirty) {
-					const nextDep = M[cur + C.NEXT_DEP];
+					const nextDep = M[cur + C.NEXT_DEP]
 					if (nextDep !== 0) {
-						cur = nextDep;
-						continue;
+						cur = nextDep
+						continue
 					}
 				}
 
 				while (checkDepth--) {
-					cur = checkStack[--checkSp];
+					cur = checkStack[--checkSp]
 					if (dirty) {
-						const subSubs = M[sub + C.SUBS];
+						const subSubs = M[sub + C.SUBS]
 						if (hostRefresh(sub, M[sub + C.HANDLE])) {
 							if (M[subSubs + C.NEXT_SUB] !== 0) {
-								shallowPropagate(subSubs);
+								shallowPropagate(subSubs)
 							}
-							sub = M[cur + C.SUB];
-							continue;
+							sub = M[cur + C.SUB]
+							continue
 						}
-						dirty = false;
+						dirty = false
 					} else {
-						M[sub + C.FLAGS] &= ~C.PENDING;
+						M[sub + C.FLAGS] &= ~C.PENDING
 					}
-					sub = M[cur + C.SUB];
-					const nextDep = M[cur + C.NEXT_DEP];
+					sub = M[cur + C.SUB]
+					const nextDep = M[cur + C.NEXT_DEP]
 					if (nextDep !== 0) {
-						cur = nextDep;
-						continue top;
+						cur = nextDep
+						continue top
 					}
 				}
 
@@ -510,54 +520,54 @@ function createKernel(records: number, host: Host, carry?: Int32Array): Kernel {
 				// semantic bits set (a computed being verified is Mutable at
 				// minimum); flags reads 0 only if sub was disposed (record
 				// zeroed) by re-entrant user code during refresh().
-				return dirty && M[sub + C.FLAGS] !== 0;
-			} while (true);
+				return dirty && M[sub + C.FLAGS] !== 0
+			} while (true)
 		} finally {
-			checkSp = stackBase;
+			checkSp = stackBase
 		}
 	}
 
 	function shallowPropagate(startLink: number): void {
-		let cur = startLink;
+		let cur = startLink
 		do {
-			const sub = M[cur + C.SUB];
-			const flags = M[sub + C.FLAGS];
+			const sub = M[cur + C.SUB]
+			const flags = M[sub + C.FLAGS]
 			if ((flags & (C.PENDING | C.DIRTY)) === C.PENDING) {
-				M[sub + C.FLAGS] = flags | C.DIRTY;
+				M[sub + C.FLAGS] = flags | C.DIRTY
 				if ((flags & (C.WATCHING | C.RECURSED_CHECK)) === C.WATCHING) {
-					hostNotify(sub, M[sub + C.HANDLE]);
+					hostNotify(sub, M[sub + C.HANDLE])
 				}
 			}
-		} while ((cur = M[cur + C.NEXT_SUB]) !== 0);
+		} while ((cur = M[cur + C.NEXT_SUB]) !== 0)
 	}
 
 	function isValidLink(checkLink: number, sub: number): boolean {
-		let cur = M[sub + C.DEPS_TAIL];
+		let cur = M[sub + C.DEPS_TAIL]
 		while (cur !== 0) {
 			if (cur === checkLink) {
-				return true;
+				return true
 			}
-			cur = M[cur + C.PREV_DEP];
+			cur = M[cur + C.PREV_DEP]
 		}
-		return false;
+		return false
 	}
 
 	// Pure-topology helpers (no kind/value knowledge): kernel mechanism.
 
 	function disposeAllDepsInReverse(sub: number): void {
-		let cur = M[sub + C.DEPS_TAIL];
+		let cur = M[sub + C.DEPS_TAIL]
 		while (cur !== 0) {
-			const prev = M[cur + C.PREV_DEP];
-			unlink(cur, sub);
-			cur = prev;
+			const prev = M[cur + C.PREV_DEP]
+			unlink(cur, sub)
+			cur = prev
 		}
 	}
 
 	function purgeDeps(sub: number): void {
-		const depsTail = M[sub + C.DEPS_TAIL];
-		let dep = depsTail !== 0 ? M[depsTail + C.NEXT_DEP] : M[sub + C.DEPS];
+		const depsTail = M[sub + C.DEPS_TAIL]
+		let dep = depsTail !== 0 ? M[depsTail + C.NEXT_DEP] : M[sub + C.DEPS]
 		while (dep !== 0) {
-			dep = unlink(dep, sub);
+			dep = unlink(dep, sub)
 		}
 	}
 }
@@ -565,57 +575,57 @@ function createKernel(records: number, host: Host, carry?: Int32Array): Kernel {
 // ---- the policy layer -----------------------------------------------------------
 
 interface Engine {
-	records: number;
-	buffer(): Int32Array;
-	newSignal(value: unknown): number;
-	newComputed(getter: (previousValue?: unknown) => unknown): number;
-	newEffect(fn: () => (() => void) | void): number;
-	newScope(fn: () => void): number;
-	gen(id: number): number;
-	handleOf(id: number): number;
-	read(s: number, h: number): unknown;
-	write(s: number, h: number, value: unknown): boolean;
-	computedRead(c: number, h: number): unknown;
-	run(e: number): void;
-	requeueAbort(e: number): void;
-	dispose(e: number): void;
-	sweepPendingFree(): void;
+	records: number
+	buffer(): Int32Array
+	newSignal(value: unknown): number
+	newComputed(getter: (previousValue?: unknown) => unknown): number
+	newEffect(fn: () => (() => void) | void): number
+	newScope(fn: () => void): number
+	gen(id: number): number
+	handleOf(id: number): number
+	read(s: number, h: number): unknown
+	write(s: number, h: number, value: unknown): boolean
+	computedRead(c: number, h: number): unknown
+	run(e: number): void
+	requeueAbort(e: number): void
+	dispose(e: number): void
+	sweepPendingFree(): void
 }
 
 function createEngine(records: number, carry?: Int32Array): Engine {
 	// Bundler-proof aliases for the module-level policy state (see donor note:
 	// esbuild bundling demotes module-scope `const` to mutable `var`).
-	const ents = entities;
-	const handleFree = freeHandles;
-	const queue = queued;
+	const ents = entities
+	const handleFree = freeHandles
+	const queue = queued
 
 	// The host object: registered once, here. Function declarations below are
 	// hoisted, so the kernel can const-bind them at creation.
-	const K = createKernel(records, { refresh, notify, watched, unwatched }, carry);
+	const K = createKernel(records, { refresh, notify, watched, unwatched }, carry)
 
 	// Kernel operations bound as function-scope consts: direct monomorphic
 	// closure calls from policy code (the accessors are small enough to inline).
-	const kAlloc = K.alloc;
-	const kFree = K.free;
-	const kHandle = K.handle;
-	const kGetFlags = K.getFlags;
-	const kSetFlags = K.setFlags;
-	const kOrFlags = K.orFlags;
-	const kAndFlags = K.andFlags;
-	const kDeps = K.deps;
-	const kDepsTail = K.depsTail;
-	const kSetDepsTail = K.setDepsTail;
-	const kSubs = K.subs;
-	const kLinkDep = K.linkDep;
-	const kLinkSub = K.linkSub;
-	const kLinkPrevDep = K.linkPrevDep;
-	const kLink = K.link;
-	const kUnlink = K.unlink;
-	const kPropagate = K.propagate;
-	const kCheckDirty = K.checkDirty;
-	const kShallowPropagate = K.shallowPropagate;
-	const kPurgeDeps = K.purgeDeps;
-	const kDisposeAllDepsInReverse = K.disposeAllDepsInReverse;
+	const kAlloc = K.alloc
+	const kFree = K.free
+	const kHandle = K.handle
+	const kGetFlags = K.getFlags
+	const kSetFlags = K.setFlags
+	const kOrFlags = K.orFlags
+	const kAndFlags = K.andFlags
+	const kDeps = K.deps
+	const kDepsTail = K.depsTail
+	const kSetDepsTail = K.setDepsTail
+	const kSubs = K.subs
+	const kLinkDep = K.linkDep
+	const kLinkSub = K.linkSub
+	const kLinkPrevDep = K.linkPrevDep
+	const kLink = K.link
+	const kUnlink = K.unlink
+	const kPropagate = K.propagate
+	const kCheckDirty = K.checkDirty
+	const kShallowPropagate = K.shallowPropagate
+	const kPurgeDeps = K.purgeDeps
+	const kDisposeAllDepsInReverse = K.disposeAllDepsInReverse
 
 	return {
 		records: K.records,
@@ -633,46 +643,46 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		requeueAbort,
 		dispose,
 		sweepPendingFree,
-	};
+	}
 
 	// ---- host callbacks (the four upcalls) -----------------------------------
 
 	function refresh(node: number, handle: number): boolean {
-		const ent = ents[handle];
-		const kind = ent.kind;
+		const ent = ents[handle]
+		const kind = ent.kind
 		if (kind === Kind.Computed) {
-			return updateComputed(node, ent);
+			return updateComputed(node, ent)
 		}
 		if (kind === Kind.Signal) {
-			return updateSignal(node, ent);
+			return updateSignal(node, ent)
 		}
-		kSetFlags(node, C.MUTABLE);
-		return true;
+		kSetFlags(node, C.MUTABLE)
+		return true
 	}
 
 	function notify(e: number, _handle: number): void {
-		let insertIndex = queuedLength;
-		const firstInsertedIndex = insertIndex;
+		let insertIndex = queuedLength
+		const firstInsertedIndex = insertIndex
 
 		do {
-			queue[insertIndex++] = e;
-			kAndFlags(e, ~C.WATCHING);
-			const subs = kSubs(e);
-			e = subs !== 0 ? kLinkSub(subs) : 0;
+			queue[insertIndex++] = e
+			kAndFlags(e, ~C.WATCHING)
+			const subs = kSubs(e)
+			e = subs !== 0 ? kLinkSub(subs) : 0
 			if (e === 0 || !(kGetFlags(e) & C.WATCHING)) {
-				break;
+				break
 			}
-		} while (true);
+		} while (true)
 
-		queuedLength = insertIndex;
+		queuedLength = insertIndex
 
 		// The parent chain was appended child-first: reverse the inserted
 		// segment in place so outer effects run before inner.
-		let left = firstInsertedIndex;
+		let left = firstInsertedIndex
 		while (left < --insertIndex) {
-			const tmp = queue[left];
-			queue[left++] = queue[insertIndex];
-			queue[insertIndex] = tmp;
+			const tmp = queue[left]
+			queue[left++] = queue[insertIndex]
+			queue[insertIndex] = tmp
 		}
 	}
 
@@ -683,16 +693,16 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	function unwatched(node: number, handle: number): void {
-		const kind = ents[handle].kind;
+		const kind = ents[handle].kind
 		if (kind === Kind.Computed) {
 			if (kDepsTail(node) !== 0) {
-				kSetFlags(node, C.MUTABLE | C.DIRTY);
-				kDisposeAllDepsInReverse(node);
+				kSetFlags(node, C.MUTABLE | C.DIRTY)
+				kDisposeAllDepsInReverse(node)
 			}
 		} else if (kind === Kind.Signal) {
 			// Nothing to do for signals.
 		} else if (kind !== Kind.Dead) {
-			dispose(node);
+			dispose(node)
 		}
 	}
 
@@ -702,297 +712,294 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// signal/computed (i.e. child effects/scopes), in reverse. Needs kind
 	// knowledge, hence policy.
 	function unlinkChildEffects(sub: number): void {
-		let cur = kDepsTail(sub);
+		let cur = kDepsTail(sub)
 		while (cur !== 0) {
-			const prev = kLinkPrevDep(cur);
-			const dep = kLinkDep(cur);
-			const kind = ents[kHandle(dep)].kind;
+			const prev = kLinkPrevDep(cur)
+			const dep = kLinkDep(cur)
+			const kind = ents[kHandle(dep)].kind
 			if (kind !== Kind.Computed && kind !== Kind.Signal) {
-				kUnlink(cur, sub);
+				kUnlink(cur, sub)
 			}
-			cur = prev;
+			cur = prev
 		}
 	}
 
 	function updateComputed(c: number, ent: Ent): boolean {
 		if (kGetFlags(c) & P.HAS_CHILD_EFFECT) {
-			unlinkChildEffects(c);
+			unlinkChildEffects(c)
 		}
-		kSetDepsTail(c, 0);
-		kSetFlags(c, C.MUTABLE | C.RECURSED_CHECK);
-		const prevSub = activeSub;
-		activeSub = c;
-		++enterDepth;
+		kSetDepsTail(c, 0)
+		kSetFlags(c, C.MUTABLE | C.RECURSED_CHECK)
+		const prevSub = activeSub
+		activeSub = c
+		++enterDepth
 		try {
-			++cycle;
-			const oldValue = ent.value;
-			return oldValue !== (ent.value = (ent.fn as (previousValue?: unknown) => unknown)(oldValue));
+			++cycle
+			const oldValue = ent.value
+			return oldValue !== (ent.value = (ent.fn as (previousValue?: unknown) => unknown)(oldValue))
 		} finally {
-			--enterDepth;
-			activeSub = prevSub;
-			kAndFlags(c, ~C.RECURSED_CHECK);
-			kPurgeDeps(c);
+			--enterDepth
+			activeSub = prevSub
+			kAndFlags(c, ~C.RECURSED_CHECK)
+			kPurgeDeps(c)
 		}
 	}
 
 	function updateSignal(s: number, ent: Ent): boolean {
-		kSetFlags(s, C.MUTABLE);
-		return ent.value !== (ent.value = ent.pending);
+		kSetFlags(s, C.MUTABLE)
+		return ent.value !== (ent.value = ent.pending)
 	}
 
 	function run(e: number): void {
-		const flags = kGetFlags(e);
-		if (
-			flags & C.DIRTY
-			|| (flags & C.PENDING && kCheckDirty(kDeps(e), e))
-		) {
+		const flags = kGetFlags(e)
+		if (flags & C.DIRTY || (flags & C.PENDING && kCheckDirty(kDeps(e), e))) {
 			if (flags & P.HAS_CHILD_EFFECT) {
-				unlinkChildEffects(e);
+				unlinkChildEffects(e)
 			}
-			const ent = ents[kHandle(e)];
+			const ent = ents[kHandle(e)]
 			if (ent.cleanup) {
-				runCleanup(ent);
+				runCleanup(ent)
 				if (ent.kind === Kind.Dead) {
-					return; // disposed by its own cleanup
+					return // disposed by its own cleanup
 				}
 			}
-			kSetDepsTail(e, 0);
-			kSetFlags(e, C.WATCHING | C.RECURSED_CHECK);
-			const prevSub = activeSub;
-			activeSub = e;
-			++enterDepth;
+			kSetDepsTail(e, 0)
+			kSetFlags(e, C.WATCHING | C.RECURSED_CHECK)
+			const prevSub = activeSub
+			activeSub = e
+			++enterDepth
 			try {
-				++cycle;
-				++runDepth;
-				ent.cleanup = (ent.fn as () => (() => void) | void)();
+				++cycle
+				++runDepth
+				ent.cleanup = (ent.fn as () => (() => void) | void)()
 			} finally {
-				--runDepth;
-				--enterDepth;
-				activeSub = prevSub;
-				kAndFlags(e, ~C.RECURSED_CHECK);
-				kPurgeDeps(e);
+				--runDepth
+				--enterDepth
+				activeSub = prevSub
+				kAndFlags(e, ~C.RECURSED_CHECK)
+				kPurgeDeps(e)
 			}
 		} else if (kDeps(e) !== 0) {
-			kSetFlags(e, C.WATCHING | (flags & P.HAS_CHILD_EFFECT));
+			kSetFlags(e, C.WATCHING | (flags & P.HAS_CHILD_EFFECT))
 		}
 	}
 
 	// flush() abort path: re-arm effects still queued after a throw.
 	function requeueAbort(e: number): void {
 		if (ents[kHandle(e)].kind !== Kind.Dead) {
-			kOrFlags(e, C.WATCHING | C.RECURSED);
+			kOrFlags(e, C.WATCHING | C.RECURSED)
 		}
 	}
 
 	function runCleanup(ent: Ent): void {
-		const cleanup = ent.cleanup as () => void;
-		ent.cleanup = undefined;
-		const prevSub = activeSub;
-		activeSub = 0;
-		++enterDepth;
+		const cleanup = ent.cleanup as () => void
+		ent.cleanup = undefined
+		const prevSub = activeSub
+		activeSub = 0
+		++enterDepth
 		try {
-			cleanup();
+			cleanup()
 		} finally {
-			--enterDepth;
-			activeSub = prevSub;
+			--enterDepth
+			activeSub = prevSub
 		}
 	}
 
 	// effectOper + effectScopeOper: dispose an effect (runs cleanup) or scope.
 	function dispose(e: number): void {
-		const ent = ents[kHandle(e)];
-		const kind = ent.kind;
+		const ent = ents[kHandle(e)]
+		const kind = ent.kind
 		if (kind === Kind.Dead) {
-			return; // already disposed
+			return // already disposed
 		}
-		ent.kind = Kind.Dead;
-		kSetFlags(e, 0);
-		kDisposeAllDepsInReverse(e);
-		const sub = kSubs(e);
+		ent.kind = Kind.Dead
+		kSetFlags(e, 0)
+		kDisposeAllDepsInReverse(e)
+		const sub = kSubs(e)
 		if (sub !== 0) {
-			kUnlink(sub);
+			kUnlink(sub)
 		}
 		if (kind === Kind.Effect && ent.cleanup) {
-			runCleanup(ent);
+			runCleanup(ent)
 		}
 		// Deferred reclamation: the queue (or an in-flight walk) may still hold
 		// this id; the record is swept back onto the free list at the next
 		// operation boundary.
-		pendingFree.push(e);
+		pendingFree.push(e)
 	}
 
 	function sweepPendingFree(): void {
 		for (let i = 0; i < pendingFree.length; ++i) {
-			const id = pendingFree[i];
-			const h = kHandle(id);
-			const ent = ents[h];
-			ent.kind = Kind.Dead;
-			ent.value = undefined;
-			ent.pending = undefined;
-			ent.fn = undefined;
-			ent.cleanup = undefined;
-			handleFree.push(h);
-			kFree(id);
+			const id = pendingFree[i]
+			const h = kHandle(id)
+			const ent = ents[h]
+			ent.kind = Kind.Dead
+			ent.value = undefined
+			ent.pending = undefined
+			ent.fn = undefined
+			ent.cleanup = undefined
+			handleFree.push(h)
+			kFree(id)
 		}
-		pendingFree.length = 0;
+		pendingFree.length = 0
 	}
 
 	// ---- entity + node creation ------------------------------------------------
 
-	function allocEnt(kind: number, value: unknown, pending: unknown, fn: Function | undefined): number {
+	function allocEnt(
+		kind: number,
+		value: unknown,
+		pending: unknown,
+		fn: Function | undefined,
+	): number {
 		if (handleFree.length !== 0) {
-			const h = handleFree.pop()!;
-			const ent = ents[h];
-			ent.kind = kind;
-			ent.value = value;
-			ent.pending = pending;
-			ent.fn = fn;
-			ent.cleanup = undefined;
-			return h;
+			const h = handleFree.pop()!
+			const ent = ents[h]
+			ent.kind = kind
+			ent.value = value
+			ent.pending = pending
+			ent.fn = fn
+			ent.cleanup = undefined
+			return h
 		}
-		ents.push({ kind, value, pending, fn, cleanup: undefined });
-		return ents.length - 1;
+		ents.push({ kind, value, pending, fn, cleanup: undefined })
+		return ents.length - 1
 	}
 
 	function newSignal(value: unknown): number {
-		return kAlloc(C.MUTABLE, allocEnt(Kind.Signal, value, value, undefined));
+		return kAlloc(C.MUTABLE, allocEnt(Kind.Signal, value, value, undefined))
 	}
 
 	function newComputed(getter: (previousValue?: unknown) => unknown): number {
-		return kAlloc(0, allocEnt(Kind.Computed, undefined, undefined, getter));
+		return kAlloc(0, allocEnt(Kind.Computed, undefined, undefined, getter))
 	}
 
 	function newEffect(fn: () => (() => void) | void): number {
-		const h = allocEnt(Kind.Effect, undefined, undefined, fn);
-		const e = kAlloc(C.WATCHING | C.RECURSED_CHECK, h);
-		const ent = ents[h];
-		const prevSub = activeSub;
-		activeSub = e;
+		const h = allocEnt(Kind.Effect, undefined, undefined, fn)
+		const e = kAlloc(C.WATCHING | C.RECURSED_CHECK, h)
+		const ent = ents[h]
+		const prevSub = activeSub
+		activeSub = e
 		if (prevSub !== 0) {
-			kLink(e, prevSub, 0);
-			kOrFlags(prevSub, P.HAS_CHILD_EFFECT);
+			kLink(e, prevSub, 0)
+			kOrFlags(prevSub, P.HAS_CHILD_EFFECT)
 		}
-		++enterDepth;
+		++enterDepth
 		try {
-			++runDepth;
-			ent.cleanup = fn();
+			++runDepth
+			ent.cleanup = fn()
 		} finally {
-			--runDepth;
-			--enterDepth;
-			activeSub = prevSub;
-			kAndFlags(e, ~C.RECURSED_CHECK);
+			--runDepth
+			--enterDepth
+			activeSub = prevSub
+			kAndFlags(e, ~C.RECURSED_CHECK)
 		}
-		return e;
+		return e
 	}
 
 	function newScope(fn: () => void): number {
-		const e = kAlloc(C.MUTABLE, allocEnt(Kind.Scope, undefined, undefined, undefined));
-		const prevSub = activeSub;
-		activeSub = e;
+		const e = kAlloc(C.MUTABLE, allocEnt(Kind.Scope, undefined, undefined, undefined))
+		const prevSub = activeSub
+		activeSub = e
 		if (prevSub !== 0) {
-			kLink(e, prevSub, 0);
-			kOrFlags(prevSub, P.HAS_CHILD_EFFECT);
+			kLink(e, prevSub, 0)
+			kOrFlags(prevSub, P.HAS_CHILD_EFFECT)
 		}
-		++enterDepth;
+		++enterDepth
 		try {
-			fn();
+			fn()
 		} finally {
-			--enterDepth;
-			activeSub = prevSub;
+			--enterDepth
+			activeSub = prevSub
 		}
-		return e;
+		return e
 	}
 
 	// ---- operations dispatched from the public wrappers ------------------------
 
 	// signalOper read path.
 	function read(s: number, h: number): unknown {
-		const ent = ents[h];
+		const ent = ents[h]
 		if (kGetFlags(s) & C.DIRTY) {
 			if (updateSignal(s, ent)) {
-				const subs = kSubs(s);
+				const subs = kSubs(s)
 				if (subs !== 0) {
-					kShallowPropagate(subs);
+					kShallowPropagate(subs)
 				}
 			}
 		}
 		if (activeSub !== 0) {
-			kLink(s, activeSub, cycle);
+			kLink(s, activeSub, cycle)
 		}
-		return ent.value;
+		return ent.value
 	}
 
 	// signalOper write path; the WRAPPER flushes (iff this returns true), so
 	// growth can happen between queued effects at the top level.
 	function write(s: number, h: number, value: unknown): boolean {
-		const ent = ents[h];
+		const ent = ents[h]
 		if (ent.pending !== (ent.pending = value)) {
-			kSetFlags(s, C.MUTABLE | C.DIRTY);
-			const subs = kSubs(s);
+			kSetFlags(s, C.MUTABLE | C.DIRTY)
+			const subs = kSubs(s)
 			if (subs !== 0) {
-				kPropagate(subs, runDepth !== 0);
-				return true;
+				kPropagate(subs, runDepth !== 0)
+				return true
 			}
 		}
-		return false;
+		return false
 	}
 
 	// computedOper.
 	function computedRead(c: number, h: number): unknown {
-		const ent = ents[h];
-		const flags = kGetFlags(c);
+		const ent = ents[h]
+		const flags = kGetFlags(c)
 		if (
-			flags & C.DIRTY
-			|| (
-				flags & C.PENDING
-				&& (
-					kCheckDirty(kDeps(c), c)
-					|| (kSetFlags(c, flags & ~C.PENDING), false)
-				)
-			)
+			flags & C.DIRTY ||
+			(flags & C.PENDING && (kCheckDirty(kDeps(c), c) || (kSetFlags(c, flags & ~C.PENDING), false)))
 		) {
 			if (updateComputed(c, ent)) {
-				const subs = kSubs(c);
+				const subs = kSubs(c)
 				if (subs !== 0) {
-					kShallowPropagate(subs);
+					kShallowPropagate(subs)
 				}
 			}
-		} else if (flags === 0) { // upstream `!flags`: never evaluated
-			kSetFlags(c, C.MUTABLE | C.RECURSED_CHECK);
-			const prevSub = activeSub;
-			activeSub = c;
-			++enterDepth;
+		} else if (flags === 0) {
+			// upstream `!flags`: never evaluated
+			kSetFlags(c, C.MUTABLE | C.RECURSED_CHECK)
+			const prevSub = activeSub
+			activeSub = c
+			++enterDepth
 			try {
-				ent.value = (ent.fn as () => unknown)();
+				ent.value = (ent.fn as () => unknown)()
 			} finally {
-				--enterDepth;
-				activeSub = prevSub;
-				kAndFlags(c, ~C.RECURSED_CHECK);
+				--enterDepth
+				activeSub = prevSub
+				kAndFlags(c, ~C.RECURSED_CHECK)
 			}
 		}
-		const sub = activeSub;
+		const sub = activeSub
 		if (sub !== 0) {
-			kLink(c, sub, cycle);
+			kLink(c, sub, cycle)
 		}
-		return ent.value;
+		return ent.value
 	}
 }
 
 // ---- engine instance + growth ------------------------------------------------
 
 const initialRecords = (() => {
-	const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-		.process?.env?.ARENA_INITIAL_RECORDS;
-	const n = env !== undefined ? Number(env) : NaN;
-	return Number.isFinite(n) && n >= 2 ? Math.ceil(n) : 1 << 20;
-})();
+	const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+		?.env?.ARENA_INITIAL_RECORDS
+	const n = env !== undefined ? Number(env) : NaN
+	return Number.isFinite(n) && n >= 2 ? Math.ceil(n) : 1 << 20
+})()
 
 // Footprint parity with the donor: 3x initialRecords shared records.
-let E: Engine = createEngine(initialRecords * 3);
+let E: Engine = createEngine(initialRecords * 3)
 
 function maybeBoundary(): void {
 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
-		boundaryWork();
+		boundaryWork()
 	}
 }
 
@@ -1001,16 +1008,16 @@ function boundaryWork(): void {
 	// still reference a disposed record, and freeing it here would let a new
 	// node reuse the id and be run() by the stale queue entry.
 	if (pendingFree.length !== 0 && queuedLength === 0) {
-		E.sweepPendingFree();
+		E.sweepPendingFree()
 	}
 	if (growPending) {
-		growPending = false;
-		let records = E.records;
+		growPending = false
+		let records = E.records
 		while (recNext > Math.min((records * 8) >> 1, (records - C.REC_SLACK) * 8)) {
-			records *= 2;
+			records *= 2
 		}
 		if (records !== E.records) {
-			E = createEngine(records, E.buffer());
+			E = createEngine(records, E.buffer())
 		}
 	}
 }
@@ -1019,23 +1026,23 @@ function flush(): void {
 	// Boundary-lite: growth/reclamation only BEFORE the flush loop, not between
 	// effects (see donor flush() audit note; all user code during flush runs
 	// at enterDepth >= 1, so E cannot be swapped mid-loop).
-	maybeBoundary();
-	const engine = E;
-	const queue = queued; // function-scope alias survives bundling
+	maybeBoundary()
+	const engine = E
+	const queue = queued // function-scope alias survives bundling
 	try {
 		while (notifyIndex < queuedLength) {
-			const e = queue[notifyIndex];
-			queue[notifyIndex++] = 0;
-			engine.run(e);
+			const e = queue[notifyIndex]
+			queue[notifyIndex++] = 0
+			engine.run(e)
 		}
 	} finally {
 		while (notifyIndex < queuedLength) {
-			const e = queue[notifyIndex];
-			queue[notifyIndex++] = 0;
-			E.requeueAbort(e);
+			const e = queue[notifyIndex]
+			queue[notifyIndex++] = 0
+			E.requeueAbort(e)
 		}
-		notifyIndex = 0;
-		queuedLength = 0;
+		notifyIndex = 0
+		queuedLength = 0
 	}
 }
 
@@ -1043,90 +1050,90 @@ function flush(): void {
 
 /** Callable signal handle: `s()` reads, `s(value)` writes. */
 export interface SignalHandle<T> {
-	(): T;
-	(value: T): void;
+	(): T
+	(value: T): void
 }
 
-export function signal<T>(): SignalHandle<T | undefined>;
-export function signal<T>(initialValue: T): SignalHandle<T>;
+export function signal<T>(): SignalHandle<T | undefined>
+export function signal<T>(initialValue: T): SignalHandle<T>
 export function signal<T>(initialValue?: T): SignalHandle<T | undefined> {
-	maybeBoundary();
-	const id = E.newSignal(initialValue);
-	const h = E.handleOf(id);
+	maybeBoundary()
+	const id = E.newSignal(initialValue)
+	const h = E.handleOf(id)
 	return function (...value: [T?]) {
 		if (value.length) {
-			maybeBoundary();
+			maybeBoundary()
 			if (E.write(id, h, value[0]) && !batchDepth) {
-				flush();
+				flush()
 			}
 		} else {
-			return E.read(id, h) as T | undefined;
+			return E.read(id, h) as T | undefined
 		}
-	} as SignalHandle<T | undefined>;
+	}
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {
-	maybeBoundary();
-	const id = E.newComputed(getter as (previousValue?: unknown) => unknown);
-	const h = E.handleOf(id);
+	maybeBoundary()
+	const id = E.newComputed(getter as (previousValue?: unknown) => unknown)
+	const h = E.handleOf(id)
 	// No maybeBoundary on the read path (donor audit note).
-	return () => E.computedRead(id, h) as T;
+	return () => E.computedRead(id, h) as T
 }
 
 /** Returns a disposer. `fn` may return a cleanup function. */
 export function effect(fn: () => void | (() => void)): () => void {
-	maybeBoundary();
-	const id = E.newEffect(fn);
-	const gen = E.gen(id);
+	maybeBoundary()
+	const id = E.newEffect(fn)
+	const gen = E.gen(id)
 	return () => {
 		if (E.gen(id) !== gen) {
-			return; // record already reclaimed (and possibly reused)
+			return // record already reclaimed (and possibly reused)
 		}
-		E.dispose(id);
-		maybeBoundary();
-	};
+		E.dispose(id)
+		maybeBoundary()
+	}
 }
 
 /** Returns a disposer that disposes every effect created inside `fn`. */
 export function effectScope(fn: () => void): () => void {
-	maybeBoundary();
-	const id = E.newScope(fn);
-	const gen = E.gen(id);
+	maybeBoundary()
+	const id = E.newScope(fn)
+	const gen = E.gen(id)
 	return () => {
 		if (E.gen(id) !== gen) {
-			return;
+			return
 		}
-		E.dispose(id);
-		maybeBoundary();
-	};
+		E.dispose(id)
+		maybeBoundary()
+	}
 }
 
 export function startBatch(): void {
-	++batchDepth;
+	++batchDepth
 }
 
 export function endBatch(): void {
 	if (!--batchDepth && notifyIndex < queuedLength) {
-		flush();
+		flush()
 	}
 }
 
 export function untracked<T>(fn: () => T): T {
-	const prevSub = activeSub;
-	activeSub = 0;
+	const prevSub = activeSub
+	activeSub = 0
 	try {
-		return fn();
+		return fn()
 	} finally {
-		activeSub = prevSub;
+		activeSub = prevSub
 	}
 }
 
 export function getActiveSub(): number {
-	return activeSub;
+	return activeSub
 }
 
 export function setActiveSub(sub = 0): number {
-	const prevSub = activeSub;
-	activeSub = sub;
-	return prevSub;
+	const prevSub = activeSub
+	activeSub = sub
+	return prevSub
 }

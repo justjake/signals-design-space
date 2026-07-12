@@ -4,6 +4,8 @@ export {
 	Atom,
 	ReducerAtom,
 	Computed,
+	isAtom,
+	isComputed,
 	effect,
 	effectScope,
 	batch,
@@ -29,7 +31,7 @@ export {
 	__TEST__eachInternals,
 	__TEST__kernelSideColumns,
 	__TEST__ctxUse,
-} from './CosignalEngine.js';
+} from './CosignalEngine.js'
 
 export type {
 	Cosignals,
@@ -65,4 +67,4 @@ export type {
 	SignalEffectId,
 	Seq,
 	BatchSlotSet,
-} from './CosignalEngine.js';
+} from './CosignalEngine.js'

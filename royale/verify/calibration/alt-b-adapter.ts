@@ -5,10 +5,10 @@
  * documented at the member. This file is orchestrator tooling — entrants
  * never see it.
  */
-import * as React from 'react';
-import { act } from 'react';
-import * as ReactDOMClient from 'react-dom/client';
-import { flushSync } from 'react-dom';
+import * as React from 'react'
+import { act } from 'react'
+import * as ReactDOMClient from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import {
 	Atom,
 	Computed,
@@ -24,7 +24,7 @@ import {
 	untracked,
 	__debug,
 	type SignalLike,
-} from 'cosignals-alt-b';
+} from 'cosignals-alt-b'
 import {
 	registerAltBReact,
 	serializeAtomState,
@@ -35,43 +35,43 @@ import {
 	useIsPending as useIsPendingAltB,
 	useSignalEffect as useSignalEffectAltB,
 	type AltBReactHandle,
-} from 'cosignals-alt-b/react';
-import { PackedTracer, startTracing, stopTracing } from 'cosignals-alt-b/trace';
-import type { RoyaleAdapter, RoyaleHandle, RoyaleTraceView } from '../battery/royale-types';
+} from 'cosignals-alt-b/react'
+import { PackedTracer, startTracing, stopTracing } from 'cosignals-alt-b/trace'
+import type { RoyaleAdapter, RoyaleHandle, RoyaleTraceView } from '../battery/royale-types'
 
-type ReactWithReset = typeof React & { unstable_resetBatchRegistryForTest?: () => void };
+type ReactWithReset = typeof React & { unstable_resetBatchRegistryForTest?: () => void }
 
-type Sig = SignalLike & { state: unknown };
+type Sig = SignalLike & { state: unknown }
 
-let registration: { alt: AltBReactHandle; handle: RoyaleHandle } | undefined;
+let registration: { alt: AltBReactHandle; handle: RoyaleHandle } | undefined
 
 function scrub(): void {
-	(React as ReactWithReset).unstable_resetBatchRegistryForTest?.();
-	__resetEngineForTests();
+	React.unstable_resetBatchRegistryForTest?.()
+	__resetEngineForTests()
 }
 
 function ensureRegistered(): { alt: AltBReactHandle; handle: RoyaleHandle } {
 	if (registration === undefined) {
-		scrub();
-		const alt = registerAltBReact();
-		const errors: unknown[] = [];
+		scrub()
+		const alt = registerAltBReact()
+		const errors: unknown[] = []
 		const handle: RoyaleHandle = {
 			errors,
 			dispose() {
 				if (registration?.alt === alt) {
-					alt.dispose();
-					registration = undefined;
+					alt.dispose()
+					registration = undefined
 				}
 			},
-		};
-		registration = { alt, handle };
+		}
+		registration = { alt, handle }
 	}
-	return registration;
+	return registration
 }
 
 /** Push adapter-plumbing failures into the active handle's error channel. */
 function reportError(err: unknown): void {
-	registration?.handle.errors.push(err);
+	registration?.handle.errors.push(err)
 }
 
 // ---- causality trace ---------------------------------------------------------------
@@ -87,34 +87,34 @@ function reportError(err: unknown): void {
 //   design; scenarios exercising the trace do so with a live batch, where
 //   every write is LOGGED and traced.
 function makeTraceView(): RoyaleTraceView {
-	const tracer: PackedTracer = startTracing({ mode: 'ring', capacity: 1 << 16 });
+	const tracer: PackedTracer = startTracing({ mode: 'ring', capacity: 1 << 16 })
 	const fmt = (e: { id: number; kindName: string; node: number; world: number; cause: number }) =>
-		`#${e.id} ${e.kindName} node=${e.node} world=${e.world} cause=${e.cause === 0 ? 'root' : `#${e.cause}`}`;
+		`#${e.id} ${e.kindName} node=${e.node} world=${e.world} cause=${e.cause === 0 ? 'root' : `#${e.cause}`}`
 	return {
 		whyLastDelivery(x: unknown): string[] {
-			const id = (x as Sig).id;
+			const id = (x as Sig).id
 			// broadcast records carry the watched node id in args[1]; args[0]
 			// is 0 when the watcher actually fired (a delivery) and 1 when the
 			// per-world cutoff suppressed it — only deliveries answer "why did
 			// this component re-render".
-			const all = tracer.events();
+			const all = tracer.events()
 			for (let i = all.length - 1; i >= 0; i--) {
-				const e = all[i];
+				const e = all[i]
 				if (e.kindName === 'broadcast' && e.args[1] === id && e.args[0] === 0) {
-					return tracer.causeChain(e.id).map(fmt);
+					return tracer.causeChain(e.id).map(fmt)
 				}
 			}
-			return [];
+			return []
 		},
 		events() {
 			return tracer
 				.events()
-				.map((e) => ({ id: e.id, kind: e.kindName, cause: e.cause === 0 ? undefined : e.cause }));
+				.map((e) => ({ id: e.id, kind: e.kindName, cause: e.cause === 0 ? undefined : e.cause }))
 		},
 		stop() {
-			stopTracing();
+			stopTracing()
 		},
-	};
+	}
 }
 
 // ---- the adapter -------------------------------------------------------------------
@@ -127,24 +127,24 @@ const adapter: RoyaleAdapter = {
 	flushSync,
 
 	register(): RoyaleHandle {
-		return ensureRegistered().handle;
+		return ensureRegistered().handle
 	},
 
 	resetForTest(): void {
-		stopTracing();
+		stopTracing()
 		if (registration !== undefined) {
-			registration.alt.dispose();
-			registration = undefined;
+			registration.alt.dispose()
+			registration = undefined
 		}
-		scrub();
+		scrub()
 	},
 
 	atom<T>(
 		initial: T | (() => T),
 		opts?: {
-			equals?(a: T, b: T): boolean;
-			onObserved?(ctx: { get(): T; set(v: T): void }): void | (() => void);
-			label?: string;
+			equals?(a: T, b: T): boolean
+			onObserved?(ctx: { get(): T; set(v: T): void }): void | (() => void)
+			label?: string
 		},
 	): unknown {
 		return new Atom<T>({
@@ -155,15 +155,15 @@ const adapter: RoyaleAdapter = {
 				opts?.onObserved === undefined
 					? undefined
 					: (ctx) => opts.onObserved!({ get: () => ctx.peek(), set: (v) => ctx.set(v) }),
-		});
+		})
 	},
 
 	set(a: unknown, v: unknown): void {
-		(a as Atom<unknown>).set(v);
+		;(a as Atom<unknown>).set(v)
 	},
 
 	update(a: unknown, fn: (prev: unknown) => unknown): void {
-		(a as Atom<unknown>).update(fn);
+		;(a as Atom<unknown>).update(fn)
 	},
 
 	computed<T>(
@@ -174,25 +174,25 @@ const adapter: RoyaleAdapter = {
 			fn: (ctx) => fn(ctx.use),
 			isEqual: opts?.equals,
 			label: opts?.label,
-		});
+		})
 	},
 
 	read(x: unknown): unknown {
-		return (x as Sig).state;
+		return (x as Sig).state
 	},
 
 	latest(x: unknown): unknown {
-		return latestRead(x as Sig);
+		return latestRead(x as Sig)
 	},
 
 	committed(x: unknown, container?: unknown): unknown {
 		if (container === undefined) {
-			return committedRead(x as Sig);
+			return committedRead(x as Sig)
 		}
 		// Per-root committed view: the bindings key views by the protocol's
 		// container object, which is the DOM element handed to createRoot.
-		const { alt } = ensureRegistered();
-		return alt.bindings.readRootCommitted(container, () => committedRead(x as Sig));
+		const { alt } = ensureRegistered()
+		return alt.bindings.readRootCommitted(container, () => committedRead(x as Sig))
 	},
 
 	isPending(x: unknown): boolean {
@@ -201,87 +201,87 @@ const adapter: RoyaleAdapter = {
 		// never "pending" here; RULES scenario 2 expects it to be. The honest
 		// mapping keeps alt-b's semantics; the divergence stays visible in
 		// calibration.
-		return isPendingRead(x as SignalLike);
+		return isPendingRead(x as SignalLike)
 	},
 
 	refresh(x: unknown): void {
-		refreshNode(x as SignalLike);
+		refreshNode(x as SignalLike)
 	},
 
 	effect,
 	batch(fn: () => void): void {
-		batch(fn);
+		batch(fn)
 	},
 	untracked,
 
 	serialize(atoms: unknown[]): string {
-		const record: Record<string, Atom<unknown>> = {};
+		const record: Record<string, Atom<unknown>> = {}
 		atoms.forEach((a, i) => {
-			record[String(i)] = a as Atom<unknown>;
-		});
-		return serializeAtomState(record);
+			record[String(i)] = a as Atom<unknown>
+		})
+		return serializeAtomState(record)
 	},
 
 	initialize(json: string, atoms: unknown[]): void {
-		const record: Record<string, Atom<unknown>> = {};
+		const record: Record<string, Atom<unknown>> = {}
 		atoms.forEach((a, i) => {
-			record[String(i)] = a as Atom<unknown>;
-		});
-		initializeAtomState(json, record);
+			record[String(i)] = a as Atom<unknown>
+		})
+		initializeAtomState(json, record)
 	},
 
 	useValue(x: unknown): unknown {
-		return useSignal(x as Sig);
+		return useSignal(x as Sig)
 	},
 
 	useComputed<T>(fn: () => T, deps: unknown[]): T {
-		return useComputedAltB(fn, deps);
+		return useComputedAltB(fn, deps)
 	},
 
 	useSignalEffect(fn: () => void | (() => void)): void {
-		useSignalEffectAltB(fn, []);
+		useSignalEffectAltB(fn, [])
 	},
 
 	useIsPending(x: unknown): boolean {
-		return useIsPendingAltB(x as SignalLike);
+		return useIsPendingAltB(x as SignalLike)
 	},
 
 	useCommitted(x: unknown): unknown {
-		return useCommittedAltB(x as Sig);
+		return useCommittedAltB(x as Sig)
 	},
 
 	startTransitionWrite(scope: () => void): void {
-		startSignalTransition(scope);
+		startSignalTransition(scope)
 	},
 
 	trace(): RoyaleTraceView {
-		return makeTraceView();
+		return makeTraceView()
 	},
 
 	onDomMutation(cb: (phase: 'start' | 'stop', container: Element) => void): () => void {
-		const { alt } = ensureRegistered();
+		const { alt } = ensureRegistered()
 		// The fork re-emits React's before/after-mutation edges per root
 		// commit; container is root.containerInfo (the createRoot element).
 		return alt.fork.subscribeToExternalRuntime({
 			onBeforeMutation(container) {
 				try {
-					cb('start', container as Element);
+					cb('start', container as Element)
 				} catch (err) {
-					reportError(err);
+					reportError(err)
 				}
 			},
 			onAfterMutation(container) {
 				try {
-					cb('stop', container as Element);
+					cb('stop', container as Element)
 				} catch (err) {
-					reportError(err);
+					reportError(err)
 				}
 			},
-		});
+		})
 	},
-};
+}
 
 // Keep __debug reachable for ad-hoc calibration digging (not used by the battery).
-void __debug;
+void __debug
 
-export default adapter;
+export default adapter

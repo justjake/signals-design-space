@@ -14,27 +14,27 @@ import {
 	endBatch,
 	startBatch,
 	untracked,
-} from 'cosignals-alt-a';
-import type { FrameworkAdapter } from './types';
+} from 'cosignals-alt-a'
+import type { FrameworkAdapter } from './types'
 
 const adapter: FrameworkAdapter = {
 	name: 'cosignals-alt-a',
 	signal(initialValue) {
-		const a = new Atom({ state: initialValue });
+		const a = new Atom({ state: initialValue })
 		return {
 			read: () => a.state,
 			write: (v) => a.set(v),
-		};
+		}
 	},
 	computed(fn) {
-		const c = new Computed({ fn });
-		return { read: () => c.state };
+		const c = new Computed({ fn })
+		return { read: () => c.state }
 	},
 	effect,
 	effectScope,
 	startBatch,
 	endBatch,
 	untracked,
-};
+}
 
-export default adapter;
+export default adapter

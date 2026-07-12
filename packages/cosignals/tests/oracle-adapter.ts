@@ -24,42 +24,74 @@ import {
 	__TEST__resetEngine,
 	type AtomInternals,
 	type CosignalEngine,
-} from '../src/CosignalEngine.js';
-import { __TEST__peekNextBatchId } from '../src/CosignalEngine.js';
-import { __TEST__eachInternals, __TEST__internalsById } from '../src/CosignalEngine.js';
-import { engineEpoch } from '../src/CosignalEngine.js';
-import { armArenaCheck } from './arena-checker.js';
+} from '../src/CosignalEngine.js'
+import { __TEST__peekNextBatchId } from '../src/CosignalEngine.js'
+import { __TEST__eachInternals, __TEST__internalsById } from '../src/CosignalEngine.js'
+import { engineEpoch } from '../src/CosignalEngine.js'
+import { armArenaCheck } from './arena-checker.js'
 import {
 	comparableEvents,
 	snapshotModel,
 	type DiffResult,
 	type EngineAdapter,
-} from '../../cosignals-oracle/src/adapter.js';
-import { CosignalModel, type ModelEvent } from '../../cosignals-oracle/src/model.js';
-import { applyOneOp, buildTopology, Q_EQUALS, type ScheduleOp, type WriteKind } from '../../cosignals-oracle/src/schedule.js';
-import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
-import { attachRefereeStream } from './trace-events.js';
+} from '../../cosignals-oracle/src/adapter.js'
+import { CosignalModel, type ModelEvent } from '../../cosignals-oracle/src/model.js'
+import {
+	applyOneOp,
+	buildTopology,
+	Q_EQUALS,
+	type ScheduleOp,
+	type WriteKind,
+} from '../../cosignals-oracle/src/schedule.js'
+import {
+	mountEngineCoreEffect,
+	mountEngineReactEffect,
+	mountEngineReactEffectPick,
+	mountEngineReactEffectWrite,
+} from './helpers.js'
+import { attachRefereeStream } from './trace-events.js'
 
 // (The TraceEvent ≡ ModelEvent type-parity pin moved to trace-events.ts,
 // beside the decoder — the only producer of the engine-side shape now.)
 
 /** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
 export function buildEngineTopology(b: CosignalEngine) {
-	const flag = b.atom('flag', 0);
-	const a = b.atom('a', 0);
-	const bb = b.atom('b', 0);
-	const r = b.atom('r', 0);
-	const cFlip = b.computed('cFlip', (read) => (read(flag) ? read(a) : read(bb)));
-	const cSum = b.computed('cSum', (read) => (read(a) as number) + (read(bb) as number) + (read(r) as number));
-	const cChain = b.computed('cChain', (read) => (read(cFlip) as number) + 10);
-	const cMix = b.computed('cMix', (read, untracked) => (read(bb) as number) + (untracked(a) as number));
+	const flag = b.atom('flag', 0)
+	const a = b.atom('a', 0)
+	const bb = b.atom('b', 0)
+	const r = b.atom('r', 0)
+	const cFlip = b.computed('cFlip', (read) => (read(flag) ? read(a) : read(bb)))
+	const cSum = b.computed(
+		'cSum',
+		(read) => (read(a) as number) + (read(bb) as number) + (read(r) as number),
+	)
+	const cChain = b.computed('cChain', (read) => (read(cFlip) as number) + 10)
+	const cMix = b.computed(
+		'cMix',
+		(read, untracked) => (read(bb) as number) + (untracked(a) as number),
+	)
 	// Appended AFTER the core eight (the op-index slices stay stable):
 	// q = the custom-equals member, out1/out2 = the disjoint
 	// effect-output subset writing core effects target.
-	const q = b.atom('q', 0, Q_EQUALS);
-	const out1 = b.atom('out1', 0);
-	const out2 = b.atom('out2', 0);
-	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2] };
+	const q = b.atom('q', 0, Q_EQUALS)
+	const out1 = b.atom('out1', 0)
+	const out2 = b.atom('out2', 0)
+	// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	// The converged-terminal cluster (mirrors buildTopology): appended LAST so
+	// the op-index slices stay stable; disjoint — tap (trigger), sig (bug-1
+	// terminal dep, core-written), sib (bug-2 sibling dep, terminal-written).
+	const tap = b.atom('tap', 0)
+	const sig = b.atom('sig', 0)
+	const sib = b.atom('sib', 0)
+	return {
+		atoms: [flag, a, bb, r],
+		computeds: [cFlip, cSum, cChain, cMix],
+		q,
+		outs: [out1, out2],
+		tap,
+		sig,
+		sib,
+	}
 }
 
 /**
@@ -70,38 +102,49 @@ export function buildEngineTopology(b: CosignalEngine) {
  * population itself to keep op resolution identical on both sides. Purely
  * an indexing-fidelity shim — no tolerance.
  */
-type EntityRegistry = { batches: number[]; renderPasses: number[]; outWriters: Set<string> };
+type EntityRegistry = {
+	batches: number[]
+	renderPasses: number[]
+	outWriters: Set<string>
+	writerEffects: Set<number>
+}
 
 /** Keyed by ENGINE EPOCH (one schedule = one reset = one epoch): the engine
  * surface is a singleton, so object keying would leak the previous
  * schedule's registry into the next. */
-const registries = new Map<number, EntityRegistry>();
+const registries = new Map<number, EntityRegistry>()
 
 function registryOf(_b: CosignalEngine): EntityRegistry {
-	let r = registries.get(engineEpoch);
+	let r = registries.get(engineEpoch)
 	if (r === undefined) {
-		r = { batches: [], renderPasses: [], outWriters: new Set() };
-		registries.set(engineEpoch, r);
+		r = { batches: [], renderPasses: [], outWriters: new Set(), writerEffects: new Set() }
+		registries.set(engineEpoch, r)
 	}
-	return r;
+	return r
 }
 
 function batchAt(b: CosignalEngine, index: number): number | undefined {
-	const ids = registryOf(b).batches;
-	if (ids.length === 0) throw new ScheduleError('no batches yet');
-	return ids[index % ids.length];
+	const ids = registryOf(b).batches
+	if (ids.length === 0) {
+		throw new ScheduleError('no batches yet')
+	}
+	return ids[index % ids.length]
 }
 
 function renderPassAt(b: CosignalEngine, index: number): number {
-	const ids = registryOf(b).renderPasses;
-	if (ids.length === 0) throw new ScheduleError('no render passes yet');
-	return ids[index % ids.length]!;
+	const ids = registryOf(b).renderPasses
+	if (ids.length === 0) {
+		throw new ScheduleError('no render passes yet')
+	}
+	return ids[index % ids.length]
 }
 
 function watcherAt(b: CosignalEngine, index: number): number {
-	const ids = [...b.watchers.keys()];
-	if (ids.length === 0) throw new ScheduleError('no watchers yet');
-	return ids[index % ids.length]!;
+	const ids = [...b.watchers.keys()]
+	if (ids.length === 0) {
+		throw new ScheduleError('no watchers yet')
+	}
+	return ids[index % ids.length]
 }
 
 /** Mirrors the model's `effectAt`: index over react-effect ids in creation
@@ -110,10 +153,14 @@ function watcherAt(b: CosignalEngine, index: number): number {
  * is exactly the model's reactEffects key sequence, by INDEX; the id VALUES
  * diverge once a core effect mounts, which is why resolution is positional). */
 function effectAt(b: CosignalEngine, index: number): number {
-	const ids: number[] = [];
-	for (const effect of b.idToSignalEffect.values()) ids.push(effect.id);
-	if (ids.length === 0) throw new ScheduleError('no react effects yet');
-	return ids[index % ids.length]!;
+	const ids: number[] = []
+	for (const effect of b.idToSignalEffect.values()) {
+		ids.push(effect.id)
+	}
+	if (ids.length === 0) {
+		throw new ScheduleError('no react effects yet')
+	}
+	return ids[index % ids.length]
 }
 
 /** Per-engine count of applyEngineOp calls: the tracer-independent uniq
@@ -121,7 +168,20 @@ function effectAt(b: CosignalEngine, index: number): number {
  * object channel died. Only per-engine uniqueness and run-to-run determinism
  * matter here — when NAME PARITY with the model matters (lockstep), the
  * differ supplies the model's own event count as `namingEvents`. */
-const appliedOps = new Map<number, number>();
+const appliedOps = new Map<number, number>()
+
+/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+ * Per-schedule ordinal for the terminal band's react-effect mounts — the
+ * model's `terminalReactMounts` twin. Ticked per APPLIED
+ * mountTermReader/mountSibWriter (same order), so the `E${uniq}#T${k}` names
+ * agree even when terminals mount at rest (no seq/event/epoch advance to make
+ * the uniq unique). Keyed by engine epoch (one per schedule reset). */
+const terminalReactMounts = new Map<number, number>()
+function nextTerminalMount(): number {
+	const k = terminalReactMounts.get(engineEpoch) ?? 0
+	terminalReactMounts.set(engineEpoch, k + 1)
+	return k
+}
 
 /** Apply ONE schedule op to an engine holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
@@ -130,109 +190,239 @@ const appliedOps = new Map<number, number>();
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
  * so name parity requires the MODEL's count — the differ supplies it. */
 export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: number): boolean {
-	const allNodes = __TEST__eachInternals();
-	const atoms = allNodes.filter((n): n is AtomInternals => n.kind === 'atom').slice(0, 4);
-	const nodes = allNodes.slice(0, 8);
+	const allNodes = __TEST__eachInternals()
+	const atoms = allNodes.filter((n): n is AtomInternals => n.kind === 'atom').slice(0, 4)
+	const nodes = allNodes.slice(0, 8)
 	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
 	 * pair (0 = set, 1 = update) — the adapter's op-literal twin of the
 	 * model-side writeOp in the oracle's schedule.ts. */
 	const writeScalarsFor = (kind: WriteKind, value: number): [0 | 1, unknown] => {
 		switch (kind) {
-			case 'set': return [0, value];
-			case 'inc': return [1, (p: unknown) => (p as number) + 1];
-			case 'double': return [1, (p: unknown) => (p as number) * 2];
-			case 'equalNewest': return [0, value]; // resolved by the caller against the target atom
+			case 'set':
+				return [0, value]
+			case 'inc':
+				return [1, (p: unknown) => (p as number) + 1]
+			case 'double':
+				return [1, (p: unknown) => (p as number) * 2]
+			case 'equalNewest':
+				return [0, value] // resolved by the caller against the target atom
 		}
-	};
+	}
 	const writeScalars = (kind: WriteKind, value: number, atomIdx: number): [0 | 1, unknown] => {
 		switch (kind) {
-			case 'set': return [0, value];
-			case 'inc': return [1, (p: unknown) => (p as number) + 1];
-			case 'double': return [1, (p: unknown) => (p as number) * 2];
-			case 'equalNewest': return [0, b.newestValue(atoms[atomIdx]!)];
+			case 'set':
+				return [0, value]
+			case 'inc':
+				return [1, (p: unknown) => (p as number) + 1]
+			case 'double':
+				return [1, (p: unknown) => (p as number) * 2]
+			case 'equalNewest':
+				return [0, b.newestValue(atoms[atomIdx])]
 		}
-	};
-	const opIndex = (appliedOps.get(engineEpoch) ?? 0) + 1;
-	appliedOps.set(engineEpoch, opIndex);
-	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`;
-	const reg = registryOf(b);
+	}
+	const opIndex = (appliedOps.get(engineEpoch) ?? 0) + 1
+	appliedOps.set(engineEpoch, opIndex)
+	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`
+	const reg = registryOf(b)
 	/** bareWrite may create the ambient batch — mirror the model's map growth. */
 	const syncAmbient = (): void => {
-		const amb = b.ambientBatch;
-		if (amb !== undefined && reg.batches[reg.batches.length - 1] !== amb && !reg.batches.includes(amb)) {
-			reg.batches.push(amb);
+		const amb = b.ambientBatch
+		if (
+			amb !== undefined &&
+			reg.batches[reg.batches.length - 1] !== amb &&
+			!reg.batches.includes(amb)
+		) {
+			reg.batches.push(amb)
 		}
-	};
+	}
 	try {
 		switch (op.t) {
-			case 'open': reg.batches.push(b.openBatch({ action: op.action }).id); break;
+			case 'open':
+				reg.batches.push(b.openBatch({ action: op.action }).id)
+				break
 			case 'write': {
-				const atom = atoms[op.atom % atoms.length]!;
-				b.write(batchAt(b, op.batch), atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
-				syncAmbient(); // a writing core effect's nested bare write can create the ambient batch
-				break;
+				const atom = atoms[op.atom % atoms.length]
+				b.write(
+					batchAt(b, op.batch),
+					atom,
+					...writeScalars(op.kind, op.value, op.atom % atoms.length),
+				)
+				syncAmbient() // a writing core effect's nested bare write can create the ambient batch
+				break
 			}
 			case 'bareWrite': {
-				const atom = atoms[op.atom % atoms.length]!;
-				b.bareWrite(atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
-				syncAmbient();
-				break;
+				const atom = atoms[op.atom % atoms.length]
+				b.bareWrite(atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length))
+				syncAmbient()
+				break
 			}
 			case 'writeQ': {
-				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!;
-				b.write(batchAt(b, op.batch), q, ...(op.kind === 'equalNewest' ? ([0, b.newestValue(q)] as [0, unknown]) : writeScalarsFor(op.kind, op.value)));
-				syncAmbient(); // a writing core effect's nested bare write can create the ambient batch
-				break;
+				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!
+				b.write(
+					batchAt(b, op.batch),
+					q,
+					...(op.kind === 'equalNewest'
+						? ([0, b.newestValue(q)] as [0, unknown])
+						: writeScalarsFor(op.kind, op.value)),
+				)
+				syncAmbient() // a writing core effect's nested bare write can create the ambient batch
+				break
 			}
 			case 'bareWriteQ': {
-				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!;
-				b.bareWrite(q, ...(op.kind === 'equalNewest' ? [0, b.newestValue(q)] as [0, unknown] : writeScalarsFor(op.kind, op.value)));
-				syncAmbient();
-				break;
+				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!
+				b.bareWrite(
+					q,
+					...(op.kind === 'equalNewest'
+						? ([0, b.newestValue(q)] as [0, unknown])
+						: writeScalarsFor(op.kind, op.value)),
+				)
+				syncAmbient()
+				break
 			}
-			case 'settle': b.settleAction(batchAt(b, op.batch)!); break;
-			case 'retire': b.retire(batchAt(b, op.batch)!); break;
-			case 'renderStart': reg.renderPasses.push(b.renderStart(op.root, op.include.map((i) => batchAt(b, i)!)).id); break;
-			case 'yield': b.renderYield(renderPassAt(b, op.renderPass)); break;
-			case 'resume': b.renderResume(renderPassAt(b, op.renderPass)); break;
-			case 'end': b.renderEnd(renderPassAt(b, op.renderPass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(b, i)!) }); break;
-			case 'mount': b.mountWatcher(renderPassAt(b, op.renderPass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
-			case 'render': b.renderWatcher(renderPassAt(b, op.renderPass), watcherAt(b, op.watcher)); break;
-			case 'reactEffect': mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
+			case 'settle':
+				b.settleAction(batchAt(b, op.batch)!)
+				break
+			case 'retire':
+				b.retire(batchAt(b, op.batch)!)
+				break
+			case 'renderStart':
+				reg.renderPasses.push(
+					b.renderStart(
+						op.root,
+						op.include.map((i) => batchAt(b, i)!),
+					).id,
+				)
+				break
+			case 'yield':
+				b.renderYield(renderPassAt(b, op.renderPass))
+				break
+			case 'resume':
+				b.renderResume(renderPassAt(b, op.renderPass))
+				break
+			case 'end':
+				b.renderEnd(renderPassAt(b, op.renderPass), op.kind, {
+					retireAtCommit: op.retireAtCommit.map((i) => batchAt(b, i)!),
+				})
+				break
+			case 'mount':
+				b.mountWatcher(renderPassAt(b, op.renderPass), nodes[op.node % nodes.length], `W${uniq}`)
+				break
+			case 'render':
+				b.renderWatcher(renderPassAt(b, op.renderPass), watcherAt(b, op.watcher))
+				break
+			case 'reactEffect':
+				mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length], `E${uniq}`)
+				break
 			case 'reactEffectPick':
 				mountEngineReactEffectPick(
-					b, op.root,
-					nodes[op.sel % nodes.length]!, nodes[op.a % nodes.length]!, nodes[op.b % nodes.length]!,
+					b,
+					op.root,
+					nodes[op.sel % nodes.length],
+					nodes[op.a % nodes.length],
+					nodes[op.b % nodes.length],
 					`E${uniq}`,
-				);
-				break;
-			case 'removeReactEffect': b.removeSignalEffect(effectAt(b, op.effect)); break;
-			case 'replayReactEffect': b.replaySignalEffect(effectAt(b, op.effect)); break;
-			case 'coreEffect': mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`); break;
+				)
+				break
+			case 'removeReactEffect':
+				b.removeSignalEffect(effectAt(b, op.effect))
+				break
+			case 'replayReactEffect': {
+				// Symmetric with the model: force-replay of a WRITING terminal is
+				// scoped out (test-surface replay pollutes the trace-only values
+				// snapshot via committed-arena materialization; see model.ts).
+				const id = effectAt(b, op.effect)
+				if (reg.writerEffects.has(id)) {
+					throw new ScheduleError('writing terminals are not force-replayable in the referee')
+				}
+				b.replaySignalEffect(id)
+				break
+			}
+			case 'coreEffect':
+				mountEngineCoreEffect(b, nodes[op.node % nodes.length], `CE${uniq}`)
+				break
 			case 'coreEffectWrite': {
-				const outName = op.out % 2 === 0 ? 'out1' : 'out2';
+				const outName = op.out % 2 === 0 ? 'out1' : 'out2'
 				// One writer per output atom (mirrors the model's legality —
 				// sibling firing order is implementation-defined, so a shared
 				// output's final value would be order-dependent).
-				if (reg.outWriters.has(outName)) throw new ScheduleError(`output atom ${outName} already has a writing effect`);
-				const out = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === outName)!;
-				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`, out);
-				reg.outWriters.add(outName);
-				break;
+				if (reg.outWriters.has(outName)) {
+					throw new ScheduleError(`output atom ${outName} already has a writing effect`)
+				}
+				const out = allNodes.find(
+					(n): n is AtomInternals => n.kind === 'atom' && n.name === outName,
+				)!
+				mountEngineCoreEffect(b, nodes[op.node % nodes.length], `CE${uniq}`, out)
+				reg.outWriters.add(outName)
+				break
 			}
-			case 'discardAllWip': b.discardAllWip(); break;
+			// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+			// The converged-terminal band (applyOneOp twins). `namedAtom` resolves
+			// the disjoint cluster by name — appended after the core eight, so the
+			// positional node lookups above are untouched.
+			case 'mountTermReader': {
+				const dep = allNodes.find(
+					(n): n is AtomInternals =>
+						n.kind === 'atom' && n.name === (op.dep % 2 === 0 ? 'sig' : 'sib'),
+				)!
+				mountEngineReactEffect(b, op.root, dep, `E${uniq}#T${nextTerminalMount()}`)
+				break
+			}
+			case 'mountTapCore': {
+				// One writer per `sig` (the model's legality; order-freedom).
+				if (reg.outWriters.has('sig')) {
+					throw new ScheduleError('sig already has a writing effect')
+				}
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
+				const sig = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sig')!
+				mountEngineCoreEffect(b, tap, `CE${uniq}`, sig)
+				reg.outWriters.add('sig')
+				break
+			}
+			case 'mountSibWriter': {
+				// QUIET-ONLY (b.quiet is the model's isQuiet twin): confine the
+				// body's sib write to the quiet fold path, never a batch.
+				if (!b.quiet) {
+					throw new ScheduleError('the writing terminal mounts only on the quiet path')
+				}
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
+				const sib = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sib')!
+				const w = mountEngineReactEffectWrite(
+					b,
+					op.root,
+					tap,
+					sib,
+					`E${uniq}#T${nextTerminalMount()}`,
+				)
+				reg.writerEffects.add(w.id) // tag the writer — force-replay is scoped out (see the model's replayReactEffect)
+				break
+			}
+			case 'writeTap': {
+				// QUIET-ONLY — the engine's `quiet` getter is the model's isQuiet
+				// twin, so legality is decided identically on both sides.
+				if (!b.quiet) {
+					throw new ScheduleError('tap writes only on the quiet path')
+				}
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!
+				b.bareWrite(tap, 0, op.value)
+				break
+			}
+			case 'discardAllWip':
+				b.discardAllWip()
+				break
 			case 'quiesce':
-				b.quiesce();
+				b.quiesce()
 				// The model drops every retired batch and ended render here; at
 				// quiescence that is all of them (no live batches/renders remain).
-				reg.batches.length = 0;
-				reg.renderPasses.length = 0;
-				break;
+				reg.batches.length = 0
+				reg.renderPasses.length = 0
+				break
 		}
-		return true;
+		return true
 	} catch (err) {
-		if (err instanceof ScheduleError) return false;
-		throw err;
+		if (err instanceof ScheduleError) {
+			return false
+		}
+		throw err
 	}
 }
 
@@ -244,28 +434,34 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
  * `snapshotModel` reads the engine's observables — engine internals
  * (kernel arena, union edges, memos) are never compared.
  */
-export function engineAsAdapter(): EngineAdapter & { engine: CosignalEngine; __syncNamingEvents(n: number): void } {
+export function engineAsAdapter(): EngineAdapter & {
+	engine: CosignalEngine
+	__syncNamingEvents(n: number): void
+} {
 	// THE ONE ENGINE, reset per schedule (the fresh-model analog). A test
 	// may legitimately end mid-episode; close it out before the reset's
 	// idle preconditions run (the helpers.ts drain, inlined).
-	engine.discardAllWip();
+	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id);
-		else engine.retire(t.id);
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
 	// devChecks armed (an engine-inert switch): the corpus referees the
 	// engine with it on, proving the flag perturbs no engine semantics.
 	// R-5: devChecks harnesses that open batches attach a driver first —
 	// the minimal context-free driver (explicit ids drive the writes).
-	__TEST__resetEngine({ devChecks: true });
-	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
-	const b = engine;
+	__TEST__resetEngine({ devChecks: true })
+	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined })
+	const b = engine
 	// BatchIds are monotonic across resets; the model restarts at 1 — the
 	// adapter rebases engine event batch ids into the model's space.
-	const batchIdBase = __TEST__peekNextBatchId() - 1;
+	const batchIdBase = __TEST__peekNextBatchId() - 1
 	// The engine's event stream: a lossless session tracer decoded on demand
 	// (the packed records are the only event channel; tests/trace-events.ts).
-	const stream = attachRefereeStream(b);
+	const stream = attachRefereeStream(b)
 	// PRODUCTION write semantics: the engine quiet-folds bare writes at rest
 	// and the model mirrors the same derivation and fold, so the corpus
 	// referees the real default write path ('quiet-write' is a compared
@@ -274,16 +470,16 @@ export function engineAsAdapter(): EngineAdapter & { engine: CosignalEngine; __s
 	// every live arena's shadows from the arena's own walks and compares
 	// against fold-truth (plus the structural validator) — the corpus runs
 	// with the referee that owns the stage's STOP condition.
-	armArenaCheck(b);
-	buildEngineTopology(b);
-	let drained = 0;
-	let namingEvents: number | undefined;
+	armArenaCheck(b)
+	buildEngineTopology(b)
+	let drained = 0
+	let namingEvents: number | undefined
 	return {
 		engine: b,
 		/** Name parity under the ⊆ delivery bound: the differ reports the
 		 * model's pre-op event count so `${events}.…` names match its. */
 		__syncNamingEvents(n: number): void {
-			namingEvents = n;
+			namingEvents = n
 		},
 		apply: (op) => (applyEngineOp(b, op, namingEvents) ? 'applied' : 'skipped'),
 		// snapshotModel reads the model shape structurally (idToNode, roots,
@@ -294,18 +490,20 @@ export function engineAsAdapter(): EngineAdapter & { engine: CosignalEngine; __s
 			snapshotModel(
 				Object.assign(Object.create(b as object), {
 					idToNode: new Map(__TEST__eachInternals().map((n) => [n.id, n])),
-				}) as unknown as CosignalModel,
+				}),
 			),
 		drainEvents() {
-			const events = stream.events;
+			const events = stream.events
 			const out = comparableEvents(events.slice(drained) as ModelEvent[]).map((e) => {
-				const batch = (e as { batch?: number }).batch;
-				return typeof batch === 'number' && batch > 0 ? ({ ...e, batch: batch - batchIdBase } as ModelEvent) : e;
-			});
-			drained = events.length;
-			return out;
+				const batch = (e as { batch?: number }).batch
+				return typeof batch === 'number' && batch > 0
+					? ({ ...e, batch: batch - batchIdBase } as ModelEvent)
+					: e
+			})
+			drained = events.length
+			return out
 		},
-	};
+	}
 }
 
 // ---- the tolerant differ ----------------------------------------------------
@@ -332,7 +530,7 @@ export function engineAsAdapter(): EngineAdapter & { engine: CosignalEngine; __s
 // throws InvariantViolation whenever divergence hidden by a mount
 // fast-out is not covered by correctives.
 
-const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
+const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective'])
 
 /**
  * Sibling core-effect firing order is implementation-defined (owner
@@ -359,54 +557,67 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 	// sibling order is implementation-defined, so seq assignment within the
 	// sibling block is a quotient of the same ruling.
 	const isOutWrite = (e: ModelEvent): boolean =>
-		e.type === 'quiet-write' && ((e as { node?: string }).node === 'out1' || (e as { node?: string }).node === 'out2');
-	const inBlock = (e: ModelEvent): boolean => e.type === 'core-effect-run' || isOutWrite(e);
-	const out = events.slice();
-	let i = 0;
+		e.type === 'quiet-write' &&
+		((e as { node?: string }).node === 'out1' || (e as { node?: string }).node === 'out2')
+	const inBlock = (e: ModelEvent): boolean => e.type === 'core-effect-run' || isOutWrite(e)
+	const out = events.slice()
+	let i = 0
 	while (i < out.length) {
-		if (out[i]!.type !== 'core-effect-run') {
-			i++;
-			continue;
+		if (out[i].type !== 'core-effect-run') {
+			i++
+			continue
 		}
-		let j = i + 1;
-		while (j < out.length && inBlock(out[j]!)) j++;
+		let j = i + 1
+		while (j < out.length && inBlock(out[j])) {
+			j++
+		}
 		// Trim trailing non-run events only if the block contains ≥2 runs or
 		// any out-write (a lone run needs no canonicalization).
-		const block = out.slice(i, j);
-		const runCount = block.filter((e) => e.type === 'core-effect-run').length;
+		const block = out.slice(i, j)
+		const runCount = block.filter((e) => e.type === 'core-effect-run').length
 		if (runCount > 1 || (runCount === 1 && block.length > 1)) {
 			// Group into units: one run + its following out-writes.
-			type Unit = { key: [string, string]; events: ModelEvent[] };
-			const units: Unit[] = [];
+			type Unit = { key: [string, string]; events: ModelEvent[] }
+			const units: Unit[] = []
 			for (const e of block) {
 				if (e.type === 'core-effect-run') {
-					const r = e as Extract<ModelEvent, { type: 'core-effect-run' }>;
-					units.push({ key: [r.effect, String(r.value)], events: [e] });
+					const r = e
+					units.push({ key: [r.effect, String(r.value)], events: [e] })
 				} else {
-					units[units.length - 1]!.events.push(e); // an out-write always follows its run
+					units[units.length - 1].events.push(e) // an out-write always follows its run
 				}
 			}
 			units.sort((a, b) =>
-				a.key[0] < b.key[0] ? -1 : a.key[0] > b.key[0] ? 1 :
-				a.key[1] < b.key[1] ? -1 : a.key[1] > b.key[1] ? 1 : 0);
+				a.key[0] < b.key[0]
+					? -1
+					: a.key[0] > b.key[0]
+						? 1
+						: a.key[1] < b.key[1]
+							? -1
+							: a.key[1] > b.key[1]
+								? 1
+								: 0,
+			)
 			// Renumber the block's quiet-write seqs positionally (ascending
 			// pool, canonical order) — clone events, never mutate the stream.
 			const seqPool = block
 				.filter(isOutWrite)
 				.map((e) => (e as { seq: number }).seq)
-				.sort((a, b) => a - b);
-			let seqIx = 0;
-			const flat: ModelEvent[] = [];
+				.sort((a, b) => a - b)
+			let seqIx = 0
+			const flat: ModelEvent[] = []
 			for (const u of units) {
 				for (const e of u.events) {
-					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++]! } as ModelEvent) : e);
+					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++] } as ModelEvent) : e)
 				}
 			}
-			for (let k = i; k < j; k++) out[k] = flat[k - i]!;
+			for (let k = i; k < j; k++) {
+				out[k] = flat[k - i]!
+			}
 		}
-		i = j;
+		i = j
 	}
-	return out;
+	return out
 }
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
@@ -418,14 +629,16 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
  * the first notification and logs 'delivery'. One notification either way;
  * pooling keys the invariant on the decision, not its mode. */
 function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
-	const out = new Map<string, number>();
+	const out = new Map<string, number>()
 	for (const e of events) {
-		if (!DELIVERYISH.has(e.type)) continue;
-		const d = e as unknown as { watcher: string; batch: number; slot: number };
-		const key = `${d.watcher}|${d.batch}|${d.slot}`;
-		out.set(key, (out.get(key) ?? 0) + 1);
+		if (!DELIVERYISH.has(e.type)) {
+			continue
+		}
+		const d = e as unknown as { watcher: string; batch: number; slot: number }
+		const key = `${d.watcher}|${d.batch}|${d.slot}`
+		out.set(key, (out.get(key) ?? 0) + 1)
 	}
-	return out;
+	return out
 }
 
 export function diffAgainstModelTolerant(
@@ -433,52 +646,71 @@ export function diffAgainstModelTolerant(
 	ops: ScheduleOp[],
 	seed?: number,
 ): DiffResult {
-	const m = new CosignalModel();
-	buildTopology(m);
-	let drained = 0;
-	const modelPool = new Map<string, number>();
-	const engineUsed = new Map<string, number>();
-	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; engine?: CosignalEngine };
-	const dpc = namedEngine.engine !== undefined ? new DeliveryPrecedesCorrection(namedEngine.engine) : undefined;
+	const m = new CosignalModel()
+	buildTopology(m)
+	let drained = 0
+	const modelPool = new Map<string, number>()
+	const engineUsed = new Map<string, number>()
+	const namedEngine = engine as EngineAdapter & {
+		__syncNamingEvents?(n: number): void
+		engine?: CosignalEngine
+	}
+	const dpc =
+		namedEngine.engine !== undefined
+			? new DeliveryPrecedesCorrection(namedEngine.engine)
+			: undefined
 	for (let step = 0; step < ops.length; step++) {
-		const namingEvents = m.events.length; // the model's pre-op count — its uniq naming input
-		const ok = applyOneOp(m, ops[step]!);
-		const mEvents = comparableEvents(m.events.slice(drained));
-		drained = m.events.length;
-		namedEngine.__syncNamingEvents?.(namingEvents);
-		dpc?.beforeOp(ops[step]!);
-		const applied = engine.apply(ops[step]!);
+		const namingEvents = m.events.length // the model's pre-op count — its uniq naming input
+		const ok = applyOneOp(m, ops[step])
+		const mEvents = comparableEvents(m.events.slice(drained))
+		drained = m.events.length
+		namedEngine.__syncNamingEvents?.(namingEvents)
+		dpc?.beforeOp(ops[step])
+		const applied = engine.apply(ops[step])
 		if (applied !== (ok ? 'applied' : 'skipped')) {
-			return { seed, step, message: `legality diverged: engine ${applied}, model ${ok ? 'applied' : 'skipped'}` };
-		}
-		const snap = JSON.stringify(engine.snapshot());
-		const expectedSnap = JSON.stringify(snapshotModel(m));
-		if (snap !== expectedSnap) {
-			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnap}` };
-		}
-		const eEvents = engine.drainEvents();
-		// Same-step core-effect-run blocks compare as a multiset (the ruling's
-		// mechanical form — see canonicalizeCoreEffectBlocks).
-		const mRest = JSON.stringify(canonicalizeCoreEffectBlocks(mEvents.filter((e) => !DELIVERYISH.has(e.type))));
-		const eRest = JSON.stringify(canonicalizeCoreEffectBlocks(eEvents.filter((e) => !DELIVERYISH.has(e.type))));
-		if (mRest !== eRest) {
-			return { seed, step, message: `events diverged:\nengine ${eRest}\nmodel  ${mRest}` };
-		}
-		for (const [key, n] of deliveryKeyCounts(mEvents)) modelPool.set(key, (modelPool.get(key) ?? 0) + n);
-		for (const [key, n] of deliveryKeyCounts(eEvents)) {
-			const used = (engineUsed.get(key) ?? 0) + n;
-			engineUsed.set(key, used);
-			if (used > (modelPool.get(key) ?? 0)) {
-				return {
-					seed, step,
-					message: `delivery decisions exceeded the union-conservative bound: ${key} engine ×${used} vs model ×${modelPool.get(key) ?? 0}`,
-				};
+			return {
+				seed,
+				step,
+				message: `legality diverged: engine ${applied}, model ${ok ? 'applied' : 'skipped'}`,
 			}
 		}
-		const dpcFail = dpc?.afterOp(ops[step]!, eEvents);
-		if (dpcFail !== undefined) return { seed, step, message: dpcFail };
+		const snap = JSON.stringify(engine.snapshot())
+		const expectedSnap = JSON.stringify(snapshotModel(m))
+		if (snap !== expectedSnap) {
+			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnap}` }
+		}
+		const eEvents = engine.drainEvents()
+		// Same-step core-effect-run blocks compare as a multiset (the ruling's
+		// mechanical form — see canonicalizeCoreEffectBlocks).
+		const mRest = JSON.stringify(
+			canonicalizeCoreEffectBlocks(mEvents.filter((e) => !DELIVERYISH.has(e.type))),
+		)
+		const eRest = JSON.stringify(
+			canonicalizeCoreEffectBlocks(eEvents.filter((e) => !DELIVERYISH.has(e.type))),
+		)
+		if (mRest !== eRest) {
+			return { seed, step, message: `events diverged:\nengine ${eRest}\nmodel  ${mRest}` }
+		}
+		for (const [key, n] of deliveryKeyCounts(mEvents)) {
+			modelPool.set(key, (modelPool.get(key) ?? 0) + n)
+		}
+		for (const [key, n] of deliveryKeyCounts(eEvents)) {
+			const used = (engineUsed.get(key) ?? 0) + n
+			engineUsed.set(key, used)
+			if (used > (modelPool.get(key) ?? 0)) {
+				return {
+					seed,
+					step,
+					message: `delivery decisions exceeded the union-conservative bound: ${key} engine ×${used} vs model ×${modelPool.get(key) ?? 0}`,
+				}
+			}
+		}
+		const dpcFail = dpc?.afterOp(ops[step], eEvents)
+		if (dpcFail !== undefined) {
+			return { seed, step, message: dpcFail }
+		}
 	}
-	return undefined;
+	return undefined
 }
 
 // ---- the scoped delivery-precedes-correction fuzz invariant ------------------
@@ -505,35 +737,36 @@ export function diffAgainstModelTolerant(
 // re-arm dedup; commits re-baseline lastRenderedValue) and after each
 // correction (which also resets the engine's dedup bits).
 
-type DpcMark = { seq: number; notified: boolean; disarmed: boolean; boundaries: number };
+type DpcMark = { seq: number; notified: boolean; disarmed: boolean; boundaries: number }
 
 class DeliveryPrecedesCorrection {
-	private marks = new Map<string, DpcMark>();
-	private preOpBatchWriteSeq = 0;
+	private marks = new Map<string, DpcMark>()
+	private preOpBatchWriteSeq = 0
 
 	constructor(private engine: CosignalEngine) {}
 
 	private resetAll(): void {
-		this.marks.clear();
+		this.marks.clear()
 	}
 
 	private markOf(name: string): DpcMark {
-		let mk = this.marks.get(name);
+		let mk = this.marks.get(name)
 		if (mk === undefined) {
-			mk = { seq: this.engine.seq, notified: false, disarmed: false, boundaries: 0 };
-			this.marks.set(name, mk);
+			mk = { seq: this.engine.seq, notified: false, disarmed: false, boundaries: 0 }
+			this.marks.set(name, mk)
 		}
-		return mk;
+		return mk
 	}
 
 	/** Resolve the retiring batch's last write seq BEFORE the op applies
 	 * (retirement can reclaim the record). */
 	beforeOp(op: ScheduleOp): void {
-		this.preOpBatchWriteSeq = 0;
+		this.preOpBatchWriteSeq = 0
 		if (op.t === 'retire' || op.t === 'settle') {
 			try {
-				const id = batchAt(this.engine, op.batch);
-				this.preOpBatchWriteSeq = (id !== undefined ? this.engine.idToBatch.get(id)?.lastWriteSeq : 0) ?? 0;
+				const id = batchAt(this.engine, op.batch)
+				this.preOpBatchWriteSeq =
+					(id !== undefined ? this.engine.idToBatch.get(id)?.lastWriteSeq : 0) ?? 0
 			} catch {
 				// no batches yet: the op will skip
 			}
@@ -541,22 +774,22 @@ class DeliveryPrecedesCorrection {
 	}
 
 	afterOp(op: ScheduleOp, events: ModelEvent[]): string | undefined {
-		const b = this.engine;
-		const singleBoundary = op.t === 'retire' || op.t === 'settle';
+		const b = this.engine
+		const singleBoundary = op.t === 'retire' || op.t === 'settle'
 		for (const e of events) {
-			const t = e.type;
+			const t = e.type
 			if (t === 'delivery' || t === 'suppressed' || t === 'mount-corrective') {
-				this.markOf((e as unknown as { watcher: string }).watcher).notified = true;
+				this.markOf((e as unknown as { watcher: string }).watcher).notified = true
 			} else if (t === 'reconcile-correction') {
-				const name = (e as unknown as { watcher: string }).watcher;
-				const mk = this.marks.get(name);
+				const name = (e as unknown as { watcher: string }).watcher
+				const mk = this.marks.get(name)
 				if (mk === undefined) {
-					this.markOf(name); // unknown window: initialize, skip
-					continue;
+					this.markOf(name) // unknown window: initialize, skip
+					continue
 				}
-				const w = [...b.watchers.values()].find((x) => x.name === name);
-				const node = w !== undefined ? __TEST__internalsById(w.node) : undefined;
-				const untrackedConsumer = node !== undefined && node.name === 'cMix';
+				const w = [...b.watchers.values()].find((x) => x.name === name)
+				const node = w !== undefined ? __TEST__internalsById(w.node) : undefined
+				const untrackedConsumer = node !== undefined && node.name === 'cMix'
 				if (
 					singleBoundary &&
 					!mk.disarmed &&
@@ -565,29 +798,39 @@ class DeliveryPrecedesCorrection {
 					this.preOpBatchWriteSeq > mk.seq &&
 					!mk.notified
 				) {
-					return `delivery-precedes-correction violated: ${name} corrected at ${op.t} (batch wrote at seq ${this.preOpBatchWriteSeq} > window ${mk.seq}) with no delivery/suppression/corrective since its window opened`;
+					return `delivery-precedes-correction violated: ${name} corrected at ${op.t} (batch wrote at seq ${this.preOpBatchWriteSeq} > window ${mk.seq}) with no delivery/suppression/corrective since its window opened`
 				}
 				// A correction resets the engine's dedup bits: fresh window.
-				this.marks.set(name, { seq: b.seq, notified: false, disarmed: false, boundaries: 0 });
+				this.marks.set(name, { seq: b.seq, notified: false, disarmed: false, boundaries: 0 })
 			}
 		}
 		// Window maintenance from the op stream.
-		if (op.t === 'end' || op.t === 'discardAllWip' || op.t === 'quiesce' || op.t === 'mount' || op.t === 'render') {
-			this.resetAll(); // commits/discards re-baseline; renders re-arm dedup; conservative wholesale reset
+		if (
+			op.t === 'end' ||
+			op.t === 'discardAllWip' ||
+			op.t === 'quiesce' ||
+			op.t === 'mount' ||
+			op.t === 'render'
+		) {
+			this.resetAll() // commits/discards re-baseline; renders re-arm dedup; conservative wholesale reset
 		} else if (singleBoundary) {
-			for (const mk of this.marks.values()) mk.boundaries++;
+			for (const mk of this.marks.values()) {
+				mk.boundaries++
+			}
 		}
 		// A live parked batch anywhere in the window disarms (dead-arena-retreat exclusion).
-		let parked = false;
+		let parked = false
 		for (const batch of b.idToBatch.values()) {
 			if (batch.parked) {
-				parked = true;
-				break;
+				parked = true
+				break
 			}
 		}
 		if (parked) {
-			for (const mk of this.marks.values()) mk.disarmed = true;
+			for (const mk of this.marks.values()) {
+				mk.disarmed = true
+			}
 		}
-		return undefined;
+		return undefined
 	}
 }

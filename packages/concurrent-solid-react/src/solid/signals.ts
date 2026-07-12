@@ -1,29 +1,29 @@
-import type { Disposable, Refreshable } from "./index.js";
+import type { Disposable, Refreshable } from './index.js'
 import {
-  $REFRESH,
-  cleanup,
-  computed,
-  CONFIG_AUTO_DISPOSE,
-  CONFIG_CHILDREN_FORBIDDEN,
-  createRoot,
-  dispose,
-  effect,
-  EFFECT_USER,
-  getObserver,
-  getOwner,
-  NotReadyError,
-  optimisticComputed,
-  optimisticSignal,
-  read,
-  runWithOwner,
-  setMemo,
-  setSignal,
-  signal,
-  trackedEffect,
-  untrack
-} from "./index.js";
-import { emitDiagnostic, registerGraph } from "./dev.js";
-import { globalQueue } from "./scheduler.js";
+	$REFRESH,
+	cleanup,
+	computed,
+	CONFIG_AUTO_DISPOSE,
+	CONFIG_CHILDREN_FORBIDDEN,
+	createRoot,
+	dispose,
+	effect,
+	EFFECT_USER,
+	getObserver,
+	getOwner,
+	NotReadyError,
+	optimisticComputed,
+	optimisticSignal,
+	read,
+	runWithOwner,
+	setMemo,
+	setSignal,
+	signal,
+	trackedEffect,
+	untrack,
+} from './index.js'
+import { emitDiagnostic, registerGraph } from './dev.js'
+import { globalQueue } from './scheduler.js'
 
 /**
  * Low-level reactive-cleanup primitive. Registers a callback that runs when
@@ -65,33 +65,33 @@ import { globalQueue } from "./scheduler.js";
  * ```
  */
 export function onCleanup(fn: Disposable): Disposable {
-  if (__DEV__) {
-    const owner = getOwner();
-    if (!owner) {
-      const message =
-        "[NO_OWNER_CLEANUP] onCleanup called outside a reactive context will never be run";
-      emitDiagnostic({
-        code: "NO_OWNER_CLEANUP",
-        kind: "lifecycle",
-        severity: "warn",
-        message
-      });
-      console.warn(message);
-    } else if (owner._config & CONFIG_CHILDREN_FORBIDDEN) {
-      const message =
-        "[CLEANUP_IN_FORBIDDEN_SCOPE] Cannot use onCleanup inside createTrackedEffect or onSettled; return a cleanup function instead";
-      emitDiagnostic({
-        code: "CLEANUP_IN_FORBIDDEN_SCOPE",
-        kind: "lifecycle",
-        severity: "error",
-        message,
-        ownerId: owner.id,
-        ownerName: (owner as any)._name
-      });
-      throw new Error(message);
-    }
-  }
-  return cleanup(fn);
+	if (__DEV__) {
+		const owner = getOwner()
+		if (!owner) {
+			const message =
+				'[NO_OWNER_CLEANUP] onCleanup called outside a reactive context will never be run'
+			emitDiagnostic({
+				code: 'NO_OWNER_CLEANUP',
+				kind: 'lifecycle',
+				severity: 'warn',
+				message,
+			})
+			console.warn(message)
+		} else if (owner._config & CONFIG_CHILDREN_FORBIDDEN) {
+			const message =
+				'[CLEANUP_IN_FORBIDDEN_SCOPE] Cannot use onCleanup inside createTrackedEffect or onSettled; return a cleanup function instead'
+			emitDiagnostic({
+				code: 'CLEANUP_IN_FORBIDDEN_SCOPE',
+				kind: 'lifecycle',
+				severity: 'error',
+				message,
+				ownerId: owner.id,
+				ownerName: (owner as any)._name,
+			})
+			throw new Error(message)
+		}
+	}
+	return cleanup(fn)
 }
 
 /**
@@ -101,13 +101,13 @@ export function onCleanup(fn: Disposable): Disposable {
  * Reading outside any tracking scope simply returns the current value without
  * creating a subscription.
  */
-export type Accessor<T> = () => T;
-export type SourceAccessor<T> = Refreshable<Accessor<T>>;
+export type Accessor<T> = () => T
+export type SourceAccessor<T> = Refreshable<Accessor<T>>
 
 export function accessor<T>(node: any): SourceAccessor<T> {
-  const fn = read.bind(null, node) as SourceAccessor<T>;
-  (fn as any)[$REFRESH] = node;
-  return fn;
+	const fn = read.bind(null, node) as SourceAccessor<T>
+	;(fn as any)[$REFRESH] = node
+	return fn
 }
 
 /**
@@ -119,76 +119,76 @@ export function accessor<T>(node: any): SourceAccessor<T> {
  * with an updater: `setHandler(() => myHandler)`.
  */
 export type Setter<in out T> = {
-  <U extends T>(
-    ...args: undefined extends T ? [] : [value: Exclude<U, Function> | ((prev: T) => U)]
-  ): undefined extends T ? undefined : U;
-  <U extends T>(value: (prev: T) => U): U;
-  <U extends T>(value: Exclude<U, Function>): U;
-  <U extends T>(value: Exclude<U, Function> | ((prev: T) => U)): U;
-};
+	<U extends T>(
+		...args: undefined extends T ? [] : [value: Exclude<U, Function> | ((prev: T) => U)]
+	): undefined extends T ? undefined : U
+	<U extends T>(value: (prev: T) => U): U
+	<U extends T>(value: Exclude<U, Function>): U
+	<U extends T>(value: Exclude<U, Function> | ((prev: T) => U)): U
+}
 
 /** A `[get, set]` pair returned from `createSignal` / `createOptimistic`. */
-export type Signal<T> = [get: SourceAccessor<T>, set: Setter<T>];
+export type Signal<T> = [get: SourceAccessor<T>, set: Setter<T>]
 
 export type ComputeFunction<Prev, Next extends Prev = Prev> = (
-  v: Prev
-) => PromiseLike<Next> | AsyncIterable<Next> | Next;
+	v: Prev,
+) => PromiseLike<Next> | AsyncIterable<Next> | Next
 export type EffectFunction<Prev, Next extends Prev = Prev> = (
-  v: Next,
-  p?: Prev
-) => (() => void) | void;
+	v: Next,
+	p?: Prev,
+) => (() => void) | void
 export type EffectBundle<Prev, Next extends Prev = Prev> = {
-  effect: EffectFunction<Prev, Next>;
-  error: (err: unknown, cleanup: () => void) => void;
-};
+	effect: EffectFunction<Prev, Next>
+	error: (err: unknown, cleanup: () => void) => void
+}
 
 /** Options shared by every effect primitive. */
 interface BaseEffectOptions {
-  /** Debug name (dev mode only) */
-  name?: string;
+	/** Debug name (dev mode only) */
+	name?: string
 }
 
 /** Options for effect primitives that support deferring/scheduling their initial run (`createEffect`, `createRenderEffect`, `createReaction`). */
 export interface EffectOptions extends BaseEffectOptions {
-  /** When true, defers the initial effect execution until the next change */
-  defer?: boolean;
-  /**
-   * When true, enqueues the initial effect callback through the effect queue instead of running
-   * it synchronously at creation. Lets the initial run participate in transitions -- if any
-   * source throws `NotReadyError` during the compute phase, the callback is held until the
-   * transition settles.
-   *
-   * Primarily for render effects that need transition-aware initial mounts (e.g. the root
-   * `insert()` in `render()`).
-   */
-  schedule?: boolean;
-  /**
-   * Advanced. When true, asserts the compute function returns synchronous
-   * values only (never `PromiseLike` / `AsyncIterable`). Skips the
-   * async-shape probe in `recompute` for a small fixed-cost win per run.
-   * Intended for compiler emissions (`_$effect`) and library code that
-   * provably returns sync values. Returning a Promise or async iterable
-   * from a `sync: true` effect is undefined behavior — the value will be
-   * stored as-is and never awaited.
-   */
-  sync?: boolean;
+	/** When true, defers the initial effect execution until the next change */
+	defer?: boolean
+	/**
+	 * When true, enqueues the initial effect callback through the effect queue instead of running
+	 * it synchronously at creation. Lets the initial run participate in transitions -- if any
+	 * source throws `NotReadyError` during the compute phase, the callback is held until the
+	 * transition settles.
+	 *
+	 * Primarily for render effects that need transition-aware initial mounts (e.g. the root
+	 * `insert()` in `render()`).
+	 */
+	schedule?: boolean
+	/**
+	 * Advanced. When true, asserts the compute function returns synchronous
+	 * values only (never `PromiseLike` / `AsyncIterable`). Skips the
+	 * async-shape probe in `recompute` for a small fixed-cost win per run.
+	 * Intended for compiler emissions (`_$effect`) and library code that
+	 * provably returns sync values. Returning a Promise or async iterable
+	 * from a `sync: true` effect is undefined behavior — the value will be
+	 * stored as-is and never awaited.
+	 */
+	sync?: boolean
 }
 
 /** Options for plain signals created with `createSignal(value)` or `createOptimistic(value)`. */
 export interface SignalOptions<T> {
-  /** Debug name (dev mode only) */
-  name?: string;
-  /**
-   * Custom equality function, or `false` to always notify subscribers.
-   * Defaults to reference equality (`isEqual`). Pass a comparator (e.g.
-   * `(a, b) => a.id === b.id`) for value-based equality, or `false` to
-   * notify on every write regardless of equality.
-   */
-  equals?: false | ((prev: T, next: T) => boolean);
-  /** Suppress dev-mode warnings when writing inside an owned scope */
-  ownedWrite?: boolean;
-  /** Callback invoked when the signal loses all subscribers */
-  unobserved?: () => void;
+	/** Debug name (dev mode only) */
+	name?: string
+	/**
+	 * Custom equality function, or `false` to always notify subscribers.
+	 * Defaults to reference equality (`isEqual`). Pass a comparator (e.g.
+	 * `(a, b) => a.id === b.id`) for value-based equality, or `false` to
+	 * notify on every write regardless of equality.
+	 */
+	equals?: false | ((prev: T, next: T) => boolean)
+	/** Suppress dev-mode warnings when writing inside an owned scope */
+	ownedWrite?: boolean
+	/** Callback invoked when the signal loses all subscribers */
+	unobserved?: () => void
 }
 
 /**
@@ -197,46 +197,46 @@ export interface SignalOptions<T> {
  * (`createSignal(fn)` / `createOptimistic(fn)`).
  */
 export interface MemoOptions<T> {
-  /** Stable identifier for the owner hierarchy */
-  id?: string;
-  /** Debug name (dev mode only) */
-  name?: string;
-  /** When true, the owner is invisible to the ID scheme -- inherits parent ID and doesn't consume a childCount slot */
-  transparent?: boolean;
-  /**
-   * Custom equality function, or `false` to always notify subscribers.
-   * Defaults to reference equality (`isEqual`). Pass a comparator (e.g.
-   * `(a, b) => a.id === b.id`) for value-based equality, or `false` to
-   * notify on every recompute regardless of equality.
-   */
-  equals?: false | ((prev: T, next: T) => boolean);
-  /** Callback invoked when the computed loses all subscribers */
-  unobserved?: () => void;
-  /**
-   * When true, defers the initial computation until the value is first read,
-   * **and** opts the memo into autodisposal — once it has no remaining
-   * subscribers it is torn down and recomputed from scratch on the next read.
-   * Use it for compute-on-demand values that should not retain state across
-   * idle periods. Non-lazy owned memos live for their owner's lifetime and
-   * never autodispose.
-   */
-  lazy?: boolean;
-  /**
-   * Advanced. When true, asserts the compute function returns synchronous
-   * values only (never `PromiseLike` / `AsyncIterable`). Skips the
-   * async-shape probe in `recompute` for a small fixed-cost win per run.
-   * Intended for compiler emissions (`_$memo`) and library code that
-   * provably returns sync values. Returning a Promise or async iterable
-   * from a `sync: true` memo is undefined behavior — the value will be
-   * stored as-is and never awaited.
-   */
-  sync?: boolean;
+	/** Stable identifier for the owner hierarchy */
+	id?: string
+	/** Debug name (dev mode only) */
+	name?: string
+	/** When true, the owner is invisible to the ID scheme -- inherits parent ID and doesn't consume a childCount slot */
+	transparent?: boolean
+	/**
+	 * Custom equality function, or `false` to always notify subscribers.
+	 * Defaults to reference equality (`isEqual`). Pass a comparator (e.g.
+	 * `(a, b) => a.id === b.id`) for value-based equality, or `false` to
+	 * notify on every recompute regardless of equality.
+	 */
+	equals?: false | ((prev: T, next: T) => boolean)
+	/** Callback invoked when the computed loses all subscribers */
+	unobserved?: () => void
+	/**
+	 * When true, defers the initial computation until the value is first read,
+	 * **and** opts the memo into autodisposal — once it has no remaining
+	 * subscribers it is torn down and recomputed from scratch on the next read.
+	 * Use it for compute-on-demand values that should not retain state across
+	 * idle periods. Non-lazy owned memos live for their owner's lifetime and
+	 * never autodispose.
+	 */
+	lazy?: boolean
+	/**
+	 * Advanced. When true, asserts the compute function returns synchronous
+	 * values only (never `PromiseLike` / `AsyncIterable`). Skips the
+	 * async-shape probe in `recompute` for a small fixed-cost win per run.
+	 * Intended for compiler emissions (`_$memo`) and library code that
+	 * provably returns sync values. Returning a Promise or async iterable
+	 * from a `sync: true` memo is undefined behavior — the value will be
+	 * stored as-is and never awaited.
+	 */
+	sync?: boolean
 }
 
 // Magic type that when used at sites where generic types are inferred from, will prevent those sites from being involved in the inference.
 // https://github.com/microsoft/TypeScript/issues/14829
 // TypeScript Discord conversation: https://discord.com/channels/508357248330760243/508357248330760249/911266491024949328
-export type NoInfer<T extends any> = [T][T extends any ? 0 : never];
+export type NoInfer<T extends any> = [T][T extends any ? 0 : never]
 
 /**
  * Creates a simple reactive state with a getter and setter.
@@ -274,27 +274,26 @@ export type NoInfer<T extends any> = [T][T extends any ? 0 : never];
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-signal
  */
-export function createSignal<T>(): Signal<T | undefined>;
-export function createSignal<T>(value: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
+export function createSignal<T>(): Signal<T | undefined>
+export function createSignal<T>(value: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>
 export function createSignal<T>(
-  fn: ComputeFunction<T>,
-  options?: SignalOptions<T> & MemoOptions<T>
-): Signal<T>;
+	fn: ComputeFunction<T>,
+	options?: SignalOptions<T> & MemoOptions<T>,
+): Signal<T>
 export function createSignal<T>(
-  first?: T | ComputeFunction<T>,
-  second?: SignalOptions<T> & MemoOptions<T>
+	first?: T | ComputeFunction<T>,
+	second?: SignalOptions<T> & MemoOptions<T>,
 ): Signal<T | undefined> {
-  if (typeof first === "function") {
-    const node = computed<T>(first as any, second as any);
-    node._config &= ~CONFIG_AUTO_DISPOSE;
-    return [
-      accessor<T | undefined>(node),
-      setMemo.bind(null, node as any) as Setter<T | undefined>
-    ];
-  }
-  const node = signal<T>(first as any, second as SignalOptions<T>);
-  if (__DEV__) registerGraph(node, getOwner());
-  return [accessor<T>(node), setSignal.bind(null, node as any) as Setter<T | undefined>];
+	if (typeof first === 'function') {
+		const node = computed<T>(first as any, second)
+		node._config &= ~CONFIG_AUTO_DISPOSE
+		return [accessor<T | undefined>(node), setMemo.bind(null, node as any) as Setter<T | undefined>]
+	}
+	const node = signal<T>(first as any, second as SignalOptions<T>)
+	if (__DEV__) {
+		registerGraph(node, getOwner())
+	}
+	return [accessor<T>(node), setSignal.bind(null, node as any) as Setter<T | undefined>]
 }
 
 /**
@@ -330,10 +329,10 @@ export function createSignal<T>(
 // NoInfer keeps the previous-value parameter from influencing T inference, so
 // the memo/effect result type is still driven by the compute return type.
 export function createMemo<T>(
-  compute: ComputeFunction<undefined | NoInfer<T>, T>,
-  options?: MemoOptions<T>
+	compute: ComputeFunction<undefined | NoInfer<T>, T>,
+	options?: MemoOptions<T>,
 ): SourceAccessor<T> {
-  return accessor<T>(computed<T>(compute as any, options));
+	return accessor<T>(computed<T>(compute as any, options))
 }
 
 /**
@@ -388,10 +387,10 @@ export function createMemo<T>(
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-effect
  */
 export function createEffect<T>(
-  compute: ComputeFunction<undefined | NoInfer<T>, T>,
-  effectFn: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
-  options?: EffectOptions
-): void;
+	compute: ComputeFunction<undefined | NoInfer<T>, T>,
+	effectFn: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
+	options?: EffectOptions,
+): void
 /**
  * @deprecated `createEffect(compute)` (single argument) is no longer supported.
  * Pass a separate effect function as the second argument:
@@ -402,30 +401,30 @@ export function createEffect<T>(
  * - For a derived value, use `createMemo(() => signal())`.
  * - For a one-shot side effect at construction time, just call the function.
  */
-export function createEffect<T>(compute: ComputeFunction<undefined | NoInfer<T>, T>): never;
+export function createEffect<T>(compute: ComputeFunction<undefined | NoInfer<T>, T>): never
 export function createEffect<T>(
-  compute: ComputeFunction<undefined | NoInfer<T>, T>,
-  effectFn?: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
-  options?: EffectOptions
+	compute: ComputeFunction<undefined | NoInfer<T>, T>,
+	effectFn?: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
+	options?: EffectOptions,
 ): void {
-  if (__DEV__ && effectFn === undefined) {
-    const message =
-      "[MISSING_EFFECT_FN] createEffect requires both a compute function and an effect function. " +
-      "Use `createEffect(() => signal(), value => doWork(value))`. " +
-      "If you want a derived value, use `createMemo`. " +
-      "If you want a one-shot side effect, just call the function directly.";
-    emitDiagnostic({
-      code: "MISSING_EFFECT_FN",
-      kind: "lifecycle",
-      severity: "error",
-      message
-    });
-    throw new Error(message);
-  }
-  effect(compute as any, (effectFn as any).effect || effectFn, (effectFn as any).error, {
-    user: true,
-    ...(__DEV__ ? { ...options, name: options?.name ?? "effect" } : options)
-  });
+	if (__DEV__ && effectFn === undefined) {
+		const message =
+			'[MISSING_EFFECT_FN] createEffect requires both a compute function and an effect function. ' +
+			'Use `createEffect(() => signal(), value => doWork(value))`. ' +
+			'If you want a derived value, use `createMemo`. ' +
+			'If you want a one-shot side effect, just call the function directly.'
+		emitDiagnostic({
+			code: 'MISSING_EFFECT_FN',
+			kind: 'lifecycle',
+			severity: 'error',
+			message,
+		})
+		throw new Error(message)
+	}
+	effect(compute as any, (effectFn as any).effect || effectFn, (effectFn as any).error, {
+		user: true,
+		...(__DEV__ ? { ...options, name: options?.name ?? 'effect' } : options),
+	})
 }
 
 /**
@@ -458,16 +457,16 @@ export function createEffect<T>(
  * @description https://docs.solidjs.com/reference/secondary-primitives/create-render-effect
  */
 export function createRenderEffect<T>(
-  compute: ComputeFunction<undefined | NoInfer<T>, T>,
-  effectFn: EffectFunction<NoInfer<T>, T>,
-  options?: EffectOptions
+	compute: ComputeFunction<undefined | NoInfer<T>, T>,
+	effectFn: EffectFunction<NoInfer<T>, T>,
+	options?: EffectOptions,
 ): void {
-  effect(
-    compute as any,
-    effectFn,
-    undefined,
-    __DEV__ ? { ...options, name: options?.name ?? "effect" } : options
-  );
+	effect(
+		compute as any,
+		effectFn,
+		undefined,
+		__DEV__ ? { ...options, name: options?.name ?? 'effect' } : options,
+	)
 }
 
 /**
@@ -500,13 +499,10 @@ export function createRenderEffect<T>(
  * @description https://docs.solidjs.com/reference/secondary-primitives/create-tracked-effect
  */
 export function createTrackedEffect(
-  compute: () => void | (() => void),
-  options?: BaseEffectOptions
+	compute: () => void | (() => void),
+	options?: BaseEffectOptions,
 ): void {
-  trackedEffect(
-    compute,
-    __DEV__ ? { ...options, name: options?.name ?? "trackedEffect" } : options
-  );
+	trackedEffect(compute, __DEV__ ? { ...options, name: options?.name ?? 'trackedEffect' } : options)
 }
 
 /**
@@ -536,36 +532,36 @@ export function createTrackedEffect(
  * @description https://docs.solidjs.com/reference/secondary-primitives/create-reaction
  */
 export function createReaction(
-  effectFn: EffectFunction<undefined> | EffectBundle<undefined>,
-  options?: EffectOptions
+	effectFn: EffectFunction<undefined> | EffectBundle<undefined>,
+	options?: EffectOptions,
 ) {
-  let cl: (() => void) | undefined = undefined;
-  cleanup(() => cl?.());
-  const owner = getOwner();
-  return (tracking: () => void) => {
-    runWithOwner(owner!, () => {
-      effect(
-        () => (tracking(), getOwner()!),
-        node => {
-          cl?.();
-          const cleanup = ((effectFn as any).effect || effectFn)?.();
-          if (__DEV__ && cleanup !== undefined && typeof cleanup !== "function") {
-            throw new Error(
-              "Reaction callback returned an invalid cleanup value. Return a cleanup function or undefined."
-            );
-          }
-          cl = cleanup as (() => void) | undefined;
-          dispose(node as any);
-        },
-        (effectFn as any).error,
-        {
-          ...(__DEV__ ? { ...options, name: options?.name ?? "effect" } : options),
-          user: true,
-          defer: true
-        }
-      );
-    });
-  };
+	let cl: (() => void) | undefined = undefined
+	cleanup(() => cl?.())
+	const owner = getOwner()
+	return (tracking: () => void) => {
+		runWithOwner(owner, () => {
+			effect(
+				() => (tracking(), getOwner()!),
+				(node) => {
+					cl?.()
+					const cleanup = ((effectFn as any).effect || effectFn)?.()
+					if (__DEV__ && cleanup !== undefined && typeof cleanup !== 'function') {
+						throw new Error(
+							'Reaction callback returned an invalid cleanup value. Return a cleanup function or undefined.',
+						)
+					}
+					cl = cleanup as (() => void) | undefined
+					dispose(node as any)
+				},
+				(effectFn as any).error,
+				{
+					...(__DEV__ ? { ...options, name: options?.name ?? 'effect' } : options),
+					user: true,
+					defer: true,
+				},
+			)
+		})
+	}
 }
 
 /**
@@ -588,24 +584,26 @@ export function createReaction(
  * @param fn a reactive expression to resolve
  */
 export function resolve<T>(fn: () => T): Promise<T> {
-  if (__DEV__ && getObserver()) {
-    throw new Error(
-      "Cannot call resolve inside a reactive scope; it only resolves the current value and does not track updates."
-    );
-  }
-  return new Promise((res, rej) => {
-    createRoot(dispose => {
-      computed(() => {
-        try {
-          res(fn());
-        } catch (err) {
-          if (err instanceof NotReadyError) throw err;
-          rej(err);
-        }
-        dispose();
-      });
-    });
-  });
+	if (__DEV__ && getObserver()) {
+		throw new Error(
+			'Cannot call resolve inside a reactive scope; it only resolves the current value and does not track updates.',
+		)
+	}
+	return new Promise((res, rej) => {
+		createRoot((dispose) => {
+			computed(() => {
+				try {
+					res(fn())
+				} catch (err) {
+					if (err instanceof NotReadyError) {
+						throw err
+					}
+					rej(err)
+				}
+				dispose()
+			})
+		})
+	})
 }
 
 /**
@@ -640,33 +638,32 @@ export function resolve<T>(fn: () => T): Promise<T> {
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-optimistic-signal
  */
-export function createOptimistic<T>(): Signal<T | undefined>;
+export function createOptimistic<T>(): Signal<T | undefined>
 export function createOptimistic<T>(
-  value: Exclude<T, Function>,
-  options?: SignalOptions<T>
-): Signal<T>;
+	value: Exclude<T, Function>,
+	options?: SignalOptions<T>,
+): Signal<T>
 export function createOptimistic<T>(
-  fn: ComputeFunction<T>,
-  options?: SignalOptions<T> & MemoOptions<T>
-): Signal<T>;
+	fn: ComputeFunction<T>,
+	options?: SignalOptions<T> & MemoOptions<T>,
+): Signal<T>
 export function createOptimistic<T>(
-  first?: T | ComputeFunction<T>,
-  second?: SignalOptions<T> & MemoOptions<T>
+	first?: T | ComputeFunction<T>,
+	second?: SignalOptions<T> & MemoOptions<T>,
 ): Signal<T | undefined> {
-  if (typeof first === "function") {
-    const node = optimisticComputed<T>(first as any, second as any);
-    node._config &= ~CONFIG_AUTO_DISPOSE;
-    return [
-      accessor<T | undefined>(node),
-      setSignal.bind(null, node as any) as Setter<T | undefined>
-    ];
-  }
-  const node = optimisticSignal<T>(first as any, second as SignalOptions<T>);
-  if (__DEV__) registerGraph(node, getOwner());
-  return [
-    accessor<T | undefined>(node),
-    setSignal.bind(null, node as any) as Setter<T | undefined>
-  ];
+	if (typeof first === 'function') {
+		const node = optimisticComputed<T>(first as any, second)
+		node._config &= ~CONFIG_AUTO_DISPOSE
+		return [
+			accessor<T | undefined>(node),
+			setSignal.bind(null, node as any) as Setter<T | undefined>,
+		]
+	}
+	const node = optimisticSignal<T>(first as any, second)
+	if (__DEV__) {
+		registerGraph(node, getOwner())
+	}
+	return [accessor<T | undefined>(node), setSignal.bind(null, node as any) as Setter<T | undefined>]
 }
 
 /**
@@ -751,25 +748,25 @@ export function createOptimistic<T>(
  *   on owner disposal
  */
 export function onSettled(callback: () => void | (() => void)): void {
-  const owner = getOwner();
-  owner && !(owner._config & CONFIG_CHILDREN_FORBIDDEN)
-    ? createTrackedEffect(() => untrack(callback), __DEV__ ? { name: "onSettled" } : undefined)
-    : globalQueue.enqueue(EFFECT_USER, () => {
-        // Unowned, out-of-band fire (no owner, or a children-forbidden one this
-        // one-shot must not bind to): a returned cleanup has no lifecycle to
-        // attach to. Reject it in dev; in production the return is simply
-        // dropped — never bound to an unrelated owner or run eagerly.
-        const cleanup = callback();
-        if (__DEV__ && cleanup !== undefined) {
-          const message =
-            "[SETTLED_CLEANUP_UNOWNED] onSettled returned a cleanup in an unowned scope; a cleanup can only be honored under an owner. Call your setup helper from an owned scope (e.g. the component body) instead of from inside an event handler, tracked effect, or another onSettled.";
-          emitDiagnostic({
-            code: "SETTLED_CLEANUP_UNOWNED",
-            kind: "lifecycle",
-            severity: "error",
-            message
-          });
-          throw new Error(message);
-        }
-      });
+	const owner = getOwner()
+	owner && !(owner._config & CONFIG_CHILDREN_FORBIDDEN)
+		? createTrackedEffect(() => untrack(callback), __DEV__ ? { name: 'onSettled' } : undefined)
+		: globalQueue.enqueue(EFFECT_USER, () => {
+				// Unowned, out-of-band fire (no owner, or a children-forbidden one this
+				// one-shot must not bind to): a returned cleanup has no lifecycle to
+				// attach to. Reject it in dev; in production the return is simply
+				// dropped — never bound to an unrelated owner or run eagerly.
+				const cleanup = callback()
+				if (__DEV__ && cleanup !== undefined) {
+					const message =
+						'[SETTLED_CLEANUP_UNOWNED] onSettled returned a cleanup in an unowned scope; a cleanup can only be honored under an owner. Call your setup helper from an owned scope (e.g. the component body) instead of from inside an event handler, tracked effect, or another onSettled.'
+					emitDiagnostic({
+						code: 'SETTLED_CLEANUP_UNOWNED',
+						kind: 'lifecycle',
+						severity: 'error',
+						message,
+					})
+					throw new Error(message)
+				}
+			})
 }

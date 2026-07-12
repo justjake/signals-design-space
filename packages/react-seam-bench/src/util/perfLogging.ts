@@ -6,30 +6,30 @@
  * time under the same padding.
  */
 export interface PerfResultStrings {
-	framework: string;
-	test: string;
-	time: string;
+	framework: string
+	test: string
+	time: string
 }
 
 const columnWidth: Record<keyof PerfResultStrings, number> = {
 	framework: 32,
 	test: 60,
 	time: 8,
-};
+}
 
 function trimColumns(row: PerfResultStrings): PerfResultStrings {
-	const trimmed = { ...row };
+	const trimmed = { ...row }
 	for (const key of Object.keys(columnWidth) as Array<keyof PerfResultStrings>) {
-		trimmed[key] = (row[key] || '').slice(0, columnWidth[key]).padEnd(columnWidth[key]);
+		trimmed[key] = (row[key] || '').slice(0, columnWidth[key]).padEnd(columnWidth[key])
 	}
-	return trimmed;
+	return trimmed
 }
 
 export function perfResultHeaders(): PerfResultStrings {
-	return { framework: 'framework', test: 'test', time: 'time' };
+	return { framework: 'framework', test: 'test', time: 'time' }
 }
 
 export function formatPerfResult(row: PerfResultStrings): string {
-	const t = trimColumns(row);
-	return [t.framework, t.test, t.time].join(' , ');
+	const t = trimColumns(row)
+	return [t.framework, t.test, t.time].join(' , ')
 }

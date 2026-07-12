@@ -1,0 +1,238 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+
+jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init source submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install core verification dependencies
+        run: |
+          pnpm install --frozen-lockfile \
+            --filter "cosignals..." \
+            --filter "@lab/cosignals-oracle..." \
+            --filter "strata-signals..."
+
+      - name: Run deterministic unit suites
+        run: |
+          pnpm --dir packages/cosignals exec vitest run --exclude tests/concurrent-fuzz.spec.ts
+          pnpm --dir packages/cosignals-oracle exec vitest run --exclude tests/fuzz.spec.ts
+          pnpm --dir packages/strata test
+
+  fuzz:
+    name: seeded fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init workspace source submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install fuzz dependencies
+        run: |
+          pnpm install --frozen-lockfile \
+            --filter "cosignals..." \
+            --filter "@lab/cosignals-oracle..."
+
+      - name: Run model and engine fuzz corpora
+        run: |
+          pnpm --dir packages/cosignals-oracle exec vitest run tests/fuzz.spec.ts
+          pnpm --dir packages/cosignals exec vitest run tests/concurrent-fuzz.spec.ts
+
+  inlining:
+    name: inlining verification (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init inlining source submodule
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install inlining harness
+        run: pnpm install --frozen-lockfile --filter "@lab/harness..."
+
+      - name: Trace top-tier compilation, inlining, and steady deopts
+        run: pnpm inlining
+
+  react-fork:
+    name: prepare React fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      cache-key: ${{ steps.fork.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init React submodule
+        run: git submodule update --init vendor/react
+
+      - name: Compute React build cache key
+        id: fork
+        run: echo "key=react-fork-${RUNNER_OS}-$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore React fork build
+        id: fork-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/react/build/oss-experimental
+          key: ${{ steps.fork.outputs.key }}
+
+      - name: Set up React build Node
+        if: steps.fork-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: vendor/react/.nvmrc
+
+      - name: Build React fork
+        if: steps.fork-cache.outputs.cache-hit != 'true'
+        run: |
+          yarn --cwd vendor/react install --frozen-lockfile
+          fork/build-react.sh
+
+  react-unit:
+    name: React integration unit tests
+    needs: react-fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init workspace source submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - name: Restore React fork build
+        uses: actions/cache@v4
+        with:
+          path: vendor/react/build/oss-experimental
+          key: ${{ needs.react-fork.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install React integration dependencies
+        run: |
+          pnpm install --frozen-lockfile \
+            --filter "cosignals-alt-a..." \
+            --filter "cosignals-alt-b..." \
+            --filter "cosignals-react..." \
+            --filter "concurrent-solid-react..." \
+            --filter "react-signals-utils..." \
+            --filter "signals-royale-fx2..."
+
+      - name: Run React integration suites
+        run: |
+          pnpm --dir packages/react-signals-utils test
+          pnpm --dir packages/cosignals-alt-a test
+          pnpm --dir packages/cosignals-alt-b test
+          pnpm --dir packages/cosignals-react test
+          pnpm --dir packages/concurrent-solid-react test
+          pnpm --dir packages/signals-royale-fx2 test
+
+  browser:
+    name: browser battery (Chromium)
+    needs: react-fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init workspace source submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - name: Restore React fork build
+        uses: actions/cache@v4
+        with:
+          path: vendor/react/build/oss-experimental
+          key: ${{ needs.react-fork.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install browser battery dependencies
+        run: pnpm install --frozen-lockfile --filter "react-signals-playground..."
+
+      - name: Install bundled Chromium
+        working-directory: packages/react-signals-playground
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Typecheck browser battery
+        working-directory: packages/react-signals-playground
+        run: pnpm check
+
+      - name: Run browser battery
+        working-directory: packages/react-signals-playground
+        run: pnpm battery
+
+      - name: Upload browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-battery-${{ github.sha }}
+          path: |
+            packages/react-signals-playground/playwright-report/
+            packages/react-signals-playground/battery/test-results/
+          if-no-files-found: ignore

@@ -1,11 +1,11 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest'
 import {
 	testSuite,
 	SkipTest,
 	setExpect,
 	type ReactiveFramework,
-} from 'reactive-framework-test-suite';
-import adapter from '../royale/harness-adapter';
+} from 'reactive-framework-test-suite'
+import adapter from '../royale/harness-adapter'
 
 const framework: ReactiveFramework = {
 	name: adapter.name,
@@ -13,32 +13,34 @@ const framework: ReactiveFramework = {
 	computed: (fn) => adapter.computed(fn),
 	effect: (fn) => adapter.effect(fn),
 	run(fn) {
-		adapter.effectScope(fn)();
+		adapter.effectScope(fn)()
 	},
 	batch(fn) {
-		adapter.startBatch();
+		adapter.startBatch()
 		try {
-			fn();
+			fn()
 		} finally {
-			adapter.endBatch();
+			adapter.endBatch()
 		}
 	},
 	untracked: adapter.untracked,
-};
+}
 
-setExpect(expect);
+setExpect(expect)
 
 for (const { section, cases } of testSuite) {
 	describe(`strata-signals :: ${section}`, () => {
 		for (const [name, fn] of Object.entries(cases)) {
 			test(name, () => {
 				try {
-					framework.run(() => fn(framework));
+					framework.run(() => fn(framework))
 				} catch (error) {
-					if (error instanceof SkipTest) return;
-					throw error;
+					if (error instanceof SkipTest) {
+						return
+					}
+					throw error
 				}
-			});
+			})
 		}
-	});
+	})
 }

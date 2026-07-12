@@ -71,7 +71,9 @@ Tips:
   are the slow ones.
 - Results land in `harness/results/<timestamp>-<framework>.{json,csv}` and
   `<timestamp>-memory-<framework>.{json,csv}`. The alien-v3 baseline files
-  recorded at harness-creation time are the ones dated 2026-07-03.
+  recorded at harness-creation time are the ones dated 2026-07-03. New runs
+  are ignored by default; use `git add -f` only when a verified result becomes
+  a cited baseline or research artifact.
 
 ## What green looks like
 
@@ -105,7 +107,7 @@ harness/
   memory/run.ts            # parent: spawns memory/child.ts per framework
   memory/child.ts          # child: upstream memoryUsage.mjs port, bug fixed
   util/cli.ts              # flag parsing, child spawn protocol, results IO
-  results/                 # JSON + CSV outputs (baselines recorded here)
+  results/                 # ignored run output + selected tracked baselines
 ```
 
 The bench child imports suite code directly from

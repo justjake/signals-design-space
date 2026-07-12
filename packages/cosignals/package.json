@@ -1,9 +1,9 @@
 {
 	"name": "cosignals",
-	"private": true,
 	"version": "0.1.0",
-	"license": "MIT",
+	"private": true,
 	"description": "A signals library designed for React concurrent rendering: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics on a packed typed-array kernel. Writes record into batches on one timeline and every render reads its own consistent world view — apps that never start a transition pay almost nothing. Includes a zero-allocation trace recorder (cosignals/trace).",
+	"license": "MIT",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {
@@ -17,7 +17,7 @@
 		"test": "vitest run"
 	},
 	"devDependencies": {
-		"typescript": "6.0.3",
+		"typescript": "7.0.2",
 		"vitest": "4.1.6"
 	}
 }

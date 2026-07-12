@@ -1,0 +1,282 @@
+framework                        , test                                                         , time    
+Alien Signals                    , createSignals                                                , 6.18    
+Alien Signals                    , createComputations                                           , 235.45  
+Alien Signals                    , updateSignals                                                , 520.58  
+Alien Signals                    , avoidablePropagation                                         , 182.84  
+Alien Signals                    , broadPropagation                                             , 169.75  
+Alien Signals                    , deepPropagation                                              , 61.91   
+Alien Signals                    , diamond                                                      , 155.72  
+Alien Signals                    , mux                                                          , 154.80  
+Alien Signals                    , repeatedObservers                                            , 34.12   
+Alien Signals                    , triangle                                                     , 47.32   
+Alien Signals                    , unstable                                                     , 37.38   
+Alien Signals                    , molBench                                                     , 32.20   
+Alien Signals                    , cellx1000                                                    , 13.88   
+Alien Signals                    , cellx2500                                                    , 25.11   
+Alien Signals                    , 2-10x5 - lazy80%                                             , 276.50  
+Alien Signals                    , 6-10x10 - dyn25% - lazy80%                                   , 178.13  
+Alien Signals                    , 4-1000x12 - dyn5%                                            , 429.97  
+Alien Signals                    , 25-1000x5                                                    , 656.78  
+Alien Signals                    , 3-5x500                                                      , 143.41  
+Alien Signals                    , 6-100x15 - dyn50%                                            , 242.29  
+Cosignal                         , createSignals                                                , 18.44   
+Cosignal                         , createComputations                                           , 150.11  
+Cosignal                         , updateSignals                                                , 540.58  
+Cosignal                         , avoidablePropagation                                         , 204.73  
+Cosignal                         , broadPropagation                                             , 196.69  
+Cosignal                         , deepPropagation                                              , 75.33   
+Cosignal                         , diamond                                                      , 183.48  
+Cosignal                         , mux                                                          , 159.00  
+Cosignal                         , repeatedObservers                                            , 39.85   
+Cosignal                         , triangle                                                     , 51.44   
+Cosignal                         , unstable                                                     , 42.68   
+Cosignal                         , molBench                                                     , 32.25   
+Cosignal                         , cellx1000                                                    , 10.42   
+Cosignal                         , cellx2500                                                    , 19.96   
+Cosignal                         , 2-10x5 - lazy80%                                             , 329.49  
+Cosignal                         , 6-10x10 - dyn25% - lazy80%                                   , 186.42  
+Cosignal                         , 4-1000x12 - dyn5%                                            , 366.66  
+Cosignal                         , 25-1000x5                                                    , 435.92  
+Cosignal                         , 3-5x500                                                      , 141.11  
+Cosignal                         , 6-100x15 - dyn50%                                            , 229.41  
+Cosignal Alt A                   , createSignals                                                , 159.53  
+Cosignal Alt A                   , createComputations                                           , 215.21  
+Cosignal Alt A                   , updateSignals                                                , 505.16  
+Cosignal Alt A                   , avoidablePropagation                                         , 244.63  
+Cosignal Alt A                   , broadPropagation                                             , 223.26  
+Cosignal Alt A                   , deepPropagation                                              , 89.49   
+Cosignal Alt A                   , diamond                                                      , 194.89  
+Cosignal Alt A                   , mux                                                          , 173.03  
+Cosignal Alt A                   , repeatedObservers                                            , 31.81   
+Cosignal Alt A                   , triangle                                                     , 61.00   
+Cosignal Alt A                   , unstable                                                     , 50.34   
+Cosignal Alt A                   , molBench                                                     , 32.55   
+Cosignal Alt A                   , cellx1000                                                    , 20.66   
+Cosignal Alt A                   , cellx2500                                                    , 49.67   
+Cosignal Alt A                   , 2-10x5 - lazy80%                                             , 377.27  
+Cosignal Alt A                   , 6-10x10 - dyn25% - lazy80%                                   , 224.81  
+Cosignal Alt A                   , 4-1000x12 - dyn5%                                            , 542.88  
+Cosignal Alt A                   , 25-1000x5                                                    , 557.43  
+Cosignal Alt A                   , 3-5x500                                                      , 208.22  
+Cosignal Alt A                   , 6-100x15 - dyn50%                                            , 291.66  
+Cosignal Alt B                   , createSignals                                                , 34.71   
+Cosignal Alt B                   , createComputations                                           , 189.89  
+Cosignal Alt B                   , updateSignals                                                , 647.17  
+Cosignal Alt B                   , avoidablePropagation                                         , 230.77  
+Cosignal Alt B                   , broadPropagation                                             , 224.49  
+Cosignal Alt B                   , deepPropagation                                              , 87.43   
+Cosignal Alt B                   , diamond                                                      , 209.50  
+Cosignal Alt B                   , mux                                                          , 179.01  
+Cosignal Alt B                   , repeatedObservers                                            , 43.16   
+Cosignal Alt B                   , triangle                                                     , 61.72   
+Cosignal Alt B                   , unstable                                                     , 63.89   
+Cosignal Alt B                   , molBench                                                     , 32.65   
+Cosignal Alt B                   , cellx1000                                                    , 11.28   
+Cosignal Alt B                   , cellx2500                                                    , 26.40   
+Cosignal Alt B                   , 2-10x5 - lazy80%                                             , 436.48  
+Cosignal Alt B                   , 6-10x10 - dyn25% - lazy80%                                   , 238.02  
+Cosignal Alt B                   , 4-1000x12 - dyn5%                                            , 565.79  
+Cosignal Alt B                   , 25-1000x5                                                    , 611.75  
+Cosignal Alt B                   , 3-5x500                                                      , 189.35  
+Cosignal Alt B                   , 6-100x15 - dyn50%                                            , 299.24  
+Royale FM1                       , createSignals                                                , 24.23   
+Royale FM1                       , createComputations                                           , 617.74  
+Royale FM1                       , updateSignals                                                , 891.33  
+Royale FM1                       , avoidablePropagation                                         , 311.56  
+Royale FM1                       , broadPropagation                                             , 335.75  
+Royale FM1                       , deepPropagation                                              , 140.94  
+Royale FM1                       , diamond                                                      , 261.13  
+Royale FM1                       , mux                                                          , 219.90  
+Royale FM1                       , repeatedObservers                                            , 31.60   
+Royale FM1                       , triangle                                                     , 80.84   
+Royale FM1                       , unstable                                                     , 54.64   
+Royale FM1                       , molBench                                                     , 32.86   
+Royale FM1                       , cellx1000                                                    , 28.97   
+Royale FM1                       , cellx2500                                                    , 74.59   
+Royale FM1                       , 2-10x5 - lazy80%                                             , 500.20  
+Royale FM1                       , 6-10x10 - dyn25% - lazy80%                                   , 261.29  
+Royale FM1                       , 4-1000x12 - dyn5%                                            , 542.18  
+Royale FM1                       , 25-1000x5                                                    , 575.55  
+Royale FM1                       , 3-5x500                                                      , 248.55  
+Royale FM1                       , 6-100x15 - dyn50%                                            , 339.86  
+Royale FM2                       , createSignals                                                , 30.51   
+Royale FM2                       , createComputations                                           , 1172.52 
+Royale FM2                       , updateSignals                                                , 700.51  
+Royale FM2                       , avoidablePropagation                                         , 310.94  
+Royale FM2                       , broadPropagation                                             , 335.57  
+Royale FM2                       , deepPropagation                                              , 143.07  
+Royale FM2                       , diamond                                                      , 287.27  
+Royale FM2                       , mux                                                          , 220.14  
+Royale FM2                       , repeatedObservers                                            , 40.72   
+Royale FM2                       , triangle                                                     , 91.07   
+Royale FM2                       , unstable                                                     , 186.94  
+Royale FM2                       , molBench                                                     , 33.25   
+Royale FM2                       , cellx1000                                                    , 19.64   
+Royale FM2                       , cellx2500                                                    , 93.66   
+Royale FM2                       , 2-10x5 - lazy80%                                             , 576.02  
+Royale FM2                       , 6-10x10 - dyn25% - lazy80%                                   , 314.45  
+Royale FM2                       , 4-1000x12 - dyn5%                                            , 650.36  
+Royale FM2                       , 25-1000x5                                                    , 757.85  
+Royale FM2                       , 3-5x500                                                      , 275.15  
+Royale FM2                       , 6-100x15 - dyn50%                                            , 402.53  
+Royale FH1                       , createSignals                                                , 13.43   
+Royale FH1                       , createComputations                                           , 934.43  
+Royale FH1                       , updateSignals                                                , 1163.67 
+Royale FH1                       , avoidablePropagation                                         , 318.45  
+Royale FH1                       , broadPropagation                                             , 419.72  
+Royale FH1                       , deepPropagation                                              , 175.31  
+Royale FH1                       , diamond                                                      , 274.06  
+Royale FH1                       , mux                                                          , 246.81  
+Royale FH1                       , repeatedObservers                                            , 44.81   
+Royale FH1                       , triangle                                                     , 88.27   
+Royale FH1                       , unstable                                                     , 172.97  
+Royale FH1                       , molBench                                                     , 33.19   
+Royale FH1                       , cellx1000                                                    , 27.21   
+Royale FH1                       , cellx2500                                                    , 72.45   
+Royale FH1                       , 2-10x5 - lazy80%                                             , 571.21  
+Royale FH1                       , 6-10x10 - dyn25% - lazy80%                                   , 261.89  
+Royale FH1                       , 4-1000x12 - dyn5%                                            , 590.89  
+Royale FH1                       , 25-1000x5                                                    , 587.69  
+Royale FH1                       , 3-5x500                                                      , 283.31  
+Royale FH1                       , 6-100x15 - dyn50%                                            , 331.76  
+Royale FH2                       , createSignals                                                , 9.36    
+Royale FH2                       , createComputations                                           , 181.66  
+Royale FH2                       , updateSignals                                                , 436.36  
+Royale FH2                       , avoidablePropagation                                         , 215.40  
+Royale FH2                       , broadPropagation                                             , 234.84  
+Royale FH2                       , deepPropagation                                              , 89.91   
+Royale FH2                       , diamond                                                      , 192.93  
+Royale FH2                       , mux                                                          , 180.15  
+Royale FH2                       , repeatedObservers                                            , 28.18   
+Royale FH2                       , triangle                                                     , 60.72   
+Royale FH2                       , unstable                                                     , 40.75   
+Royale FH2                       , molBench                                                     , 32.11   
+Royale FH2                       , cellx1000                                                    , 20.09   
+Royale FH2                       , cellx2500                                                    , 41.58   
+Royale FH2                       , 2-10x5 - lazy80%                                             , 366.96  
+Royale FH2                       , 6-10x10 - dyn25% - lazy80%                                   , 224.98  
+Royale FH2                       , 4-1000x12 - dyn5%                                            , 532.06  
+Royale FH2                       , 25-1000x5                                                    , 604.14  
+Royale FH2                       , 3-5x500                                                      , 215.37  
+Royale FH2                       , 6-100x15 - dyn50%                                            , 286.28  
+Royale FX1                       , createSignals                                                , 13.99   
+Royale FX1                       , createComputations                                           , 853.55  
+Royale FX1                       , updateSignals                                                , 593.01  
+Royale FX1                       , avoidablePropagation                                         , 274.11  
+Royale FX1                       , broadPropagation                                             , 265.34  
+Royale FX1                       , deepPropagation                                              , 113.82  
+Royale FX1                       , diamond                                                      , 236.16  
+Royale FX1                       , mux                                                          , 204.10  
+Royale FX1                       , repeatedObservers                                            , 37.38   
+Royale FX1                       , triangle                                                     , 66.12   
+Royale FX1                       , unstable                                                     , 57.20   
+Royale FX1                       , molBench                                                     , 32.69   
+Royale FX1                       , cellx1000                                                    , 25.28   
+Royale FX1                       , cellx2500                                                    , 65.17   
+Royale FX1                       , 2-10x5 - lazy80%                                             , 420.12  
+Royale FX1                       , 6-10x10 - dyn25% - lazy80%                                   , 239.31  
+Royale FX1                       , 4-1000x12 - dyn5%                                            , 548.30  
+Royale FX1                       , 25-1000x5                                                    , 559.46  
+Royale FX1                       , 3-5x500                                                      , 244.33  
+Royale FX1                       , 6-100x15 - dyn50%                                            , 291.23  
+Royale FX2                       , createSignals                                                , 21.59   
+Royale FX2                       , createComputations                                           , 188.39  
+Royale FX2                       , updateSignals                                                , 630.75  
+Royale FX2                       , avoidablePropagation                                         , 340.38  
+Royale FX2                       , broadPropagation                                             , 220.86  
+Royale FX2                       , deepPropagation                                              , 88.14   
+Royale FX2                       , diamond                                                      , 273.28  
+Royale FX2                       , mux                                                          , 183.99  
+Royale FX2                       , repeatedObservers                                            , 41.17   
+Royale FX2                       , triangle                                                     , 72.29   
+Royale FX2                       , unstable                                                     , 114.67  
+Royale FX2                       , molBench                                                     , 32.57   
+Royale FX2                       , cellx1000                                                    , 24.57   
+Royale FX2                       , cellx2500                                                    , 29.54   
+Royale FX2                       , 2-10x5 - lazy80%                                             , 520.44  
+Royale FX2                       , 6-10x10 - dyn25% - lazy80%                                   , 227.67  
+Royale FX2                       , 4-1000x12 - dyn5%                                            , 572.70  
+Royale FX2                       , 25-1000x5                                                    , 738.20  
+Royale FX2                       , 3-5x500                                                      , 194.25  
+Royale FX2                       , 6-100x15 - dyn50%                                            , 268.89  
+Royale SH1                       , createSignals                                                , 4.50    
+Royale SH1                       , createComputations                                           , 1057.59 
+Royale SH1                       , updateSignals                                                , 2001.99 
+Royale SH1                       , avoidablePropagation                                         , 456.66  
+Royale SH1                       , broadPropagation                                             , 694.83  
+Royale SH1                       , deepPropagation                                              , 213.09  
+Royale SH1                       , diamond                                                      , 506.24  
+Royale SH1                       , mux                                                          , 397.01  
+Royale SH1                       , repeatedObservers                                            , 54.86   
+Royale SH1                       , triangle                                                     , 168.99  
+Royale SH1                       , unstable                                                     , 72.72   
+Royale SH1                       , molBench                                                     , 33.71   
+Royale SH1                       , cellx1000                                                    , 80.43   
+Royale SH1                       , cellx2500                                                    , 250.99  
+Royale SH1                       , 2-10x5 - lazy80%                                             , 1196.81 
+Royale SH1                       , 6-10x10 - dyn25% - lazy80%                                   , 716.30  
+Royale SH1                       , 4-1000x12 - dyn5%                                            , 1694.91 
+Royale SH1                       , 25-1000x5                                                    , 3100.31 
+Royale SH1                       , 3-5x500                                                      , 572.10  
+Royale SH1                       , 6-100x15 - dyn50%                                            , 978.25  
+Royale SH2                       , createSignals                                                , 6.06    
+Royale SH2                       , createComputations                                           , 383.67  
+Royale SH2                       , updateSignals                                                , 1659.57 
+Royale SH2                       , avoidablePropagation                                         , 430.08  
+Royale SH2                       , broadPropagation                                             , 417.37  
+Royale SH2                       , deepPropagation                                              , 146.49  
+Royale SH2                       , diamond                                                      , 363.79  
+Royale SH2                       , mux                                                          , 238.13  
+Royale SH2                       , repeatedObservers                                            , 64.19   
+Royale SH2                       , triangle                                                     , 101.73  
+Royale SH2                       , unstable                                                     , 73.22   
+Royale SH2                       , molBench                                                     , 32.93   
+Royale SH2                       , cellx1000                                                    , 19.51   
+Royale SH2                       , cellx2500                                                    , 42.42   
+Royale SH2                       , 2-10x5 - lazy80%                                             , 739.47  
+Royale SH2                       , 6-10x10 - dyn25% - lazy80%                                   , 337.38  
+Royale SH2                       , 4-1000x12 - dyn5%                                            , 770.93  
+Royale SH2                       , 25-1000x5                                                    , 873.62  
+Royale SH2                       , 3-5x500                                                      , 230.41  
+Royale SH2                       , 6-100x15 - dyn50%                                            , 364.54  
+Royale SX2                       , createSignals                                                , 95.87   
+Royale SX2                       , createComputations                                           , 1062.64 
+Royale SX2                       , updateSignals                                                , 3264.68 
+Royale SX2                       , avoidablePropagation                                         , 608.24  
+Royale SX2                       , broadPropagation                                             , 1059.02 
+Royale SX2                       , deepPropagation                                              , 376.29  
+Royale SX2                       , diamond                                                      , 664.25  
+Royale SX2                       , mux                                                          , 538.56  
+Royale SX2                       , repeatedObservers                                            , 71.64   
+Royale SX2                       , triangle                                                     , 230.63  
+Royale SX2                       , unstable                                                     , 96.55   
+Royale SX2                       , molBench                                                     , 34.23   
+Royale SX2                       , cellx1000                                                    , 49.98   
+Royale SX2                       , cellx2500                                                    , 164.01  
+Royale SX2                       , 2-10x5 - lazy80%                                             , 1480.27 
+Royale SX2                       , 6-10x10 - dyn25% - lazy80%                                   , 717.32  
+Royale SX2                       , 4-1000x12 - dyn5%                                            , 1900.91 
+Royale SX2                       , 25-1000x5                                                    , 3014.95 
+Royale SX2                       , 3-5x500                                                      , 699.63  
+Royale SX2                       , 6-100x15 - dyn50%                                            , 896.65  
+Royale SM1                       , createSignals                                                , 60.28   
+Royale SM2                       , createSignals                                                , 7.43    
+Royale SM2                       , createComputations                                           , 950.93  
+Royale SM2                       , updateSignals                                                , 1894.63 
+Royale SM2                       , avoidablePropagation                                         , 511.77  
+Royale SM2                       , broadPropagation                                             , 680.04  
+Royale SM2                       , deepPropagation                                              , 269.37  
+Royale SM2                       , diamond                                                      , 517.49  
+Royale SM2                       , mux                                                          , 384.45  
+Royale SM2                       , repeatedObservers                                            , 54.22   
+Royale SM2                       , triangle                                                     , 172.94  
+Royale SM2                       , unstable                                                     , 78.30   
+Royale SM2                       , molBench                                                     , 33.53   
+Royale SM2                       , cellx1000                                                    , 42.19   
+Royale SM2                       , cellx2500                                                    , 140.90  
+Royale SM2                       , 2-10x5 - lazy80%                                             , 1113.26 
+Royale SM2                       , 6-10x10 - dyn25% - lazy80%                                   , 791.37  
+Royale SM2                       , 4-1000x12 - dyn5%                                            , 1765.65 
+Royale SM2                       , 25-1000x5                                                    , 2659.22 
+Royale SM2                       , 3-5x500                                                      , 511.83  
+Royale SM2                       , 6-100x15 - dyn50%                                            , 1160.85 

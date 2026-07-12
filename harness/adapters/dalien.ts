@@ -11,34 +11,34 @@ import {
 	setActiveSub,
 	signal,
 	startBatch,
-} from '../../packages/dalien-signals/src/index.js';
-import type { FrameworkAdapter } from './types';
+} from '../../packages/dalien-signals/src/index.js'
+import type { FrameworkAdapter } from './types'
 
 const adapter: FrameworkAdapter = {
 	name: 'dalien',
 	signal(initialValue) {
-		const s = signal(initialValue);
+		const s = signal(initialValue)
 		return {
 			read: () => s(),
 			write: (v) => s(v),
-		};
+		}
 	},
 	computed(fn) {
-		const c = computed(fn);
-		return { read: () => c() };
+		const c = computed(fn)
+		return { read: () => c() }
 	},
 	effect,
 	effectScope,
 	startBatch,
 	endBatch,
 	untracked<T>(fn: () => T): T {
-		const prev = setActiveSub(undefined);
+		const prev = setActiveSub(undefined)
 		try {
-			return fn();
+			return fn()
 		} finally {
-			setActiveSub(prev);
+			setActiveSub(prev)
 		}
 	},
-};
+}
 
-export default adapter;
+export default adapter

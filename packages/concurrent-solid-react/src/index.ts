@@ -11,56 +11,56 @@
 
 // Engine API (Solid 2.0 surface, minus stores/boundaries/action)
 export {
-  createSignal,
-  createMemo,
-  createEffect,
-  createRenderEffect,
-  createTrackedEffect,
-  createReaction,
-  createOptimistic,
-  resolve,
-  onSettled,
-  onCleanup
-} from "./solid/signals.js";
+	createSignal,
+	createMemo,
+	createEffect,
+	createRenderEffect,
+	createTrackedEffect,
+	createReaction,
+	createOptimistic,
+	resolve,
+	onSettled,
+	onCleanup,
+} from './solid/signals.js'
 export type {
-  Accessor,
-  SourceAccessor,
-  Setter,
-  Signal,
-  ComputeFunction,
-  EffectFunction,
-  EffectBundle,
-  EffectOptions,
-  SignalOptions,
-  MemoOptions
-} from "./solid/signals.js";
+	Accessor,
+	SourceAccessor,
+	Setter,
+	Signal,
+	ComputeFunction,
+	EffectFunction,
+	EffectBundle,
+	EffectOptions,
+	SignalOptions,
+	MemoOptions,
+} from './solid/signals.js'
 export {
-  NotReadyError,
-  createRoot,
-  runWithOwner,
-  getOwner,
-  getObserver,
-  untrack,
-  isPending,
-  latest,
-  refresh,
-  flush,
-  createContext,
-  getContext,
-  setContext
-} from "./solid/index.js";
-export type { Owner, Refreshable } from "./solid/index.js";
+	NotReadyError,
+	createRoot,
+	runWithOwner,
+	getOwner,
+	getObserver,
+	untrack,
+	isPending,
+	latest,
+	refresh,
+	flush,
+	createContext,
+	getContext,
+	setContext,
+} from './solid/index.js'
+export type { Owner, Refreshable } from './solid/index.js'
 
 // React bridge + hooks
 export {
-  registerConcurrentSolidReact,
-  useSelector,
-  useSignal,
-  useIsPending,
-  useLatest,
-  useComputed,
-  useSignalState,
-  useSignalEffect,
-  useSignalTransition
-} from "./hooks.js";
-export { assertForkPresent, type BridgeHandle, type ForkReact } from "./bridge.js";
+	registerConcurrentSolidReact,
+	useSelector,
+	useSignal,
+	useIsPending,
+	useLatest,
+	useComputed,
+	useSignalState,
+	useSignalEffect,
+	useSignalTransition,
+} from './hooks.js'
+export { assertForkPresent, type BridgeHandle, type ForkReact } from './bridge.js'

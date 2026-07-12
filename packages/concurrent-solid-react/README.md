@@ -3,8 +3,8 @@
 Concurrent React signals built as a **minimum evolution of Solid 2.0's
 reactive core**. The engine is the actual `solid-signals` source (vendored
 into `src/solid/`), edited only at the seams React hosting requires. A thin
-bridge maps React's external-runtime protocol (the patched React build in
-`vendor/react`) onto machinery Solid already has: React transitions become
+bridge maps the shared React batch registry onto machinery Solid already has:
+React transitions become
 Solid transitions, React Suspense consumes Solid's pending statuses, and
 React's commit becomes Solid's commit.
 
@@ -38,7 +38,7 @@ React renders the speculative world instead of the engine holding the DOM.
 ```
 src/solid/    vendored solid-signals core (edits tagged [react-adapt E#])
 src/reader.ts render-phase reads (probe) + per-component reader nodes
-src/bridge.ts fork protocol adapter: batch tokens <-> Solid transitions
+src/bridge.ts React batch registry adapter: batch tokens <-> Solid transitions
 src/hooks.ts  useSignal / useSelector / useComputed / useSignalEffect / ...
 ```
 
@@ -47,12 +47,11 @@ src/hooks.ts  useSignal / useSelector / useComputed / useSignalEffect / ...
 Every **deferred fork batch token** (a `startTransition` scope) owns one Solid
 `Transition`:
 
-1. The bridge registers the protocol's batch-id allocator. When React creates
-   a deferred batch, the allocator creates a Solid transition and pushes a
+1. When the shared registry creates a deferred batch, the bridge creates a
+   Solid transition and pushes a
    *retainer* into it — the transition cannot complete while the retainer is
    present.
-2. Every `setSignal` asks React which batch it belongs to
-   (`unstable_getCurrentWriteBatch()`, bit 0 = deferred). Deferred writes run
+2. Every `setSignal` asks the registry which batch it belongs to. Deferred writes run
    with that batch's transition active, so they stage into `_pendingValue`;
    committed values are untouched. Urgent writes leave the ambient world
    alone and commit at the next flush.
@@ -108,7 +107,7 @@ React may discard any render, so renders must not mutate the graph:
   post-subscribe fixup: if the value moved between render and subscribe, or
   a live transition world disagrees with what this commit shows (a component
   that mounted urgently during a pending transition), a corrective re-render
-  is delivered **inside that batch** via `unstable_runInBatch`, so it commits
+  is delivered **inside that batch** through the registry, so it commits
   with the batch instead of tearing beside it.
 - **Wake-ups** fire synchronously in the writer's stack, so the re-render
   inherits the writer's priority; optimistic invalidations force the urgent

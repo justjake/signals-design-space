@@ -27,7 +27,7 @@
  * backing stores geometrically) and are never truncated, so steady state
  * allocates nothing.
  */
-export const USE_PERSISTENT_STACKS: boolean = true;
+export const USE_PERSISTENT_STACKS: boolean = true
 
 /**
  * Optimization 2 — global quiet-epoch fast path.
@@ -52,4 +52,4 @@ export const USE_PERSISTENT_STACKS: boolean = true;
  * recompute, one increment per changing write, +8 B per computed).
  * Flipping it on is conformance-green and safe; see quiet-epoch.test.ts.
  */
-export const USE_QUIET_EPOCH: boolean = false;
+export const USE_QUIET_EPOCH: boolean = false

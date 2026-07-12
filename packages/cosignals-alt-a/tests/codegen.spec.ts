@@ -3,10 +3,10 @@
  * layout artifacts in memory and string-compare against the checked-in
  * files/regions. Failure message: run `pnpm gen`.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { schema, defineSchema } from '../tools/schema';
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { schema, defineSchema } from '../tools/schema'
 import {
 	END_MARKER,
 	START_MARKER,
@@ -14,36 +14,36 @@ import {
 	generateDocs,
 	generateEnumRegion,
 	spliceEnumRegion,
-} from '../tools/gen-layout';
+} from '../tools/gen-layout'
 
-const root = join(__dirname, '..');
+const root = join(__dirname, '..')
 
 describe('§15 codegen: regenerate-and-diff', () => {
 	it('the engine enum region matches the schema (run pnpm gen)', () => {
-		const source = readFileSync(join(root, 'src', 'engine.ts'), 'utf8');
-		const start = source.indexOf(START_MARKER);
-		const endIdx = source.indexOf(END_MARKER);
-		expect(start).toBeGreaterThanOrEqual(0);
-		expect(endIdx).toBeGreaterThan(start);
-		const endLine = source.indexOf('\n', endIdx);
-		const checkedIn = source.slice(start, endLine);
-		expect(checkedIn).toBe(generateEnumRegion(schema));
+		const source = readFileSync(join(root, 'src', 'engine.ts'), 'utf8')
+		const start = source.indexOf(START_MARKER)
+		const endIdx = source.indexOf(END_MARKER)
+		expect(start).toBeGreaterThanOrEqual(0)
+		expect(endIdx).toBeGreaterThan(start)
+		const endLine = source.indexOf('\n', endIdx)
+		const checkedIn = source.slice(start, endLine)
+		expect(checkedIn).toBe(generateEnumRegion(schema))
 		// The generator only ever rewrites text between its own markers.
-		expect(spliceEnumRegion(source, schema)).toBe(source);
+		expect(spliceEnumRegion(source, schema)).toBe(source)
 		// Exactly one region.
-		expect(source.indexOf(START_MARKER, start + 1)).toBe(-1);
-	});
+		expect(source.indexOf(START_MARKER, start + 1)).toBe(-1)
+	})
 
 	it('the debug twin matches the schema (run pnpm gen)', () => {
-		const checkedIn = readFileSync(join(root, 'src', 'debug', 'layout.debug.ts'), 'utf8');
-		expect(checkedIn).toBe(generateDebugTwin(schema));
-	});
+		const checkedIn = readFileSync(join(root, 'src', 'debug', 'layout.debug.ts'), 'utf8')
+		expect(checkedIn).toBe(generateDebugTwin(schema))
+	})
 
 	it('the docs table matches the schema (run pnpm gen)', () => {
-		const checkedIn = readFileSync(join(root, 'docs', 'layout.md'), 'utf8');
-		expect(checkedIn).toBe(generateDocs(schema));
-	});
-});
+		const checkedIn = readFileSync(join(root, 'docs', 'layout.md'), 'utf8')
+		expect(checkedIn).toBe(generateDocs(schema))
+	})
+})
 
 describe('§15 codegen: schema self-checks', () => {
 	it('rejects overlapping flag bits', () => {
@@ -55,8 +55,8 @@ describe('§15 codegen: schema self-checks', () => {
 					{ name: 'B', value: 1, doc: 'b' },
 				],
 			}),
-		).toThrow(/overlaps/);
-	});
+		).toThrow(/overlaps/)
+	})
 
 	it('rejects out-of-stride slots and duplicate slots', () => {
 		expect(() =>
@@ -66,14 +66,12 @@ describe('§15 codegen: schema self-checks', () => {
 					{
 						name: 'bad',
 						plane: 'G',
-						fields: [
-							{ name: 'X', slot: 4, kind: 'u31', doc: 'x', owner: 'x' },
-						],
+						fields: [{ name: 'X', slot: 4, kind: 'u31', doc: 'x', owner: 'x' }],
 					},
 				],
 			}),
-		).toThrow(/outside stride/);
-	});
+		).toThrow(/outside stride/)
+	})
 
 	it('rejects masks referencing unknown flags', () => {
 		expect(() =>
@@ -81,13 +79,13 @@ describe('§15 codegen: schema self-checks', () => {
 				...schema,
 				derivedMasks: [{ name: 'BAD', of: ['NOPE'], doc: 'bad' }],
 			}),
-		).toThrow(/unknown flag/);
-	});
+		).toThrow(/unknown flag/)
+	})
 
 	it('the debug twin decodes flag words', async () => {
-		const twin = await import('../src/debug/layout.debug');
-		expect(twin.decodeFlags(1 | 1024)).toEqual(['MUTABLE', 'K_ATOM']);
-		expect(twin.FIELDS_BY_RECORD.node.find((f) => f.name === 'LOG_HEAD')?.slot).toBe(6);
-		expect(twin.LAYOUT_VERSION).toBe(schema.layoutVersion);
-	});
-});
+		const twin = await import('../src/debug/layout.debug')
+		expect(twin.decodeFlags(1 | 1024)).toEqual(['MUTABLE', 'K_ATOM'])
+		expect(twin.FIELDS_BY_RECORD.node.find((f) => f.name === 'LOG_HEAD')?.slot).toBe(6)
+		expect(twin.LAYOUT_VERSION).toBe(schema.layoutVersion)
+	})
+})

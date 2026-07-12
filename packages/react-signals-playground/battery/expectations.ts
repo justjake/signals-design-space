@@ -10,16 +10,16 @@
  * mechanism that is unreachable on that implementation. variant rows tell
  * the spec which ruled behavior to assert.
  */
-import type { test as batteryTest } from './fixtures';
-import type { BatteryEntry } from './entries';
+import type { test as batteryTest } from './fixtures'
+import type { BatteryEntry } from './entries'
 
 export type Expectation =
 	| { kind: 'pass' }
 	| { kind: 'finding'; note: string }
 	| { kind: 'variant'; variant: string }
-	| { kind: 'skip'; reason: string };
+	| { kind: 'skip'; reason: string }
 
-const PASS: Expectation = { kind: 'pass' };
+const PASS: Expectation = { kind: 'pass' }
 
 // History note: the gate harness (thrown promises in transition renders)
 // was expected to freeze solid-react's commits — its shim documents that
@@ -28,7 +28,7 @@ const PASS: Expectation = { kind: 'pass' };
 // behaves exactly like the suspense implementations, so no gate row skips
 // solid-react anymore and FIND-THENABLE.gate pins the working hold.
 
-type PerImpl = Partial<Record<string, Expectation>>;
+type PerImpl = Partial<Record<string, Expectation>>
 
 const TABLE: Record<string, PerImpl> = {
 	// RCC-RT1.scope-read: solid-react's bare accessor used to resolve
@@ -72,10 +72,10 @@ const TABLE: Record<string, PerImpl> = {
 	// resolving slice-time worlds) fixed 2026-07-08 — the bridge pins each
 	// node's first-read value per render pass, and the commit fixup corrects
 	// staleness pre-paint.
-};
+}
 
 export function expectationFor(rowId: string, entry: BatteryEntry): Expectation {
-	return TABLE[rowId]?.[entry.label] ?? PASS;
+	return TABLE[rowId]?.[entry.label] ?? PASS
 }
 
 /**
@@ -89,11 +89,11 @@ export function applyExpectation(
 	rowId: string,
 	entry: BatteryEntry,
 ): Expectation {
-	const expectation = expectationFor(rowId, entry);
+	const expectation = expectationFor(rowId, entry)
 	if (expectation.kind === 'skip') {
-		t.skip(true, `${rowId}: ${expectation.reason}`);
+		t.skip(true, `${rowId}: ${expectation.reason}`)
 	} else if (expectation.kind === 'finding') {
-		t.fail(true, `FINDING ${rowId}: ${expectation.note}`);
+		t.fail(true, `FINDING ${rowId}: ${expectation.note}`)
 	}
-	return expectation;
+	return expectation
 }

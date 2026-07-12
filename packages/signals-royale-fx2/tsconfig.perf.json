@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"noEmitOnError": true,
+		"incremental": false,
+		"declaration": false,
+		"sourceMap": false,
+		"inlineSourceMap": false,
+		"rewriteRelativeImportExtensions": true
+	},
+	"include": ["src"]
+}

@@ -7,7 +7,7 @@
  * the only producers of the app's signal handles, so every handle really is
  * an Atom/Computed instance.
  */
-import { Atom, Computed } from 'cosignals';
+import { Atom, Computed } from 'cosignals'
 import {
 	registerCosignalReact,
 	startSignalTransition,
@@ -15,44 +15,44 @@ import {
 	useSignal as bridgeUseSignal,
 	useSignalEffect as bridgeUseSignalEffect,
 	type SignalSource,
-} from 'cosignals-react';
-import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface';
+} from 'cosignals-react'
+import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
-export const name = 'cosignals';
+export const name = 'cosignals'
 
 // Verified in the playground's Playwright suite: a promise thrown from a
 // component inside a transition render keeps the transition pending while
 // urgent updates keep committing, exactly like stock React semantics.
-export const transitionHoldStyle: TransitionHoldStyle = 'suspense';
+export const transitionHoldStyle: TransitionHoldStyle = 'suspense'
 
 export function register(): void {
 	// The handle is intentionally dropped: registration lives for the page,
 	// and dispose() only matters for tests that re-register.
-	registerCosignalReact();
+	registerCosignalReact()
 }
 
 export function createAtom<T>(initial: T, label?: string): WritableSignal<T> {
-	return new Atom(initial, { label });
+	return new Atom(initial, { label })
 }
 
 export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T> {
-	return new Computed(fn, { label });
+	return new Computed(fn, { label })
 }
 
 export function useSignal<T>(signal: ReadableSignal<T>): T {
-	return bridgeUseSignal(signal as unknown as SignalSource<T>);
+	return bridgeUseSignal(signal as unknown as SignalSource<T>)
 }
 
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
 	// This bridge splits the concerns: useComputed memoizes a Computed handle
 	// on deps, and subscription goes through useSignal like any other signal.
-	return bridgeUseSignal(bridgeUseComputed(fn, deps));
+	return bridgeUseSignal(bridgeUseComputed(fn, deps))
 }
 
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
-	bridgeUseSignalEffect(fn, deps);
+	bridgeUseSignalEffect(fn, deps)
 }
 
 // Direct re-export: the bridge's scope type (() => unknown, for async
 // actions) is wider than the interface's () => void, so it conforms as is.
-export { startSignalTransition };
+export { startSignalTransition }

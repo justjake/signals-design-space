@@ -52,199 +52,215 @@
  * a custom-equals topology member, so lockstep checks the acceptance/order
  * semantics continuously; this file is the hand-pinned matrix.
  */
-import { describe, expect, it } from 'vitest';
-import { Atom, engine, ReducerAtom, __TEST__resetEngine } from '../src/index.js';
-import type { Equals, Value } from '../src/index.js';
+import { describe, expect, it } from 'vitest'
+import { Atom, engine, ReducerAtom, __TEST__resetEngine } from '../src/index.js'
+import type { Equals, Value } from '../src/index.js'
 
-type Pair = [Value, Value];
+type Pair = [Value, Value]
 
 /** An asymmetric, counting comparator: records every (a, b) argument pair
  * and answers `false` unless BOTH halves match a designated "equal" pair —
  * asymmetry means a flipped invocation records a flipped pair and (for the
  * order pins) would also flip the equal answer. */
 function probeComparator(): { eq: Equals; calls: Pair[]; reset(): void } {
-	const calls: Pair[] = [];
+	const calls: Pair[] = []
 	return {
 		calls,
 		reset() {
-			calls.length = 0;
+			calls.length = 0
 		},
 		eq: (a, b) => {
-			calls.push([a, b]);
+			calls.push([a, b])
 			// Asymmetric equality: (x, y) is "equal" only when incoming === current + 0
 			// — i.e. plain identity — but ONLY in this argument order for the
 			// asymmetric drop pins below: current tagged objects never equal.
-			return Object.is(a, b);
+			return Object.is(a, b)
 		},
-	};
+	}
 }
 
 function freshEngine(): void {
-	engine.discardAllWip();
+	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
-		if (t.parked) engine.settleAction(t.id);
-		else engine.retire(t.id);
+		if (t.parked) {
+			engine.settleAction(t.id)
+		} else {
+			engine.retire(t.id)
+		}
 	}
-	__TEST__resetEngine();
+	__TEST__resetEngine()
 }
 
 describe('R-2 order: isEqual(current, incoming), everywhere', () => {
 	it('standalone set/update/dispatch: one invocation, kernel order', () => {
-		freshEngine();
-		const p = probeComparator();
-		const a = new Atom<number>(1, { isEqual: p.eq });
-		a.set(2); // standalone fast arm (no engine content, quiet, no driver)
-		expect(p.calls).toEqual([[1, 2]]); // (current, incoming), ONCE
-		p.reset();
-		a.update((n) => n + 1); // 2 -> 3
-		expect(p.calls).toEqual([[2, 3]]); // the updater folds first; ONE comparator call
-		p.reset();
-		const r = new ReducerAtom<number, number>((s, act) => s + act, 10, { isEqual: p.eq });
-		r.dispatch(5); // dispatch is an update whose closure carries the reducer
-		expect(p.calls).toEqual([[10, 15]]);
-	});
+		freshEngine()
+		const p = probeComparator()
+		const a = new Atom<number>(1, { isEqual: p.eq })
+		a.set(2) // standalone fast arm (no engine content, quiet, no driver)
+		expect(p.calls).toEqual([[1, 2]]) // (current, incoming), ONCE
+		p.reset()
+		a.update((n) => n + 1) // 2 -> 3
+		expect(p.calls).toEqual([[2, 3]]) // the updater folds first; ONE comparator call
+		p.reset()
+		const r = new ReducerAtom<number, number>((s, act) => s + act, 10, { isEqual: p.eq })
+		r.dispatch(5) // dispatch is an update whose closure carries the reducer
+		expect(p.calls).toEqual([[10, 15]])
+	})
 
 	it('quiet set/update/dispatch on an engine atom: one invocation, kernel order (the double invocation is corrected)', () => {
-		freshEngine();
-		const p = probeComparator();
-		const node = engine.atom('q', 1, p.eq);
-		const handle = node.handle as Atom<number>;
-		handle.set(2); // quiet fold (engine content, nothing pending)
-		expect(p.calls).toEqual([[1, 2]]); // ONCE — the direct kernel apply re-runs no policy comparator
-		p.reset();
-		handle.update((n) => n + 1); // 2 -> 3
-		expect(p.calls).toEqual([[2, 3]]);
-		p.reset();
-		const rHandle = new ReducerAtom<number, number>((s, act) => s + act, 10, { isEqual: p.eq });
-		const rNode = engine.internalsForAtom(rHandle as unknown as Atom<number>);
-		rNode.name = 'qr';
-		rHandle.dispatch(5);
-		expect(p.calls).toEqual([[10, 15]]);
-	});
+		freshEngine()
+		const p = probeComparator()
+		const node = engine.atom('q', 1, p.eq)
+		const handle = node.handle as Atom<number>
+		handle.set(2) // quiet fold (engine content, nothing pending)
+		expect(p.calls).toEqual([[1, 2]]) // ONCE — the direct kernel apply re-runs no policy comparator
+		p.reset()
+		handle.update((n) => n + 1) // 2 -> 3
+		expect(p.calls).toEqual([[2, 3]])
+		p.reset()
+		const rHandle = new ReducerAtom<number, number>((s, act) => s + act, 10, { isEqual: p.eq })
+		const rNode = engine.internalsForAtom(rHandle)
+		rNode.name = 'qr'
+		rHandle.dispatch(5)
+		expect(p.calls).toEqual([[10, 15]])
+	})
 
 	it('recorded set/update/dispatch, EMPTY log: two invocations — the drop check, then the eager apply gate', () => {
-		freshEngine();
-		const p = probeComparator();
-		const node = engine.atom('r', 1, p.eq);
-		const t = engine.openBatch();
-		engine.write(t.id, node, 0, 2); // set
+		freshEngine()
+		const p = probeComparator()
+		const node = engine.atom('r', 1, p.eq)
+		const t = engine.openBatch()
+		engine.write(t.id, node, 0, 2) // set
 		// Drop check against base (1, 2), then the eager stepwise gate against
 		// kernel newest (1, 2) — kernel order at BOTH pinned sites.
-		expect(p.calls).toEqual([[1, 2], [1, 2]]);
-		p.reset();
-		engine.write(t.id, node, 1, (n: unknown) => (n as number) + 1); // update, log now LIVE (unretired entry)
+		expect(p.calls).toEqual([
+			[1, 2],
+			[1, 2],
+		])
+		p.reset()
+		engine.write(t.id, node, 1, (n: unknown) => (n as number) + 1) // update, log now LIVE (unretired entry)
 		// No drop check with live history present; the eager gate folds over
 		// kernel newest (2 -> 3): ONE invocation.
-		expect(p.calls).toEqual([[2, 3]]);
-		p.reset();
-		const reduce = (s: number, act: number) => s + act;
-		engine.write(t.id, node, 1, (s: unknown) => reduce(s as number, 7)); // the dispatch shape
-		expect(p.calls).toEqual([[3, 10]]);
-		engine.retire(t.id);
-	});
+		expect(p.calls).toEqual([[2, 3]])
+		p.reset()
+		const reduce = (s: number, act: number) => s + act
+		engine.write(t.id, node, 1, (s: unknown) => reduce(s as number, 7)) // the dispatch shape
+		expect(p.calls).toEqual([[3, 10]])
+		engine.retire(t.id)
+	})
 
 	it('recorded, RETIRED-HISTORY log: the drop check re-arms against kernel newest — the same counts as the empty cell', () => {
-		freshEngine();
-		const p = probeComparator();
-		const node = engine.atom('rh', 0, p.eq);
-		const hold = engine.openBatch(); // write-free: holds the episode open past t's retirement
-		const t = engine.openBatch();
-		engine.write(t.id, node, 0, 5);
-		engine.retire(t.id); // every entry retired, no pins — but `hold` keeps the episode (and the log) alive
-		expect(node.log.materialize()).toHaveLength(1); // the entry persists until the episode drop
-		p.reset();
+		freshEngine()
+		const p = probeComparator()
+		const node = engine.atom('rh', 0, p.eq)
+		const hold = engine.openBatch() // write-free: holds the episode open past t's retirement
+		const t = engine.openBatch()
+		engine.write(t.id, node, 0, 5)
+		engine.retire(t.id) // every entry retired, no pins — but `hold` keeps the episode (and the log) alive
+		expect(node.log.materialize()).toHaveLength(1) // the entry persists until the episode drop
+		p.reset()
 		// Equal against kernel newest (the one value every world folds to):
 		// DROPPED after ONE invocation, exactly as an empty-log drop — this is
 		// the state where the reference model's log is already empty.
-		engine.write(hold.id, node, 0, 5);
-		expect(p.calls).toEqual([[5, 5]]);
-		expect(node.log.materialize()).toHaveLength(1); // no entry appended
-		p.reset();
+		engine.write(hold.id, node, 0, 5)
+		expect(p.calls).toEqual([[5, 5]])
+		expect(node.log.materialize()).toHaveLength(1) // no entry appended
+		p.reset()
 		// Unequal: accepted with the empty cell's TWO invocations — the
 		// re-armed drop check, then the eager apply gate (both against newest).
-		engine.write(hold.id, node, 0, 6);
-		expect(p.calls).toEqual([[5, 6], [5, 6]]);
-		engine.retire(hold.id);
-	});
+		engine.write(hold.id, node, 0, 6)
+		expect(p.calls).toEqual([
+			[5, 6],
+			[5, 6],
+		])
+		engine.retire(hold.id)
+	})
 
 	it('world folds re-invoke per entry BY DESIGN, in kernel order; the episode close re-invokes NOTHING', () => {
-		freshEngine();
-		const p = probeComparator();
-		const node = engine.atom('f', 0, p.eq);
-		const t = engine.openBatch();
-		engine.write(t.id, node, 0, 1);
-		engine.write(t.id, node, 0, 2);
-		p.reset();
+		freshEngine()
+		const p = probeComparator()
+		const node = engine.atom('f', 0, p.eq)
+		const t = engine.openBatch()
+		engine.write(t.id, node, 0, 1)
+		engine.write(t.id, node, 0, 2)
+		p.reset()
 		// A committed read replays NO entries (t not committed for the root),
 		// a newest read serves the kernel without folding; force a real fold
 		// through the render world including t.
-		const render = engine.renderStart('A', [t.id]);
-		expect(engine.renderValue(node, render)).toBe(2);
+		const render = engine.renderStart('A', [t.id])
+		expect(engine.renderValue(node, render)).toBe(2)
 		// The fold replayed both entries: (0,1) then (1,2) — per entry, kernel order.
-		expect(p.calls).toEqual([[0, 1], [1, 2]]);
-		engine.renderEnd(render.id, 'discard');
-		p.reset();
+		expect(p.calls).toEqual([
+			[0, 1],
+			[1, 2],
+		])
+		engine.renderEnd(render.id, 'discard')
+		p.reset()
 		// THE CLOSE PIN: this retirement is the last pending durable work, so
 		// the EPISODE CLOSES — base adopts kernel newest by identity (each
 		// write's sole acceptance gate already ran at the write, pinned
 		// above), the log drops whole, and the comparator runs ZERO times.
-		engine.retire(t.id);
-		expect(p.calls).toEqual([]);
-		expect(node.log.materialize()).toHaveLength(0);
-		expect(node.base).toBe(2);
-	});
+		engine.retire(t.id)
+		expect(p.calls).toEqual([])
+		expect(node.log.materialize()).toHaveLength(0)
+		expect(node.base).toBe(2)
+	})
 
 	it('the bounded-memory prefix fold (held-open episode) replays per entry, kernel order; the close still re-invokes nothing', () => {
-		freshEngine();
-		const p = probeComparator();
-		const node = engine.atom('chunky', 0, p.eq);
-		const parked = engine.openBatch({ action: true }); // a parked action holds the episode open indefinitely
-		const t = engine.openBatch();
-		const u = engine.openBatch();
-		const THRESHOLD = 1024; // WriteLog.ts FOLD_VALVE_THRESHOLD
-		const N = THRESHOLD + 200; // a threshold's worth in t + a 200-entry tail in u
-		for (let i = 1; i <= THRESHOLD; i++) engine.write(t.id, node, 0, i);
-		for (let i = THRESHOLD + 1; i <= N; i++) engine.write(u.id, node, 0, i);
-		p.reset();
+		freshEngine()
+		const p = probeComparator()
+		const node = engine.atom('chunky', 0, p.eq)
+		const parked = engine.openBatch({ action: true }) // a parked action holds the episode open indefinitely
+		const t = engine.openBatch()
+		const u = engine.openBatch()
+		const THRESHOLD = 1024 // WriteLog.ts FOLD_VALVE_THRESHOLD
+		const N = THRESHOLD + 200 // a threshold's worth in t + a 200-entry tail in u
+		for (let i = 1; i <= THRESHOLD; i++) {
+			engine.write(t.id, node, 0, i)
+		}
+		for (let i = THRESHOLD + 1; i <= N; i++) {
+			engine.write(u.id, node, 0, i)
+		}
+		p.reset()
 		// Retiring t stamps its entries, but the parked action keeps the
 		// episode open — the valve folds the retired THRESHOLD-long prefix
 		// into base (per entry, kernel order: replay fidelity) and keeps u's
 		// still-unretired tail.
-		engine.retire(t.id);
-		expect(p.calls.length).toBe(THRESHOLD);
-		expect(p.calls[0]).toEqual([0, 1]);
-		expect(p.calls[THRESHOLD - 1]).toEqual([THRESHOLD - 1, THRESHOLD]);
-		expect(node.base).toBe(THRESHOLD);
-		expect(node.log.length).toBe(N - THRESHOLD); // the tail stays for the episode drop
-		p.reset();
+		engine.retire(t.id)
+		expect(p.calls.length).toBe(THRESHOLD)
+		expect(p.calls[0]).toEqual([0, 1])
+		expect(p.calls[THRESHOLD - 1]).toEqual([THRESHOLD - 1, THRESHOLD])
+		expect(node.base).toBe(THRESHOLD)
+		expect(node.log.length).toBe(N - THRESHOLD) // the tail stays for the episode drop
+		p.reset()
 		// Retiring u stamps the tail, but a 200-entry prefix is below the
 		// threshold: no fold — sub-threshold residue waits for the close.
-		engine.retire(u.id);
-		expect(p.calls).toEqual([]);
-		expect(node.log.length).toBe(N - THRESHOLD);
+		engine.retire(u.id)
+		expect(p.calls).toEqual([])
+		expect(node.log.length).toBe(N - THRESHOLD)
 		// Settlement retires the last batch: the episode closes; the tail
 		// drops whole with base adopting kernel newest by identity — zero
 		// comparator invocations.
-		engine.settleAction(parked.id);
-		expect(p.calls).toEqual([]);
-		expect(node.log.length).toBe(0);
-		expect(node.base).toBe(N);
-	});
+		engine.settleAction(parked.id)
+		expect(p.calls).toEqual([])
+		expect(node.log.length).toBe(0)
+		expect(node.base).toBe(N)
+	})
 
 	it('the asymmetric drop pin: a comparator equal in one direction only drops exactly when (current, incoming) says equal', () => {
-		freshEngine();
+		freshEngine()
 		// eq(a, b) := b is the "successor tag" of a — equal ONLY when the
 		// incoming value is `current + 10`. If any site flipped its argument
 		// order, the drop/accept decisions below would invert.
-		const asym: Equals = (a, b) => (b as number) === (a as number) + 10;
-		const node = engine.atom('asym', 0, asym);
-		const handle = node.handle as Atom<number>;
-		handle.set(10); // eq(0, 10) → true: DROPPED (quiet drop against base)
-		expect(engine.newestValue(node)).toBe(0);
-		handle.set(5); // eq(0, 5) → false: accepted
-		expect(engine.newestValue(node)).toBe(5);
-		expect(engine.committedValue(node, 'A')).toBe(5);
-		handle.set(15); // eq(5, 15) → true: DROPPED — a flipped site would accept
-		expect(engine.newestValue(node)).toBe(5);
-	});
-});
+		const asym: Equals = (a, b) => (b as number) === (a as number) + 10
+		const node = engine.atom('asym', 0, asym)
+		const handle = node.handle as Atom<number>
+		handle.set(10) // eq(0, 10) → true: DROPPED (quiet drop against base)
+		expect(engine.newestValue(node)).toBe(0)
+		handle.set(5) // eq(0, 5) → false: accepted
+		expect(engine.newestValue(node)).toBe(5)
+		expect(engine.committedValue(node, 'A')).toBe(5)
+		handle.set(15) // eq(5, 15) → true: DROPPED — a flipped site would accept
+		expect(engine.newestValue(node)).toBe(5)
+	})
+})

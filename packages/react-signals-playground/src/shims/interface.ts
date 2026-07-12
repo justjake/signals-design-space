@@ -29,24 +29,24 @@
  *   state (compare an urgently-written target against the transitionally
  *   written current value); no render ever suspends.
  */
-export type TransitionHoldStyle = 'suspense' | 'defer-write';
+export type TransitionHoldStyle = 'suspense' | 'defer-write'
 
 /** A readable reactive value: an atom or a derived value. */
 export interface ReadableSignal<T> {
-	readonly state: T;
+	readonly state: T
 }
 
 /** A writable reactive value (an atom). */
 export interface WritableSignal<T> extends ReadableSignal<T> {
 	/** Replace the value. */
-	set(next: T): void;
+	set(next: T): void
 	/** Functional update; `fn` must be pure (implementations replay it per pending world). */
-	update(fn: (current: T) => T): void;
+	update(fn: (current: T) => T): void
 }
 
 export interface ConcurrentSignalsShim {
 	/** Implementation display name — rendered by the app so a page proves which engine drives it. */
-	readonly name: string;
+	readonly name: string
 
 	/**
 	 * Couples the implementation's engine to the patched React build's
@@ -54,23 +54,23 @@ export interface ConcurrentSignalsShim {
 	 * react-dom/client (the renderer registers its protocol provider at
 	 * module init) and before rendering any root. Throws on stock React.
 	 */
-	register(): void;
+	register(): void
 
 	/** A module-level writable signal. */
-	createAtom<T>(initial: T, label?: string): WritableSignal<T>;
+	createAtom<T>(initial: T, label?: string): WritableSignal<T>
 
 	/**
 	 * A module-level derived signal: `fn`'s signal reads are tracked and the
 	 * value recomputes when they change. `fn` must be pure.
 	 */
-	createComputed<T>(fn: () => T, label?: string): ReadableSignal<T>;
+	createComputed<T>(fn: () => T, label?: string): ReadableSignal<T>
 
 	/**
 	 * Subscribes the component to a signal and returns its value for the
 	 * current render's world: a transition render sees pending state, an
 	 * urgent render sees committed state, and no render mixes the two.
 	 */
-	useSignal<T>(signal: ReadableSignal<T>): T;
+	useSignal<T>(signal: ReadableSignal<T>): T
 
 	/**
 	 * Component-scoped derived value: like useMemo, but the component also
@@ -78,14 +78,14 @@ export interface ConcurrentSignalsShim {
 	 * tracked automatically and do NOT belong in `deps`; `deps` covers the
 	 * ordinary React values `fn` closes over (props, state).
 	 */
-	useComputed<T>(fn: () => T, deps: readonly unknown[]): T;
+	useComputed<T>(fn: () => T, deps: readonly unknown[]): T
 
 	/**
 	 * Like useEffect, but re-runs when the COMMITTED value of a signal read
 	 * inside `fn` changes — effects track what the user actually sees, never
 	 * pending transition state.
 	 */
-	useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void;
+	useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void
 
 	/**
 	 * React's startTransition with the implementation's write batching:
@@ -93,8 +93,8 @@ export interface ConcurrentSignalsShim {
 	 * the resulting renders are non-urgent and urgent updates keep landing
 	 * in between.
 	 */
-	startSignalTransition(scope: () => void): void;
+	startSignalTransition(scope: () => void): void
 
 	/** How to hold a transition open on in-flight async data; see TransitionHoldStyle. */
-	readonly transitionHoldStyle: TransitionHoldStyle;
+	readonly transitionHoldStyle: TransitionHoldStyle
 }
