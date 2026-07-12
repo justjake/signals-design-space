@@ -364,13 +364,15 @@ describe('two-tier graph: tracking and waves', () => {
 	test('T11 [falsify-first] a write through a deep watched chain completes', () => {
 		// Pre-rebuild failure: RangeError: Maximum call stack size exceeded —
 		// the recursive wave overflowed at this depth; the iterative propagate
-		// carries it. (Pull-side recursion is consciously retained; this test
-		// never deep-pulls.)
+		// carries it. The final read also guards pull-side validation.
 		const DEPTH = 150_000
 		const base = cell(0)
+		const side = cell(0)
 		const disposers: Array<() => void> = []
 		let topNotified = 0
-		let prev: ReactiveNode = base
+		let prev: ReactiveNode = makeGraphDerived(() => readCell(base) + readCell(side))
+		disposers.push(observeNode(prev, () => {}))
+		readDerived(prev as DerivedNode<number>)
 		for (let i = 0; i < DEPTH; i++) {
 			const p = prev
 			const d = makeGraphDerived(
@@ -388,11 +390,34 @@ describe('two-tier graph: tracking and waves', () => {
 		expect((prev as DerivedNode<number>).value).toBe(DEPTH)
 		writeCell(base, 1)
 		expect(topNotified).toBe(1)
+		expect(readDerived(prev as DerivedNode<number>)).toBe(DEPTH + 1)
 		// Reverse order keeps demote cascades depth-1 as well.
 		for (let i = disposers.length - 1; i >= 0; i--) {
 			disposers[i]()
 		}
 		expect(subEdgeCount(base)).toBe(0)
+	})
+
+	test('T11c reentrant disposal cannot strand the chain top stale', () => {
+		const base = signal(1)
+		const side = signal(0)
+		let stop = () => {}
+		const first = computed(() => {
+			const value = base.get()
+			if (value === 2) {
+				stop()
+			}
+			return value * 10 + side.get()
+		})
+		let top = first
+		for (let i = 0; i < 20; i++) {
+			const previous = top
+			top = computed(() => previous.get() + 1)
+		}
+		stop = makeEffect(() => void top.get())
+		base.set(2)
+		expect((nodeOf(top) as DerivedNode<number>).value).toBe(40)
+		expect(top.get()).toBe(40)
 	})
 })
 

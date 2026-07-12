@@ -1183,13 +1183,86 @@ function recompute(node: DerivedNode<unknown>): void {
 	node.validAtGraphChange = preGraphChange
 }
 
+const chainNodes: Array<DerivedNode<unknown> | undefined> = []
+let chainDepth = 0
+
+function chainResolve(start: DerivedNode<unknown>, first: Link): void {
+	const base = chainDepth
+	let depth = base
+	let node = start
+	let link = first
+	let dep: ReactiveNode
+	try {
+		while (true) {
+			chainNodes[depth++] = node
+			dep = link.dep
+			const flags = dep.flags
+			if (
+				(flags & (Flag.KindDerived | Flag.StaleMask)) ===
+				(Flag.KindDerived | Flag.StaleDirty)
+			) {
+				chainDepth = depth
+				recompute(dep as DerivedNode<unknown>)
+				break
+			}
+			if (
+				(flags & (Flag.KindDerived | Flag.StaleMask)) !==
+				(Flag.KindDerived | Flag.StaleCheck)
+			) {
+				break
+			}
+			const next = dep.deps
+			if (next === undefined || next.nextDep !== undefined) {
+				chainDepth = depth
+				ensureFreshAt(dep as DerivedNode<unknown>, 0)
+				break
+			}
+			node = dep as DerivedNode<unknown>
+			link = next
+		}
+		do {
+			node = chainNodes[--depth]!
+			chainNodes[depth] = undefined
+			if (dep.changedAtGraphChange > node.validAtGraphChange) {
+				chainDepth = depth
+				recompute(node)
+			} else {
+				node.flags &= ~Flag.StaleMask
+				node.validAtGraphChange = graphChangeClock
+			}
+			dep = node
+		} while (depth !== base)
+		chainDepth = base
+	} finally {
+		while (depth !== base) {
+			chainNodes[--depth] = undefined
+		}
+		chainDepth = base
+	}
+}
+
 /** Bring a derived up to date; exact recompute counts are the contract. */
 export function ensureFresh(node: DerivedNode<unknown>): void {
+	ensureFreshAt(node, 0)
+}
+
+function ensureFreshAt(node: DerivedNode<unknown>, depth: number): void {
 	const flags = node.flags
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promote validated the closure).
 		if ((flags & Flag.StaleMask) === 0) {
 			return
+		}
+		if (
+			depth === 16 &&
+			(flags & Flag.StaleMask) === Flag.StaleCheck &&
+			node.value !== UNINITIALIZED
+		) {
+			const first = node.deps
+			if (first !== undefined && first.nextDep === undefined) {
+				chainResolve(node, first)
+				return
+			}
 		}
 	} else if ((flags & Flag.StaleMask) === 0 && node.validAtGraphChange === graphChangeClock) {
 		return
@@ -1213,7 +1286,7 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
 			(dflags & Flag.KindDerived) !== 0 &&
 			(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 		) {
-			ensureFresh(dep as DerivedNode<unknown>)
+			ensureFreshAt(dep as DerivedNode<unknown>, depth === 16 ? 0 : depth + 1)
 		}
 		if (dep.changedAtGraphChange > node.validAtGraphChange) {
 			recompute(node)
@@ -1232,7 +1305,7 @@ export function readDerived<T>(node: DerivedNode<T>): T {
 	// nothing to validate) — skip the ensureFresh call entirely. Everything
 	// else (stale, or unwatched needing the currency check) takes the call.
 	if ((node.flags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched) {
-		ensureFresh(node as DerivedNode<unknown>)
+		ensureFreshAt(node as DerivedNode<unknown>, 0)
 	}
 	if (activeConsumer !== null) {
 		trackRead(node, activeConsumer)
@@ -1317,7 +1390,7 @@ function runWatcher(w: WatcherNode): void {
 				(dflags & Flag.KindDerived) !== 0 &&
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
-				ensureFresh(dep as DerivedNode<unknown>)
+				ensureFreshAt(dep as DerivedNode<unknown>, 0)
 				if ((w.flags & Flag.Watched) === 0) {
 					return
 				} // disposed mid-validation

@@ -218,6 +218,28 @@ describe('leak audit', () => {
 		expect(payloadRef.deref()).toBeUndefined()
 	})
 
+	test('[guard] deep-chain scratch slots do not retain computed nodes', async () => {
+		const base = signal(0)
+		let savedRef!: WeakRef<object>
+		;(() => {
+			const nodes = []
+			let top = computed(() => base.get() + 1)
+			nodes.push(top)
+			for (let i = 1; i < 40; i++) {
+				const previous = top
+				top = computed(() => previous.get() + 1)
+				nodes.push(top)
+			}
+			const dispose = effect(() => void top.get())
+			base.set(1)
+			savedRef = new WeakRef(nodeOf(nodes[23]!))
+			dispose()
+		})()
+		await collect(10)
+		expect(savedRef.deref()).toBeUndefined()
+		expect(subCount(base)).toBe(0)
+	})
+
 	test('[guard] effects preempted by a throwing flush collect after disposal (catch-path slots nulled)', async () => {
 		const cell = signal(0)
 		let armed = false
