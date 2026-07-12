@@ -105,7 +105,7 @@ export interface Draft {
 let nextDraftId: DraftId = 1
 /** Open and sealed drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>()
-// Virgin cells may sit in world certificates; the graph asks before taking
+// Detached cells may sit in world certificates; the graph asks before taking
 // its recordless write fast path (see writeCell).
 setHasLiveDrafts(() => liveDrafts.size > 0)
 /** Cells with at least one live draft intent. */

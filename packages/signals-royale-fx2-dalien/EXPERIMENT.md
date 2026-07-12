@@ -95,15 +95,15 @@ What closed the gap, in landing order:
   a freed watcher record, for instance, provably dirties only its dep list
   head/tail and validation watermark.
 - **Lazy records.** Cells and computeds are born pointing at a shared,
-  immutable "virgin" record that carries their born flags word; the real
+  immutable detached-state record that carries their born flags word; the real
   record and finalizer registration materialize at first graph
   participation. A handle dropped before that point frees with ordinary
   GC. Writes to a recordless cell store the value and skip the clock
   entirely unless a draft world is live or a tracer is attached (both can
   observe a cell from outside the edge graph).
-- **Cell re-virginization.** A cell record's only owners are its incoming
+- **Cell record detachment.** A cell record's only owners are its incoming
   links, so when the last one drops, the record returns to the free pool
-  and the live handle points back at the virgin record. Cells linked by
+  and the live handle points back at the detached-state record. Cells linked by
   reads therefore never touch the FinalizationRegistry at all; only
   computeds (whose records own dep links a dead handle must free) and
   tracer/draft-materialized cells register.
@@ -114,7 +114,7 @@ What closed the gap, in landing order:
 - **Bytecode diet.** Typed-array field access compiles to roughly double
   the bytecode of a named-property access, which starved V8's inlining
   budgets. Moving cold bodies (cycle throw, children/cleanup disposal,
-  stale-edge freeing, batch-base save, re-virginize) out of hot functions
+  stale-edge freeing, batch-base save, detach) out of hot functions
   restored inlining across the validate/recompute/track cluster.
 - **Stackless chain validation.** A node with exactly one dependency
   validates with one reading compare, and a chain of single-dep,
@@ -150,4 +150,4 @@ Two claims from the earlier conclusion did not survive re-testing.
 Typed-array bounds checks were already exonerated by the masking
 experiment and remain exonerated. The finalizer-registration cost, judged
 inherent above, was removable for the dominant cell lifecycle via
-re-virginization.
+record detachment.

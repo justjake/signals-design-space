@@ -124,7 +124,7 @@ export const enum Flag {
 	/** This record's owner is registered with the node finalizer. Deriveds
 	 * always are (their records own dep links a dead handle must free). An
 	 * unregistered cell's record is owned by its incoming links alone: when
-	 * the last one drops it re-virginizes instead (see freeLink), so it never
+	 * the last one drops the record detaches instead (see freeLink), so it never
 	 * needs the registry — and must never be freed by it. */
 	Registered = 0b1000_0000_0000_0000,
 
@@ -262,7 +262,7 @@ const observerColumn = new Int32Array(RECORD_CAPACITY)
 const causeColumn = new Int32Array(RECORD_CAPACITY)
 const pokeColumn = new Int32Array(RECORD_CAPACITY)
 const batchColumn = new Int32Array(RECORD_CAPACITY)
-// Bumped every time a record is reclaimed or re-virginized (and never
+// Bumped every time a record is reclaimed or detached (and never
 // zeroed), so an (id, generation) pair names one lifetime of one record.
 // The effect queue stores these pairs; an entry whose record moved on
 // gen-mismatches and drains as a no-op.
@@ -276,7 +276,7 @@ const M = graphMemory
 
 /**
  * Lazy records: cells and deriveds are born WITHOUT an arena record — their
- * id points at one of two shared, immutable "virgin" records that hold the
+ * id points at one of two shared, immutable detached-state records that hold the
  * born flags word (so every flags READ anywhere stays correct) and zeros in
  * every list/clock slot (no deps, no subs, never changed, never validated).
  * A real record materializes at the node's first graph participation — its
@@ -288,15 +288,15 @@ const M = graphMemory
  * record first; reads need no care. Watchers keep eager records — they are
  * roots with edges from their first run.
  */
-const VIRGIN_CELL: ReactiveNodeId = NODE_STRIDE
-const VIRGIN_DERIVED: ReactiveNodeId = NODE_STRIDE * 2
+const DETACHED_CELL: ReactiveNodeId = NODE_STRIDE
+const DETACHED_DERIVED: ReactiveNodeId = NODE_STRIDE * 2
 const FIRST_REAL_RECORD = NODE_STRIDE * 3
 
-function initVirginRecords(): void {
-	M[VIRGIN_CELL + NodeSlot.Flags] = Flag.KindCell
-	M[VIRGIN_DERIVED + NodeSlot.Flags] = Flag.KindDerived | Flag.StaleDirty
+function initDetachedRecords(): void {
+	M[DETACHED_CELL + NodeSlot.Flags] = Flag.KindCell
+	M[DETACHED_DERIVED + NodeSlot.Flags] = Flag.KindDerived | Flag.StaleDirty
 }
-initVirginRecords()
+initDetachedRecords()
 
 /** The computed body executing now, independent of dependency tracking.
  * untracked() clears activeConsumer but must not bypass computed policies. */
@@ -313,9 +313,9 @@ export function setTraceHook(fn: TraceFn | null): void {
 	traceHook = fn
 }
 
-/** Installed by worlds.ts: true while any draft is live. Virgin cells take
+/** Installed by worlds.ts: true while any draft is live. Detached cells take
  * the recordless write fast path only when this reports false — a live
- * draft world may hold certificate readings of a virgin cell's changedAt,
+ * draft world may hold certificate readings of a detached cell's changedAt,
  * and the single-draft cutoff relies on the clock ticking for every real
  * base change. */
 export let hasLiveDrafts: () => boolean = () => false
@@ -361,7 +361,7 @@ export function initializeCell<T>(
 	},
 ): CellNode<T> {
 	const lazyInit = typeof initial === 'function'
-	;(cell as { id: ReactiveNodeId }).id = VIRGIN_CELL
+	;(cell as { id: ReactiveNodeId }).id = DETACHED_CELL
 	cell.depsTail = 0
 	cell.throwable = null
 	cell.label = opts?.label
@@ -387,7 +387,7 @@ export function initializeDerived<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
-	;(node as { id: ReactiveNodeId }).id = VIRGIN_DERIVED
+	;(node as { id: ReactiveNodeId }).id = DETACHED_DERIVED
 	node.depsTail = 0
 	node.throwable = null
 	node.label = opts?.label
@@ -565,7 +565,7 @@ function createGraphCore(
 		freeNodeStack[freeNodeCount++] = id
 	}
 
-	/** Materialize the arena record of a virgin cell/derived (see above), with
+	/** Materialize the arena record of a detached cell/derived (see above), with
 	 * finalizer registration: the general-purpose, always-safe variant. */
 	function ensureNodeRecord(node: ReactiveNode): ReactiveNodeId {
 		const id = node.id
@@ -580,7 +580,7 @@ function createGraphCore(
 
 	/** Materialize a dependency's record at link creation. Cells stay
 	 * unregistered here: the link about to be created pins the record (and the
-	 * handle), and when the last link drops the record re-virginizes in
+	 * handle), and when the last link drops the record detaches in
 	 * freeLink — the registry never needs to know. A derived reaching this
 	 * point has always evaluated already (readDerived freshens before it
 	 * tracks), so the derived branch is a should-not-happen safety net. */
@@ -589,7 +589,7 @@ function createGraphCore(
 		if (id >= FIRST_REAL_RECORD) {
 			return id
 		}
-		if (id !== VIRGIN_CELL) {
+		if (id !== DETACHED_CELL) {
 			return ensureNodeRecord(dep)
 		}
 		return allocNode(dep, Flag.KindCell)
@@ -619,7 +619,7 @@ function createGraphCore(
 	}
 
 	/** Last link onto an unregistered cell: the record's only owners were its
-	 * links, so hand it back and point the live handle at the shared virgin
+	 * links, so hand it back and point the live handle at the shared detached
 	 * record again. Provably-zero slots stay untouched (no deps ever; refcount
 	 * 0 means no subs and no observers); pass stamps are monotonic and
 	 * tolerate staleness. Out of line so unpinning stays cheap in freeLink
@@ -632,7 +632,7 @@ function createGraphCore(
 		const flags = mem[dep + NodeSlot.Flags]
 		if ((flags & (Flag.KindCell | Flag.Registered)) === Flag.KindCell) {
 			const owner = pins[depIndex] as { id: ReactiveNodeId }
-			owner.id = VIRGIN_CELL
+			owner.id = DETACHED_CELL
 			mem[dep + NodeSlot.Flags] = 0
 			generationColumn[dep >> RECORD_SHIFT]++
 			clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
@@ -656,7 +656,7 @@ function createGraphCore(
 
 	function allocNode(owner: ReactiveNode, flags: Flags): ReactiveNodeId {
 		// Popped node records were zeroed at reclaim (or provably zero at
-		// re-virginize), so only the flags word needs a store here.
+		// detach the record), so only the flags word needs a store here.
 		const id = freeNodeCount !== 0 ? freeNodeStack[--freeNodeCount] : allocRecord(NODE_STRIDE)
 		M[id + NodeSlot.Flags] = flags
 		;(owner as { id: ReactiveNodeId }).id = id
@@ -956,8 +956,8 @@ function createGraphCore(
 	function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 		const mem = M
 		const pins = pinnedInternals
-		// First edge onto a virgin dep materializes its record. The sub is never
-		// virgin here: it is a recomputing derived (recompute materializes) or a
+		// First edge onto a detached dep materializes its record. The sub is never
+		// detached here: it is a recomputing derived (recompute materializes) or a
 		// watcher (eager records).
 		const depId = ensureDepRecord(dep)
 		const subId = sub.id
@@ -1429,9 +1429,9 @@ function createGraphCore(
 						// Invariant: a net-revert restores the changedAt reading — the
 						// batch produced no real change, so consumers must validate as
 						// unchanged (the clock still ticked; they pay one reading compare).
-						// A cell whose record re-virginized mid-batch (last consumer
+						// A cell whose record record-detached mid-batch (last consumer
 						// disposed) has nothing to restore — and must not write the
-						// shared virgin record.
+						// shared detached-state record.
 						if (cell.id >= FIRST_REAL_RECORD && cell.equals(cell.value, base.value)) {
 							graphClocks[(cell.id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = base.changedAtGraphChange
 						}
@@ -1598,7 +1598,7 @@ function createGraphCore(
 		}
 		let id = cell.id
 		if (id < FIRST_REAL_RECORD) {
-			// A virgin cell has no subscribers, no watchers, and no consumer
+			// A detached cell has no subscribers, no watchers, and no consumer
 			// holding a changedAt reading of it (edges materialize the record), so
 			// the write is observable only through later reads: store and return.
 			// Two parties CAN observe a recordless cell from outside the edge
@@ -2159,7 +2159,7 @@ function createGraphCore(
 		effectCount = 0
 		queueHead = 0
 		renderNotifyCount = 0
-		initVirginRecords()
+		initDetachedRecords()
 		nextRecord = FIRST_REAL_RECORD
 		freeLinkCount = 0
 		freeNodeCount = 0
