@@ -630,6 +630,92 @@ index 0000000..a1e7c9f
 +    disposeScope = undefined;
 +  },
 +};
+diff --git a/packages/core/src/frameworksLazy.ts b/packages/core/src/frameworksLazy.ts
+index d65be9d..81105bf 100644
+--- a/packages/core/src/frameworksLazy.ts
++++ b/packages/core/src/frameworksLazy.ts
+@@ -181,4 +181,81 @@ export const lazyFrameworkInfo: LazyFrameworkInfo[] = [
+       testPullCounts: true,
+     }),
+   },
++  {
++    name: "Royale FM1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-fm1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale FM2",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-fm2")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale FH1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-fh1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale FH2",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-fh2")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale FX1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-fx1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SH1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sh1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SH2",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sh2")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SX1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sx1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SX2",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sx2")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SM1",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sm1")).default,
++      testPullCounts: true,
++    }),
++  },
++  {
++    name: "Royale SM2",
++    load: async () => ({
++      framework: (await import("./frameworks/royale-sm2")).default,
++      testPullCounts: true,
++    }),
++  },
+ ];
 diff --git a/packages/core/src/frameworksList.ts b/packages/core/src/frameworksList.ts
 index 3072912..0f95fde 100644
 --- a/packages/core/src/frameworksList.ts
