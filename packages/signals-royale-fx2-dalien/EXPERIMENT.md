@@ -151,3 +151,36 @@ Typed-array bounds checks were already exonerated by the masking
 experiment and remain exonerated. The finalizer-registration cost, judged
 inherent above, was removable for the dominant cell lifecycle via
 record detachment.
+
+## 2026-07-12, continued: 1.06x measured frontier
+
+Follow-up work after the first table: dependency cursors moved to handle
+fields, watcher reclaim slimmed to its three dirty slots, watched-edge
+insertion fused, node records returned to 8 words with side columns
+(the 16-word colocation had doubled creation's arena footprint for no
+measured walk gain), and two-ended arena allocation (nodes grow up,
+links grow down) so node records stay dense, the pin table spans only
+the node region, and link allocation is a bare bump.
+
+Result, on a quiet machine against the object-graph package at the same
+commit, three independent 3-round isolated runs: geometric-mean ratios
+1.0455, 1.0794, 1.0571 — mean 1.0607. The arena wins signal creation
+(0.93), every large dynamic-graph row (0.86-0.96), and update-heavy
+writes (1.00); it loses the small cache-resident validate/recompute rows
+by a uniform 1.10-1.28.
+
+Why the remaining gap does not close within this design: the split
+representation pays double addressing at its boundary. A node's hot
+state is consulted two ways — by handle (reads, recomputes) and by raw
+record id (the invalidation wave, dependency-validation loops, chain
+climbs). Any field moved onto the handle makes the handle-side cheaper
+by one load and the id-side more expensive by at least two (an owner
+lookup plus the field), and the id-side loops dominate exactly the rows
+that are behind. Counting loads per operation for every candidate split
+(flags on handles with per-link owner arrays; clocks as handle doubles)
+gives a non-positive net on this suite. The object graph's advantage on
+small hot graphs is that all per-node state sits behind one pointer at
+fixed offsets; the arena's advantage is density and no garbage-collector
+coupling, which is why it wins every row whose working set outgrows the
+cache. The two designs are each optimal on their own side of that line,
+and this suite weighs the small-graph side 12 rows to 6.
