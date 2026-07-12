@@ -11,13 +11,14 @@
  * "which function grew"; a failure here says "the inlining you care about
  * stopped happening" or "the kernel deopts under unchanged shapes".
  *
- * Per framework the spec generates a tiny entry that STATICALLY imports
- * one adapter (never the registry — see smoke.ts for why), bundles it
- * with the shared bundleChild helper, and probes it.
+ * Most frameworks get a statically imported adapter bundle (never the
+ * registry — see smoke.ts for why). FX2 is emitted by its TypeScript 7
+ * compiler so its trace has the same source shape as its perf probes.
  *
  * V8-version-sensitive: trace formats and inlining heuristics move
  * between majors. CI pins Node 24; the suite skips elsewhere.
  */
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -29,6 +30,7 @@ import { expectations } from './expects'
 
 const NODE_MAJOR = Number(process.versions.node.split('.')[0])
 const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const repoRoot = path.resolve(harnessRoot, '..')
 
 const cleanups: Array<() => void> = []
 afterAll(() => {
@@ -37,9 +39,41 @@ afterAll(() => {
 	}
 })
 
-async function probeFramework(framework: string): Promise<OptTrace> {
-	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-`))
+async function probeFramework(framework: string, chainDepth: number): Promise<OptTrace> {
+	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-${chainDepth}-`))
 	cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+	if (framework === 'fx2') {
+		writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n')
+		const config = path.join(dir, 'tsconfig.json')
+		writeFileSync(
+			config,
+			JSON.stringify({
+				extends: path.join(repoRoot, 'packages/signals-royale-fx2/tsconfig.perf.json'),
+				compilerOptions: {
+					rootDir: repoRoot,
+					outDir: dir,
+					noEmit: false,
+					incremental: false,
+					declaration: false,
+					sourceMap: false,
+					inlineSourceMap: false,
+					types: ['node'],
+					typeRoots: [path.join(harnessRoot, 'node_modules/@types')],
+				},
+				files: [path.join(harnessRoot, 'inlining/fx2-smoke.ts')],
+				include: [],
+			}),
+		)
+		execFileSync(
+			process.execPath,
+			[path.join(harnessRoot, 'node_modules/typescript/bin/tsc'), '-p', config],
+			{ cwd: repoRoot },
+		)
+		return traceOptimization({
+			script: path.join(dir, 'harness/inlining/fx2-smoke.js'),
+			env: { SMOKE_DEPTH: String(chainDepth) },
+		})
+	}
 	const entry = path.join(dir, `${framework}.ts`)
 	writeFileSync(
 		entry,
@@ -56,11 +90,11 @@ async function probeFramework(framework: string): Promise<OptTrace> {
 }
 
 describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () => {
-	for (const { framework, minInlinedPairs, mustReachTopTier } of expectations) {
+	for (const { framework, minInlinedPairs, mustInline, mustReachTopTier } of expectations) {
 		describe(framework, () => {
 			let trace: OptTrace
 			beforeAll(async () => {
-				trace = await probeFramework(framework)
+				trace = await probeFramework(framework, 8)
 			}, 180_000)
 
 			test(`inlines at least ${minInlinedPairs} distinct named pairs`, () => {
@@ -85,6 +119,32 @@ describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () 
 					`neither compiled standalone nor inlined; optimized: ${[...trace.optimized].sort().join(', ')}; inlined callees: ${[...inlinedCallees].sort().join(', ')}`,
 				).toEqual([])
 			})
+
+			if (mustInline !== undefined) {
+				test(`inlines ${mustInline.join(', ')}`, () => {
+					const inlinedCallees = new Set(trace.inlined.map((edge) => edge.callee))
+					const missing = mustInline.filter((name) => !inlinedCallees.has(name))
+					expect(
+						missing,
+						`not inlined; inlined callees: ${[...inlinedCallees].sort().join(', ')}`,
+					).toEqual([])
+				})
+			}
+
+			if (framework === 'fx2') {
+				test('deep chain resolver reaches top tier without steady eager deopts', async () => {
+					const deepTrace = await probeFramework(framework, 32)
+					const inlinedCallees = new Set(deepTrace.inlined.map((edge) => edge.callee))
+					expect(
+						deepTrace.optimized.has('chainResolve') || inlinedCallees.has('chainResolve'),
+						'chainResolve neither compiled standalone nor inlined',
+					).toBe(true)
+					expect(
+						steadyEagerDeopts(deepTrace).map((d) => `${d.fn}: ${d.reason}`),
+						'eager deopts inside the deep steady bracket',
+					).toEqual([])
+				}, 180_000)
+			}
 
 			test('steady state is free of eager deopts', () => {
 				const bad = steadyEagerDeopts(trace)

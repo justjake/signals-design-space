@@ -20,6 +20,8 @@ export interface InliningExpectation {
 	framework: AdapterName
 	/** Floor on DISTINCT named (callee → into) pairs TurboFan inlines. */
 	minInlinedPairs: number
+	/** Small hot functions that must inline somewhere, without pinning a caller. */
+	mustInline?: string[]
 	/** Functions that must compile standalone or appear as an inlined callee. */
 	mustReachTopTier: string[]
 }
@@ -47,5 +49,19 @@ export const expectations: InliningExpectation[] = [
 		framework: 'dalien',
 		minInlinedPairs: 10,
 		mustReachTopTier: [...SHARED_OPTIMIZE, 'readComputed'],
+	},
+	{
+		framework: 'fx2',
+		minInlinedPairs: 10,
+		mustInline: ['getComputed', 'readDerived', 'trackRead'],
+		mustReachTopTier: [
+			'ensureFreshAt',
+			'recompute',
+			'writeCell',
+			'propagateWave',
+			'scheduleWatcher',
+			'runWatcher',
+			'flush',
+		],
 	},
 ]
