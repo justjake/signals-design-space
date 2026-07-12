@@ -18,7 +18,7 @@ import {
 	initializeAtomState,
 } from 'signals-royale-fx2-dalien'
 import {
-	startTransitionWrite,
+	startSignalTransition,
 	useIsPending,
 	useSignalTransition,
 	useValue,
@@ -100,7 +100,7 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		)
 		expect(text(container)).toBe('i;v:0;')
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(1)
 				hold.set(true)
 			})
@@ -138,7 +138,7 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 1)
 				hold.set(true)
 			})
@@ -184,7 +184,7 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 			</>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 2)
 				hold.set(true)
 			})
@@ -251,7 +251,7 @@ describe('the latest() context rule', () => {
 
 		held = true
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(2)
 				hold.set(true)
 			})
@@ -306,7 +306,7 @@ describe('scenario 4 — sibling consistency', () => {
 		)
 		await act(() => {
 			a.set(1)
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('2,2;2,2;')
@@ -340,7 +340,7 @@ describe('scenario 5 — mount mid-transition', () => {
 		}
 		const { root, container } = await h.mount(<App extra={false} />)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		expect(text(container)).toBe('r1:0;s:0;')
 		await act(() => {
@@ -378,7 +378,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 			</>,
 		)
 		await act(() => {
-			startTransitionWrite(() => a.set(9))
+			startSignalTransition(() => a.set(9))
 		})
 		await act(() => {
 			flushSync(() => b.set(1))
@@ -410,7 +410,7 @@ describe('scenario 7 — one transition across two roots', () => {
 		)
 		const two = await h.mount(<Reader id="r" atom={a} />)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		expect(text(one.container)).toBe('s:0;') // held here
 		expect(text(two.container)).toBe('r:1;') // committed there
@@ -449,7 +449,7 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		expect(text(first.container)).toBe('s:1;')
 		// This root registers after the draft's dispatch: its passes never carry
@@ -526,7 +526,7 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 		const before = renders
 		await act(() => {
 			a.set(1)
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(renders).toBe(before)
@@ -592,7 +592,7 @@ describe('scenario 12 — time slicing stays real', () => {
 		)
 		;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
 		try {
-			startTransitionWrite(() => items.set(24))
+			startSignalTransition(() => items.set(24))
 			const deadline = Date.now() + 5000
 			while (itemRenders < 3 && Date.now() < deadline) {
 				await tick(5)

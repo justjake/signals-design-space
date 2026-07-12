@@ -27,7 +27,7 @@ import {
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
-	startTransitionWrite,
+	startSignalTransition,
 	useCommitted,
 	useComputed,
 	useIsPending,
@@ -126,8 +126,8 @@ const adapter = {
 	useCommitted(x: unknown): unknown {
 		return useCommitted(x as Signal<unknown>)
 	},
-	startTransitionWrite(scope: () => void): void {
-		startTransitionWrite(scope)
+	startSignalTransition(scope: () => void): void {
+		startSignalTransition(scope)
 	},
 
 	trace(): RoyaleTraceView {

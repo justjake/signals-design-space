@@ -410,7 +410,12 @@ const enum Limit {
 	FlushRuns = 100_000,
 }
 
-export class WriteForbiddenError extends Error {}
+export class SignalReadForbidden extends Error {
+	name = 'SignalReadForbidden'
+}
+export class SignalWriteForbidden extends Error {
+	name = 'SignalWriteForbidden'
+}
 /** Policy only. The graph's self-affecting-computed mechanism remains intact;
  * changing this to false restores writes from computeds without changing the
  * evaluation or validation machinery. */
@@ -421,16 +426,16 @@ let writesForbidden: string | null = null
 
 export function assertSignalReadAllowed(): void {
 	if (readsForbidden !== null) {
-		throw new Error(readsForbidden)
+		throw new SignalReadForbidden(readsForbidden)
 	}
 }
 
 export function assertSignalWriteAllowed(): void {
 	if (writesForbidden !== null) {
-		throw new WriteForbiddenError(writesForbidden)
+		throw new SignalWriteForbidden(writesForbidden)
 	}
 	if (FORBID_WRITE_FROM_COMPUTED && activeEvaluation !== null) {
-		throw new WriteForbiddenError('writes inside computeds are forbidden')
+		throw new SignalWriteForbidden('writes inside computeds are forbidden')
 	}
 }
 

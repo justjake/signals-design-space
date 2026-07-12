@@ -15,7 +15,7 @@ import {
 	type Signal,
 } from 'signals-royale-fx2-dalien'
 import {
-	startTransitionWrite,
+	startSignalTransition,
 	useAtom,
 	useCommitted,
 	useComputed,
@@ -92,7 +92,7 @@ describe('scenario 11 — suspense family', () => {
 		)
 		await r.settle('0', 'one')
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				param.set(1)
 			})
 		})
@@ -165,7 +165,7 @@ describe('scenario 15 — causality traces', () => {
 			</React.Suspense>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				update(a, (x) => x + 1)
 				hold.set(true)
 			})
@@ -400,7 +400,7 @@ describe('fx2 extras', () => {
 		expect(text(container)).toBe('n:1;c:1;')
 		expect(renders).toBe(2)
 		await act(() => {
-			startTransitionWrite(() => a.set(2))
+			startSignalTransition(() => a.set(2))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('n:2;c:2;')

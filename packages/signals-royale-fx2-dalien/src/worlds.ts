@@ -476,8 +476,9 @@ export function discardAllDrafts(): void {
 // Write classification
 // ---------------------------------------------------------------------------
 
-/** Explicit draft scope (startTransitionWrite / adapter runInBatch). */
-let currentDraft: Draft | null = null
+/** Explicit write target used by engine tests and non-React integrations.
+ * It affects write classification only; reads remain in their current world. */
+let currentDraftWriteTarget: Draft | null = null
 /** Ambient classifier installed by the React bindings: detects writes issued
  * inside React.startTransition without our helper. */
 let ambientClassifier: (() => Draft | null) | null = null
@@ -486,19 +487,19 @@ export function setAmbientClassifier(fn: (() => Draft | null) | null): void {
 	ambientClassifier = fn
 }
 
-export function runInDraft<T>(draft: Draft, fn: () => T): T {
-	const prev = currentDraft
-	currentDraft = draft
+export function runWithDraftWrites<T>(draft: Draft, fn: () => T): T {
+	const prev = currentDraftWriteTarget
+	currentDraftWriteTarget = draft
 	try {
 		return fn()
 	} finally {
-		currentDraft = prev
+		currentDraftWriteTarget = prev
 	}
 }
 
 export function classifyWrite(): Draft | null {
-	if (currentDraft !== null) {
-		return currentDraft
+	if (currentDraftWriteTarget !== null) {
+		return currentDraftWriteTarget
 	}
 	if (ambientClassifier !== null) {
 		return ambientClassifier()

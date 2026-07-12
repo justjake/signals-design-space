@@ -17,7 +17,7 @@ import {
 	openDraft,
 	resolveState,
 	retireDraft,
-	runInDraft,
+	runWithDraftWrites,
 	sealDraft,
 	worldOf,
 	type DraftId,
@@ -68,8 +68,8 @@ describe('leak audit', () => {
 		const c = createComputed(() => a.get() + 1)
 		const d1 = openDraft()
 		const d2 = openDraft()
-		runInDraft(d1, () => a.set(1))
-		runInDraft(d2, () => a.update((x) => x + 5))
+		runWithDraftWrites(d1, () => a.set(1))
+		runWithDraftWrites(d2, () => a.update((x) => x + 5))
 		resolveState(nodeOf(c), worldOf([d1.id]))
 		resolveState(nodeOf(c), worldOf([d1.id, d2.id]))
 		expect(nodeOf(c).worldMemos).not.toBeNull()
@@ -94,7 +94,7 @@ describe('leak audit', () => {
 		;(() => {
 			const draft = openDraft()
 			const payload = { n: 1 }
-			runInDraft(draft, () => a.set(payload))
+			runWithDraftWrites(draft, () => a.set(payload))
 			sealDraft(draft)
 			committedReducerState.push(draft.id)
 			draftRef = new WeakRef(draft)

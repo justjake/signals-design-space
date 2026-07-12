@@ -4,7 +4,7 @@ import { batch, set, createAtom, type Atom } from 'signals-royale-fx2-dalien'
 import {
 	SignalScope,
 	registerReactSignals,
-	startTransitionWrite,
+	startSignalTransition,
 	useValue,
 } from '../src/react/index.ts'
 
@@ -46,7 +46,7 @@ const contender: Contender = {
 				})
 			},
 			writeManyInTransition(updates) {
-				startTransitionWrite(() => {
+				startSignalTransition(() => {
 					for (const [i, v] of updates) {
 						set(cells[i], v)
 					}

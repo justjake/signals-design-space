@@ -100,7 +100,7 @@ if (contender === 'royale-fx2') {
 			cell.set(v)
 		},
 		writeManyInTransition(cells, v) {
-			bindings.startTransitionWrite(() => {
+			bindings.startSignalTransition(() => {
 				for (const c of cells) {
 					c.set(v)
 				}

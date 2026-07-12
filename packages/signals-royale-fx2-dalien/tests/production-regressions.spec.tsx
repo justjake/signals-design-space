@@ -17,8 +17,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
 import { latest, read, createAtom } from 'signals-royale-fx2-dalien'
-import { startTransitionWrite, useValue } from 'signals-royale-fx2-dalien/react'
-import { openDraft, runInDraft, sealDraft, type Draft } from '../src/worlds.ts'
+import { startSignalTransition, useValue } from 'signals-royale-fx2-dalien/react'
+import { openDraft, runWithDraftWrites, sealDraft, type Draft } from '../src/worlds.ts'
 import { broadcastDraft, draftWakeStats } from '../src/react/host.ts'
 
 let h: Harness
@@ -46,7 +46,7 @@ function makeHeld() {
 	}
 	const start = () =>
 		act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(2)
 				hold.set(true)
 			})
@@ -162,7 +162,7 @@ describe('tear: the render-world note is validity-gated', () => {
 		})
 		;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
 		try {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				items.set(24)
 				a.set(2)
 			})
@@ -240,7 +240,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const { container } = await h.mount(grid)
 		expect(renders).toEqual(new Array(N).fill(1))
 		await act(() => {
-			startTransitionWrite(() => cells[3].set(7))
+			startSignalTransition(() => cells[3].set(7))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('0;0;0;7;0;0;0;0;')
@@ -276,7 +276,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			React.startTransition(() => {
 				draft = openDraft()
 				broadcastDraft(draft)
-				runInDraft(draft, () => {
+				runWithDraftWrites(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
 				})
@@ -288,7 +288,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		// wake must ride the OWNING transition's lane, so the committed DOM
 		// stays untouched and untouched subscribers stay asleep.
 		await act(() => {
-			runInDraft(draft, () => cells[1].set(2))
+			runWithDraftWrites(draft, () => cells[1].set(2))
 			sealDraft(draft)
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
@@ -332,7 +332,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			</>,
 		)
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				a.set(1)
 				hold.set(true)
 			})
@@ -340,7 +340,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(text(container)).toBe('a:0;b:0;') // T1 held
 		expect(bRenders).toBe(1) // T1's wakes never reached b's subscriber
 		await act(() => {
-			startTransitionWrite(() => b.set(2))
+			startSignalTransition(() => b.set(2))
 		})
 		await act(async () => {})
 		// T2 woke exactly b's subscriber; its commit rides behind T1's hold
@@ -373,7 +373,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		draftWakeStats.dispatches = 0
 		let dispatchesBeforeRender = -1
 		await act(() => {
-			startTransitionWrite(() => {
+			startSignalTransition(() => {
 				for (let k = 1; k <= 100; k++) {
 					cell.set(k)
 				}
@@ -415,7 +415,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			React.startTransition(() => {
 				draft = openDraft()
 				broadcastDraft(draft)
-				runInDraft(draft, () => {
+				runWithDraftWrites(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
 				})
@@ -425,7 +425,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const afterHeldPass = renders[0]
 		expect(afterHeldPass).toBe(2)
 		await act(() => {
-			runInDraft(draft, () => cells[0].set(2))
+			runWithDraftWrites(draft, () => cells[0].set(2))
 			sealDraft(draft)
 		})
 		expect(renders[0]).toBe(afterHeldPass + 1) // exactly one more transition render
@@ -461,7 +461,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			React.startTransition(() => {
 				draft = openDraft()
 				broadcastDraft(draft)
-				runInDraft(draft, () => {
+				runWithDraftWrites(draft, () => {
 					cells[0].set(1)
 					hold.set(true)
 				})
@@ -469,7 +469,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held
 		await act(() => {
-			runInDraft(draft, () => cells[0].set(2))
+			runWithDraftWrites(draft, () => cells[0].set(2))
 			sealDraft(draft)
 		})
 		await act(async () => {
@@ -484,7 +484,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		const { container } = await h.mount(<React.StrictMode>{grid}</React.StrictMode>)
 		const mounted = [...renders]
 		await act(() => {
-			startTransitionWrite(() => cells[2].set(5))
+			startSignalTransition(() => cells[2].set(5))
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('0;0;5;0;0;0;0;0;')

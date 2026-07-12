@@ -286,7 +286,7 @@ import { createRoot } from 'react-dom/client';
 import {
   registerReactSignals, wrapCreateRoot,
   useValue, useComputed, useSignalEffect, useIsPending, useCommitted, useAtom,
-  startTransitionWrite, useSignalTransition,
+  startSignalTransition, useSignalTransition,
 } from 'signals-royale-fx2-dalien/react';
 import { signal } from 'signals-royale-fx2-dalien';
 
@@ -301,7 +301,7 @@ function Counter() {
   return <button onClick={() => count.set(n + 1)}>{n}{pending ? '…' : ''}</button>;
 }
 
-startTransitionWrite(() => count.update((x) => x * 2)); // draft until commit
+startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
 ```
 
 - `useValue(x)` — subscribing read; resolves the pass's world; suspends by
@@ -315,7 +315,7 @@ startTransitionWrite(() => count.update((x) => x * 2)); // draft until commit
   per-root committed view.
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after
   unmount.
-- `startTransitionWrite(scope)` / `useSignalTransition()` — transition
+- `startSignalTransition(scope)` / `useSignalTransition()` — transition
   batches. Plain `React.startTransition` also works: the first engine write
   inside any transition context is classified into a draft automatically.
 - Writing during render throws.

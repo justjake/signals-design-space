@@ -17,4 +17,4 @@ export {
 	useCommitted,
 	useAtom,
 } from './hooks.ts'
-export { startTransitionWrite, useSignalTransition } from './transitions.ts'
+export { startSignalTransition, useSignalTransition } from './transitions.ts'

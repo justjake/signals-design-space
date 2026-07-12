@@ -175,7 +175,7 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
   error boxes, two-level suspend-vs-stale, settlement-as-write with world
   attribution — done.
 - React bindings: useValue/useComputed/useSignalEffect/useCommitted/
-  useIsPending/useAtom, useSignalTransition + startTransitionWrite + plain
+  useIsPending/useAtom, useSignalTransition + startSignalTransition + plain
   startTransition classification, loud registration, multi-root, write-
   during-render throws, unmount silence — done.
 - SSR serialize/initialize/installState — done. Causality tracer (attach/

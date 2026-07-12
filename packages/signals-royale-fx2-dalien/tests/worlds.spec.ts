@@ -23,7 +23,7 @@ import {
 	rebaseLogIntentCount,
 	resolveState,
 	retireDraft,
-	runInDraft,
+	runWithDraftWrites,
 	sealDraft,
 	setCommittedWorld,
 	worldOf,
@@ -43,7 +43,7 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve))
 
 function inDraft(fn: () => void): DraftId {
 	const d = openDraft()
-	runInDraft(d, fn)
+	runWithDraftWrites(d, fn)
 	sealDraft(d)
 	return d.id
 }
@@ -200,7 +200,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 			() => {},
 			(id) => wakes.push(id),
 		)
-		runInDraft(d, () => a.update((x) => x + 1))
+		runWithDraftWrites(d, () => a.update((x) => x + 1))
 		expect(wakes).toEqual([d.id])
 		expect(stateIn(a, [d.id])).toEqual(valueState(6))
 		a.set(5) // equality cutoff: base state stays 5, no propagation
@@ -230,7 +230,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 		a.update((value) => value + 2)
 		expect(view).toBe(16) // urgent delivery advanced the subscriber, not that memo
 
-		runInDraft(d, () => a.update((value) => value + 2))
+		runWithDraftWrites(d, () => a.update((value) => value + 2))
 		expect(view).toBe(18) // the draft wake must not cut off against stale 18
 
 		discardDraft(d.id)
@@ -271,19 +271,19 @@ describe('computeds across worlds', () => {
 		const offProbe = observeNode(nodeOf(parity), () => probes++)
 		const d = openDraft()
 
-		runInDraft(d, () => a.set(3))
+		runWithDraftWrites(d, () => a.set(3))
 		expect(wakes).toEqual([]) // parity stayed 1: no value-hook wake
 		expect(probes).toBe(1) // pendingness still changed
 
-		runInDraft(d, () => a.set(2))
+		runWithDraftWrites(d, () => a.set(2))
 		expect(wakes).toEqual([d.id]) // parity changed 1 -> 0
 		expect(probes).toBe(2)
 		wakes.length = 0
 		expect(stateIn(parity, [d.id])).toEqual(valueState(0)) // a held render observed 0
 
-		runInDraft(d, () => a.set(4))
+		runWithDraftWrites(d, () => a.set(4))
 		expect(wakes).toEqual([]) // repeated append kept the draft-world value at 0
-		runInDraft(d, () => a.set(3))
+		runWithDraftWrites(d, () => a.set(3))
 		expect(wakes).toEqual([d.id]) // returning to 1 must repair the held render
 
 		discardDraft(d.id)
@@ -305,7 +305,7 @@ describe('computeds across worlds', () => {
 		const second = openDraft()
 		discardDraft(second.id)
 
-		runInDraft(first, () => a.set(3))
+		runWithDraftWrites(first, () => a.set(3))
 		expect(wakes).toEqual([first.id]) // cutoff stays disabled after overlap ends
 
 		discardDraft(first.id)
@@ -434,7 +434,7 @@ describe('computeds across worlds', () => {
 			return source.get() * 2
 		})
 		const draft = openDraft()
-		runInDraft(draft, () => source.set(2))
+		runWithDraftWrites(draft, () => source.set(2))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(4))
 		expect(runs).toBe(1)
 
@@ -443,7 +443,7 @@ describe('computeds across worlds', () => {
 		expect(runs).toBe(1)
 
 		const otherDraft = openDraft()
-		runInDraft(otherDraft, () => unrelated.set(2))
+		runWithDraftWrites(otherDraft, () => unrelated.set(2))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(4))
 		expect(runs).toBe(1)
 		discardDraft(otherDraft.id)
@@ -460,11 +460,11 @@ describe('computeds across worlds', () => {
 			return source.get() * 2
 		})
 		const draft = openDraft()
-		runInDraft(draft, () => source.set(2))
+		runWithDraftWrites(draft, () => source.set(2))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(4))
 		expect(runs).toBe(1)
 
-		runInDraft(draft, () => source.set(3))
+		runWithDraftWrites(draft, () => source.set(3))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(6))
 		expect(runs).toBe(2)
 
@@ -482,7 +482,7 @@ describe('computeds across worlds', () => {
 			return source.get()
 		})
 		const draft = openDraft()
-		runInDraft(draft, () => source.update((value) => value + 1))
+		runWithDraftWrites(draft, () => source.update((value) => value + 1))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(6))
 		expect(runs).toBe(1)
 
@@ -507,11 +507,11 @@ describe('computeds across worlds', () => {
 		})
 		expect(top.get()).toBe(-1)
 		const draft = openDraft()
-		runInDraft(draft, () => enabled.set(true))
+		runWithDraftWrites(draft, () => enabled.set(true))
 		expect(stateIn(middle, [draft.id])).toEqual(valueState(1))
 		expect(stateIn(top, [draft.id])).toEqual(valueState(1))
 
-		runInDraft(draft, () => source.set(41))
+		runWithDraftWrites(draft, () => source.set(41))
 		expect(stateIn(top, [draft.id])).toEqual(valueState(42))
 		expect(middleRuns).toBe(2)
 		expect(topRuns).toBe(3) // one canonical run plus two draft-world runs
@@ -528,7 +528,7 @@ describe('computeds across worlds', () => {
 		})
 		expect(c.get()).toBe(1)
 		const draft = openDraft()
-		runInDraft(draft, () => worldBranch.set(true))
+		runWithDraftWrites(draft, () => worldBranch.set(true))
 		expect(stateIn(c, [draft.id])).toEqual(valueState(1))
 
 		canonicalSource.set(2)
@@ -544,7 +544,7 @@ describe('computeds across worlds', () => {
 		const c = createComputed((use) => (enabled.get() ? use(gate.promise) : 0))
 		expect(c.get()).toBe(0)
 		const draft = openDraft()
-		runInDraft(draft, () => enabled.set(true))
+		runWithDraftWrites(draft, () => enabled.set(true))
 		const pending = stateIn(c, [draft.id]) as { flags: number }
 		expect(pending.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
 

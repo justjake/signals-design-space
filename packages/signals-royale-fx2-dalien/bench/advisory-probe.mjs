@@ -14,7 +14,7 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 const React = (await import('react')).default ?? (await import('react'))
 const { createRoot } = await import('react-dom/client')
 const { createAtom } = await import('signals-royale-fx2-dalien')
-const { registerReactSignals, useValue, wrapCreateRoot, startTransitionWrite } =
+const { registerReactSignals, useValue, wrapCreateRoot, startSignalTransition } =
 	await import('../src/react/index.ts')
 
 registerReactSignals()
@@ -57,7 +57,7 @@ async function run(label, makeCase) {
 	for (let i = 0; i < 20; i++) {
 		await frame()
 	}
-	startTransitionWrite(write)
+	startSignalTransition(write)
 	await settle(() => done(el))
 	console.log(`${label}: advisory ${advisories.length > 0 ? 'FIRES' : 'silent'}`)
 	root.unmount()

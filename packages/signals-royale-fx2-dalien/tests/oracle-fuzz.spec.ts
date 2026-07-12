@@ -29,7 +29,7 @@ import {
 	openDraft,
 	resolveState,
 	retireDraft,
-	runInDraft,
+	runWithDraftWrites,
 	worldOf,
 	type Draft,
 	type DraftId,
@@ -447,7 +447,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 							sub.modelIds.add(s.draft)
 						}
 					}
-					runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].set(s.v))
+					runWithDraftWrites(engDrafts.get(s.draft)!, () => engCells[s.cell].set(s.v))
 					break
 				}
 				case 'draftUpdate': {
@@ -465,7 +465,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 							sub.modelIds.add(s.draft)
 						}
 					}
-					runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].update((p) => p + k))
+					runWithDraftWrites(engDrafts.get(s.draft)!, () => engCells[s.cell].update((p) => p + k))
 					break
 				}
 				case 'retire': {

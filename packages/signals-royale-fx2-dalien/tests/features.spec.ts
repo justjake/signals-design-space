@@ -18,8 +18,13 @@ import {
 	untracked,
 	update,
 } from '../src/index.ts'
-import { FORBID_WRITE_FROM_COMPUTED, observeNode } from '../src/graph.ts'
-import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+import {
+	FORBID_WRITE_FROM_COMPUTED,
+	SignalReadForbidden,
+	SignalWriteForbidden,
+	observeNode,
+} from '../src/graph.ts'
+import { openDraft, retireDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
 
 type Animal = { name: string }
 type Dog = Animal & { bark(): void }
@@ -205,6 +210,7 @@ describe('derived policy and APIs', () => {
 	test('updaters cannot read or write signals', () => {
 		const a = createAtom(1)
 		const b = createAtom(10)
+		expect(() => a.update((value) => value + b.get())).toThrow(SignalReadForbidden)
 		expect(() => a.update((value) => value + b.get())).toThrow(/reads are not allowed/)
 		expect(() => a.update((value) => value + Number(isPending(b)))).toThrow(/reads are not allowed/)
 		expect(() =>
@@ -212,7 +218,7 @@ describe('derived policy and APIs', () => {
 				b.set(20)
 				return value
 			}),
-		).toThrow(/writes are not allowed/)
+		).toThrow(SignalWriteForbidden)
 		expect(a.get()).toBe(1)
 		expect(b.get()).toBe(10)
 	})
@@ -325,7 +331,7 @@ describe('causality tracer', () => {
 		const t = attachTracer()
 		const a = createAtom(1, { label: 'a' })
 		const d = openDraft()
-		runInDraft(d, () => a.update((x) => x + 1))
+		runWithDraftWrites(d, () => a.update((x) => x + 1))
 		sealDraft(d)
 		retireDraft(d.id)
 		const events = t.events()

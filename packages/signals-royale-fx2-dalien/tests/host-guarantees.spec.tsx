@@ -4,11 +4,11 @@ import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { nodeOf, createAtom, read, type Signal } from 'signals-royale-fx2-dalien'
-import { liveDraftCount, openDraft, runInDraft, sealDraft } from '../src/worlds.ts'
+import { liveDraftCount, openDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
-	startTransitionWrite,
+	startSignalTransition,
 	useValue,
 } from 'signals-royale-fx2-dalien/react'
 import { broadcastDraft, registerProvider } from '../src/react/host.ts'
@@ -42,7 +42,7 @@ describe('hosted draft lifetime', () => {
 		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
-		runInDraft(draft, () => a.set(1))
+		runWithDraftWrites(draft, () => a.set(1))
 		sealDraft(draft)
 		expect(liveDraftCount()).toBe(1)
 		await Promise.resolve()
@@ -60,7 +60,7 @@ describe('hosted draft lifetime', () => {
 		const a = createAtom(0)
 		const draft = openDraft()
 		broadcastDraft(draft)
-		runInDraft(draft, () => a.set(2))
+		runWithDraftWrites(draft, () => a.set(2))
 		sealDraft(draft)
 		expect(delivered).toEqual([draft.id])
 		expect(liveDraftCount()).toBe(1)
@@ -87,7 +87,7 @@ describe('unmount reclamation', () => {
 		const { root, container } = await h.mount(<Many />)
 		expect(subCount(a)).toBe(50)
 		await act(() => {
-			startTransitionWrite(() => a.set(1))
+			startSignalTransition(() => a.set(1))
 		})
 		await act(async () => {})
 		expect(text(container)).toContain('1')
@@ -111,7 +111,7 @@ describe('unmount reclamation', () => {
 		const m1 = await h.mount(<App />)
 		const m2 = await h.mount(<App />)
 		await act(() => {
-			startTransitionWrite(() => a.set(5))
+			startSignalTransition(() => a.set(5))
 		})
 		await act(async () => {})
 		expect(text(m1.container)).toBe('5')
