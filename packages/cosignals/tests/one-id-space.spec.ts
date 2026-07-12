@@ -139,11 +139,11 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		const b = freshEngine()
 		armArenaCheck(b)
 		const at = new Atom(1)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const keep = b.computed('keep', (read) => read(an))
 		mount(b, 'R', keep, 'W')
 		// Warm one full dispose→create cycle so the steady state is the baseline.
-		const warm = new Computed(() => (at.state as number) * 2)
+		const warm = new Computed(() => at.state * 2)
 		b.committedValue(b.internalsForComputed(warm as unknown as Computed<unknown>), 'R')
 		b.disposeComputed(warm as unknown as Computed<unknown>)
 
@@ -153,7 +153,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		const indexes = new Set<number>()
 		const N = 200
 		for (let i = 0; i < N; i++) {
-			const c = new Computed(() => (at.state as number) + i)
+			const c = new Computed(() => at.state + i)
 			const node = b.internalsForComputed(c as unknown as Computed<unknown>)
 			expect(b.committedValue(node, 'R')).toBe(1 + i)
 			indexes.add(ixOf(c._id))
@@ -198,7 +198,7 @@ describe("P2 — record-free scrub: a new tenant never sees the old tenant's row
 
 		const oldId = cOld.handle._id
 		const ix = ixOf(oldId)
-		expect(cols(b).obsRefs[ix]!).toBeGreaterThan(0) // retained by the observed computed's dependency set
+		expect(cols(b).obsRefs[ix]).toBeGreaterThan(0) // retained by the observed computed's dependency set
 		// Leave a DORMANT watcher row on cOld (mounted, never committed).
 		const p = b.renderStart('R2', [])
 		b.mountWatcher(p.id, cOld, 'Wstale')
@@ -238,13 +238,11 @@ describe("P2 — record-free scrub: a new tenant never sees the old tenant's row
 		const a = b.atom('a', 5)
 		const cOld = b.computed('cOld', (read) => (read(a) as number) * 2)
 		// Observer whose CURRENT strong dep set includes cOld.
-		const obs = b.computed('obs', (read) =>
-			(read(gate) as number) !== 0 ? (read(cOld) as number) : (read(a) as number),
-		)
+		const obs = b.computed('obs', (read) => ((read(gate) as number) !== 0 ? read(cOld) : read(a)))
 		mount(b, 'R', obs, 'Wobs')
 		const oldId = cOld.handle._id
 		const ix = ixOf(oldId)
-		expect(cols(b).obsRefs[ix]!).toBeGreaterThan(0)
+		expect(cols(b).obsRefs[ix]).toBeGreaterThan(0)
 
 		// Dispose cOld while the observer's retained dep set still names it (the
 		// discipline breach the identity guard defuses), then reuse the record.
@@ -252,14 +250,14 @@ describe("P2 — record-free scrub: a new tenant never sees the old tenant's row
 		const cNew = b.computed('cNew', (read) => (read(a) as number) + 100)
 		expect(cNew.handle._id).toBe(oldId)
 		const wNew = mount(b, 'R', cNew, 'Wnew') // the new tenant is observed: obsRefs[ix] = its own count
-		const newRefs = cols(b).obsRefs[ix]!
+		const newRefs = cols(b).obsRefs[ix]
 		expect(newRefs).toBeGreaterThan(0)
 
 		// Flip the observer's deps: its re-point releases the STALE cOld
 		// reference — the release must not decrement the new tenant's count.
 		commitWrite(b, gate, 0)
 		expect(b.committedValue(obs, 'R')).toBe(5)
-		expect(cols(b).obsRefs[ix]!).toBe(newRefs)
+		expect(cols(b).obsRefs[ix]).toBe(newRefs)
 		expect(wNew.live).toBe(true)
 	})
 })

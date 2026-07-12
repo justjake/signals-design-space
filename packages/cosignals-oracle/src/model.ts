@@ -850,7 +850,7 @@ export class CosignalModel {
 	 */
 	private internSlot(batch: Batch): BatchSlotMeta {
 		if (batch.slot !== undefined) {
-			return this.slots[batch.slot]!
+			return this.slots[batch.slot]
 		}
 		let free = this.slots.find((s) => s.tenant === undefined)
 		if (free === undefined) {
@@ -867,7 +867,7 @@ export class CosignalModel {
 				const rb = this.batchById(b.tenant!).retiredSeq ?? 0
 				return ra - rb
 			})
-			const victim = candidates[0]!
+			const victim = candidates[0]
 			this.log({ type: 'slot-backstop-released', slot: victim.id, batch: victim.tenant! })
 			this.releaseSlot(victim)
 			free = victim
@@ -1522,7 +1522,7 @@ export class CosignalModel {
 			// A mid-body throw keeps the partial snapshot (the deps read before
 			// the throw are real dependencies — same rule as the engine frame).
 			e.deps = deps
-			e.lastValue = deps.length === 0 ? undefined : deps[deps.length - 1]!.value
+			e.lastValue = deps.length === 0 ? undefined : deps[deps.length - 1].value
 		}
 	}
 
@@ -1862,7 +1862,7 @@ export class CosignalModel {
 			r.committedBatches.delete(batch.id)
 		}
 		if (batch.slot !== undefined) {
-			const slot = this.slots[batch.slot]!
+			const slot = this.slots[batch.slot]
 			if (this.slotRetainedByOpenMask(slot.id)) {
 				slot.releasePending = true // re-evaluated at every render end
 			} else {
@@ -2014,7 +2014,7 @@ export class CosignalModel {
 			if (!this.batchTouches(t, closure)) {
 				continue
 			}
-			const slot = this.slots[t.slot]!
+			const slot = this.slots[t.slot]
 			// Fully included (slot in the render's included set AND no post-pin
 			// write in it): the render already folded everything — skip. The skip
 			// is by inclusion + clocks, never by comparing values.
@@ -2044,7 +2044,7 @@ export class CosignalModel {
 		// also checks the committing render's rendered BATCHES at commit time
 		// (their latest write seq vs the pin).
 		const clocksQuiet =
-			[...w.snapshot.maskSlots].every((s) => this.slots[s]!.writeClock <= w.snapshot.pin) &&
+			[...w.snapshot.maskSlots].every((s) => this.slots[s].writeClock <= w.snapshot.pin) &&
 			[...committingRender.maskBatches].every((tid) => {
 				const t = this.batchById(tid)
 				return t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin

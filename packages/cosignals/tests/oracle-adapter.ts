@@ -136,7 +136,7 @@ function renderPassAt(b: CosignalEngine, index: number): number {
 	if (ids.length === 0) {
 		throw new ScheduleError('no render passes yet')
 	}
-	return ids[index % ids.length]!
+	return ids[index % ids.length]
 }
 
 function watcherAt(b: CosignalEngine, index: number): number {
@@ -144,7 +144,7 @@ function watcherAt(b: CosignalEngine, index: number): number {
 	if (ids.length === 0) {
 		throw new ScheduleError('no watchers yet')
 	}
-	return ids[index % ids.length]!
+	return ids[index % ids.length]
 }
 
 /** Mirrors the model's `effectAt`: index over react-effect ids in creation
@@ -160,7 +160,7 @@ function effectAt(b: CosignalEngine, index: number): number {
 	if (ids.length === 0) {
 		throw new ScheduleError('no react effects yet')
 	}
-	return ids[index % ids.length]!
+	return ids[index % ids.length]
 }
 
 /** Per-engine count of applyEngineOp calls: the tracer-independent uniq
@@ -217,7 +217,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 			case 'double':
 				return [1, (p: unknown) => (p as number) * 2]
 			case 'equalNewest':
-				return [0, b.newestValue(atoms[atomIdx]!)]
+				return [0, b.newestValue(atoms[atomIdx])]
 		}
 	}
 	const opIndex = (appliedOps.get(engineEpoch) ?? 0) + 1
@@ -241,7 +241,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				reg.batches.push(b.openBatch({ action: op.action }).id)
 				break
 			case 'write': {
-				const atom = atoms[op.atom % atoms.length]!
+				const atom = atoms[op.atom % atoms.length]
 				b.write(
 					batchAt(b, op.batch),
 					atom,
@@ -251,7 +251,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				break
 			}
 			case 'bareWrite': {
-				const atom = atoms[op.atom % atoms.length]!
+				const atom = atoms[op.atom % atoms.length]
 				b.bareWrite(atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length))
 				syncAmbient()
 				break
@@ -305,21 +305,21 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				})
 				break
 			case 'mount':
-				b.mountWatcher(renderPassAt(b, op.renderPass), nodes[op.node % nodes.length]!, `W${uniq}`)
+				b.mountWatcher(renderPassAt(b, op.renderPass), nodes[op.node % nodes.length], `W${uniq}`)
 				break
 			case 'render':
 				b.renderWatcher(renderPassAt(b, op.renderPass), watcherAt(b, op.watcher))
 				break
 			case 'reactEffect':
-				mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length]!, `E${uniq}`)
+				mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length], `E${uniq}`)
 				break
 			case 'reactEffectPick':
 				mountEngineReactEffectPick(
 					b,
 					op.root,
-					nodes[op.sel % nodes.length]!,
-					nodes[op.a % nodes.length]!,
-					nodes[op.b % nodes.length]!,
+					nodes[op.sel % nodes.length],
+					nodes[op.a % nodes.length],
+					nodes[op.b % nodes.length],
 					`E${uniq}`,
 				)
 				break
@@ -338,7 +338,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				break
 			}
 			case 'coreEffect':
-				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`)
+				mountEngineCoreEffect(b, nodes[op.node % nodes.length], `CE${uniq}`)
 				break
 			case 'coreEffectWrite': {
 				const outName = op.out % 2 === 0 ? 'out1' : 'out2'
@@ -351,7 +351,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				const out = allNodes.find(
 					(n): n is AtomInternals => n.kind === 'atom' && n.name === outName,
 				)!
-				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`, out)
+				mountEngineCoreEffect(b, nodes[op.node % nodes.length], `CE${uniq}`, out)
 				reg.outWriters.add(outName)
 				break
 			}
@@ -490,7 +490,7 @@ export function engineAsAdapter(): EngineAdapter & {
 			snapshotModel(
 				Object.assign(Object.create(b as object), {
 					idToNode: new Map(__TEST__eachInternals().map((n) => [n.id, n])),
-				}) as unknown as CosignalModel,
+				}),
 			),
 		drainEvents() {
 			const events = stream.events
@@ -563,12 +563,12 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 	const out = events.slice()
 	let i = 0
 	while (i < out.length) {
-		if (out[i]!.type !== 'core-effect-run') {
+		if (out[i].type !== 'core-effect-run') {
 			i++
 			continue
 		}
 		let j = i + 1
-		while (j < out.length && inBlock(out[j]!)) {
+		while (j < out.length && inBlock(out[j])) {
 			j++
 		}
 		// Trim trailing non-run events only if the block contains ≥2 runs or
@@ -581,10 +581,10 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 			const units: Unit[] = []
 			for (const e of block) {
 				if (e.type === 'core-effect-run') {
-					const r = e as Extract<ModelEvent, { type: 'core-effect-run' }>
+					const r = e
 					units.push({ key: [r.effect, String(r.value)], events: [e] })
 				} else {
-					units[units.length - 1]!.events.push(e) // an out-write always follows its run
+					units[units.length - 1].events.push(e) // an out-write always follows its run
 				}
 			}
 			units.sort((a, b) =>
@@ -608,7 +608,7 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 			const flat: ModelEvent[] = []
 			for (const u of units) {
 				for (const e of u.events) {
-					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++]! } as ModelEvent) : e)
+					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++] } as ModelEvent) : e)
 				}
 			}
 			for (let k = i; k < j; k++) {
@@ -661,12 +661,12 @@ export function diffAgainstModelTolerant(
 			: undefined
 	for (let step = 0; step < ops.length; step++) {
 		const namingEvents = m.events.length // the model's pre-op count — its uniq naming input
-		const ok = applyOneOp(m, ops[step]!)
+		const ok = applyOneOp(m, ops[step])
 		const mEvents = comparableEvents(m.events.slice(drained))
 		drained = m.events.length
 		namedEngine.__syncNamingEvents?.(namingEvents)
-		dpc?.beforeOp(ops[step]!)
-		const applied = engine.apply(ops[step]!)
+		dpc?.beforeOp(ops[step])
+		const applied = engine.apply(ops[step])
 		if (applied !== (ok ? 'applied' : 'skipped')) {
 			return {
 				seed,
@@ -705,7 +705,7 @@ export function diffAgainstModelTolerant(
 				}
 			}
 		}
-		const dpcFail = dpc?.afterOp(ops[step]!, eEvents)
+		const dpcFail = dpc?.afterOp(ops[step], eEvents)
 		if (dpcFail !== undefined) {
 			return { seed, step, message: dpcFail }
 		}

@@ -113,10 +113,10 @@ function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
 	// handle belongs to THIS shim's bound engine, throwing a clear cross-instance
 	// error rather than silently resolving its id against the wrong arena.
 	if (isAtom(signal)) {
-		return shim.internalsForAtom(signal as Atom<unknown>)
+		return shim.internalsForAtom(signal)
 	}
 	if (isComputed(signal)) {
-		return shim.bridge.internalsForComputed(signal as Computed<unknown>)
+		return shim.bridge.internalsForComputed(signal)
 	}
 	throw new Error(
 		'cosignals-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).',

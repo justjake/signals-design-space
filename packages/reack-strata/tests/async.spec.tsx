@@ -15,10 +15,10 @@ const mounted: Array<{ root: ReturnType<typeof createRoot>; container: HTMLDivEl
 
 afterEach(async () => {
 	for (let i = 0; i < mounted.length; i++) {
-		await act(() => mounted[i]!.root.unmount())
+		await act(() => mounted[i].root.unmount())
 	}
 	for (let i = 0; i < mounted.length; i++) {
-		mounted[i]!.container.remove()
+		mounted[i].container.remove()
 	}
 	mounted.length = 0
 	resetForTest()

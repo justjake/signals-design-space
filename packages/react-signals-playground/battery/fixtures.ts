@@ -34,7 +34,7 @@ interface BatteryOptions {
 export const test = base.extend<BatteryFixtures & BatteryOptions>({
 	// Default keeps `playwright test` usable without a project filter; the
 	// config always overrides this per project.
-	entry: [ENTRIES[0]!, { option: true }],
+	entry: [ENTRIES[0], { option: true }],
 
 	errors: [
 		async ({ page }, use, testInfo) => {

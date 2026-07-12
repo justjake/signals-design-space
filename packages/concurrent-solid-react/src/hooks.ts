@@ -52,7 +52,7 @@ import {
 import type { Computed } from './solid/types.js'
 
 export function registerConcurrentSolidReact(react?: unknown): BridgeHandle {
-	const b = attachBridge((react ?? React) as ForkReact)
+	const b = attachBridge(react ?? React)
 	return { errors: b.errors, dispose: () => b.dispose() }
 }
 
@@ -196,7 +196,7 @@ export function useSelector<T>(selector: () => T): T {
 	if (r.value === PENDING) {
 		throw r.thenable
 	}
-	return r.value as T
+	return r.value
 }
 
 /** Read one accessor (see useSelector). */

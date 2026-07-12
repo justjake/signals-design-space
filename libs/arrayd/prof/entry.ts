@@ -23,7 +23,7 @@ function busy() {
 // --- broadPropagation ---
 function buildBroad() {
 	const head = signal(0)
-	let last: () => number = head as unknown as () => number
+	let last: () => number = head
 	const counter = { count: 0 }
 	for (let i = 0; i < 50; i++) {
 		const current = computed(() => head() + i)

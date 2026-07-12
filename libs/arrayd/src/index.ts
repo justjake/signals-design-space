@@ -129,7 +129,7 @@ export function signal(initialValue?: unknown): SignalHandle<unknown> {
 	const s = new Node(F.Signal | F.Mutable)
 	s.value = initialValue
 	s.aux = initialValue
-	return signalOper.bind(s) as SignalHandle<unknown>
+	return signalOper.bind(s)
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {
@@ -160,7 +160,7 @@ export function effect(fn: () => void | (() => void)): () => void {
 		e.flags &= ~F.RecursedCheck
 		finishTracking(e, version, vbase)
 	}
-	return effectOper.bind(e) as () => void
+	return effectOper.bind(e)
 }
 
 /** Returns a disposer that disposes everything created inside `fn`. */
@@ -181,7 +181,7 @@ export function effectScope(fn: () => void): () => void {
 		activeSub = prevSub
 		finishTracking(e, version, vbase)
 	}
-	return effectScopeOper.bind(e) as () => void
+	return effectScopeOper.bind(e)
 }
 
 export function startBatch(): void {

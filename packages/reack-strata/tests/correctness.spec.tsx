@@ -22,10 +22,10 @@ beforeEach(() => {
 
 afterEach(async () => {
 	for (let i = 0; i < roots.length; i++) {
-		await act(() => roots[i]!.unmount())
+		await act(() => roots[i].unmount())
 	}
 	for (let i = 0; i < containers.length; i++) {
-		containers[i]!.remove()
+		containers[i].remove()
 	}
 	resetForTest()
 })

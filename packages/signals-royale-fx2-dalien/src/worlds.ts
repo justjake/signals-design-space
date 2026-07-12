@@ -370,7 +370,7 @@ function releaseLogs(dead: Draft): void {
 		let value = log.valueBeforeDrafts
 		let prefix = 0
 		for (; prefix < intents.length; prefix++) {
-			const intent = intents[prefix] as Intent
+			const intent = intents[prefix]
 			const draft = intent.draft
 			if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') {
 				break
@@ -625,14 +625,14 @@ function recordSource(node: ReactiveNode): void {
 
 function inheritCertificate(certificate: Certificate): void {
 	for (let i = 0; i < certificate.count; i++) {
-		const entry = certificate.entries[i] as CertificateEntry
+		const entry = certificate.entries[i]
 		appendCertificate(entry.node as ReactiveNode, entry.changedAtGraphChange, entry.draftRevision)
 	}
 }
 
 function clearInactiveCertificateEntries(certificate: Certificate, previousCount: number): void {
 	for (let i = certificate.count; i < previousCount; i++) {
-		const entry = certificate.entries[i] as CertificateEntry
+		const entry = certificate.entries[i]
 		entry.node = null
 	}
 }
@@ -661,7 +661,7 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 		return false
 	}
 	for (let i = 0; i < memo.certificate.count; i++) {
-		const entry = memo.certificate.entries[i] as CertificateEntry
+		const entry = memo.certificate.entries[i]
 		const source = entry.node as ReactiveNode
 		if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
 			return false
@@ -764,9 +764,7 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	// indistinguishable, so identity-comparing subscribers do not re-render.
 	const previousState = memo?.state
 	const state =
-		previousState !== undefined && statesEqual(node, previousState, fresh)
-			? previousState
-			: fresh
+		previousState !== undefined && statesEqual(node, previousState, fresh) ? previousState : fresh
 	if (memo === undefined) {
 		memo = {
 			validAtGraphChange: currentGraphChange(),

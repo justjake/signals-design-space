@@ -51,7 +51,7 @@ describe('observation union at the engine', () => {
 	it('a live watcher alone observes; dropping it unobserves', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, node, 'W')
 		await tick()
@@ -68,7 +68,7 @@ describe('observation union at the engine', () => {
 	it('kernel subscriber + watcher = ONE observation; unobserve only after BOTH detach', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const dispose = effect(() => {
 			void atom.state // kernel consumer: links on the atom's record
 		})
@@ -90,7 +90,7 @@ describe('observation union at the engine', () => {
 	it('deferMountEffects hidden prepare never observes; the adoptRevealedMount reveal observes exactly once', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const hidden = b.renderStart('A', [])
 		const w = b.mountWatcher(hidden.id, node, 'W')
 		b.deferMountEffects(w.id) // Activity pre-render: layout effects deferred
@@ -111,7 +111,7 @@ describe('observation union at the engine', () => {
 	it('same-tick handoff between consumer kinds coalesces (no flap either direction)', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, node, 'W')
 		b.renderEnd(p.id, 'commit')
@@ -140,7 +140,7 @@ describe('observation union at the engine', () => {
 	it('cold flap: commit-subscribe and unsubscribe within one tick net to nothing', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, node, 'W')
 		b.renderEnd(p.id, 'commit')
@@ -152,7 +152,7 @@ describe('observation union at the engine', () => {
 	it('re-asserting watcher liveness is edge-filtered (idempotent, no double retain)', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, node, 'W')
 		b.renderEnd(p.id, 'commit')
@@ -167,7 +167,7 @@ describe('observation union at the engine', () => {
 	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
 		const b = freshEngine() // production posture (quiet arms by derivation alone)
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		expect(b.quiet).toBe(true)
 		const p = b.renderStart('A', []) // the render disarms quiet while open…
 		const w = b.mountWatcher(p.id, node, 'W')
@@ -188,7 +188,7 @@ describe('observation union at the engine', () => {
 		const b = freshEngine()
 		const stream = attachRefereeStream(b) // referee posture: decode the packed stream
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const before = stream.cursor()
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, node, 'W')
@@ -211,8 +211,8 @@ describe('observation union at the engine', () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
 		const { atom: atomB, log: logB } = observedAtom(0)
-		const nodeA = b.internalsForAtom(atom as Atom<unknown>)
-		const nodeB = b.internalsForAtom(atomB as Atom<unknown>)
+		const nodeA = b.internalsForAtom(atom)
+		const nodeB = b.internalsForAtom(atomB)
 		const flag = b.atom('flag', 0)
 		const e = mountEngineReactEffectPick(b, 'A', flag, nodeA, nodeB, 'E') // flag=0 → edges {flag, b}
 		await tick()

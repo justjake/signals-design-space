@@ -119,7 +119,7 @@ describe('R-2 order: isEqual(current, incoming), everywhere', () => {
 		expect(p.calls).toEqual([[2, 3]])
 		p.reset()
 		const rHandle = new ReducerAtom<number, number>((s, act) => s + act, 10, { isEqual: p.eq })
-		const rNode = engine.internalsForAtom(rHandle as unknown as Atom<number>)
+		const rNode = engine.internalsForAtom(rHandle)
 		rNode.name = 'qr'
 		rHandle.dispatch(5)
 		expect(p.calls).toEqual([[10, 15]])

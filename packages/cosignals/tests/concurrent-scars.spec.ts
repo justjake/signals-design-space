@@ -183,7 +183,7 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent()
 		const x1 = m.atom('x1', 0)
 		const x2 = m.atom('x2', 0)
-		const c = m.computed('c', (read) => ((read(x1) as number) && (read(x2) as number)) as number)
+		const c = m.computed('c', (read) => (read(x1) as number) && read(x2))
 		const t1 = m.openBatch('deferred')
 		const t2 = m.openBatch('deferred')
 		m.write(t1.id, x1, set(1)) // per-batch projection: 1&&0 = 0 == committed
@@ -521,7 +521,7 @@ describe('pinned scars (model-expressible)', () => {
 			.eventsSince(mark)
 			.filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.batch === t.id)
 		expect(d).toHaveLength(1)
-		expect(d[0]!.type === 'delivery' && d[0]!.mode).toBe('interleaved')
+		expect(d[0].type === 'delivery' && d[0].mode).toBe('interleaved')
 		m.renderResume(pt.id)
 		m.renderEnd(pt.id, 'discard') // React restarts at a fresh pin for the interleaved update
 		const pt2 = openRender(m, 'A', [t])

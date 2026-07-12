@@ -55,7 +55,7 @@ describe('battery (spec §6) at React level', () => {
 			return <span>s:{v};</span>
 		}
 		function App() {
-			const c = useComputed<number>(() => (a.state as number) * 10, [])
+			const c = useComputed<number>(() => a.state * 10, [])
 			return (
 				<>
 					<span>c:{useSignal(c)};</span>
@@ -328,7 +328,7 @@ describe('battery (spec §6) at React level', () => {
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('r1:1;r2:1;')
-		const k = h.events.eventsOfType('write')[0]!.batch
+		const k = h.events.eventsOfType('write')[0].batch
 		// The corrective re-render rode k's own lane — k committed exactly
 		// once on this root (a fresh transition would have produced a second).
 		const kCommits = h.events.eventsOfType('per-root-commit').filter((e) => e.batch === k)
@@ -347,7 +347,7 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {})
 		expect(text(one.container)).toBe('one:4;')
 		expect(text(two.container)).toBe('two:4;')
-		const k = h.events.eventsOfType('write')[0]!.batch
+		const k = h.events.eventsOfType('write')[0].batch
 		const roots = new Set(
 			h.events
 				.eventsOfType('per-root-commit')
@@ -402,7 +402,7 @@ describe('battery (spec §6) at React level', () => {
 		const a = new Atom(1)
 		const committedNodeIds: number[] = []
 		function View({ dep }: { dep: number }) {
-			const c = useComputed<number>(() => (a.state as number) + dep, [dep])
+			const c = useComputed<number>(() => a.state + dep, [dep])
 			React.useEffect(() => {
 				committedNodeIds.push(c._id) // the committed render's node (S-C: the kernel record id IS the node identity)
 			})
@@ -445,7 +445,7 @@ describe('battery (spec §6) at React level', () => {
 		}
 		const fetchLike = (query: string): Promise<string> => {
 			fetches++
-			return gates[query]!.promise
+			return gates[query].promise
 		}
 		function Show({ id, data }: { id: string; data: { state: string } }) {
 			return (
@@ -458,7 +458,7 @@ describe('battery (spec §6) at React level', () => {
 			// The key carries the world-varying input (the query): each world
 			// resolves its own entry in the LIVING node's per-key cache.
 			const data = useComputed<string>((ctx) => {
-				const query = q.state as string
+				const query = q.state
 				return ctx.use(['fetch', query], () => fetchLike(query))
 			}, [])
 			return (
@@ -472,7 +472,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('fb;') // suspended on the q1 entry
 		expect(fetches).toBe(1)
 		await act(async () => {
-			gates.q1!.resolve('DATA1')
+			gates.q1.resolve('DATA1')
 		})
 		expect(text(container)).toBe('one:DATA1;')
 		// App (the node's owner) lives OUTSIDE the Suspense boundary, so the
@@ -496,7 +496,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('one:DATA1;two:DATA1;')
 		expect(fetches).toBe(2) // exactly one fetch per distinct key
 		await act(async () => {
-			gates.q2!.resolve('DATA2')
+			gates.q2.resolve('DATA2')
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('one:DATA2;two:DATA2;')
@@ -566,7 +566,7 @@ describe('battery (spec §6) at React level', () => {
 		}
 		function App() {
 			useSignalEffect(() => {
-				committedSeen.push(a.state as number)
+				committedSeen.push(a.state)
 			}, [])
 			return (
 				<React.Suspense fallback={null}>
@@ -576,7 +576,7 @@ describe('battery (spec §6) at React level', () => {
 		}
 		const { container } = await h.mount(<App />)
 		const disposeCore = effect(() => {
-			newestSeen.push(a.state as number)
+			newestSeen.push(a.state)
 		})
 		await act(async () => {
 			React.startTransition(() => a.set(1)) // applied, not committed
@@ -641,7 +641,7 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 		const settled = deferred<void>()
 		const argCounts: number[] = []
 		let actionBatch: number | undefined
-		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>)
+		const aNode = h.handle.shim.internalsForAtom(a)
 		await act(async () => {
 			startSignalTransition(async function (...args: unknown[]) {
 				argCounts.push(args.length) // the action callback gets NO scope object — nothing at all
@@ -670,7 +670,7 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 		// retired records).
 		const settledState = h.bridge.idToBatch.get(actionBatch!)?.state
 		expect(settledState === undefined || settledState === 'retired').toBe(true)
-		expect(() => h.bridge.write(actionBatch!, aNode, 0, 9)).toThrow(/retired batch|unknown batch/)
+		expect(() => h.bridge.write(actionBatch, aNode, 0, 9)).toThrow(/retired batch|unknown batch/)
 	})
 })
 
@@ -745,7 +745,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 			// schedule no re-render, so no commit boundary lands before the
 			// settlement; the window stays open for the assertions.
 			useSignalEffect(() => {
-				const v = a.state as number
+				const v = a.state
 				runs.push(v)
 				return () => cleans.push(v)
 			}, [])
@@ -761,15 +761,15 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		// driven at the engine level — writes attributed to the action's
 		// still-live engine batch, the shape a protocol lane merge or a
 		// runInBatch-delivered write produces.
-		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>)
+		const aNode = h.handle.shim.internalsForAtom(a)
 		let actionBatch: number | undefined
 		await act(async () => {
 			startSignalTransition(async () => {
 				b.set(1) // sync part classifies into the action's batch: the transition renders + commits (locks in) while parked
 				await gate.promise
-				h.bridge.write(actionBatch!, aNode, 0, 1) // member writes: committed truth moves at each…
-				h.bridge.write(actionBatch!, aNode, 0, 2)
-				h.bridge.write(actionBatch!, aNode, 0, 3)
+				h.bridge.write(actionBatch, aNode, 0, 1) // member writes: committed truth moves at each…
+				h.bridge.write(actionBatch, aNode, 0, 2)
+				h.bridge.write(actionBatch, aNode, 0, 3)
 				wrote.resolve()
 				await hold.promise // …but the action stays parked past the assertion
 			})
@@ -798,7 +798,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const cleans: number[] = []
 		function Eff() {
 			useSignalEffect(() => {
-				const v = a.state as number
+				const v = a.state
 				runs.push(v)
 				return () => cleans.push(v)
 			}, [])
@@ -818,13 +818,13 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const hold = deferred<void>()
 		// Engine-level member write into the action's still-live batch (see the
 		// coalescing test above for why the React surface no longer spells this).
-		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>)
+		const aNode = h.handle.shim.internalsForAtom(a)
 		let actionBatch: number | undefined
 		await act(async () => {
 			startSignalTransition(async () => {
 				b.set(1)
 				await gate.promise
-				h.bridge.write(actionBatch!, aNode, 0, 7) // the member write lands while the effect is live…
+				h.bridge.write(actionBatch, aNode, 0, 7) // the member write lands while the effect is live…
 				wrote.resolve()
 				await hold.promise // …but its durable flip is the settlement, later
 			})
@@ -854,7 +854,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const seen: unknown[] = []
 		function View() {
 			const data = useComputed<string>((ctx) => {
-				void (kick.state as number) // the request's key input (a tracked dep)
+				void kick.state // the request's key input (a tracked dep)
 				return ctx.use('k', () => gate.promise)
 			}, [])
 			useSignalEffect(() => {

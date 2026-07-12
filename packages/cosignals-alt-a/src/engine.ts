@@ -777,7 +777,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 					set: (v: unknown) => writeOp(a, C.OP_SET, v),
 					update: (f: (x: unknown) => unknown) => writeOp(a, C.OP_UPDATE, f),
 				}
-				const cleanup = observe(ctx) as (() => void) | void
+				const cleanup = observe(ctx)
 				lifecycleDelivered.set(a, { cleanup: cleanup ?? undefined })
 			} else if (!live && delivered !== undefined) {
 				lifecycleDelivered.delete(a)
@@ -3147,7 +3147,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				writeOp(id, C.OP_UPDATE, fn)
 			},
 		} as const
-		return handle as AtomHandle<T>
+		return handle
 	}
 
 	function reducerAtom<S, A>(
@@ -3185,7 +3185,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				writeOp(id, C.OP_DISPATCH, action)
 			},
 		} as const
-		return handle as ReducerAtomHandle<S, A>
+		return handle
 	}
 
 	function computed<T>(
@@ -3203,14 +3203,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 		maybeBoundary()
 		const id = allocNode(C.K_COMPUTED)
 		const isEqual = opts?.isEqual as Equality<unknown> | undefined
-		metas[id >> 3] = { isEqual, label: opts?.label, rawFn: fn as () => unknown }
+		metas[id >> 3] = { isEqual, label: opts?.label, rawFn: fn }
 		// Kernel wrapper (§11.2): custom equality returns the previous
 		// reference so the kernel's identity compare reports "unchanged".
 		fns[id >> 3] =
 			opts?.kernelFn !== undefined
 				? opts.kernelFn
 				: isEqual === undefined
-					? (fn as (prev?: unknown) => unknown)
+					? fn
 					: (prev?: unknown): unknown => {
 							const next = (fn as () => unknown)()
 							return prev !== undefined && isEqual(prev, next) ? prev : next
@@ -3223,7 +3223,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				return readComputedPublic(id) as T
 			},
 		} as const
-		return handle as ComputedHandle<T>
+		return handle
 	}
 
 	function watch(target: SignalHandle, onBroadcast?: (ev: BroadcastEvent) => void): WatcherHandle {

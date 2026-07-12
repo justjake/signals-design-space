@@ -76,13 +76,13 @@ describe('zero cost with no driver attached (behavioral)', () => {
 		for (let round = 0; round < 20; round++) {
 			batch(() => {
 				for (let i = 0; i < atoms.length; i++) {
-					atoms[i]!.set(round * 100 + i)
-					atoms[i]!.update((v) => v + 1)
+					atoms[i].set(round * 100 + i)
+					atoms[i].update((v) => v + 1)
 				}
 				r.dispatch(1)
 			})
 			for (let i = 0; i < atoms.length; i++) {
-				sink += doubles[i]!.state
+				sink += doubles[i].state
 			}
 			sink += untracked(() => sum.state) + r.state
 		}
@@ -183,11 +183,11 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		la.handle.set(100)
 		;(la.handle as Atom<number>).update((n) => n + 1) // op captured UNFOLDED
 		expect(la.log.materialize()).toHaveLength(2)
-		expect(la.log.materialize()[0]!.op).toEqual({ kind: 'set', value: 100 })
-		expect(la.log.materialize()[1]!.op.kind).toBe('update') // replay fidelity: the updater itself
+		expect(la.log.materialize()[0].op).toEqual({ kind: 'set', value: 100 })
+		expect(la.log.materialize()[1].op.kind).toBe('update') // replay fidelity: the updater itself
 		const ambient = engine.ambientBatch
 		expect(ambient).toBeDefined()
-		expect(la.log.materialize()[0]!.batch).toBe(ambient)
+		expect(la.log.materialize()[0].batch).toBe(ambient)
 		expect(engine.newestValue(la)).toBe(101) // writes apply to the kernel immediately
 		expect(engine.committedValue(la, 'A')).toBe(8) // not committed yet: base still holds the quiet fold
 		engine.retire(ambient!)
@@ -211,23 +211,23 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		const doubles = handles.map((h) => new Computed(() => h.state * 2))
 		let effectRuns = 0
 		const dispose = effect(() => {
-			void doubles[0]!.state
+			void doubles[0].state
 			effectRuns++
 		})
 		const rHandle = new ReducerAtom<number, number>((s, a) => s + a, 0)
-		const r = engine.internalsForAtom(rHandle as unknown as Atom<number>)
+		const r = engine.internalsForAtom(rHandle)
 		r.name = 'regReducer'
 		// No reducer wiring: dispatch records as an update whose closure carries the reducer.
 		const before = __TEST__coreProbes()
 		let sink = 0
 		for (let round = 0; round < 50; round++) {
 			for (let i = 0; i < handles.length; i++) {
-				handles[i]!.set(round * 1000 + i)
-				handles[i]!.update((v) => v + 1)
+				handles[i].set(round * 1000 + i)
+				handles[i].update((v) => v + 1)
 			}
 			rHandle.dispatch(1)
 			for (let i = 0; i < doubles.length; i++) {
-				sink += doubles[i]!.state
+				sink += doubles[i].state
 			}
 		}
 		dispose()
@@ -238,8 +238,8 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		expect(after.batches).toBe(before.batches) // ZERO batches (no ambient create)
 		expect(engine.ambientBatch).toBeUndefined()
 		// And the folds are real: base == kernel == committed for every atom.
-		expect(engine.newestValue(atoms[3]!)).toBe(49 * 1000 + 3 + 1)
-		expect(engine.committedValue(atoms[3]!, 'A')).toBe(49 * 1000 + 3 + 1)
+		expect(engine.newestValue(atoms[3])).toBe(49 * 1000 + 3 + 1)
+		expect(engine.committedValue(atoms[3], 'A')).toBe(49 * 1000 + 3 + 1)
 		expect(engine.committedValue(r, 'A')).toBe(50)
 	})
 
@@ -256,9 +256,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 	it('replayed updaters run under the fold guard: raw reads inside them throw, and nothing records', () => {
 		const la = engine.atom('pure', 1)
 		const handle = la.handle as Atom<number>
-		expect(() => handle.update((n) => n + (handle.state as number))).toThrow(
-			/not allowed inside an update/,
-		)
+		expect(() => handle.update((n) => n + handle.state)).toThrow(/not allowed inside an update/)
 		expect(la.log.materialize()).toHaveLength(0) // the rejected write left no log entry
 		expect(engine.newestValue(la)).toBe(1) // and no kernel mutation
 	})
@@ -281,7 +279,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 
 	it('public reads of an engine atom inside an overlay world evaluation serve the world fold', () => {
 		const la = engine.atom('routed', 0)
-		const viaHandle = engine.computed('viaHandle', () => la.handle.state as number) // NOT the reader — the public API
+		const viaHandle = engine.computed('viaHandle', () => la.handle.state) // NOT the reader — the public API
 		const t = engine.openBatch()
 		engine.write(t.id, la, 0, 5)
 		expect(engine.newestValue(viaHandle)).toBe(5) // newest = kernel arena

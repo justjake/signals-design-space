@@ -81,7 +81,7 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 
 	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop) — FROZEN literals`, () => {
 		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) {
-			expectOpsDiffClean(FROZEN[`s${seed}x400`]!, seed)
+			expectOpsDiffClean(FROZEN[`s${seed}x400`], seed)
 		}
 	})
 
@@ -91,7 +91,7 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		// lists (tests/frozen-schedules.json) so no generator change can ever
 		// silently rewrite them.
 		for (const seed of [29, 97, 173]) {
-			expectOpsDiffClean(FROZEN[`s${seed}x80`]!, seed)
+			expectOpsDiffClean(FROZEN[`s${seed}x80`], seed)
 		}
 	})
 
@@ -109,7 +109,7 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 	// pre-fix engine diverges here (see the STEP-3 proof in the change report).
 	it('the converged-terminal pins (bugs 1 & 2) exercise the terminal AND diff clean — FROZEN literals', () => {
 		for (const key of ['terminal-bug1-quiet', 'terminal-bug2-quiet']) {
-			const ops = FROZEN[key]!
+			const ops = FROZEN[key]
 			const model = runSchedule(ops, true) // the naive spec: invariants after every step
 			expect(model.failure, `${key}: ${model.failure?.error.message}`).toBeUndefined()
 			const reFires = model.model.eventsOfType('react-effect-run').length

@@ -322,7 +322,7 @@ describe('ReactBatchRegistry', () => {
 					__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: {
 						E: { forkProtocolVersion: 2 },
 					},
-				} as never),
+				}),
 		).toThrow('protocol 1')
 	})
 
@@ -374,9 +374,9 @@ describe('ReactBatchRegistry', () => {
 
 		for (let step = 0; step < 1_000; step++) {
 			const rootIndex = random() % roots.length
-			const root = roots[rootIndex]!
-			const container = containers[rootIndex]!
-			const lane = lanes[random() % lanes.length]!
+			const root = roots[rootIndex]
+			const container = containers[rootIndex]
+			const lane = lanes[random() % lanes.length]
 			switch (random() % 8) {
 				case 0:
 				case 1:
@@ -406,8 +406,8 @@ describe('ReactBatchRegistry', () => {
 			}
 		}
 		for (let i = 0; i < roots.length; i++) {
-			taps.emit('onRenderPassStart', roots[i]!, containers[i]!, allLanes)
-			taps.emit('onRootCommitted', roots[i]!, containers[i]!, allLanes, 0, 0)
+			taps.emit('onRenderPassStart', roots[i], containers[i], allLanes)
+			taps.emit('onRootCommitted', roots[i], containers[i], allLanes, 0, 0)
 		}
 		taps.emit('onEventClosed', 0, null)
 
@@ -438,8 +438,8 @@ describe('ReactBatchRegistry', () => {
 				;(globalThis.gc as () => void)()
 				await new Promise((resolve) => setTimeout(resolve, 2))
 			}
-			expect(references[0]!.deref()).toBeUndefined()
-			expect(references[1]!.deref()).toBeUndefined()
+			expect(references[0].deref()).toBeUndefined()
+			expect(references[1].deref()).toBeUndefined()
 			registry.dispose()
 		},
 	)

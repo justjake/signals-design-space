@@ -358,7 +358,7 @@ export class ReactBatchRegistry {
 		this.emit('onRootCommitted', container, committed)
 		if (retirements !== undefined) {
 			for (let i = 0; i < retirements.length; i++) {
-				const retirement = retirements[i]!
+				const retirement = retirements[i]
 				this.retire(retirement.slot, retirement.committed)
 			}
 		}

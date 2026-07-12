@@ -122,7 +122,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		for (const rel of ENGINE_MODULES) {
 			const lines = src(rel).split('\n')
 			for (let i = 0; i < lines.length; i++) {
-				const t = lines[i]!.trim()
+				const t = lines[i].trim()
 				if (!/(^|[^.\w])tr\.\w+\(/.test(t)) {
 					continue
 				}
@@ -222,8 +222,8 @@ describe('R11 runtime enable/disable', () => {
 		expect(traced.epoch).toBe(plain.epoch)
 		expect(traced.nodes.length).toBe(plain.nodes.length)
 		for (let i = 0; i < plain.nodes.length; i++) {
-			const n = plain.nodes[i]!
-			const tn = traced.nodes[i]!
+			const n = plain.nodes[i]
+			const tn = traced.nodes[i]
 			expect(tn.id, 'node ids diverged under tracing').toBe(n.id)
 			expect(tn.name, 'node population diverged under tracing').toBe(n.name)
 			expect(Object.is(tn.newest, n.newest), `newest(${n.name}) diverged under tracing`).toBe(true)
@@ -278,7 +278,7 @@ describe('R11 SESSION mode (lossless capture)', () => {
 		expect(s.truncated).toBe(true)
 		expect(s.chunks).toBe(2)
 		expect(s.recorded).toBe(21) // 20 events + the truncation marker
-		const marker = tr.events('truncation')[0]!
+		const marker = tr.events('truncation')[0]
 		expect(marker.id).toBe(16)
 		expect(marker.data).toEqual({ boundaryId: 16 })
 		expect(tr.decode(17)!.data).toEqual({ epoch: 16 }) // the event that crossed, re-emitted after the marker
@@ -298,12 +298,12 @@ describe('R11 recorder details', () => {
 	it('clock-sync: a saturated µs delta emits an absolute-time record', () => {
 		const times = [0, 100, 100 + 2147483648]
 		let i = 0
-		const tr = bareTracer({ now: () => times[Math.min(i++, times.length - 1)]! })
+		const tr = bareTracer({ now: () => times[Math.min(i++, times.length - 1)] })
 		emitN(tr, 2)
 		const kinds = tr.events().map((e) => e.kind)
 		expect(kinds).toEqual(['epoch-reset', 'clock-sync', 'epoch-reset'])
-		expect(tr.events('clock-sync')[0]!.data).toEqual({ absoluteUs: 100 + 2147483648 })
-		expect(tr.events()[2]!.dt).toBe(0) // the synced event restarts the delta line
+		expect(tr.events('clock-sync')[0].data).toEqual({ absoluteUs: 100 + 2147483648 })
+		expect(tr.events()[2].dt).toBe(0) // the synced event restarts the delta line
 		tr.stop()
 	})
 
@@ -358,8 +358,8 @@ describe('R11 Graphviz renderers', () => {
 		const t = b.openBatch()
 		b.write(t.id, a, 0, 1)
 
-		const write = tr.events('write')[0]!
-		const delivery = tr.events('delivery')[0]!
+		const write = tr.events('write')[0]
+		const delivery = tr.events('delivery')[0]
 		const dot = traceToDot(tr.events())
 		expect(dot).toMatch(/^digraph trace \{/)
 		expect(dot).toContain(`t${write.id} [label="#${write.id} write(a)"`)

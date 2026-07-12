@@ -304,7 +304,7 @@ export function refreshCommittedCone(sources: Array<Signal<any> | Computed<any>>
 		if (
 			next !== null &&
 			typeof next === 'object' &&
-			(typeof (next as any).then === 'function' || (next as any)[Symbol.asyncIterator])
+			(typeof next.then === 'function' || next[Symbol.asyncIterator])
 		) {
 			continue // async compute: committed copy stays stale (residual gap)
 		}
@@ -401,7 +401,7 @@ function resolveOptimisticNodes(nodes: OptimisticNode[]): void {
 		const node = nodes[i]
 		node._optimisticLane = undefined
 		if (node._pendingValue !== NOT_PENDING) {
-			node._value = node._pendingValue as any
+			node._value = node._pendingValue
 			node._pendingValue = NOT_PENDING
 		}
 		const prevOverride = node._overrideValue
@@ -759,7 +759,7 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
 
 		if (optimistic && sourceLane) {
 			s._sub._flags |= REACTIVE_OPTIMISTIC_DIRTY
-			assignOrMergeLane(s._sub as any, sourceLane)
+			assignOrMergeLane(s._sub, sourceLane)
 		} else if (optimistic) {
 			s._sub._flags |= REACTIVE_OPTIMISTIC_DIRTY
 			// No source lane means reversion - clear subscriber's lane so effects go to regular queue
@@ -785,7 +785,7 @@ function commitPendingNode(n: Signal<any>): void {
 	const c = n as Partial<Computed<unknown>>
 	if (!c._fn) {
 		if (n._pendingValue !== NOT_PENDING) {
-			n._value = n._pendingValue as any
+			n._value = n._pendingValue
 			n._pendingValue = NOT_PENDING
 		}
 		// [react-adapt E1] plain pending signals re-derive at the commit point
@@ -798,7 +798,7 @@ function commitPendingNode(n: Signal<any>): void {
 		return
 	}
 	if (n._pendingValue !== NOT_PENDING) {
-		n._value = n._pendingValue as any
+		n._value = n._pendingValue
 		n._pendingValue = NOT_PENDING
 		// Set _modified for effects, but not for tracked effects (they handle their own scheduling)
 		if ((n as any)._type && (n as any)._type !== EFFECT_TRACKED) {

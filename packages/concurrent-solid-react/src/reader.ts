@@ -192,7 +192,7 @@ export function pokeReadersInCone(
 		if (sub._isReactReader) {
 			if (!sub._modified) {
 				sub._modified = true
-				sub._queue.enqueue(0, sub._run! as unknown as QueueCallback)
+				sub._queue.enqueue(0, sub._run!)
 			}
 		} else {
 			pokeReadersInCone(sub, visited)
@@ -232,7 +232,7 @@ export function syncReaderDeps(reader: ReaderNode, deps: DepNode[]): void {
 	deferUnobserved(() => {
 		let toRemove = reader._deps
 		while (toRemove !== null) {
-			toRemove = unlinkSubs(toRemove as Link)
+			toRemove = unlinkSubs(toRemove)
 		}
 		reader._deps = null
 		reader._depsTail = null

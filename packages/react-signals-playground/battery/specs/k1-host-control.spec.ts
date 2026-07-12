@@ -47,8 +47,8 @@ for (const order of ['B-first', 'A-first'] as const) {
 		// The host fact this row pins: releasing ONE gate commits NOTHING —
 		// React renders the pending transition lanes jointly, and the retry
 		// still suspends on the unresolved gate. Identical in both orders.
-		const first = (order === 'B-first' ? 'releaseB' : 'releaseA') as 'releaseA' | 'releaseB'
-		const second = (order === 'B-first' ? 'releaseA' : 'releaseB') as 'releaseA' | 'releaseB'
+		const first: 'releaseA' | 'releaseB' = order === 'B-first' ? 'releaseB' : 'releaseA'
+		const second: 'releaseA' | 'releaseB' = order === 'B-first' ? 'releaseA' : 'releaseB'
 		await page.evaluate((fn) => window.__control[fn](), first)
 		await page.waitForTimeout(400)
 		await expect(page.getByTestId('value-a')).toHaveText('0')

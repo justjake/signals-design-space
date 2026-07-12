@@ -105,8 +105,8 @@ function defaultBoxedEq(a: unknown, b: unknown): boolean {
 		if (!ab || !bb) {
 			return false
 		}
-		const ba = a as Boxed
-		const bx = b as Boxed
+		const ba = a
+		const bx = b
 		if (ba.kind !== bx.kind) {
 			return false
 		}
@@ -477,7 +477,7 @@ export function createAPI(engine: CosignalEngine) {
 					},
 				)
 				this.id = this.handle.id
-				instancesByHandle.set(this.handle, this as Computed<unknown>)
+				instancesByHandle.set(this.handle, this)
 				return
 			}
 			// Fused kernel wrapper: canonical evaluations carry the kernel's
@@ -496,7 +496,7 @@ export function createAPI(engine: CosignalEngine) {
 				kernelFn,
 			})
 			this.id = this.handle.id
-			instancesByHandle.set(this.handle, this as Computed<unknown>)
+			instancesByHandle.set(this.handle, this)
 		}
 
 		/** refresh() support: drop every world's thenable slots so the next
@@ -599,14 +599,14 @@ export function createAPI(engine: CosignalEngine) {
 				th.csStatus = 'pending'
 				th.then(
 					(v) => {
-						th!.csStatus = 'fulfilled'
-						th!.csValue = v
-						this.onSettle(th!)
+						th.csStatus = 'fulfilled'
+						th.csValue = v
+						this.onSettle(th)
 					},
 					(r) => {
-						th!.csStatus = 'rejected'
-						th!.csReason = r
-						this.onSettle(th!)
+						th.csStatus = 'rejected'
+						th.csReason = r
+						this.onSettle(th)
 					},
 				)
 			}
@@ -688,7 +688,7 @@ export function createAPI(engine: CosignalEngine) {
 	const pendingProbes = new WeakMap<object, Computed<boolean>>()
 
 	function handleOfSource(x: { handle: SignalHandle } | SignalHandle): SignalHandle {
-		return 'handle' in x ? (x as { handle: SignalHandle }).handle : (x as SignalHandle)
+		return 'handle' in x ? x.handle : x
 	}
 
 	/**
@@ -825,7 +825,7 @@ export function createAPI(engine: CosignalEngine) {
 	 * values. Unknown keys warn; missing keys leave the constructor default. */
 	function initializeAtomState(
 		json: string,
-		atoms: Record<string, { handle: { set(v: never): void } } | { set(v: never): void }>,
+		atoms: Record<string, { handle: { set(v: unknown): void } } | { set(v: unknown): void }>,
 		reviver?: (key: string, value: unknown) => unknown,
 	): void {
 		const data = JSON.parse(json) as Record<string, unknown>
@@ -843,7 +843,7 @@ export function createAPI(engine: CosignalEngine) {
 				installable.installState(v)
 				continue
 			}
-			const settable = ('handle' in target ? target.handle : target) as { set(x: unknown): void }
+			const settable = 'handle' in target ? target.handle : target
 			settable.set(v)
 		}
 	}

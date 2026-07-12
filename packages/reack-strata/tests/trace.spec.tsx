@@ -46,7 +46,7 @@ test('links a signal write to its React component delivery and root commit', asy
 	let committed = false
 	const events = log.events()
 	for (let i = 0; i < events.length; i++) {
-		if (events[i]!.kind === 'root-commit') {
+		if (events[i].kind === 'root-commit') {
 			committed = true
 		}
 	}

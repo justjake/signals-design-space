@@ -441,7 +441,7 @@ export class TwinDriver {
 		const mNode = this.model.atom(name, initial, equals)
 		const eInternals = this.engine.atom(name, initial, equals)
 		this.nodeMap.set(mNode, eInternals) // ids live in different spaces — the mapping is the resolution
-		this.mirror.setOrigin(eInternals as EAtomInternals, initial)
+		this.mirror.setOrigin(eInternals, initial)
 		return mNode
 	}
 
@@ -470,8 +470,8 @@ export class TwinDriver {
 		const mNode = this.model.computed(name, fn)
 		const eInternals = this.engine.computed(name, (read, untracked) =>
 			fn(
-				(d) => read(this.toEngine(d as AnyNode)),
-				(d) => untracked(this.toEngine(d as AnyNode)),
+				(d) => read(this.toEngine(d)),
+				(d) => untracked(this.toEngine(d)),
 			),
 		)
 		this.nodeMap.set(mNode, eInternals) // ids live in different spaces — the mapping is the resolution
@@ -803,7 +803,7 @@ export class TwinDriver {
 			if (n.kind !== 'atom') {
 				continue
 			}
-			const folded = this.engine.foldAtom(n, { kind: 'newest' } as EWorld)
+			const folded = this.engine.foldAtom(n, { kind: 'newest' })
 			const kernel = this.engine.newestValue(n)
 			expect(
 				Object.is(folded, kernel),

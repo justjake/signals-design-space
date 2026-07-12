@@ -52,7 +52,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 			.eventsOfType('delivery')
 			.filter((e) => e.watcher === 'W' && e.batch === k.id)
 		expect(deliveries).toHaveLength(2)
-		expect(deliveries[1]!.mode).toBe('interleaved')
+		expect(deliveries[1].mode).toBe('interleaved')
 		expect(m.renderValue(c, pk)).toBe(0) // pinned world never drifts (s2 > pin)
 		m.renderEnd(pk.id, 'discard')
 		const pk2 = openRender(m, 'A', [k]) // step 4: the follow-up render at a fresh pin
@@ -144,7 +144,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		const v = m.openBatch('deferred')
 		m.write(v.id, a, set(2))
 		expect(m.idToBatch.get(v.id)!.slot).toBe(kSlot) // recycled
-		expect(m.slots[kSlot]!.writeClock).toBeGreaterThan(0) // fresh clock started from zero at claim
+		expect(m.slots[kSlot].writeClock).toBeGreaterThan(0) // fresh clock started from zero at claim
 		// held render (pinned before k's retirement): excludes BOTH tenants
 		expect(m.renderValue(a, held)).toBe(0)
 		// a fresh render including V folds k via the retired clause then V via clause 2, in seq order
@@ -255,8 +255,8 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		// f=1: x = a, y = x. f=0: y = b, x = y. Union has x→y and y→x.
 		type R = (n: never) => unknown
 		const refs: { x?: unknown; y?: unknown } = {}
-		const x = m.computed('x', (read) => (read(f) ? read(a) : read(refs.y as never)) as unknown)
-		const y = m.computed('y', (read) => (read(f) ? read(refs.x as never) : read(b)) as unknown)
+		const x = m.computed('x', (read) => (read(f) ? read(a) : read(refs.y as never)))
+		const y = m.computed('y', (read) => (read(f) ? read(refs.x as never) : read(b)))
 		refs.x = x
 		refs.y = y
 		void (undefined as unknown as R)
@@ -378,8 +378,8 @@ describe('case 4 — two-batch write into an already-stale region (re-notify)', 
 		m.write(t2.id, a, set(2)) // before any re-render
 		const deliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W')
 		expect(deliveries).toHaveLength(2)
-		expect(deliveries[0]!.batch).toBe(t1.id)
-		expect(deliveries[1]!.batch).toBe(t2.id) // in T2's lane — marks gate routing, never delivery
+		expect(deliveries[0].batch).toBe(t1.id)
+		expect(deliveries[1].batch).toBe(t2.id) // in T2's lane — marks gate routing, never delivery
 		expect(w.dedup.size).toBe(2)
 		m.retire(t1.id)
 		m.retire(t2.id)
@@ -464,7 +464,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 		m.retire(t.id) // T's remaining React work lived on other roots
 		const slot = m.idToBatch.get(t.id)!.slot
 		expect(slot).toBeDefined() // release BLOCKED: P's mask names it
-		expect(m.slots[slot!]!.releasePending).toBe(true)
+		expect(m.slots[slot!].releasePending).toBe(true)
 		expect(m.renderValue(b, p)).toBe(7) // clause 1 fails (rs > pin); clause 2: mask ∋ T ∧ 95 ≤ pin
 		m.renderResume(p.id)
 		m.renderEnd(p.id, 'discard') // commit and discard alike re-evaluate the deferred release
@@ -551,7 +551,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		// fast-out fails (baseline.committedAdvance > pin) ⇒ v_fx (retired-at-now ∋ D) ≠ v_r ⇒ urgent pre-paint setState
 		const fix = m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')
 		expect(fix).toHaveLength(1)
-		expect(fix[0]!.to).toBe(4)
+		expect(fix[0].to).toBe(4)
 		expect(w.lastRenderedValue).toBe(4)
 		m.retire(k.id)
 		selfCheck(m)
@@ -813,7 +813,7 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 			.eventsOfType('delivery')
 			.filter((e) => e.batch === v.id && e.watcher === 'W')
 		expect(vDeliveries).toHaveLength(1)
-		expect(vDeliveries[0]!.mode).toBe('fresh')
+		expect(vDeliveries[0].mode).toBe('fresh')
 		m.retire(v.id)
 		selfCheck(m)
 	})

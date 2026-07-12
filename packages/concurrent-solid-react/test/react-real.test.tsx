@@ -402,7 +402,7 @@ describe('real React: flushSync parity', () => {
 			setM(5)
 			flushSync(() => setN(1))
 			// inside the same task: the signal and its useState twin agree
-			const match = text(el)!.match(/^s(\d+):m(\d+)/)!
+			const match = text(el).match(/^s(\d+):m(\d+)/)!
 			expect(match[1]).toBe(match[2])
 		})
 		expect(text(el)).toBe('s5:m5:n1')

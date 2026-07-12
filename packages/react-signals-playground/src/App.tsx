@@ -272,7 +272,7 @@ function goBack(): void {
 		return
 	}
 	histIndex.set(index - 1)
-	navigate(histEntries.state[index - 1]!, false)
+	navigate(histEntries.state[index - 1], false)
 }
 
 function goForward(): void {
@@ -282,7 +282,7 @@ function goForward(): void {
 		return
 	}
 	histIndex.set(index + 1)
-	navigate(entries[index + 1]!, false)
+	navigate(entries[index + 1], false)
 }
 
 // ---- table data ---------------------------------------------------------------------

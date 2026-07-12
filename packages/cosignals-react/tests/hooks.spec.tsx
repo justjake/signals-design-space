@@ -513,7 +513,7 @@ describe('useSignalEffect (§5.11)', () => {
 		const observed: number[] = []
 		function View() {
 			useSignalEffect(() => {
-				observed.push(a.state as number)
+				observed.push(a.state)
 			}, [])
 			return <span>{useSignal(a)}</span>
 		}
@@ -531,7 +531,7 @@ describe('useSignalEffect (§5.11)', () => {
 		const log: string[] = []
 		function View() {
 			useSignalEffect(() => {
-				const v = a.state as number
+				const v = a.state
 				log.push(`run:${v}`)
 				return () => log.push(`clean:${v}`)
 			}, [])
@@ -582,7 +582,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		const { atom: a, log } = observedAtom(0)
 		function View() {
 			useSignalEffect(() => {
-				void (a.state as number)
+				void a.state
 			}, [])
 			return <span>x</span>
 		}
@@ -772,7 +772,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		h = makeHarness()
 		const { atom: a, log } = observedAtom(2)
 		function View() {
-			const doubled = useComputed(() => (a.state as number) * 2, [])
+			const doubled = useComputed(() => a.state * 2, [])
 			return <span>{useSignal(doubled)}</span>
 		}
 		const { root, container } = await h.mount(

@@ -46,7 +46,7 @@ type Sig = SignalLike & { state: unknown }
 let registration: { alt: AltBReactHandle; handle: RoyaleHandle } | undefined
 
 function scrub(): void {
-	;(React as ReactWithReset).unstable_resetBatchRegistryForTest?.()
+	React.unstable_resetBatchRegistryForTest?.()
 	__resetEngineForTests()
 }
 

@@ -225,7 +225,7 @@ function foldEvalResult(
 		if (isSuspendedBox(prev) && prev.thenable === pend && Object.is(prev.latest, latest)) {
 			return prev
 		}
-		return { kind: 'suspended', thenable: pend, latest } as SuspendedBox
+		return { kind: 'suspended', thenable: pend, latest }
 	}
 	return next
 }
@@ -2190,7 +2190,7 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 			if (isErrorBox(prev) && Object.is(prev.error, err)) {
 				return prev
 			}
-			return { kind: 'error', error: err } as ErrorBox
+			return { kind: 'error', error: err }
 		} finally {
 			--enterDepth
 		}
@@ -4107,7 +4107,7 @@ export class Computed<T> {
 					if (isErrorBox(prev) && Object.is(prev.error, err)) {
 						return prev
 					}
-					return { kind: 'error', error: err } as ErrorBox
+					return { kind: 'error', error: err }
 				} finally {
 					evalPending = saved
 				}
@@ -4207,7 +4207,7 @@ export function pendingComputedOf(signal: SignalLike): Computed<boolean> {
  * ordinary computed read); per-world correct (the probe evaluates in the
  * ambient world like any node). False on first load and on errors. */
 export function isPending(signal: SignalLike): boolean {
-	return pendingComputedOf(signal).state as boolean
+	return pendingComputedOf(signal).state
 }
 
 /** §7 refresh: re-run a computed's fn so ctx.use re-registers (a resource-

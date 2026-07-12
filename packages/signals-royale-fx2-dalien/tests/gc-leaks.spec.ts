@@ -40,7 +40,7 @@ async function collect(times = 5): Promise<void> {
 		throw new Error('run with --expose-gc')
 	}
 	for (let i = 0; i < times; i++) {
-		gc!()
+		gc()
 		await new Promise<void>((r) => setTimeout(() => r(), 10))
 	}
 }

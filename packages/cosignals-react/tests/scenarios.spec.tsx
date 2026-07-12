@@ -353,14 +353,14 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		// engine-level surface (lane merges, runInBatch deliveries) — driven
 		// here through the action's engine batch to pin its fold-at-settlement
 		// semantics end to end.
-		const cNode = h.handle.shim.internalsForAtom(c as Atom<unknown>)
+		const cNode = h.handle.shim.internalsForAtom(c)
 		let actionBatch: number | undefined
 		await act(async () => {
 			startSignalTransition(async () => {
 				a.set(1) // transition context: the action's batch
 				await io.promise
 				b.set(2) // bare continuation: urgent protocol batch (React parity)
-				h.bridge.write(actionBatch!, cNode, 0, 3) // attributed to the action's batch
+				h.bridge.write(actionBatch, cNode, 0, 3) // attributed to the action's batch
 				settled.resolve()
 			})
 			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id

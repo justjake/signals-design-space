@@ -259,5 +259,5 @@ function finishCompute(
 	return (flags & Flag.AsyncMask) !== 0
 }
 
-setUseImpl(baseUse as never)
-setFinishComputeImpl(finishCompute as never)
+setUseImpl(baseUse)
+setFinishComputeImpl(finishCompute)

@@ -22,10 +22,10 @@ beforeEach(() => {
 	fork = createForkDouble()
 	e.attachFork(fork)
 	fork.registerRoot('root')
-	flag = e.atom<boolean | number>(false) as never
-	a = e.atom(0) as never
-	b = e.atom(0) as never
-	c = e.computed(() => (flag.state ? a.state : b.state)) as never
+	flag = e.atom<boolean | number>(false)
+	a = e.atom(0)
+	b = e.atom(0)
+	c = e.computed(() => (flag.state ? a.state : b.state))
 	expect(c.state).toBe(0) // canonical evaluation: reads flag, b
 	e.watch(c)
 	e.debug.takeBroadcasts()

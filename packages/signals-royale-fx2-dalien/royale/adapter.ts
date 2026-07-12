@@ -53,7 +53,7 @@ const adapter = {
 	slug: 'fx2',
 	React,
 	ReactDOMClient: { createRoot: wrapCreateRoot(createRoot as never) },
-	act: act as <T>(fn: () => T | Promise<T>) => Promise<undefined>,
+	act: act,
 	flushSync: (fn: () => void) => flushSync(fn),
 
 	register(): RoyaleHandle {
@@ -83,7 +83,7 @@ const adapter = {
 		fn: (use: <U>(t: PromiseLike<U>) => U) => T,
 		opts?: { equals?(a: T, b: T): boolean; label?: string },
 	): unknown {
-		return computed(fn as (use: UseFn) => T, opts)
+		return computed(fn, opts)
 	},
 	read(x: unknown): unknown {
 		return read(x as Atom)

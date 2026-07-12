@@ -211,7 +211,7 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 			// metaCol), and V8 gives every closure born in a scope the scope's
 			// one shared context; if that context also held `c`, fn would pin
 			// the handle and finalization could never fire.
-			const makeComputed = () => new Computed({ fn: () => (src.state as number) * 2 })
+			const makeComputed = () => new Computed({ fn: () => src.state * 2 })
 			const cycle = (): void => {
 				const c = makeComputed()
 				const stop = effect(() => void c.state) // watched
@@ -292,14 +292,14 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		attachFork(fork)
 		const a = new Atom({ state: 0 })
 		const b = new Atom({ state: 0 })
-		const c = new Computed({ fn: () => (a.state as number) + (b.state as number) })
+		const c = new Computed({ fn: () => a.state + b.state })
 		const w = createWatcher(c, () => {})
 
 		for (let i = 1; i <= 100; ++i) {
 			const token = fork.openBatch(true)
 			fork.inBatch(token, () => {
 				a.set(i)
-				b.update((v) => (v as number) + 1)
+				b.update((v) => v + 1)
 			})
 			// Exercise writer's-world memos + certificates + slot chains.
 			__debug.readInWorld(c, { kind: 'writer', token })
@@ -335,7 +335,7 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		const fork = new ForkDouble()
 		attachFork(fork)
 		const a = new Atom({ state: 0 })
-		const c = new Computed({ fn: () => (a.state as number) * 2 })
+		const c = new Computed({ fn: () => a.state * 2 })
 		for (let i = 0; i < 20; ++i) {
 			const t1 = fork.openBatch(true)
 			const t2 = fork.openBatch(true)
@@ -361,7 +361,7 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		const fork = new ForkDouble()
 		attachFork(fork)
 		const a = new Atom({ state: 0 })
-		const c = new Computed({ fn: () => (a.state as number) + 1 })
+		const c = new Computed({ fn: () => a.state + 1 })
 		const token = fork.openBatch(true)
 		fork.inBatch(token, () => a.set(1))
 		__debug.readInWorld(c, { kind: 'writer', token }) // memo + cert exist
@@ -401,7 +401,7 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 			resolveIt = res
 		})
 		const c = new Computed<number>({
-			fn: (ctx) => (a.state as number) + ctx.use(p),
+			fn: (ctx) => a.state + ctx.use(p),
 		})
 		const token = fork.openBatch(true)
 		fork.inBatch(token, () => a.set(2)) // tape below c → pass reads divert to the overlay
@@ -517,7 +517,7 @@ describe('refresh() and superseded thenables', () => {
 			// 0..9); keep the CURRENT one (epoch 10) alive — the fn must keep
 			// returning the same promise for the current epoch (resource idiom).
 			const current = epochHole[10]!
-			const currentResolve = resolvers[10]!
+			const currentResolve = resolvers[10]
 			for (let i = 0; i < 10; ++i) {
 				epochHole[i] = undefined
 				resolvers[i] = undefined as unknown as (v: number) => void
@@ -588,7 +588,7 @@ describe.runIf(hasGC)('heapUsed stabilizes (no strong refs to dead records)', ()
 		const fork = new ForkDouble()
 		attachFork(fork)
 		const a = new Atom<number[]>({ state: [] })
-		const c = new Computed({ fn: () => (a.state as number[]).length })
+		const c = new Computed({ fn: () => a.state.length })
 		const w = createWatcher(c, () => {})
 		const cycle = (i: number): void => {
 			const token = fork.openBatch(true)
@@ -623,7 +623,7 @@ describe.runIf(hasGC)('heapUsed stabilizes (no strong refs to dead records)', ()
 			const handles = []
 			for (let i = 0; i < 100; ++i) {
 				const payload = new Array(512).fill(i) // captured by the closure
-				stops.push(effect(() => void ((a.state as number) + payload.length)))
+				stops.push(effect(() => void (a.state + payload.length)))
 				handles.push(createWatcher(a, () => {}))
 			}
 			for (const s of stops) {

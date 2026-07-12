@@ -530,7 +530,7 @@ function applyOp(s: RunState, op: Op): boolean {
 			// oracle's fold.
 			for (let i = 0; i < s.defs.length; ++i) {
 				if (isAtomNode(s.defs[i])) {
-					const kernel = __debug.kernelValue(s.handles[i] as { id: number })
+					const kernel = __debug.kernelValue(s.handles[i])
 					const fold = o.value(i, { kind: 'w0' })
 					if (!Object.is(kernel, fold)) {
 						throw new Error(
@@ -642,7 +642,7 @@ function applyOp(s: RunState, op: Op): boolean {
 					const token = s.batches[op.batch].token
 					engineV = mapRaw(
 						s,
-						__debug.readInWorld(s.handles[op.node] as { id: number }, {
+						__debug.readInWorld(s.handles[op.node], {
 							kind: 'writer',
 							token,
 						}),

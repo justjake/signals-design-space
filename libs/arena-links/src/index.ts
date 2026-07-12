@@ -687,7 +687,7 @@ function unwatched(node: ReactiveNode): void {
 	} else if ('fn' in node) {
 		effectOper.call(node as EffectNode)
 	} else {
-		effectScopeOper.call(node as EffectScopeNode)
+		effectScopeOper.call(node)
 	}
 }
 

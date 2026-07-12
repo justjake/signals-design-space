@@ -49,6 +49,7 @@ export default {
 		ignorePatterns: vendored,
 		rules: {
 			curly: 'error',
+			'typescript/no-unnecessary-type-assertion': 'error',
 		},
 		options: {
 			typeAware: true,

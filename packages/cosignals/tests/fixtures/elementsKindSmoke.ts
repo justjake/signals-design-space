@@ -72,13 +72,13 @@ for (let i = 0; i < 25; i++) {
 
 // Batched write traffic over the live watchers (delivery walks, drains).
 for (let i = 1; i <= 50; i++) {
-	commitWrite(b, atoms[i % atoms.length]!, i * 3)
+	commitWrite(b, atoms[i % atoms.length], i * 3)
 }
 
 // Dispose→create churn with record reuse (the nodeIndex recycling path).
 const base = new Atom(1)
 for (let i = 0; i < 120; i++) {
-	const c = new Computed(() => (base.state as number) + i)
+	const c = new Computed(() => base.state + i)
 	const node = b.internalsForComputed(c as unknown as Computed<unknown>)
 	b.committedValue(node, 'R')
 	b.disposeComputed(c as unknown as Computed<unknown>)

@@ -347,7 +347,7 @@ describe('real React: interleaved suspending works (impossible under the old lin
 		}
 		const remote = new api.Computed<string>({
 			fn: (ctx) => {
-				const p = which.state as number
+				const p = which.state
 				return p === 0 ? 'none' : ctx.use(fetchFor(p))
 			},
 		})
@@ -445,7 +445,7 @@ describe('real React: multi-root and committed effects', () => {
 		function A(): React.ReactNode {
 			const v = useSignal(sig)
 			useSignalEffect(() => {
-				effectSeen.push(sig.state as number)
+				effectSeen.push(sig.state)
 			}, [])
 			return <b>{v}</b>
 		}
@@ -480,7 +480,7 @@ describe('real React: multi-root and committed effects', () => {
 			const v = useSignal(sig)
 			const g = useSignal(gate)
 			useSignalEffect(() => {
-				effectSeen.push(sig.state as string)
+				effectSeen.push(sig.state)
 			}, [])
 			return (
 				<>
@@ -530,7 +530,7 @@ describe('real React: Solid-2.0 async API set', () => {
 		}
 		const remote = new api.Computed<string>({
 			fn: (ctx) => {
-				const d = dep.state as number
+				const d = dep.state
 				return `${ctx.use(fetchFor(d))}#${d}`
 			},
 		})
@@ -657,7 +657,7 @@ describe('real React: Solid-2.0 async API set', () => {
 			return promise
 		}
 		const remote = new api.Computed<string>({
-			fn: (ctx) => ctx.use(fetchFor(dep.state as number)),
+			fn: (ctx) => ctx.use(fetchFor(dep.state)),
 		})
 		function View(): React.ReactNode {
 			return <span>{useSignal(remote)}</span>
@@ -735,7 +735,7 @@ describe('real React: ambient W0 visibility (alt-family rule)', () => {
 			React.startTransition(async () => {
 				api.batch(() => {
 					A.set(1)
-					inScope.push(A.state as number) // read-your-own-draft
+					inScope.push(A.state) // read-your-own-draft
 				})
 				await new Promise<void>((r) => (release = r))
 			})
@@ -779,7 +779,7 @@ describe('real React: lazy state initializer', () => {
 					return 40
 				},
 			})
-			rendered = local as unknown as { set(v: number): void }
+			rendered = local
 			return <span>{useSignal(local as unknown as { state: number; handle: never })}</span>
 		}
 		const c = await mount(<View />)

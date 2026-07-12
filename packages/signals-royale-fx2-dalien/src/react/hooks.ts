@@ -242,7 +242,7 @@ export function useValue<T>(x: Readable<T>): T {
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
 	requireScope('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const c = React.useMemo(() => computed(fn), deps as unknown[])
+	const c = React.useMemo(() => computed(fn), deps)
 	return useValue(c)
 }
 

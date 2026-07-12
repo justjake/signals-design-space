@@ -210,7 +210,7 @@ export function handleAsync<T>(
 		if (el._inFlight !== result) {
 			return
 		}
-		globalQueue.initTransition(resolveTransition(el as any))
+		globalQueue.initTransition(resolveTransition(el))
 		// NotReadyError from rejected promises should be treated as pending, not error
 		notifyStatus(el, error instanceof NotReadyError ? STATUS_PENDING : STATUS_ERROR, error)
 		el._time = clock
@@ -226,11 +226,11 @@ export function handleAsync<T>(
 		if (el._flags & (REACTIVE_DIRTY | REACTIVE_OPTIMISTIC_DIRTY)) {
 			return
 		}
-		globalQueue.initTransition(resolveTransition(el as any))
+		globalQueue.initTransition(resolveTransition(el))
 		const wasUninitialized = !!(el._statusFlags & STATUS_UNINITIALIZED)
 		trimStaleDeps(el)
 		clearStatus(el)
-		const lane = resolveLane(el as any)
+		const lane = resolveLane(el)
 		if (lane) {
 			lane._pendingAsync.delete(el)
 		}
@@ -309,7 +309,7 @@ export function handleAsync<T>(
 			handleError(syncError)
 			throw syncError
 		} else if (!resolved) {
-			globalQueue.initTransition(resolveTransition(el as any))
+			globalQueue.initTransition(resolveTransition(el))
 			throw new NotReadyError(context!)
 		}
 	}
@@ -333,14 +333,12 @@ export function handleAsync<T>(
 		})
 
 		const iterate = (): boolean => {
-			let syncResult: IteratorResult<T>,
-				resolved = false,
-				isSync = true
+			let syncResult: IteratorResult<T> | undefined
+			let isSync = true
 			it.next().then(
 				(r) => {
 					if (isSync) {
 						syncResult = r
-						resolved = true
 						if (r.done) {
 							completed = true
 						}
@@ -362,17 +360,17 @@ export function handleAsync<T>(
 				},
 			)
 			isSync = false
-			if (resolved && !syncResult!.done) {
-				syncValue = syncResult!.value
+			if (syncResult !== undefined && !syncResult.done) {
+				syncValue = syncResult.value
 				hadSyncValue = true
 				return iterate()
 			}
-			return resolved && syncResult!.done
+			return syncResult?.done === true
 		}
 
 		const immediatelyDone = iterate()
 		if (!hadSyncValue && !immediatelyDone) {
-			globalQueue.initTransition(resolveTransition(el as any))
+			globalQueue.initTransition(resolveTransition(el))
 			throw new NotReadyError(context!)
 		}
 	}

@@ -755,7 +755,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 				return visibleValue
 			}
 		}
-		return value as T
+		return value
 	}
 
 	// Handle isPending() mode: collect pending state while preserving normal read semantics.
@@ -989,7 +989,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 
 	if (el._overrideValue !== undefined && el._overrideValue !== NOT_PENDING) {
 		if (c && stale && shouldReadStashedOptimisticValue(el as Signal<any>)) {
-			return el._value as T
+			return el._value
 		}
 		return el._overrideValue as T
 	}
@@ -1010,7 +1010,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 		c
 	) {
 		activeTransition._gatedSubs.add(c as Computed<any>)
-		return el._value as T
+		return el._value
 	}
 
 	// In optimistic lane context, return _value for optimistic/lane-assigned signals
@@ -1206,7 +1206,7 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 		// Re-propagate for optimistic computeds with active override — downstream
 		// nodes may have stale _inFlight based on old upstream data.
 		if (isOptimistic && hasOverride) {
-			const transition = resolveTransition(el as any)
+			const transition = resolveTransition(el)
 			if (transition && activeTransition !== transition) {
 				globalQueue.initTransition(transition)
 			}
@@ -1221,7 +1221,7 @@ function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T))
 	if (isOptimistic) {
 		const firstOverride = el._overrideValue === NOT_PENDING
 		if (!firstOverride) {
-			globalQueue.initTransition(resolveTransition(el as any))
+			globalQueue.initTransition(resolveTransition(el))
 		}
 		if (firstOverride) {
 			el._pendingValue = el._value

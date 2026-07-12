@@ -144,7 +144,7 @@ describe('1. KERNEL (index.ts arena)', () => {
 			gate.set(i % 2 === 0)
 			void c.state // re-track: one link unlinks (freed), its replacement allocates
 			const memory = E.buffer()
-			for (let l = memory[cid + NodeField.DEPS]!; l !== 0; l = memory[l + LinkField.NEXT_DEP]!) {
+			for (let l = memory[cid + NodeField.DEPS]; l !== 0; l = memory[l + LinkField.NEXT_DEP]!) {
 				linkIds.add(l)
 			}
 		}
@@ -156,12 +156,12 @@ describe('2. ENGINE REGISTRY (nodeIndexToInternals + dense per-node columns)', (
 	it('adopt/dispose churn returns idToInternals to baseline, recycles kernel ids AND their nodeIndexes, and the record-free scrub leaves only cleared dense rows (RECLAIMED; columns bounded by node count)', () => {
 		const b = freshEngine()
 		const at = new Atom(1)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const keep = b.computed('keep', (read) => read(an))
 		mount(b, 'R', keep, 'W')
 		// Warm one dispose→create cycle so the free list (and its recycled
 		// nodeIndex) is the steady state the baseline measures.
-		const warm = new Computed(() => (at.state as number) * 2)
+		const warm = new Computed(() => at.state * 2)
 		b.committedValue(b.internalsForComputed(warm as unknown as Computed<unknown>), 'R')
 		b.disposeComputed(warm as unknown as Computed<unknown>)
 		const nodesBase = b.idToInternals.size
@@ -171,7 +171,7 @@ describe('2. ENGINE REGISTRY (nodeIndexToInternals + dense per-node columns)', (
 		let lastIx = 0
 		const N = 200
 		for (let i = 0; i < N; i++) {
-			const c = new Computed(() => (at.state as number) + i)
+			const c = new Computed(() => at.state + i)
 			const node = b.internalsForComputed(c as unknown as Computed<unknown>)
 			expect(b.committedValue(node, 'R')).toBe(1 + i)
 			kids.add((c as unknown as { _id: number })._id)
@@ -196,12 +196,12 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const b = freshEngine()
 		armArenaCheck(b) // fold-truth divergence check armed across record reuse
 		const at = new Atom(1)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const other = b.atom('other', 0)
 		const keep = b.computed('keep', (read) => read(an))
 		const w = mount(b, 'R', keep, 'W') // consumers never hit zero: the arena LIVES for the whole probe
 		// Warm one full dispose→create cycle so the steady state is the baseline.
-		const warm = new Computed(() => (at.state as number) * 2)
+		const warm = new Computed(() => at.state * 2)
 		b.committedValue(b.internalsForComputed(warm as unknown as Computed<unknown>), 'R')
 		b.disposeComputed(warm as unknown as Computed<unknown>)
 		const shell = b.__TEST__arena('R')!
@@ -211,7 +211,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const links0 = shell.links
 		const N = 400
 		for (let i = 1; i <= N; i++) {
-			const c = new Computed(() => (at.state as number) * 2 + i)
+			const c = new Computed(() => at.state * 2 + i)
 			const node = b.internalsForComputed(c as unknown as Computed<unknown>) // useComputed: adopt…
 			expect(b.committedValue(node, 'R')).toBe(2 + i) // …evaluate in the live committed arena (serves correctly through reuse)…
 			if (i % 64 === 0) {
@@ -253,7 +253,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		mount(b, 'R', keep, 'W') // arena stays alive without watching c
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead)
 		expect(b.__TEST__arenaStats().suspended).toBe(1)
-		b.disposeComputed((c as ComputedInternals).handle)
+		b.disposeComputed(c.handle)
 		expect(b.__TEST__arenaStats().suspended).toBe(0) // arenaEvictShadow swap-removed the entry
 		gate.resolve('x')
 		await tick()
@@ -264,7 +264,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const b = freshEngine()
 		armArenaCheck(b)
 		const at = new Atom(1)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const gate = deferred<string>()
 		const c: ComputedInternals = b.computed('c', () => {
 			try {
@@ -282,9 +282,9 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		gate.resolve('data')
 		await tick() // settlement drain marks c DIRTY + lists it (no decay runs in the drain)
 		const shell = b.__TEST__arena('R')!
-		b.disposeComputed((c as ComputedInternals).handle) // orphan the record while its stale dirty-list entry is outstanding
+		b.disposeComputed(c.handle) // orphan the record while its stale dirty-list entry is outstanding
 		const nextAfterDispose = shell.next
-		const c2 = new Computed(() => (at.state as number) + 7) // reuse: the freed SHADOW record re-tenants…
+		const c2 = new Computed(() => at.state + 7) // reuse: the freed SHADOW record re-tenants…
 		expect(b.committedValue(b.internalsForComputed(c2 as unknown as Computed<unknown>), 'R')).toBe(
 			8,
 		)
@@ -295,7 +295,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 			9,
 		)
 		b.disposeComputed(c2 as unknown as Computed<unknown>) // second cycle: now a shadow AND a link sit in the free lists…
-		const c3 = new Computed(() => (at.state as number) + 9)
+		const c3 = new Computed(() => at.state + 9)
 		expect(b.committedValue(b.internalsForComputed(c3 as unknown as Computed<unknown>), 'R')).toBe(
 			11,
 		)
@@ -315,7 +315,7 @@ describe('4. ARENA POOL', () => {
 		b.quiesce()
 		const capAfterBig = Math.max(...b.__TEST__arenaPool().map((a) => a.memory.length))
 		for (let i = 0; i < 12; i++) {
-			const s = b.computed(`s${i}`, (read) => read(atoms[0]!))
+			const s = b.computed(`s${i}`, (read) => read(atoms[0]))
 			const ws = mount(b, `S${i}`, s, `WS${i}`) // small tenancies churn pool claims (render + committed shells)
 			ws.live = false
 			b.quiesce()
@@ -370,7 +370,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 				}
 			},
 		})
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		an.name = 'life'
 		const c = b.computed('c', (read) => read(an))
 		for (let i = 1; i <= 25; i++) {
@@ -396,7 +396,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		const c: ComputedInternals = b.computed('c', (read) => {
 			const v = read(version) as number
 			try {
-				return __TEST__ctxUse(c.ix, `k${v}`, () => gates[v]!.promise)
+				return __TEST__ctxUse(c.ix, `k${v}`, () => gates[v].promise)
 			} catch (err) {
 				if (err instanceof SuspendedRead) {
 					return err
@@ -410,7 +410,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 				commitWrite(b, version, v)
 			}
 			expect(b.__TEST__arenaStats().suspended).toBe(1)
-			gates[v]!.resolve(`d${v}`)
+			gates[v].resolve(`d${v}`)
 			await tick()
 			expect(b.__TEST__arenaStats().suspended).toBe(0) // settlement re-marked + the correction consumed the box
 			expect(b.__TEST__arenaStats().pendingSettlements).toBe(0) // queue drained to its fixed point

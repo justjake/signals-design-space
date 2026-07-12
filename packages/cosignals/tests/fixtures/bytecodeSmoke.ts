@@ -121,16 +121,16 @@ const cc2 = eng.computed(
 	(read, untrackedRead) => (read(cc) as number) + (untrackedRead(at) as number),
 )
 const render = eng.renderStart('R', [])
-eng.mountWatcher(render.id, cc2 as AnyInternals, 'W')
+eng.mountWatcher(render.id, cc2, 'W')
 eng.renderEnd(render.id, 'commit')
 for (let i = 0; i < 50; i++) {
 	const t = eng.openBatch()
 	// update-op log entries make committed folds run the updater: foldAtom.
-	eng.write(t.id, at as never, 1, (prev: unknown) => (prev as number) + 1)
+	eng.write(t.id, at, 1, (prev: unknown) => (prev as number) + 1)
 	eng.retire(t.id)
 }
 const t2 = eng.openBatch()
-eng.write(t2.id, at2 as never, 0, 100)
+eng.write(t2.id, at2, 0, 100)
 eng.retire(t2.id)
 
 function commitWrite(node: AnyInternals, value: unknown): void {
@@ -150,11 +150,11 @@ const cGate = eng.computed('cGate', (read) => {
 })
 const top2 = eng.computed('top2', (read) => read(cGate))
 const p2 = eng.renderStart('R2', [])
-const w2 = eng.mountWatcher(p2.id, top2 as AnyInternals, 'W2')
+const w2 = eng.mountWatcher(p2.id, top2, 'W2')
 eng.renderEnd(p2.id, 'commit')
 w2.live = false
-commitWrite(atG as AnyInternals, 1)
-commitWrite(atG as AnyInternals, 2)
+commitWrite(atG, 1)
+commitWrite(atG, 2)
 
 // B2 arenaCheckDirtyLoop walk shapes. The cone's TOP gets the lowest node id
 // (created first; its fn closes over later-declared handles, resolved at
@@ -175,11 +175,11 @@ const cK = eng.computed('cK', (read) => {
 })
 const atK = eng.atom('atK', 0)
 const p5 = eng.renderStart('R5', [])
-const w5 = eng.mountWatcher(p5.id, topK as AnyInternals, 'W5')
+const w5 = eng.mountWatcher(p5.id, topK, 'W5')
 eng.renderEnd(p5.id, 'commit')
 w5.live = false
-commitWrite(atK as AnyInternals, 1)
-commitWrite(atK as AnyInternals, 2)
+commitWrite(atK, 1)
+commitWrite(atK, 2)
 // arenaCheckDirtyLoop's update arms (arenaUpdateAndShallow, descend + unwind): at
 // S-A no PUBLIC flow reaches them — arena-authoritative serves happen only
 // inside the armed epilogue, whose aValidate/memo-evaluate pass consumes
@@ -195,7 +195,7 @@ eng.__TEST__eachArena((a: WorldArena) => {
 		return
 	}
 	eng.__TEST__fanAtomsToArena(a, [atK], false)
-	eng.__TEST__arenaServe(a, topK as AnyInternals)
+	eng.__TEST__arenaServe(a, topK)
 })
 
 // In-arena dynamic dep drop + re-link: arenaUnlink, arenaFreeLink, then arenaAllocLink
@@ -204,12 +204,12 @@ const gateB = eng.atom('gateB', 0)
 const extra = eng.atom('extra', 5)
 const cDyn = eng.computed('cDyn', (read) => ((read(gateB) as number) === 0 ? read(extra) : 0))
 const p3 = eng.renderStart('R3', [])
-eng.mountWatcher(p3.id, cDyn as AnyInternals, 'W3')
+eng.mountWatcher(p3.id, cDyn, 'W3')
 eng.renderEnd(p3.id, 'commit')
-commitWrite(gateB as AnyInternals, 1)
-commitWrite(gateB as AnyInternals, 0)
-commitWrite(extra as AnyInternals, 6)
+commitWrite(gateB, 1)
+commitWrite(gateB, 0)
+commitWrite(extra, 6)
 
 process.stdout.write(
-	`@@SMOKE-OK ${c3.state} ${String(eng.committedValue(cc2 as AnyInternals, 'R'))} ${String(eng.committedValue(cDyn as AnyInternals, 'R3'))}\n`,
+	`@@SMOKE-OK ${c3.state} ${String(eng.committedValue(cc2, 'R'))} ${String(eng.committedValue(cDyn, 'R3'))}\n`,
 )

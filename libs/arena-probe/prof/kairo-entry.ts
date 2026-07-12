@@ -59,7 +59,7 @@ const framework = {
 	name: libName,
 	signal: <T>(initialValue: T) => {
 		const s = lib.signal(initialValue)
-		return { read: () => s() as T, write: (v: T) => s(v) }
+		return { read: () => s(), write: (v: T) => s(v) }
 	},
 	computed: <T>(fn: () => T) => {
 		const c = lib.computed(fn)

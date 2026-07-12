@@ -383,7 +383,7 @@ describe('scenario 7 — one transition batch spanning two roots: per-root consi
 			const v2 = adapter.useValue(a)
 			React.useLayoutEffect(() => {
 				if (boxes[i].el) {
-					frames[i].push(text(boxes[i].el!))
+					frames[i].push(text(boxes[i].el))
 				}
 			})
 			return (

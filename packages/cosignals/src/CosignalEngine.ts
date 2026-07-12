@@ -310,7 +310,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return ctxPrevious()
 		},
 		use<V>(sourceOrKey: PromiseLike<V> | UseKey, factory?: () => PromiseLike<V>): V {
-			return ctxUse(sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V
+			return ctxUse(sourceOrKey, factory) as V
 		},
 	}
 
@@ -1858,28 +1858,28 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * recompute/read-heavy workloads; only erroring folds ever dispatch through it. */
 	const POISON: Kernel = {
 		records: 2,
-		buffer: foldPoisonOp as never,
-		clocks: foldPoisonOp as never,
-		newSignal: foldPoisonOp as never,
-		newComputed: foldPoisonOp as never,
-		newEffect: foldPoisonOp as never,
-		newScope: foldPoisonOp as never,
-		newObserver: foldPoisonOp as never,
-		disposeObserver: foldPoisonOp as never,
-		gen: foldPoisonOp as never,
-		readAtom: foldPoisonOp as never,
-		write: foldPoisonOp as never,
-		computedRead: foldPoisonOp as never,
-		run: foldPoisonOp as never,
-		requeueAbort: foldNoop as never,
-		disposeEffect: foldPoisonOp as never,
-		sweepPendingFree: foldPoisonOp as never,
-		reclaimStructure: foldPoisonOp as never,
-		invalidateComputed: foldPoisonOp as never,
-		disposeComputed: foldPoisonOp as never,
-		markMachineryOwned: foldPoisonOp as never,
-		markLifecycle: foldPoisonOp as never,
-		activeIsComputed: foldPoisonOp as never,
+		buffer: foldPoisonOp,
+		clocks: foldPoisonOp,
+		newSignal: foldPoisonOp,
+		newComputed: foldPoisonOp,
+		newEffect: foldPoisonOp,
+		newScope: foldPoisonOp,
+		newObserver: foldPoisonOp,
+		disposeObserver: foldPoisonOp,
+		gen: foldPoisonOp,
+		readAtom: foldPoisonOp,
+		write: foldPoisonOp,
+		computedRead: foldPoisonOp,
+		run: foldPoisonOp,
+		requeueAbort: foldNoop,
+		disposeEffect: foldPoisonOp,
+		sweepPendingFree: foldPoisonOp,
+		reclaimStructure: foldPoisonOp,
+		invalidateComputed: foldPoisonOp,
+		disposeComputed: foldPoisonOp,
+		markMachineryOwned: foldPoisonOp,
+		markLifecycle: foldPoisonOp,
+		activeIsComputed: foldPoisonOp,
 	}
 
 	/** The kernel op table — the one mutable slot every consumer dispatches
@@ -2116,7 +2116,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return undefined
 		}
 		if (
-			(E.buffer()[c + NodeField.FLAGS]! & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !==
+			(E.buffer()[c + NodeField.FLAGS] & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !==
 			NodeFlag.K_COMPUTED
 		) {
 			return undefined
@@ -2242,9 +2242,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			cache = new Map()
 			useCaches.set(nodeIndex, cache)
 		}
-		let t = cache.get(k) as InstrumentedThenable | undefined
+		let t = cache.get(k)
 		if (t === undefined) {
-			t = factory() as InstrumentedThenable
+			t = factory()
 			if (
 				t === null ||
 				(typeof t !== 'object' && typeof t !== 'function') ||
@@ -2269,10 +2269,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		factory: (() => PromiseLike<unknown>) | undefined,
 	): unknown {
 		const c = activeSub
-		if (c === 0 || (E.buffer()[c + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) === 0) {
+		if (c === 0 || (E.buffer()[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED) === 0) {
 			throw new Error('cosignals: ctx.use may only be called during a computed evaluation.')
 		}
-		return ctxUseKeyed(E.buffer()[c + NodeField.NODE_INDEX]!, sourceOrKey, factory)
+		return ctxUseKeyed(E.buffer()[c + NodeField.NODE_INDEX], sourceOrKey, factory)
 	}
 
 	/** The kernel's exception hook (cold): store what the evaluation threw —
@@ -2307,7 +2307,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				return // a dead test's settlement — the engine it targeted is gone
 			}
 			if (
-				(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0 ||
+				(E.buffer()[c + NodeField.FLAGS] & NodeFlag.BOX_SUSPENDED) === 0 ||
 				values[c >> ArenaShape.ID_TO_VALUE_SHIFT] !== t
 			) {
 				return
@@ -3183,10 +3183,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			getKernelNodeIndex(id),
 			atom.label ?? `atom#${id}`,
 			current,
-			(atom._isEqual as Equals | undefined) ?? Object.is,
+			atom._isEqual ?? Object.is,
 			atom._isEqual === undefined,
 			// Weak handle slot: content must not pin the public handle (see AtomInternals._h).
-			new WeakRef(atom as Atom<Value>),
+			new WeakRef(atom),
 		)
 		atom._internals = node
 		indexInternals(node)
@@ -3231,7 +3231,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			equals === undefined,
 			handle,
 		)
-		;(handle as Atom<unknown>)._internals = node
+		handle._internals = node
 		indexInternals(node)
 		return node
 	}
@@ -3243,7 +3243,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// id/ix land after the kernel record exists (the getter closure needs the internals object first).
 		const node = new ComputedInternals(0, 0, name, fn, undefined as never, false, equals)
 		const handle = new Computed<unknown>(
-			makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value,
+			makeKernelGetter(node),
 			equals === undefined ? { label: name } : { label: name, isEqual: equals },
 		)
 		node._h = handle
@@ -3278,18 +3278,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		)
 		// The world evaluation fn (readers unused: the raw fn reads through the routed `.state` seams).
 		{
-			const rawFn = c._fn as (ctx: ComputedCtx<unknown>) => Value
+			const rawFn = c._fn
 			const ctx: ComputedCtx<unknown> = {
 				get previous(): Value {
 					return node.prevCommitted
 				},
 				use: <V>(sourceOrKey: unknown, factory?: () => PromiseLike<V>): V =>
-					ctxUseKeyed(
-						node.ix,
-						sourceOrKey,
-						factory as (() => PromiseLike<unknown>) | undefined,
-					) as V,
-			} as ComputedCtx<unknown>
+					ctxUseKeyed(node.ix, sourceOrKey, factory) as V,
+			}
 			node.fn = () => {
 				try {
 					return rawFn(ctx)
@@ -3321,7 +3317,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					if (tr !== undefined) {
 						tr.evalEnd()
 					}
-					if (obsRefs[node.ix]! > 0) {
+					if (obsRefs[node.ix] > 0) {
 						syncObservationAfterKernelRun(node, getKernelStrongDeps(node))
 					}
 				}
@@ -3353,7 +3349,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					}
 				}
 			}
-			if (obsRefs[ix]! > 0) {
+			if (obsRefs[ix] > 0) {
 				exitObservation(node)
 			} // release any retained closure (defensive)
 			purgeNodeFromArenas(ix)
@@ -3375,7 +3371,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// its observation retains and clear a still-live handle's backlink.
 			const resident = nodeIndexToInternals[ix]
 			if (resident !== undefined) {
-				if (obsRefs[ix]! > 0) {
+				if (obsRefs[ix] > 0) {
 					exitObservation(resident)
 				}
 				clearHandleBacklink(resident)
@@ -3412,7 +3408,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (ws !== undefined && ws.length !== 0) {
 				return true
 			}
-			if (obsRefs[ix]! > 0) {
+			if (obsRefs[ix] > 0) {
 				return true
 			}
 		}
@@ -3441,7 +3437,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function makeKernelGetter(node: ComputedInternals): () => Value {
 		return () => {
 			const savedCapture = obsCapture
-			obsCapture = obsRefs[node.ix]! > 0 ? [] : undefined
+			obsCapture = obsRefs[node.ix] > 0 ? [] : undefined
 			evalDepth++ // writes during a newest evaluation throw, as in every world
 			const tr = trace
 			if (tr !== undefined) {
@@ -3494,10 +3490,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function getKernelStrongDeps(node: ComputedInternals): AnyInternals[] {
 		const memory = E.buffer()
 		const out: AnyInternals[] = []
-		let l = memory[node.id + NodeField.DEPS]!
+		let l = memory[node.id + NodeField.DEPS]
 		while (l !== 0) {
 			// Dep ids come off live kernel links: the dense row is the dep's node, or undefined (no engine content).
-			const depIx = memory[memory[l + LinkField.DEP]! + NodeField.NODE_INDEX]!
+			const depIx = memory[memory[l + LinkField.DEP] + NodeField.NODE_INDEX]
 			const dep = depIx < nodeIndexToInternals.length ? nodeIndexToInternals[depIx] : undefined
 			if (dep !== undefined) {
 				out.push(dep)
@@ -3549,7 +3545,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (nodeIndexToInternals[ix] !== node) {
 			return
 		}
-		const refs = obsRefs[ix]! + delta
+		const refs = obsRefs[ix] + delta
 		obsRefs[ix] = refs
 		if (refs === 1 && delta === 1) {
 			enterObservation(node)
@@ -3619,7 +3615,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * its retains at the strong deps this evaluation recorded. Skipped if
 	 * observation left mid-evaluation — installing a retained set now would leak. */
 	function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
-		if (obsRefs[node.ix]! === 0) {
+		if (obsRefs[node.ix] === 0) {
 			return
 		}
 		const prev = obsDeps[node.ix]
@@ -3704,7 +3700,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 		/** The just-appended entry, materialized for the trace `logEntry` hook. */
 		tailEntry(): WriteLogEntry {
-			return materializeRecord(this.entries[this.entries.length - 1]!)
+			return materializeRecord(this.entries[this.entries.length - 1])
 		}
 
 		materialize(): WriteLogEntry[] {
@@ -3759,7 +3755,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const entries = log.entries
 		let n = 0
 		while (n < entries.length) {
-			const r = entries[n]!.retiredSeq
+			const r = entries[n].retiredSeq
 			if (r === undefined || r > minPin) {
 				break
 			}
@@ -3768,7 +3764,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (n >= FOLD_VALVE_THRESHOLD) {
 			const onDrop = onLogEntryDrop
 			for (let i = 0; i < n; i++) {
-				const e = entries[i]!
+				const e = entries[i]
 				const next = applyOp(atom, e.kind, e.payload, atom.base)
 				// Stepwise equality per replayed entry, order isEqual(current, incoming).
 				if (!isAtomValueEqual(atom, atom.base, next)) {
@@ -3783,7 +3779,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// The stamp max may have lived in the folded prefix: recompute.
 			let max: Seq = 0
 			for (let i = 0; i < entries.length; i++) {
-				const r = entries[i]!.retiredSeq
+				const r = entries[i].retiredSeq
 				if (r !== undefined && r > max) {
 					max = r
 				}
@@ -3819,12 +3815,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const entries = log.entries
 				if (onDrop !== undefined) {
 					for (let i = 0; i < entries.length; i++) {
-						onDrop(atom, materializeRecord(entries[i]!))
+						onDrop(atom, materializeRecord(entries[i]))
 					}
 				}
 				// The durable handoff (see the section header): adopt kernel newest by identity.
 				atom.base = untracked(() => E.readAtom(atom.id)) // untracked: a close reached from inside a kernel effect frame records no link
-				atom.baseSeq = entries[entries.length - 1]!.seq
+				atom.baseSeq = entries[entries.length - 1].seq
 				log.reset()
 			}
 			episodeHolds.clear()
@@ -3983,7 +3979,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Intern the batch's slot, claiming a free one at its first write. */
 	function internSlot(batch: Batch): BatchSlotMeta {
 		if (batch.slot !== undefined) {
-			return slots[batch.slot]!
+			return slots[batch.slot]
 		}
 		let free: BatchSlotMeta | undefined
 		for (const slot of slots) {
@@ -4147,7 +4143,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let touchedAny = false
 		const touchedAtoms = batch.atomsTouched
 		for (let i = 0; i < touchedAtoms.length; i++) {
-			const n = touchedAtoms[i]!
+			const n = touchedAtoms[i]
 			if (n.retirementStamp === retiredSeq) {
 				continue
 			} // duplicate touch entry
@@ -4155,7 +4151,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			const entries = log.entries
 			let stamped = 0
 			for (let j = 0; j < entries.length; j++) {
-				const e = entries[j]!
+				const e = entries[j]
 				if (e.batch === batch.id && e.retiredSeq === undefined) {
 					e.retiredSeq = retiredSeq
 					stamped++
@@ -4208,7 +4204,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 		if (batch.slot !== undefined) {
-			const slot = slots[batch.slot]!
+			const slot = slots[batch.slot]
 			if (isSlotRetainedByOpenMask(slot.id)) {
 				slot.releasePending = true // re-evaluated at every render end
 				const tr = trace
@@ -4346,7 +4342,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const entries = atom.log.entries
 		let value = atom.base
 		for (let i = 0; i < entries.length; i++) {
-			const e = entries[i]!
+			const e = entries[i]
 			if (!isVisible(e, world)) {
 				continue
 			}
@@ -4529,7 +4525,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const savedSink = currentSink
 		const savedObsCapture = obsCapture
 		// Observed nodes capture this run's strong deps; others pay one check.
-		obsCapture = obsRefs[node.ix]! > 0 ? [] : undefined
+		obsCapture = obsRefs[node.ix] > 0 ? [] : undefined
 		currentSink = node.ix
 		const tr = trace // paired eval hooks; end fires on throw too
 		if (tr !== undefined) {
@@ -4620,12 +4616,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** A node record's tenancy generation, read live from kernel memory (the
 	 * buffer is re-fetched per read: growth rebuilds swap it mid-operation). */
 	function getKernelGeneration(id: NodeId): Generation {
-		return E.buffer()[id + NodeField.GEN]!
+		return E.buffer()[id + NodeField.GEN]
 	}
 
 	/** A node record's NODE_INDEX, read live from kernel memory. */
 	function getKernelNodeIndex(id: NodeId): NodeIndex {
-		return E.buffer()[id + NodeField.NODE_INDEX]!
+		return E.buffer()[id + NodeField.NODE_INDEX]
 	}
 
 	// ---- the arena layer --------------------------------------------------------------
@@ -4729,14 +4725,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Reclamation guard probe: whether this arena's suspended list holds the
 	 * node's shadow. Cold — one probe per arena per finalizer fire/retry. */
 	function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
-		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
+		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 		return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0
 	}
 
 	/** Membership probe: whether this arena holds a shadow for the node index.
 	 * Cold — reclamation guards, a render-lifecycle dev assert, diagnostics. */
 	function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
-		return (ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0) !== 0
+		return (ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0) !== 0
 	}
 
 	/** Renumber the read clock: MARK → 0 on every live shadow, clock restarts at 0
@@ -4745,7 +4741,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
 			if (
 				(a.memory[sh + ArenaField.NODE] ?? 0) !== 0 &&
-				a.nodeToShadow[a.memory[sh + ArenaField.NODE]!] === sh
+				a.nodeToShadow[a.memory[sh + ArenaField.NODE]] === sh
 			) {
 				a.memory[sh + ArenaField.MARK] = 0
 			}
@@ -4768,10 +4764,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
 			if (
 				(memory[sh + ArenaField.NODE] ?? 0) !== 0 &&
-				a.nodeToShadow[memory[sh + ArenaField.NODE]!] === sh
+				a.nodeToShadow[memory[sh + ArenaField.NODE]] === sh
 			) {
 				for (
-					let l = memory[sh + ArenaField.DEPS]!;
+					let l = memory[sh + ArenaField.DEPS];
 					l !== 0;
 					l = memory[l + ArenaLinkField.NEXT_DEP]!
 				) {
@@ -4845,10 +4841,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * head/tail only — the link's own prev/next stay stale for mid-walk readers. */
 	function arenaSubsDetach(a: WorldArena, id: number): void {
 		const memory = a.memory
-		const dep = memory[id + ArenaLinkField.DEP]!
-		const nextSub = memory[id + ArenaLinkField.NEXT_SUB]!
-		const prevSub = memory[id + ArenaLinkField.PREV_SUB]!
-		const weak = (memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0
+		const dep = memory[id + ArenaLinkField.DEP]
+		const nextSub = memory[id + ArenaLinkField.NEXT_SUB]
+		const prevSub = memory[id + ArenaLinkField.PREV_SUB]
+		const weak = (memory[id + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) !== 0
 		if (nextSub !== 0) {
 			memory[nextSub + ArenaLinkField.PREV_SUB] = prevSub
 		} else if (weak) {
@@ -4868,9 +4864,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Append a link to its dep's mode-matching subs list tail (sets the link's own prev/next and mode). */
 	function arenaSubsAppend(a: WorldArena, id: number, weak: boolean): void {
 		const memory = a.memory
-		const dep = memory[id + ArenaLinkField.DEP]!
+		const dep = memory[id + ArenaLinkField.DEP]
 		const vi = dep >> ArenaGeom.ID_TO_COLUMN_SHIFT
-		const tail = weak ? a.weakSubsTail[vi]! : memory[dep + ArenaField.SUBS_TAIL]!
+		const tail = weak ? a.weakSubsTail[vi] : memory[dep + ArenaField.SUBS_TAIL]
 		memory[id + ArenaLinkField.MODE] = weak ? ArenaLinkMode.WEAK : 0
 		memory[id + ArenaLinkField.PREV_SUB] = tail
 		memory[id + ArenaLinkField.NEXT_SUB] = 0
@@ -4890,7 +4886,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** Set a live link's mode; a change moves it between the dep's two subs lists. */
 	function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
-		if (((a.memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0) === weak) {
+		if (((a.memory[id + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) !== 0) === weak) {
 			return
 		}
 		arenaSubsDetach(a, id)
@@ -4912,7 +4908,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		weak: boolean,
 	): number {
 		const memory = a.memory
-		const prevDep = memory[sub + ArenaField.DEPS_TAIL]!
+		const prevDep = memory[sub + ArenaField.DEPS_TAIL]
 		if (prevDep !== 0 && memory[prevDep + ArenaLinkField.DEP] === dep) {
 			// Duplicate occurrence within this evaluation: strong dominates.
 			if (!weak) {
@@ -4921,7 +4917,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return prevDep
 		}
 		const nextDep =
-			prevDep !== 0 ? memory[prevDep + ArenaLinkField.NEXT_DEP]! : memory[sub + ArenaField.DEPS]!
+			prevDep !== 0 ? memory[prevDep + ArenaLinkField.NEXT_DEP] : memory[sub + ArenaField.DEPS]
 		if (nextDep !== 0 && memory[nextDep + ArenaLinkField.DEP] === dep) {
 			// In-place reuse: first occurrence this evaluation — reset the mode.
 			memory[nextDep + ArenaLinkField.VERSION] = version
@@ -4942,7 +4938,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		nextDep: number,
 	): number {
 		// Nonadjacent same-evaluation duplicate: probe both mode tails; strong dominates.
-		const sTail = a.memory[dep + ArenaField.SUBS_TAIL]!
+		const sTail = a.memory[dep + ArenaField.SUBS_TAIL]
 		if (
 			sTail !== 0 &&
 			a.memory[sTail + ArenaLinkField.VERSION] === version &&
@@ -4950,7 +4946,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		) {
 			return sTail // already strong this evaluation
 		}
-		const wTail = a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+		const wTail = a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 		if (
 			wTail !== 0 &&
 			a.memory[wTail + ArenaLinkField.VERSION] === version &&
@@ -4986,9 +4982,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (
 			signalEffectCount !== 0 &&
 			!weak &&
-			(memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0
+			(memory[sub + ArenaField.FLAGS] & ArenaFlag.K_EFFECT) !== 0
 		) {
-			shiftEffectDep(a, dep as ShadowId, 1)
+			shiftEffectDep(a, dep, 1)
 		}
 		return newLink
 	}
@@ -4996,21 +4992,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function arenaUnlink(
 		a: WorldArena,
 		id: number,
-		sub: number = a.memory[id + ArenaLinkField.SUB]!,
+		sub: number = a.memory[id + ArenaLinkField.SUB],
 	): number {
 		const memory = a.memory
-		const dep = memory[id + ArenaLinkField.DEP]!
-		const prevDep = memory[id + ArenaLinkField.PREV_DEP]!
-		const nextDep = memory[id + ArenaLinkField.NEXT_DEP]!
+		const dep = memory[id + ArenaLinkField.DEP]
+		const prevDep = memory[id + ArenaLinkField.PREV_DEP]
+		const nextDep = memory[id + ArenaLinkField.NEXT_DEP]
 		// The K_EFFECT-sub teardown mirrors arenaLinkInsert's append bookkeeping.
 		// It stays a single flags read (no signalEffectCount prefix): arenaUnlink
 		// is at its inline byte budget, and the K_EFFECT bit is set only when a
 		// SignalEffect exists, so this already resolves false when none do.
 		if (
-			(memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0 &&
-			(memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) === 0
+			(memory[sub + ArenaField.FLAGS] & ArenaFlag.K_EFFECT) !== 0 &&
+			(memory[id + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) === 0
 		) {
-			shiftEffectDep(a, dep as ShadowId, -1)
+			shiftEffectDep(a, dep, -1)
 		}
 		if (nextDep !== 0) {
 			memory[nextDep + ArenaLinkField.PREV_DEP] = prevDep
@@ -5027,15 +5023,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (
 			memory[dep + ArenaField.SUBS] === 0 &&
 			a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] === 0 &&
-			(memory[dep + ArenaField.FLAGS]! & ArenaFlag.K_COMPUTED) !== 0
+			(memory[dep + ArenaField.FLAGS] & ArenaFlag.K_COMPUTED) !== 0
 		) {
 			// Unwatched computed shadow (both lists empty): mark stale, tear down its deps (acyclic ⇒ terminates).
 			if (memory[dep + ArenaField.DEPS_TAIL] !== 0) {
 				// DIRTY 0→1 ⇒ dirty-list append (the a.dirty contract) — a torn computed must reach decay via the list.
-				if ((memory[dep + ArenaField.FLAGS]! & ArenaFlag.DIRTY) === 0) {
+				if ((memory[dep + ArenaField.FLAGS] & ArenaFlag.DIRTY) === 0) {
 					a.dirty.push(dep)
 				}
-				memory[dep + ArenaField.FLAGS] = memory[dep + ArenaField.FLAGS]! | ArenaFlag.DIRTY
+				memory[dep + ArenaField.FLAGS] = memory[dep + ArenaField.FLAGS] | ArenaFlag.DIRTY
 				arenaDisposeAllDepsInReverse(a, dep)
 			}
 		}
@@ -5043,9 +5039,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	}
 
 	function arenaDisposeAllDepsInReverse(a: WorldArena, sub: number): void {
-		let cur = a.memory[sub + ArenaField.DEPS_TAIL]!
+		let cur = a.memory[sub + ArenaField.DEPS_TAIL]
 		while (cur !== 0) {
-			const prev = a.memory[cur + ArenaLinkField.PREV_DEP]!
+			const prev = a.memory[cur + ArenaLinkField.PREV_DEP]
 			arenaUnlink(a, cur, sub)
 			cur = prev
 		}
@@ -5059,11 +5055,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** Purge links not re-tracked by the current evaluation (kernel discipline). */
 	function arenaPurgeDeps(a: WorldArena, sub: number): void {
-		const depsTail = a.memory[sub + ArenaField.DEPS_TAIL]!
+		const depsTail = a.memory[sub + ArenaField.DEPS_TAIL]
 		let dep =
 			depsTail !== 0
-				? a.memory[depsTail + ArenaLinkField.NEXT_DEP]!
-				: a.memory[sub + ArenaField.DEPS]!
+				? a.memory[depsTail + ArenaLinkField.NEXT_DEP]
+				: a.memory[sub + ArenaField.DEPS]
 		let guard = 0
 		while (dep !== 0) {
 			if (++guard > ArenaWalk.CYCLE_CAP) {
@@ -5093,15 +5089,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function arenaPropagate(a: WorldArena, startLink: number): void {
 		const memory = a.memory // never allocates: safe to cache
 		let cur = startLink
-		let next = memory[cur + ArenaLinkField.NEXT_SUB]!
+		let next = memory[cur + ArenaLinkField.NEXT_SUB]
 		const stackBase = arenaPropSp
 		let guard = 0
 		top: do {
 			if (++guard > ArenaWalk.CYCLE_CAP) {
 				arenaWalkCycle('arenaPropagate', cur)
 			}
-			const sub = memory[cur + ArenaLinkField.SUB]!
-			let flags = memory[sub + ArenaField.FLAGS]!
+			const sub = memory[cur + ArenaLinkField.SUB]
+			let flags = memory[sub + ArenaField.FLAGS]
 			if (
 				!(
 					flags &
@@ -5123,8 +5119,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				flags = 0
 			}
 			if (flags & ArenaFlag.MUTABLE) {
-				let subSubs = memory[sub + ArenaField.SUBS]!
-				const subWeak = a.weakSubs[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+				let subSubs = memory[sub + ArenaField.SUBS]
+				const subWeak = a.weakSubs[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 				let park = 0 // the weak head, parked when both lists are populated
 				if (subWeak !== 0) {
 					if (subSubs === 0) {
@@ -5136,7 +5132,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				}
 				if (subSubs !== 0) {
 					cur = subSubs
-					const nextSub = memory[cur + ArenaLinkField.NEXT_SUB]!
+					const nextSub = memory[cur + ArenaLinkField.NEXT_SUB]
 					if (nextSub !== 0 || park !== 0) {
 						if (arenaPropSp + 2 > arenaPropStack.length) {
 							const bigger = new Int32Array(arenaPropStack.length * 2)
@@ -5173,17 +5169,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * `for (list 0..1)` walk sites learn the two lists' homes (hot fanout reads direct). */
 	function arenaSubsHead(a: WorldArena, sh: number, list: number): number {
 		return list === 0
-			? a.memory[sh + ArenaField.SUBS]!
-			: a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+			? a.memory[sh + ArenaField.SUBS]
+			: a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 	}
 
 	/** Seed arenaPropagate over both of a shadow's subs lists (fanout sites). */
 	function arenaPropagateBoth(a: WorldArena, sh: number): void {
-		const subs = a.memory[sh + ArenaField.SUBS]!
+		const subs = a.memory[sh + ArenaField.SUBS]
 		if (subs !== 0) {
 			arenaPropagate(a, subs)
 		}
-		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 		if (weak !== 0) {
 			arenaPropagate(a, weak)
 		}
@@ -5197,8 +5193,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (++guard > ArenaWalk.CYCLE_CAP) {
 				throw new InvariantViolation(`arenaShallowPropagate: subs chain cycle at link ${cur}`)
 			}
-			const sub = memory[cur + ArenaLinkField.SUB]!
-			const flags = memory[sub + ArenaField.FLAGS]!
+			const sub = memory[cur + ArenaLinkField.SUB]
+			const flags = memory[sub + ArenaField.FLAGS]
 			if ((flags & (ArenaFlag.PENDING | ArenaFlag.DIRTY)) === ArenaFlag.PENDING) {
 				memory[sub + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY
 				// DIRTY 0→1 ⇒ dirty-list append: an upgraded shadow can reach a boundary unconsumed; it must be listed.
@@ -5209,11 +5205,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** Shallow-propagate over both subs lists (weak dependents upgrade too). */
 	function arenaShallowPropagateBoth(a: WorldArena, sh: number): void {
-		const subs = a.memory[sh + ArenaField.SUBS]!
+		const subs = a.memory[sh + ArenaField.SUBS]
 		if (subs !== 0) {
 			arenaShallowPropagate(a, subs)
 		}
-		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+		const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 		if (weak !== 0) {
 			arenaShallowPropagate(a, weak)
 		}
@@ -5221,7 +5217,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolean {
 		const memory = a.memory
-		let cur = memory[sub + ArenaField.DEPS_TAIL]!
+		let cur = memory[sub + ArenaField.DEPS_TAIL]
 		let guard = 0
 		while (cur !== 0) {
 			if (++guard > ArenaWalk.CYCLE_CAP) {
@@ -5310,7 +5306,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let arenaFrameCycle = 0
 
 	function shiftEffectDep(a: WorldArena, dep: ShadowId, delta: 1 | -1): void {
-		const ix = a.memory[dep + ArenaField.NODE]!
+		const ix = a.memory[dep + ArenaField.NODE]
 		const node = nodeIndexToInternals[ix]
 		if (
 			node !== undefined &&
@@ -5324,7 +5320,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const storage = kind === 'render' ? 'js' : 'arena'
 		let a: WorldArena | undefined
 		for (let i = arenaPool.length - 1; i >= 0; i--) {
-			if (arenaPool[i]!.storage === storage) {
+			if (arenaPool[i].storage === storage) {
 				a = arenaPool[i]!
 				arenaPool.splice(i, 1)
 				break
@@ -5389,13 +5385,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * mirrored sites. Returns the settled clock; render arenas never settle.
 	 */
 	function settleObserverClock(a: WorldArena, node: AnyInternals): Clock {
-		const sh = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0
+		const sh = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix] : 0
 		if (sh === 0 || !a.bumpsClocks) {
 			return 0
 		}
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
 		const v = a.vals[vi]
-		const clock = a.clocks[vi]!
+		const clock = a.clocks[vi]
 		if (clock !== 0 && !isValueChanged(node, a.cutoffVals[vi], v)) {
 			return clock
 		}
@@ -5445,7 +5441,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * never serves — it is reset cold and re-tenanted. */
 	function resolveShadow(a: WorldArena, node: AnyInternals, kindFlags: number): number {
 		const ix = node.ix
-		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
+		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 		const gen = getKernelGeneration(node.id) // one kernel-memory load per consult (priced by the bench trio)
 		if (sh !== 0) {
 			if (a.memory[sh + ArenaField.NODE_GEN] === gen) {
@@ -5469,12 +5465,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		for (let list = 0; list < 2; list++) {
 			let sl = arenaSubsHead(a, sh, list)
 			while (sl !== 0) {
-				const next = a.memory[sl + ArenaLinkField.NEXT_SUB]!
+				const next = a.memory[sl + ArenaLinkField.NEXT_SUB]
 				arenaUnlink(a, sl)
 				sl = next
 			}
 		}
-		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) {
+		if ((a.memory[sh + ArenaField.FLAGS] & ArenaFlag.BOX_SUSPENDED) !== 0) {
 			arenaUnsuspend(a, sh)
 		}
 		scrubWorldShadowColumnsOnEvict(a, sh) // value + clock slots clear together
@@ -5521,12 +5517,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Swap-remove at the stored index on the 1→0 clear (the list stays dense). */
 	function arenaUnsuspend(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
-		const slot = a.suspIdx[vi]!
+		const slot = a.suspIdx[vi]
 		if (slot === 0) {
 			return
 		}
 		const last = a.suspended.length - 1
-		const moved = a.suspended[last]!
+		const moved = a.suspended[last]
 		a.suspended[slot - 1] = moved
 		a.suspIdx[moved >> ArenaGeom.ID_TO_COLUMN_SHIFT] = slot
 		a.suspended.pop()
@@ -5534,7 +5530,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		suspendedCount--
 		// Reclamation retry: the suspended-list guard clears here, covering every exit path. Size-0 bail first.
 		if (reclaimSkippedN !== 0) {
-			const node = nodeIndexToInternals[a.memory[sh + ArenaField.NODE]!]
+			const node = nodeIndexToInternals[a.memory[sh + ArenaField.NODE]]
 			if (node !== undefined) {
 				noteReclaimRetry(node.id)
 			}
@@ -5546,7 +5542,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * once its thenable settles (the serve-site probe marks it DIRTY). */
 	function arenaNoteThrow(a: WorldArena, sh: number, err: unknown): void {
 		const memory = a.memory
-		const flags = memory[sh + ArenaField.FLAGS]!
+		const flags = memory[sh + ArenaField.FLAGS]
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
 		arenaBumpReadClock(a)
 		if (err instanceof SuspendedRead) {
@@ -5580,7 +5576,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (node.kind === 'atom') {
 			const sh = resolveShadow(a, node, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE)
 			const memory = a.memory
-			const flags = memory[sh + ArenaField.FLAGS]!
+			const flags = memory[sh + ArenaField.FLAGS]
 			if ((flags & ArenaFlag.VALID) === 0 || (flags & ArenaFlag.DIRTY) !== 0) {
 				// A changed refold upgrades PENDING dependents to DIRTY so their re-check refolds them.
 				if (arenaUpdateShadow(a, sh)) {
@@ -5613,7 +5609,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		const sh = resolveShadow(a, node, ArenaFlag.K_COMPUTED)
 		const memory = a.memory
-		let flags = memory[sh + ArenaField.FLAGS]!
+		let flags = memory[sh + ArenaField.FLAGS]
 		if ((flags & ArenaFlag.RECURSED_CHECK) !== 0) {
 			throw createCycleError(node.name)
 		}
@@ -5635,7 +5631,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			// Evicted-to-cold residue: VALID clear means the value column is
 			// evicted — refold on consult (MUTABLE alone says "evaluated once").
 			(flags & ArenaFlag.VALID) === 0 ||
-			((flags & ArenaFlag.PENDING) !== 0 && arenaCheckDirty(a, a.memory[sh + ArenaField.DEPS]!, sh))
+			((flags & ArenaFlag.PENDING) !== 0 && arenaCheckDirty(a, a.memory[sh + ArenaField.DEPS], sh))
 		) {
 			if (arenaUpdateComputed(a, sh)) {
 				arenaShallowPropagateBoth(a, sh)
@@ -5661,7 +5657,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				oc.push(node)
 			}
 		}
-		const outFlags = a.memory[sh + ArenaField.FLAGS]!
+		const outFlags = a.memory[sh + ArenaField.FLAGS]
 		// boxedRead-style rethrow: thrown payloads rethrow from cache; a returned
 		// sentinel serves as a value, by identity (tests/concurrent-battery.spec.ts).
 		if (
@@ -5682,11 +5678,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Refold a shadow (atom fold or computed fn run);
 	 * returns whether the world's value changed (the value cutoff). */
 	function arenaUpdateShadow(a: WorldArena, sh: number): boolean {
-		const flags = a.memory[sh + ArenaField.FLAGS]!
+		const flags = a.memory[sh + ArenaField.FLAGS]
 		if ((flags & ArenaFlag.K_COMPUTED) !== 0) {
 			return arenaUpdateComputed(a, sh)
 		}
-		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!
+		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]
 		const atom = nodeIndexToInternals[nid] as AtomInternals
 		// Marked ⇒ refold unconditionally — no fingerprint shortcut.
 		const next = foldAtom(atom, a.world)
@@ -5708,11 +5704,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * routing override, and the world set; observed nodes capture the run's
 	 * strong deps and re-point their retains after ({@link syncObservedDeps}). */
 	function arenaUpdateComputed(a: WorldArena, sh: number): boolean {
-		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!
+		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]
 		const node = nodeIndexToInternals[nid] as ComputedInternals
 		a.memory[sh + ArenaField.DEPS_TAIL] = 0
 		a.memory[sh + ArenaField.FLAGS] =
-			(a.memory[sh + ArenaField.FLAGS]! | ArenaFlag.MUTABLE | ArenaFlag.RECURSED_CHECK) &
+			(a.memory[sh + ArenaField.FLAGS] | ArenaFlag.MUTABLE | ArenaFlag.RECURSED_CHECK) &
 			~(ArenaFlag.RECURSED | ArenaFlag.DIRTY | ArenaFlag.PENDING)
 		const savedFrameArena = arenaFrame
 		const savedFrameShadow = arenaFrameShadow
@@ -5726,7 +5722,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		arenaFrameCycle = arenaBumpCycle(a)
 		serveOverride = a
 		currentSink = 0
-		obsCapture = obsRefs[nid]! > 0 ? [] : undefined // nid is the nodeIndex (the NODE column)
+		obsCapture = obsRefs[nid] > 0 ? [] : undefined // nid is the nodeIndex (the NODE column)
 		setWorld(a.world)
 		evalDepth++
 		const tr = trace // paired eval hooks; end fires on throw too
@@ -5756,7 +5752,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			arenaFrame = savedFrameArena
 			arenaFrameShadow = savedFrameShadow
 			arenaFrameCycle = savedFrameCycle
-			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS]! & ~ArenaFlag.RECURSED_CHECK
+			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS] & ~ArenaFlag.RECURSED_CHECK
 			arenaPurgeDeps(a, sh)
 			arenaBumpReadClock(a)
 			if (obsCaptured !== undefined) {
@@ -5792,7 +5788,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		eq: Equals | undefined,
 	): boolean {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
-		const flags = a.memory[sh + ArenaField.FLAGS]!
+		const flags = a.memory[sh + ArenaField.FLAGS]
 		if (value instanceof SuspendedRead) {
 			const same =
 				(flags & ArenaFlag.BOX_SUSPENDED) !== 0 &&
@@ -5824,7 +5820,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			a.vals[vi] = value
 		}
 		a.memory[sh + ArenaField.FLAGS] =
-			(a.memory[sh + ArenaField.FLAGS]! &
+			(a.memory[sh + ArenaField.FLAGS] &
 				~(ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN)) |
 			ArenaFlag.VALID
 		return changed
@@ -5842,7 +5838,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		const ix = getKernelNodeIndex(effect.rec)
 		const gen = getKernelGeneration(effect.rec)
-		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
+		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 		if (sh === 0) {
 			sh = arenaAllocShadow(a, ix, ArenaFlag.K_EFFECT | ArenaFlag.MUTABLE | ArenaFlag.VALID, gen)
 		} else if (
@@ -5871,7 +5867,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const a = effect.arena!
 		a.memory[sh + ArenaField.DEPS_TAIL] = 0
 		a.memory[sh + ArenaField.FLAGS] =
-			(a.memory[sh + ArenaField.FLAGS]! &
+			(a.memory[sh + ArenaField.FLAGS] &
 				~(ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.RECURSED)) |
 			ArenaFlag.K_EFFECT |
 			ArenaFlag.MUTABLE |
@@ -5910,7 +5906,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (a === undefined || sh === 0) {
 			return
 		}
-		const ix = a.memory[sh + ArenaField.NODE]!
+		const ix = a.memory[sh + ArenaField.NODE]
 		arenaEvictShadow(a, sh)
 		for (let f = 0; f < ArenaGeom.STRIDE; f++) {
 			a.memory[sh + f] = 0
@@ -5929,24 +5925,24 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (a === undefined || sh === 0) {
 			return false
 		}
-		const effectFlags = a.memory[sh + ArenaField.FLAGS]!
+		const effectFlags = a.memory[sh + ArenaField.FLAGS]
 		if ((effectFlags & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) === 0) {
 			return false
 		}
-		let link = a.memory[sh + ArenaField.DEPS]!
+		let link = a.memory[sh + ArenaField.DEPS]
 		while (link !== 0) {
-			const depShadow: number = a.memory[link + ArenaLinkField.DEP]!
-			const ix = a.memory[depShadow + ArenaField.NODE]!
+			const depShadow: number = a.memory[link + ArenaLinkField.DEP]
+			const ix = a.memory[depShadow + ArenaField.NODE]
 			const node = nodeIndexToInternals[ix]
 			if (
 				node !== undefined &&
 				a.memory[depShadow + ArenaField.NODE_GEN] === getKernelGeneration(node.id)
 			) {
-				const stamp = a.clocks[link >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+				const stamp = a.clocks[link >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 				const vi = depShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT
 				if (
 					!(
-						(a.memory[depShadow + ArenaField.FLAGS]! &
+						(a.memory[depShadow + ArenaField.FLAGS] &
 							(ArenaFlag.VALID | ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.HAS_BOX)) ===
 							ArenaFlag.VALID &&
 						a.clocks[vi] === stamp &&
@@ -5980,7 +5976,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const stack = walkStack
 		let sp = 0
 		for (let i = 0; i < a.dirty.length; i++) {
-			const sh = a.dirty[i]!
+			const sh = a.dirty[i]
 			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) {
 				continue
 			}
@@ -5993,11 +5989,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 		while (sp > 0) {
-			const sh = stack[--sp]!
+			const sh = stack[--sp]
 			for (let list = 0; list < 2; list++) {
 				let link = arenaSubsHead(a, sh, list)
 				while (link !== 0) {
-					const sub = memory[link + ArenaLinkField.SUB]!
+					const sub = memory[link + ArenaLinkField.SUB]
 					if (walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 						stack[sp++] = sub
@@ -6050,8 +6046,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * weak-side validation stranding a lone strong sub PENDING — so both lists
 	 * propagate unconditionally; the walker's own re-upgrade is a no-op. */
 	function arenaUpdateAndShallow(a: WorldArena, node: number): boolean {
-		const subs = a.memory[node + ArenaField.SUBS]!
-		const weak = a.weakSubs[node >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+		const subs = a.memory[node + ArenaField.SUBS]
+		const weak = a.weakSubs[node >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 		if (arenaUpdateShadow(a, node)) {
 			if (subs !== 0) {
 				arenaShallowPropagate(a, subs)
@@ -6074,9 +6070,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				arenaWalkCycle('arenaCheckDirty', cur)
 			}
 			const memory = a.memory
-			const dep = memory[cur + ArenaLinkField.DEP]!
-			const depFlags = memory[dep + ArenaField.FLAGS]!
-			if ((memory[sub + ArenaField.FLAGS]! & ArenaFlag.DIRTY) !== 0) {
+			const dep = memory[cur + ArenaLinkField.DEP]
+			const depFlags = memory[dep + ArenaField.FLAGS]
+			if ((memory[sub + ArenaField.FLAGS] & ArenaFlag.DIRTY) !== 0) {
 				dirty = true
 			} else if (
 				(depFlags & (ArenaFlag.MUTABLE | ArenaFlag.DIRTY)) ===
@@ -6104,7 +6100,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				continue
 			}
 			if (!dirty) {
-				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]!
+				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]
 				if (nextDep !== 0) {
 					cur = nextDep
 					continue
@@ -6119,10 +6115,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 					}
 					dirty = false
 				} else {
-					a.memory[sub + ArenaField.FLAGS] = a.memory[sub + ArenaField.FLAGS]! & ~ArenaFlag.PENDING
+					a.memory[sub + ArenaField.FLAGS] = a.memory[sub + ArenaField.FLAGS] & ~ArenaFlag.PENDING
 				}
 				sub = a.memory[cur + ArenaLinkField.SUB]!
-				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]!
+				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]
 				if (nextDep !== 0) {
 					cur = nextDep
 					continue top
@@ -6146,11 +6142,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		const memory = a.memory
 		for (let i = 0; i < atoms.length; i++) {
-			const sh = a.nodeToShadow[atoms[i]!.ix] ?? 0
+			const sh = a.nodeToShadow[atoms[i].ix] ?? 0
 			if (sh === 0) {
 				continue
 			} // no shadow: nothing consumes this atom here
-			const flags = memory[sh + ArenaField.FLAGS]!
+			const flags = memory[sh + ArenaField.FLAGS]
 			if ((flags & ArenaFlag.DIRTY) !== 0 && memory[sh + ArenaField.MARK] === a.readClock) {
 				continue
 			} // dedup
@@ -6190,20 +6186,20 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.dirty = []
 		const memory = a.memory
 		for (let i = 0; i < list.length; i++) {
-			const sh = list[i]!
-			const flags = memory[sh + ArenaField.FLAGS]!
+			const sh = list[i]
+			const flags = memory[sh + ArenaField.FLAGS]
 			if ((flags & ArenaFlag.DIRTY) === 0) {
 				continue
 			} // consumed by an evaluation: drop the entry
-			const nid = memory[sh + ArenaField.NODE]!
+			const nid = memory[sh + ArenaField.NODE]
 			const ws = nodeToWatchers[nid]
 			// Keep-the-dirt while any live observer can consume the mark (same-root
 			// watcher or ANY observation retain): a dropped observed shadow would refold
 			// cold — a clock bump with no value change — and re-fire spuriously.
-			let watched = (flags & ArenaFlag.K_EFFECT) !== 0 || obsRefs[nid]! > 0
+			let watched = (flags & ArenaFlag.K_EFFECT) !== 0 || obsRefs[nid] > 0
 			if (!watched && ws !== undefined) {
 				for (let j = 0; j < ws.length; j++) {
-					const w = ws[j]!
+					const w = ws[j]
 					if (w.live && w.root === a.root) {
 						watched = true
 						break
@@ -6235,7 +6231,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * onto the dead-shadow free list. Idempotent (an already-purged index skips). */
 	function purgeNodeFromArenas(ix: NodeIndex): void {
 		eachArena((a) => {
-			const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
+			const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 			if (sh === 0) {
 				return
 			}
@@ -6259,11 +6255,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const memory = a.memory
 		let matched = false
 		for (let j = 0; j < list.length; j++) {
-			const sh = list[j]!
+			const sh = list[j]
 			if (a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== suspendSentinel) {
 				continue
 			}
-			const flags = memory[sh + ArenaField.FLAGS]!
+			const flags = memory[sh + ArenaField.FLAGS]
 			if ((flags & ArenaFlag.DIRTY) === 0) {
 				memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY
 				a.dirty.push(sh)
@@ -6288,7 +6284,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const ws = nodeToWatchers[nid]
 		if (ws !== undefined) {
 			for (let i = 0; i < ws.length; i++) {
-				const w = ws[i]!
+				const w = ws[i]
 				if (w.live) {
 					found.push(w)
 				}
@@ -6301,7 +6297,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const nw = nodeToWatchers[nid]
 		if (nw !== undefined) {
 			for (let j = 0; j < nw.length; j++) {
-				const w = nw[j]!
+				const w = nw[j]
 				if (w.live && w.root === rootId) {
 					ws.push(w)
 				}
@@ -6319,7 +6315,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		found: Watcher[],
 		effects: SignalEffect[],
 	): void {
-		const start = from < a.nodeToShadow.length ? a.nodeToShadow[from]! : 0
+		const start = from < a.nodeToShadow.length ? a.nodeToShadow[from] : 0
 		if (start === 0) {
 			return
 		}
@@ -6333,10 +6329,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		walk[start >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 		stack[sp++] = start
 		while (sp > 0) {
-			const sh = stack[--sp]!
-			let l = memory[sh + ArenaField.SUBS]!
+			const sh = stack[--sp]
+			let l = memory[sh + ArenaField.SUBS]
 			while (l !== 0) {
-				const sub = memory[l + ArenaLinkField.SUB]!
+				const sub = memory[l + ArenaLinkField.SUB]
 				if (walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 					walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 					const effect = a.signalEffects[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT]
@@ -6347,7 +6343,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 						}
 					} else {
 						stack[sp++] = sub
-						const nid = memory[sub + ArenaField.NODE]!
+						const nid = memory[sub + ArenaField.NODE]
 						if (lastWalk[nid] !== gen) {
 							lastWalk[nid] = gen
 							collectWatchersAt(nid, found)
@@ -6374,29 +6370,29 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let sp = 0
 		const list = a.dirty
 		for (let i = 0; i < list.length; i++) {
-			const sh = list[i]!
+			const sh = list[i]
 			if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) {
 				continue
 			}
 			walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 			stack[sp++] = sh
-			const nid = memory[sh + ArenaField.NODE]!
+			const nid = memory[sh + ArenaField.NODE]
 			if (lastWalk[nid] !== gen) {
 				lastWalk[nid] = gen
 				collectRootWatchersAt(nid, rootId, ws)
 			}
 		}
 		while (sp > 0) {
-			const sh = stack[--sp]!
+			const sh = stack[--sp]
 			// Both subs lists: drains expand over weak links too.
 			for (let list = 0; list < 2; list++) {
 				let l = arenaSubsHead(a, sh, list)
 				while (l !== 0) {
-					const sub = memory[l + ArenaLinkField.SUB]!
+					const sub = memory[l + ArenaLinkField.SUB]
 					if (walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 						stack[sp++] = sub
-						const nid = memory[sub + ArenaField.NODE]!
+						const nid = memory[sub + ArenaField.NODE]
 						if (lastWalk[nid] !== gen) {
 							lastWalk[nid] = gen
 							collectRootWatchersAt(nid, rootId, ws)
@@ -6410,7 +6406,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** One arena's reverse-deps half of the fixup closure (strong links); shadows map back to NodeIds via the node row. */
 	function collectArenaClosure(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void {
-		const start = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0
+		const start = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix] : 0
 		if (start === 0) {
 			return
 		}
@@ -6425,14 +6421,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		walk[start >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
 		stack[sp++] = start
 		while (sp > 0) {
-			const sh = stack[--sp]!
-			let l = memory[sh + ArenaField.DEPS]!
+			const sh = stack[--sp]
+			let l = memory[sh + ArenaField.DEPS]
 			while (l !== 0) {
-				if ((memory[l + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) === 0) {
-					const dep = memory[l + ArenaLinkField.DEP]!
+				if ((memory[l + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) === 0) {
+					const dep = memory[l + ArenaLinkField.DEP]
 					if (walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen
-						const depNode = nodeIndexToInternals[memory[dep + ArenaField.NODE]!]
+						const depNode = nodeIndexToInternals[memory[dep + ArenaField.NODE]]
 						if (depNode !== undefined) {
 							closure.add(depNode.id)
 						}
@@ -6477,7 +6473,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		eachArena((a) => {
 			const memory = a.memory
 			for (let ix = 0; ix < a.nodeToShadow.length; ix++) {
-				const sh = a.nodeToShadow[ix]!
+				const sh = a.nodeToShadow[ix]
 				if (sh === 0) {
 					continue
 				}
@@ -6488,8 +6484,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				for (let list = 0; list < 2; list++) {
 					let l = arenaSubsHead(a, sh, list)
 					while (l !== 0) {
-						const sub = memory[l + ArenaLinkField.SUB]!
-						const subNode = nodeIndexToInternals[memory[sub + ArenaField.NODE]!]
+						const sub = memory[l + ArenaLinkField.SUB]
+						const subNode = nodeIndexToInternals[memory[sub + ArenaField.NODE]]
 						if (subNode !== undefined) {
 							let s = out.get(depNode.id)
 							if (s === undefined) {
@@ -6522,10 +6518,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (depSh === 0 || subSh === 0) {
 			return undefined
 		}
-		let cur = a.memory[subSh + ArenaField.DEPS]!
+		let cur = a.memory[subSh + ArenaField.DEPS]
 		while (cur !== 0) {
 			if (a.memory[cur + ArenaLinkField.DEP] === depSh) {
-				return (a.memory[cur + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0 ? 'weak' : 'strong'
+				return (a.memory[cur + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) !== 0 ? 'weak' : 'strong'
 			}
 			cur = a.memory[cur + ArenaLinkField.NEXT_DEP]!
 		}
@@ -6544,7 +6540,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (depSh === 0 || subSh === 0) {
 			return 0
 		}
-		let cur = a.memory[subSh + ArenaField.DEPS]!
+		let cur = a.memory[subSh + ArenaField.DEPS]
 		while (cur !== 0) {
 			if (a.memory[cur + ArenaLinkField.DEP] === depSh) {
 				return cur
@@ -6617,7 +6613,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		notifyState.flushing = true
 		try {
 			for (let i = 0; i < notifyState.n; i++) {
-				const kind = notifyKinds[i]!
+				const kind = notifyKinds[i]
 				const obs = notifyObservers[i]
 				const t = notifyBatches[i]
 				const effect = notifyEffects[i]
@@ -6627,12 +6623,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				if (kind === NotifyKind.DELIVERY) {
 					const l = onDelivery
 					if (l !== undefined) {
-						l(obs!, t!, notifySlots[i]!)
+						l(obs!, t!, notifySlots[i])
 					}
 				} else if (kind === NotifyKind.MOUNT_CORRECTIVE) {
 					const l = onMountCorrective
 					if (l !== undefined) {
-						l(obs!, t!, notifySlots[i]!)
+						l(obs!, t!, notifySlots[i])
 					}
 				} else if (kind === NotifyKind.CORRECTION) {
 					const l = onCorrection
@@ -6685,13 +6681,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		const bit = 1 << slot.id
 		for (let i = 0; i < effects.length; i++) {
-			effects[i]!.pendingSlots |= bit
+			effects[i].pendingSlots |= bit
 		}
 		if (found.length > 1) {
 			found.sort((a, b) => a.id - b.id)
 		}
 		for (let i = 0; i < found.length; i++) {
-			deliver(found[i]!, batch, slot, seq)
+			deliver(found[i], batch, slot, seq)
 		}
 		found.length = 0
 		effects.length = 0
@@ -6855,7 +6851,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			ws.sort((a, b) => a.id - b.id)
 		}
 		for (let i = 0; i < ws.length; i++) {
-			reconcileWatcher(ws[i]!, a, world, cause)
+			reconcileWatcher(ws[i], a, world, cause)
 		}
 		ws.length = 0
 	}
@@ -6951,11 +6947,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const taken = pendingSettle
 				pendingSettle = []
 				for (let i = 0; i < taken.length; i++) {
-					pendingSettleSet.delete(taken[i]!)
+					pendingSettleSet.delete(taken[i])
 				}
 				const touchedRoots = new Set<RootId>()
 				for (let i = 0; i < taken.length; i++) {
-					const suspendSentinel = taken[i]!
+					const suspendSentinel = taken[i]
 					eachArena((a) => {
 						// Mark shadows caching this sentinel stale; the scan and mark
 						// mechanics live in {@link arenaInvalidateSettled}.
@@ -7104,24 +7100,24 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 		/** The watched node record id (the component reads this node). */
 		get node(): NodeId {
-			return E.buffer()[this.rec + ObserverField.NODE]!
+			return E.buffer()[this.rec + ObserverField.NODE]
 		}
 
 		/** The watched record's NODE_INDEX, cached at mount (slot-tied — never stale). @internal */
 		get nodeIx(): NodeIndex {
-			return E.buffer()[this.rec + ObserverField.NODE_IX]!
+			return E.buffer()[this.rec + ObserverField.NODE_IX]
 		}
 
 		/** The watched record's tenancy generation at mount: record ids recycle,
 		 * so watcher→node resolutions check this stamp and skip on mismatch. */
 		get nodeRecordGen(): Generation {
-			return E.buffer()[this.rec + ObserverField.NODE_GEN]!
+			return E.buffer()[this.rec + ObserverField.NODE_GEN]
 		}
 
 		/** Per-(watcher, batch-slot) delivery dedup bits, one int word: a second
 		 * write in a slot re-delivers only if no scheduled render will fold it. */
 		get dedupBits(): BatchSlotSet {
-			return E.buffer()[this.rec + ObserverField.DEDUP_BITS]!
+			return E.buffer()[this.rec + ObserverField.DEDUP_BITS]
 		}
 		set dedupBits(bits: BatchSlotSet) {
 			E.buffer()[this.rec + ObserverField.DEDUP_BITS] = bits
@@ -7143,7 +7139,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		 * never (a re-staled commit resets it, forcing the next correction).
 		 * Corrections gate on this stamp alone — mismatch means re-fire. */
 		get lastValidatedAt(): Clock {
-			return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]!
+			return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]
 		}
 		set lastValidatedAt(c: Clock) {
 			E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT] = c
@@ -7169,11 +7165,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		 * watcher liveness flip routes through this setter.
 		 * Edge-filtered, so a dead handle's `live = false` is a safe no-op. */
 		get live(): boolean {
-			return (E.buffer()[this.rec + ObserverField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0
+			return (E.buffer()[this.rec + ObserverField.FLAGS] & NodeFlag.OBSERVER_LIVE) !== 0
 		}
 		set live(value: boolean) {
 			const memory = E.buffer()
-			const flags = memory[this.rec + ObserverField.FLAGS]!
+			const flags = memory[this.rec + ObserverField.FLAGS]
 			if (((flags & NodeFlag.OBSERVER_LIVE) !== 0) === value) {
 				return
 			}
@@ -7250,10 +7246,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (a === undefined || this.shadow === 0) {
 				return out
 			}
-			let link = a.memory[this.shadow + ArenaField.DEPS]!
+			let link = a.memory[this.shadow + ArenaField.DEPS]
 			while (link !== 0) {
-				const dep = a.memory[link + ArenaLinkField.DEP]!
-				const node = this.x.nodes[a.memory[dep + ArenaField.NODE]!]
+				const dep = a.memory[link + ArenaLinkField.DEP]
+				const node = this.x.nodes[a.memory[dep + ArenaField.NODE]]
 				if (
 					node !== undefined &&
 					a.memory[dep + ArenaField.NODE_GEN] === getKernelGeneration(node.id)
@@ -7308,7 +7304,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 
 		get live(): boolean {
-			return (E.buffer()[this.rec + SignalEffectField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0
+			return (E.buffer()[this.rec + SignalEffectField.FLAGS] & NodeFlag.OBSERVER_LIVE) !== 0
 		}
 	}
 
@@ -7336,8 +7332,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** A node's per-root committed clock by nodeIndex (0 = never consulted).
 	 * Reads WITHOUT settling: callers run after a consult already settled it. */
 	function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
-		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0
-		return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
+		return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 	}
 
 	/** Live terminals by id; fresh per composition. */
@@ -7352,12 +7348,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (evalDepth > 0 || inFoldCallback) {
 			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame')
 		}
-		const effect = new SignalEffect(
-			nextSignalEffectId++ as SignalEffectId,
-			name,
-			rootId,
-			nodeIndexToInternals,
-		)
+		const effect = new SignalEffect(nextSignalEffectId++, name, rootId, nodeIndexToInternals)
 		root(rootId)
 		idToSignalEffect.set(effect.id, effect)
 		signalEffectCount++
@@ -7372,7 +7363,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if ((effect.pendingSlots & bit) === 0) {
 				continue
 			}
-			const tenant = slots[slotId]!.tenant
+			const tenant = slots[slotId].tenant
 			const batch = tenant === undefined ? undefined : idToBatch.get(tenant)
 			if (
 				batch === undefined ||
@@ -7497,13 +7488,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 		for (let i = 0; i < effects.length; i++) {
-			const effect = effects[i]!
+			const effect = effects[i]
 			const a = effect.arena
 			const sh = effect.shadow
 			if (
 				a !== undefined &&
 				sh !== 0 &&
-				(a.memory[sh + ArenaField.FLAGS]! & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) ===
+				(a.memory[sh + ArenaField.FLAGS] & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) ===
 					ArenaFlag.PENDING
 			) {
 				a.memory[sh + ArenaField.FLAGS] |= ArenaFlag.DIRTY
@@ -7536,7 +7527,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			effects.sort((a, b) => a.id - b.id)
 		}
 		for (let i = 0; i < effects.length; i++) {
-			const effect = effects[i]!
+			const effect = effects[i]
 			if (!effect.live) {
 				continue
 			}
@@ -7546,7 +7537,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				if (
 					a !== undefined &&
 					sh !== 0 &&
-					(a.memory[sh + ArenaField.FLAGS]! & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) ===
+					(a.memory[sh + ArenaField.FLAGS] & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) ===
 						ArenaFlag.PENDING
 				) {
 					a.memory[sh + ArenaField.FLAGS] |= ArenaFlag.DIRTY
@@ -8018,7 +8009,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (report < 0) {
 				continue
 			}
-			const effect = idToSignalEffect.get(report as SignalEffectId)
+			const effect = idToSignalEffect.get(report)
 			if (effect !== undefined && effect.live) {
 				const matching = effect.pendingSlots & render.maskBits
 				if (matching !== 0) {
@@ -8206,7 +8197,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * fast-out's clock conjunct, quantified over a snapshot's slot bits). */
 	function areSlotClocksQuiet(bits: BatchSlotSet, pin: Seq): boolean {
 		for (let s = 0; bits !== 0; s++, bits >>>= 1) {
-			if ((bits & 1) === 1 && slots[s]!.writeClock > pin) {
+			if ((bits & 1) === 1 && slots[s].writeClock > pin) {
 				return false
 			}
 		}
@@ -8245,7 +8236,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (!isBatchTouchingClosure(b, closure)) {
 				continue
 			}
-			const slot = slots[b.slot]!
+			const slot = slots[b.slot]
 			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
 			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) {
 				continue
@@ -8335,16 +8326,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 		seen.add(kernelId)
 		const memory = E.buffer()
-		let l = memory[kernelId + NodeField.DEPS]!
+		let l = memory[kernelId + NodeField.DEPS]
 		while (l !== 0) {
-			const depKernelId = memory[l + LinkField.DEP]!
+			const depKernelId = memory[l + LinkField.DEP]
 			// Dep ids come off live kernel links: a defined dense row ⇔ engine
 			// content. Unregistered intermediates traverse but contribute nothing.
-			const depIx = memory[depKernelId + NodeField.NODE_INDEX]!
+			const depIx = memory[depKernelId + NodeField.NODE_INDEX]
 			if (depIx < nodeIndexToInternals.length && nodeIndexToInternals[depIx] !== undefined) {
 				closure.add(depKernelId)
 			}
-			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) {
+			if ((memory[depKernelId + NodeField.FLAGS] & NodeFlag.K_COMPUTED) !== 0) {
 				collectKernelClosure(depKernelId, closure, seen)
 			}
 			l = memory[l + LinkField.NEXT_DEP]!
@@ -8354,7 +8345,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function isBatchTouchingClosure(t: Batch, closure: Set<NodeId>): boolean {
 		const atoms = t.atomsTouched
 		for (let i = 0; i < atoms.length; i++) {
-			if (closure.has(atoms[i]!.id)) {
+			if (closure.has(atoms[i].id)) {
 				return true
 			}
 		}
@@ -8747,7 +8738,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		const slot = batch.slot !== undefined ? slots[batch.slot]! : internSlot(batch)
+		const slot = batch.slot !== undefined ? slots[batch.slot] : internSlot(batch)
 		const writeSeq = nextSeq()
 		log.push(kind, slot.id, writeSeq, batch.id, payload)
 		batch.lastWriteSeq = writeSeq
@@ -9539,11 +9530,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				const taken = deferredCleanups
 				deferredCleanups = []
 				for (let i = 0; i < taken.length; i++) {
-					const entry = taken[i]!
+					const entry = taken[i]
 					const cleanups = entry.cleanups
 					for (let k = 0; k < cleanups.length; k++) {
 						try {
-							cleanups[k]!()
+							cleanups[k]()
 						} catch (err) {
 							reportReclaimError(err)
 						}
@@ -9825,9 +9816,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				// The callback parks in this atom's own `fns` slot (unused for
 				// atoms; record free clears it). The engine's active lifecycle
 				// record is id-keyed and never holds a handle reference.
-				fns[id >> ArenaShape.ID_TO_FN_SHIFT] = effect as (
-					ctx: AtomCtx<unknown>,
-				) => void | (() => void)
+				fns[id >> ArenaShape.ID_TO_FN_SHIFT] = effect
 			}
 		}
 
@@ -9838,7 +9827,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		 * there would serve later reads with no invalidation. Folds throw on dispatch. */
 		get state(): T {
 			if (routingActive && activeSub === 0 && enterDepth === 0) {
-				const v = routedAtomRead(this as Atom<unknown>)
+				const v = routedAtomRead(this)
 				if (v !== NOT_ROUTED) {
 					return v as T
 				}
@@ -9858,7 +9847,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				writeAtom(this._id, this._isEqual, value)
 				return
 			}
-			writeAtomConcurrent(this as Atom<unknown>, 0, value)
+			writeAtomConcurrent(this, 0, value)
 		}
 
 		/** Functional update. `fn` must be pure — it runs under the fold-purity
@@ -9878,7 +9867,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				writeAtom(id, this._isEqual, next)
 				return
 			}
-			writeAtomConcurrent(this as Atom<unknown>, 1, fn)
+			writeAtomConcurrent(this, 1, fn)
 		}
 	}
 
@@ -9939,7 +9928,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				fns[id >> ArenaShape.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 					const prev = values[iv]
 					const next = (fn as (ctx: unknown) => unknown)(ctxArg)
-					if (prev === undefined || (E.buffer()[id + NodeField.FLAGS]! & NodeFlag.HAS_BOX) !== 0) {
+					if (prev === undefined || (E.buffer()[id + NodeField.FLAGS] & NodeFlag.HAS_BOX) !== 0) {
 						return next
 					}
 					return isEqual(prev, next) ? prev : next
@@ -10066,7 +10055,7 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			if (!Object.prototype.hasOwnProperty.call(atoms, key)) {
 				continue
 			}
-			const value = atoms[key]!.state
+			const value = atoms[key].state
 			out[key] = replacer === undefined ? value : replacer(key, value)
 		}
 		return JSON.stringify(out)

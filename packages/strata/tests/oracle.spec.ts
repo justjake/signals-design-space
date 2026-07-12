@@ -44,7 +44,7 @@ function apply(operation: ModelOperation, value: number): number {
 function fold(atom: ModelAtom, include: (operation: ModelOperation) => boolean): number {
 	let value = atom.base
 	for (let i = 0; i < atom.operations.length; i++) {
-		const operation = atom.operations[i]!
+		const operation = atom.operations[i]
 		if (include(operation)) {
 			value = apply(operation, value)
 		}
@@ -128,9 +128,9 @@ function run(schedule: Op[]): string | undefined {
 		actual.push(runtime.atom(i - 2))
 		model.push({ base: i - 2, operations: [] })
 	}
-	const sum = runtime.computed(() => actual[0]!.state * 3 + actual[1]!.state)
+	const sum = runtime.computed(() => actual[0].state * 3 + actual[1].state)
 	const dynamic = runtime.computed(() =>
-		(actual[2]!.state & 1) === 0 ? actual[3]!.state : actual[4]!.state,
+		(actual[2].state & 1) === 0 ? actual[3].state : actual[4].state,
 	)
 	const total = runtime.computed(() => sum.state + dynamic.state)
 	const slots: Array<ModelBranch | undefined> = []
@@ -150,7 +150,7 @@ function run(schedule: Op[]): string | undefined {
 	runtime.attachHost(host)
 
 	for (let step = 0; step < schedule.length; step++) {
-		const operation = schedule[step]!
+		const operation = schedule[step]
 		let branch = slots[operation.slot]
 		if (operation.kind === 'set' || operation.kind === 'update') {
 			if (branch === undefined) {
@@ -165,14 +165,14 @@ function run(schedule: Op[]): string | undefined {
 			}
 			activeSlot = operation.slot
 			activeDeferred = branch.deferred
-			const atom = model[operation.atom]!
+			const atom = model[operation.atom]
 			const previous = writer(atom, branch)
 			const next =
 				operation.kind === 'set' ? operation.value : updateFns[operation.update](previous)
 			if (operation.kind === 'set') {
-				actual[operation.atom]!.set(operation.value)
+				actual[operation.atom].set(operation.value)
 			} else {
-				actual[operation.atom]!.update(updateFns[operation.update])
+				actual[operation.atom].update(updateFns[operation.update])
 			}
 			if (branch.engine === undefined) {
 				for (const candidate of runtime.activeBranches()) {
@@ -210,28 +210,27 @@ function run(schedule: Op[]): string | undefined {
 			}
 			if (!anyActive) {
 				for (let i = 0; i < model.length; i++) {
-					model[i]!.base = canonical(model[i]!)
-					model[i]!.operations.length = 0
+					model[i].base = canonical(model[i])
+					model[i].operations.length = 0
 				}
 				cutoffs.clear()
 			}
 		}
 
 		for (let i = 0; i < actual.length; i++) {
-			const got = actual[i]!.state
-			const want = canonical(model[i]!)
+			const got = actual[i].state
+			const want = canonical(model[i])
 			if (!Object.is(got, want)) {
 				return `step ${step} atom ${i} canonical: ${got} != ${want}`
 			}
-			const gotLatest = runtime.latest(actual[i]!)
-			const wantLatest = newest(model[i]!)
+			const gotLatest = runtime.latest(actual[i])
+			const wantLatest = newest(model[i])
 			if (!Object.is(gotLatest, wantLatest)) {
 				return `step ${step} atom ${i} latest: ${gotLatest} != ${wantLatest}`
 			}
 		}
-		const wantSum = canonical(model[0]!) * 3 + canonical(model[1]!)
-		const wantDynamic =
-			(canonical(model[2]!) & 1) === 0 ? canonical(model[3]!) : canonical(model[4]!)
+		const wantSum = canonical(model[0]) * 3 + canonical(model[1])
+		const wantDynamic = (canonical(model[2]) & 1) === 0 ? canonical(model[3]) : canonical(model[4])
 		if (sum.state !== wantSum) {
 			return `step ${step} sum: ${sum.state} != ${wantSum}`
 		}
@@ -241,8 +240,8 @@ function run(schedule: Op[]): string | undefined {
 		if (total.state !== wantSum + wantDynamic) {
 			return `step ${step} total: ${total.state} != ${wantSum + wantDynamic}`
 		}
-		const latestSum = newest(model[0]!) * 3 + newest(model[1]!)
-		const latestDynamic = (newest(model[2]!) & 1) === 0 ? newest(model[3]!) : newest(model[4]!)
+		const latestSum = newest(model[0]) * 3 + newest(model[1])
+		const latestDynamic = (newest(model[2]) & 1) === 0 ? newest(model[3]) : newest(model[4])
 		const gotLatestTotal = runtime.latest(total)
 		if (!Object.is(gotLatestTotal, latestSum + latestDynamic)) {
 			return `step ${step} computed latest: ${gotLatestTotal} != ${latestSum + latestDynamic}`
@@ -260,15 +259,15 @@ function run(schedule: Op[]): string | undefined {
 		try {
 			const expected: number[] = []
 			for (let i = 0; i < model.length; i++) {
-				expected.push(worldValue(model[i]!, operation.mask, sequence, cutoffs))
-				const got = runtime.withWorld(world, leaves, () => actual[i]!.state)
+				expected.push(worldValue(model[i], operation.mask, sequence, cutoffs))
+				const got = runtime.withWorld(world, leaves, () => actual[i].state)
 				if (!Object.is(got, expected[i])) {
 					return `step ${step} atom ${i} world(${operation.mask}): ${got} != ${expected[i]}`
 				}
 			}
 			const got = runtime.withWorld(world, leaves, () => total.state)
-			const expectedDynamic = (expected[2]! & 1) === 0 ? expected[3]! : expected[4]!
-			const want = expected[0]! * 3 + expected[1]! + expectedDynamic
+			const expectedDynamic = (expected[2] & 1) === 0 ? expected[3] : expected[4]
+			const want = expected[0] * 3 + expected[1] + expectedDynamic
 			if (!Object.is(got, want)) {
 				return `step ${step} computed world: ${got} != ${want}`
 			}
@@ -355,7 +354,7 @@ test('functional transition updates rebase over urgent updates', () => {
 	value.update((current) => current * 2)
 	const urgent =
 		runtime.activeBranches().next().value === transition
-			? [...runtime.activeBranches()][1]!
+			? [...runtime.activeBranches()][1]
 			: runtime.activeBranches().next().value!
 	expect(value.state).toBe(2)
 	runtime.finishBranch(urgent, true)

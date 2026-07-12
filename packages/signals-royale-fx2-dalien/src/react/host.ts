@@ -71,7 +71,7 @@ function sharedInternals(): SharedInternals {
 	const secret = (React as unknown as Record<string, unknown>)[
 		'__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE'
 	]
-	return (secret ?? {}) as SharedInternals
+	return secret ?? {}
 }
 
 /** Hook dispatchers observed during renders. React parks a context-only
@@ -437,11 +437,7 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
 	}
 	for (const id of ids) {
 		const hosted = hostedDrafts.get(id)
-		if (
-			hosted !== undefined &&
-			hosted.recipients.delete(p) &&
-			hosted.recipients.size === 0
-		) {
+		if (hosted !== undefined && hosted.recipients.delete(p) && hosted.recipients.size === 0) {
 			hostedDrafts.delete(id)
 			// Fold loudness is per subscriber now: the fold's writes notify every
 			// subscriber over the touched cells, and each one's render-notify

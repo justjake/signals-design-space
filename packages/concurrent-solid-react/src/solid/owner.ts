@@ -130,7 +130,7 @@ function runDisposal(node: Owner, zombie?: boolean): void {
 			callable.call(callable)
 		}
 	} else {
-		;(disposal as Disposable).call(disposal)
+		disposal.call(disposal)
 	}
 	zombie ? (node._pendingDisposal = null) : (node._disposal = null)
 }

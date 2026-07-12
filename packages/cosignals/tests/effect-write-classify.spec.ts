@@ -49,8 +49,8 @@ describe('R-3: effect writes during the fused apply classify normally', () => {
 		const ambient = engine.ambientBatch
 		expect(ambient).toBeDefined()
 		expect(out.log.materialize()).toHaveLength(1)
-		expect(out.log.materialize()[0]!.op).toEqual({ kind: 'set', value: 10 })
-		expect(out.log.materialize()[0]!.batch).toBe(ambient)
+		expect(out.log.materialize()[0].op).toEqual({ kind: 'set', value: 10 })
+		expect(out.log.materialize()[0].batch).toBe(ambient)
 		expect(engine.newestValue(out)).toBe(10) // and applied eagerly, like any recorded write
 		// Not committed yet — the recorded semantics are real, not a bypass:
 		expect(engine.committedValue(out, 'A')).toBe(0)

@@ -159,7 +159,7 @@ describe('§12.3 ctx.use and suspense', () => {
 		let created = 0
 		const make = (): Promise<number> => {
 			++created
-			return Promise.resolve(5 + (dep.handle.peek() as number))
+			return Promise.resolve(5 + dep.handle.peek())
 		}
 		const c = new api.Computed({
 			fn: (ctx) => {
@@ -246,7 +246,7 @@ describe('§12.3 (adapted): pending as graph state', () => {
 		// through the ordinary class getter — no ctx, no use().
 		const doubled = new api.Computed({ fn: () => (source.state as number) * 2 })
 		// And a ctx-ful one above THAT (two forwarding hops).
-		const plusOne = new api.Computed({ fn: () => (doubled.state as number) + 1 })
+		const plusOne = new api.Computed({ fn: () => doubled.state + 1 })
 		expect(isSuspendedBox(doubled.boxed)).toBe(true) // forwarded, not thrown
 		expect(isSuspendedBox(plusOne.boxed)).toBe(true)
 		// The forwarded thenable is the SOURCE's store-held one (stable identity).
@@ -274,7 +274,7 @@ describe('§12.3 (adapted): pending as graph state', () => {
 			fn: (ctx) => {
 				const a = ctx.use(make((f) => (releaseA = f)))
 				const b = ctx.use(make((f) => (releaseB = f))) // must still run while a is pending
-				return (a as number) + (b as number)
+				return a + b
 			},
 		})
 		expect(isSuspendedBox(c.boxed)).toBe(true)
@@ -297,9 +297,9 @@ describe('Solid-2.0 async API set (isPending / refresh / latest)', () => {
 		let fetches = 0
 		const remote = new api.Computed<number>({
 			fn: (ctx) => {
-				const d = dep.state as number
+				const d = dep.state
 				++fetches
-				return (ctx.use(new Promise<number>((r) => resolvers.push(r))) as number) + d
+				return ctx.use(new Promise<number>((r) => resolvers.push(r))) + d
 			},
 		})
 		const flips: boolean[] = []
@@ -334,12 +334,12 @@ describe('Solid-2.0 async API set (isPending / refresh / latest)', () => {
 		api.engine.attachFork(fork)
 		fork.registerRoot('root')
 		const x = new api.Atom({ state: 1 })
-		const doubled = new api.Computed({ fn: () => (x.state as number) * 2 })
+		const doubled = new api.Computed({ fn: () => x.state * 2 })
 		const resolvers: Array<(v: number) => void> = []
 		const asyncTen = new api.Computed<number>({
 			fn: (ctx) => {
-				const d = x.state as number
-				return (ctx.use(new Promise<number>((r) => resolvers.push(r))) as number) * d
+				const d = x.state
+				return ctx.use(new Promise<number>((r) => resolvers.push(r))) * d
 			},
 		})
 		asyncTen.boxed // start first load
@@ -557,7 +557,7 @@ describe('lazy state initializer (owner feature; SPEC-RESOLUTIONS entry 13)', ()
 		const lazy = new api.Atom<number>({
 			state: () => {
 				++calls
-				return (dep.state as number) * 10
+				return dep.state * 10
 			},
 		})
 		let evals = 0
@@ -566,7 +566,7 @@ describe('lazy state initializer (owner feature; SPEC-RESOLUTIONS entry 13)', ()
 		const c = new api.Computed<number>({
 			fn: () => {
 				++evals
-				return (lazy.state as number) + 1
+				return lazy.state + 1
 			},
 		})
 		expect(c.state).toBe(11) // init: 1*10, computed: +1
@@ -625,7 +625,7 @@ describe('lazy state initializer (owner feature; SPEC-RESOLUTIONS entry 13)', ()
 		a.set(5) // materializes: init 5, then SET 5 — equality-dropped
 		expect(calls).toBe(1)
 		api.effect(() => {
-			seen.push(a.state as number)
+			seen.push(a.state)
 		})
 		expect(seen).toEqual([5])
 		a.set(5) // still equal to the initializer-derived value: dropped
@@ -653,7 +653,7 @@ describe('lazy state initializer (owner feature; SPEC-RESOLUTIONS entry 13)', ()
 		const lazy = new api.Atom<number>({ state: () => 33 })
 		let inScope = -1
 		t.run(() => {
-			inScope = lazy.state as number // FIRST materialization, draft context
+			inScope = lazy.state // FIRST materialization, draft context
 		})
 		expect(inScope).toBe(33)
 		// The initializer result is BASE state: identical in every world.

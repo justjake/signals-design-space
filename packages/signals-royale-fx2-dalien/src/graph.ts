@@ -365,7 +365,7 @@ export function initializeCell<T>(
 	cell.depsTail = 0
 	cell.throwable = null
 	cell.label = opts?.label
-	cell.value = lazyInit ? UNINITIALIZED : (initial as T)
+	cell.value = lazyInit ? UNINITIALIZED : initial
 	cell.initializer = lazyInit ? (initial as () => T) : undefined
 	cell.equals = opts?.equals ?? Object.is
 	cell.lifetime = opts?.onObserved
@@ -490,7 +490,9 @@ export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
 	finishComputeImpl = impl
 }
 
-export function setActiveEvaluation(node: DerivedNode<unknown> | null): DerivedNode<unknown> | null {
+export function setActiveEvaluation(
+	node: DerivedNode<unknown> | null,
+): DerivedNode<unknown> | null {
 	const prev = activeEvaluation
 	activeEvaluation = node
 	return prev
@@ -505,7 +507,6 @@ export { UNINITIALIZED }
 // ---------------------------------------------------------------------------
 // Watchers: effects, scopes, and store subscriptions
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // The engine core. One closure instantiation per process: the arena views
@@ -833,8 +834,7 @@ function createGraphCore(
 					addObserver(pins[depId >> RECORD_SHIFT]!)
 					if (
 						validate &&
-						(changedAtOf(depId) > validAt ||
-							(mem[depId + NodeSlot.Flags] & Flag.StaleMask) !== 0)
+						(changedAtOf(depId) > validAt || (mem[depId + NodeSlot.Flags] & Flag.StaleMask) !== 0)
 					) {
 						invalid = true
 					}
@@ -1103,7 +1103,7 @@ function createGraphCore(
 			return
 		}
 		if ((flags & Flag.WatchRender) !== 0) {
-			renderNotifyQueue[renderNotifyCount++] = pins[id >> RECORD_SHIFT] as WatcherNode
+			renderNotifyQueue[renderNotifyCount++] = pins[id >> RECORD_SHIFT]
 		} else if ((flags & Flag.WatchRunEffect) !== 0) {
 			// Ids, not handles: no lookup and no write barrier here, and no slot
 			// nulling at drain. The generation stamp makes a stale entry (record
@@ -1326,8 +1326,7 @@ function createGraphCore(
 					} else if ((flags & Flag.KindDerived) !== 0) {
 						const subSubs = subsOf(sub)
 						if (subSubs !== undefined) {
-							const subChanged =
-								valueChanged?.(pinnedInternals[sub >> RECORD_SHIFT]!) ?? true
+							const subChanged = valueChanged?.(pinnedInternals[sub >> RECORD_SHIFT]!) ?? true
 							cur = subSubs
 							const sibling = M[cur + LinkSlot.LinkNextSub] || undefined
 							if (sibling !== undefined) {
@@ -1443,7 +1442,8 @@ function createGraphCore(
 						// disposed) has nothing to restore — and must not write the
 						// shared detached-state record.
 						if (cell.id >= FIRST_REAL_RECORD && cell.equals(cell.value, base.value)) {
-							graphClocks[(cell.id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = base.changedAtGraphChange
+							graphClocks[(cell.id >> ClockSlot.Shift) + ClockSlot.ChangedAt] =
+								base.changedAtGraphChange
 						}
 					}
 				}
@@ -1567,7 +1567,9 @@ function createGraphCore(
 		}
 		cell.initializer = undefined
 		const prevConsumer = activeConsumer
-		const prevForbidden = setWritesForbidden('a lazy state initializer must not write to other state')
+		const prevForbidden = setWritesForbidden(
+			'a lazy state initializer must not write to other state',
+		)
 		activeConsumer = null
 		try {
 			cell.value = init()
@@ -1641,13 +1643,13 @@ function createGraphCore(
 	 * instead; see worlds.ts.) A use() that escapes its evaluation — captured
 	 * and called later, or called inside untracked() — finds no evaluating
 	 * computed and throws rather than park the wrong node. */
-	const evalUse: UseFn = (<U>(t: PromiseLike<U>): U => {
+	const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 		const consumer = activeConsumer
 		if (consumer === null || (flagsOf(consumer) & Flag.KindDerived) === 0) {
 			throw new Error('use() called outside a computed evaluation')
 		}
 		return useImpl(t, consumer as DerivedNode<unknown>) as U
-	}) as UseFn
+	}
 
 	/** Out of line so the cycle path's Error construction and template string
 	 * stay out of recompute's bytecode (hot-cluster inlining budget). */
@@ -1701,7 +1703,7 @@ function createGraphCore(
 		let changed: boolean
 		if (!parked && !hasError && (mem[id + NodeSlot.Flags] & Flag.AsyncMask) === 0) {
 			const prev = node.value
-			if (prev === UNINITIALIZED || !node.equals(prev as never, value as never)) {
+			if (prev === UNINITIALIZED || !node.equals(prev, value)) {
 				node.value = value
 				changed = true
 			} else {
@@ -1756,17 +1758,11 @@ function createGraphCore(
 		while (true) {
 			dep = mem[link + LinkSlot.LinkDep]
 			const dflags = mem[dep + NodeSlot.Flags]
-			if (
-				(dflags & (Flag.KindDerived | Flag.StaleMask)) ===
-				(Flag.KindDerived | Flag.StaleDirty)
-			) {
+			if ((dflags & (Flag.KindDerived | Flag.StaleMask)) === (Flag.KindDerived | Flag.StaleDirty)) {
 				recompute(pins[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
 				break
 			}
-			if (
-				(dflags & (Flag.KindDerived | Flag.StaleMask)) !==
-				(Flag.KindDerived | Flag.StaleCheck)
-			) {
+			if ((dflags & (Flag.KindDerived | Flag.StaleMask)) !== (Flag.KindDerived | Flag.StaleCheck)) {
 				break // a cell or a Clean derived: fresh as-is, compare-ready
 			}
 			const depDeps = mem[dep + NodeSlot.Deps]
@@ -1782,8 +1778,7 @@ function createGraphCore(
 		}
 		while (true) {
 			if (
-				clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
-				validAtColumn[node >> RECORD_SHIFT]
+				clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAtColumn[node >> RECORD_SHIFT]
 			) {
 				recompute(pins[node >> RECORD_SHIFT] as DerivedNode<unknown>)
 			} else {
@@ -1816,11 +1811,7 @@ function createGraphCore(
 			if ((flags & Flag.StaleMask) === 0) {
 				return
 			}
-			if (
-				(flags & Flag.StaleDirty) === 0 &&
-				node.value !== UNINITIALIZED &&
-				chainResolve(id)
-			) {
+			if ((flags & Flag.StaleDirty) === 0 && node.value !== UNINITIALIZED && chainResolve(id)) {
 				return
 			}
 		} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
@@ -2288,7 +2279,6 @@ function createGraphCore(
 		droppedDisposers.register(dispose, sub, dispose)
 		return dispose
 	}
-
 
 	return {
 		ensureNodeRecord,

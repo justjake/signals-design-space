@@ -625,12 +625,12 @@ export function signal<T>(initialValue?: T): SignalHandle<T | undefined> {
 		} else {
 			return read(id) as T | undefined
 		}
-	} as SignalHandle<T | undefined>
+	}
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {
 	const id = allocNode(K_COMPUTED)
-	fns[id >> 3] = getter as (previousValue?: unknown) => unknown
+	fns[id >> 3] = getter
 	return () => computedRead(id) as T
 }
 

@@ -261,7 +261,7 @@ export function maybeWrapThenable<T>(promise: Promise<T>): PromiseLike<T> {
 			void promise.then(onFulfilled, onRejected)
 			return undefined as unknown as PromiseLike<never>
 		},
-	} as PromiseLike<T>
+	}
 }
 
 /** App.tsx reports each navigation resource's lifecycle here (fetch counters). */

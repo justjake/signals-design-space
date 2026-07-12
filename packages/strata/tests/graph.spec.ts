@@ -15,14 +15,14 @@ test('a deep shared DAG materializes without rechecking clean subgraphs', () => 
 			row.push(
 				runtime.computed(() => {
 					pulls++
-					return previous[i]!.state + previous[(i + 1) % 5]!.state
+					return previous[i].state + previous[(i + 1) % 5].state
 				}),
 			)
 		}
 	}
 	const dispose = runtime.effect(() => {
 		for (let i = 0; i < row.length; i++) {
-			row[i]!.state
+			row[i].state
 		}
 	})
 	expect(pulls).toBe(145)

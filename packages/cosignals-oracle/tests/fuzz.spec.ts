@@ -38,7 +38,7 @@ describe('randomized schedules against the naive model', () => {
 
 	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop) — FROZEN literals + fresh regenerations`, () => {
 		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) {
-			const ops = FROZEN[`s${seed}x400`]!
+			const ops = FROZEN[`s${seed}x400`]
 			const r = runSchedule(ops, true)
 			if (r.failure !== undefined) {
 				throw new Error(
@@ -67,7 +67,7 @@ describe('randomized schedules against the naive model', () => {
 	// catch) lives in the CONCURRENT fuzz spec.
 	it('converged-terminal pins hold invariants and self-diff clean — FROZEN literals', () => {
 		for (const key of ['terminal-bug1-quiet', 'terminal-bug2-quiet']) {
-			const ops = FROZEN[key]!
+			const ops = FROZEN[key]
 			const r = runSchedule(ops, true)
 			expect(r.failure, `${key}: ${r.failure?.error.message ?? ''}`).toBeUndefined()
 			expect(

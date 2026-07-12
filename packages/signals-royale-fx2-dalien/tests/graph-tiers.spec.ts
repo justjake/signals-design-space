@@ -256,7 +256,7 @@ describe('two-tier graph: promote/demote structure', () => {
 		expect(d.observerCount).toBe(1)
 		expect(isWatched(d) && isWatched(x)).toBe(true)
 		expect(isWatched(y)).toBe(false)
-		expectTierInvariant([x, y, d as ReactiveNode])
+		expectTierInvariant([x, y, d])
 
 		writeCell(y, 9) // the dropped edge must not notify
 		expect(notified).toBe(0)
@@ -267,7 +267,7 @@ describe('two-tier graph: promote/demote structure', () => {
 		expect(readDerived(d)).toBe(15)
 		expect(y.observerCount).toBe(1)
 		expect(isWatched(y)).toBe(true)
-		expectTierInvariant([x, y, d as ReactiveNode])
+		expectTierInvariant([x, y, d])
 		stop!()
 		expect(y.observerCount).toBe(0)
 	})

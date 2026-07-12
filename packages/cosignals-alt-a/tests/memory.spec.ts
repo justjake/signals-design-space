@@ -10,14 +10,14 @@ describe('§14.2 reclamation', () => {
 	it('deterministic reclaim frees unreferenced atom/computed records', () => {
 		const e = createCosignalEngine({ finalization: true })
 		const a = e.atom(1)
-		const c = e.computed(() => (a.state as number) + 1)
+		const c = e.computed(() => a.state + 1)
 		expect(c.state).toBe(2)
 		e.reclaim(c) // computed with no subscribers: freed (deps dropped)
 		e.reclaim(a) // atom with no subscribers: freed
 		e.debug.verify()
 		// Records are recycled: new nodes may reuse them without corruption.
 		const b = e.atom(5)
-		const d = e.computed(() => (b.state as number) * 2)
+		const d = e.computed(() => b.state * 2)
 		expect(d.state).toBe(10)
 		e.debug.verify()
 	})
@@ -28,7 +28,7 @@ describe('§14.2 reclamation', () => {
 		e.attachFork(fork)
 		fork.registerRoot('root')
 		const a = e.atom(1)
-		const c = e.computed(() => (a.state as number) + 1)
+		const c = e.computed(() => a.state + 1)
 		let runs = 0
 		const dispose = e.effect(() => {
 			c.state

@@ -55,7 +55,7 @@ function all(tr: Tracer, kind: TraceKind): TraceRecord[] {
 function last(tr: Tracer, kind: TraceKind): TraceRecord {
 	const found = all(tr, kind)
 	expect(found.length, `expected at least one ${kind} event`).toBeGreaterThan(0)
-	return found[found.length - 1]!
+	return found[found.length - 1]
 }
 
 /** The decoded TraceEvent view of the same records (the reference model's event shape). */
@@ -84,14 +84,14 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		w = b.mountWatcher(p1.id, c, 'W')
 		b.renderEnd(p1.id, 'commit')
 
-		expect(all(tr, 'render-start')[0]!.data).toEqual({
+		expect(all(tr, 'render-start')[0].data).toEqual({
 			renderPass: p1.id,
 			root: 'A',
 			pin: 0,
 			maskSize: 0,
 		})
-		expect(all(tr, 'render-start')[0]!.cause).toBeUndefined()
-		const end = all(tr, 'render-end')[0]!
+		expect(all(tr, 'render-start')[0].cause).toBeUndefined()
+		const end = all(tr, 'render-end')[0]
 		expect(end.data).toEqual({ renderPass: p1.id, root: 'A', disposition: 'commit' })
 		// world evaluations recorded: the mount render evaluated c in p1's world
 		const evals = all(tr, 'eval')
@@ -102,7 +102,7 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		// mount-fix evaluation entirely — no mount-fix eval record exists
 		expect(evals.some((e) => e.data['world'] === 'mount-fix:A')).toBe(false)
 		// clean mount on a quiet root: fast-out, zero correctives; provoked by the commit
-		const fx = all(tr, 'mount-fixup')[0]!
+		const fx = all(tr, 'mount-fixup')[0]
 		expect(fx.data).toEqual({ watcher: 'W', root: 'A', disposition: 'fast-out', correctives: 0 })
 		expect(tr.causeChain(fx.id).map((e) => e.kind)).toContain('render-end')
 	})
@@ -111,13 +111,13 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		const k = b.openBatch()
 		b.write(k.id, flag, 0, 1)
 
-		expect(all(tr, 'batch-open')[0]!.data).toEqual({ batch: k.id, action: false, ambient: false })
-		expect(all(tr, 'slot-claim')[0]!.data).toEqual({ slot: 0, batch: k.id })
-		const seq = tevents(tr, 'write')[0]!.seq // the slot claim created its own seq before the write's
-		const w1 = all(tr, 'write')[0]!
+		expect(all(tr, 'batch-open')[0].data).toEqual({ batch: k.id, action: false, ambient: false })
+		expect(all(tr, 'slot-claim')[0].data).toEqual({ slot: 0, batch: k.id })
+		const seq = tevents(tr, 'write')[0].seq // the slot claim created its own seq before the write's
+		const w1 = all(tr, 'write')[0]
 		expect(w1.data).toEqual({ node: 'flag', op: 'set', batch: k.id, slot: 0, seq })
 		expect(w1.cause).toBeUndefined() // operation root
-		const d1 = all(tr, 'delivery')[0]!
+		const d1 = all(tr, 'delivery')[0]
 		expect(d1.data).toEqual({ watcher: 'W', batch: k.id, slot: 0, seq, mode: 'fresh' })
 		expect(d1.cause).toBe(w1.id) // the delivery is provoked by its write
 
@@ -133,14 +133,14 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 	it('dedup suppression: second write into the armed (watcher, slot) suppresses with a reason', () => {
 		const k = 1 // batch id from the previous stage
 		b.write(k, flag, 0, 2)
-		const w2 = all(tr, 'write')[1]!
+		const w2 = all(tr, 'write')[1]
 		expect(w2.cause).toBeUndefined() // opEnd isolated the previous write's chain
-		const s = all(tr, 'suppressed')[0]!
+		const s = all(tr, 'suppressed')[0]
 		expect(s.data).toEqual({
 			watcher: 'W',
 			batch: k,
 			slot: 0,
-			seq: tevents(tr, 'suppressed')[0]!.seq,
+			seq: tevents(tr, 'suppressed')[0].seq,
 			reason: 'dedup-pending-fold',
 		})
 		expect(s.cause).toBe(w2.id)
@@ -151,19 +151,19 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		b.renderValue(c, p2) // the render reads c: p2's arena records flag→c, a→c (the routing structure the write below walks)
 		b.renderYield(p2.id)
 		b.renderResume(p2.id)
-		expect(all(tr, 'render-start')[1]!.data).toEqual({
+		expect(all(tr, 'render-start')[1].data).toEqual({
 			renderPass: p2.id,
 			root: 'A',
 			pin: p2.pin,
 			maskSize: 1,
 		})
-		expect(all(tr, 'render-yield')[0]!.data).toEqual({ renderPass: p2.id, root: 'A' })
-		expect(all(tr, 'render-yield')[0]!.cause).toBeUndefined()
-		expect(all(tr, 'render-resume')[0]!.data).toEqual({ renderPass: p2.id, root: 'A' })
+		expect(all(tr, 'render-yield')[0].data).toEqual({ renderPass: p2.id, root: 'A' })
+		expect(all(tr, 'render-yield')[0].cause).toBeUndefined()
+		expect(all(tr, 'render-resume')[0].data).toEqual({ renderPass: p2.id, root: 'A' })
 
 		b.write(1, a, 0, 5)
 		const d = last(tr, 'delivery')
-		const seq = tevents(tr, 'write')[2]!.seq
+		const seq = tevents(tr, 'write')[2].seq
 		expect(d.data).toEqual({ watcher: 'W', batch: 1, slot: 0, seq, mode: 'interleaved' })
 
 		b.renderWatcher(p2.id, w.id)
@@ -171,12 +171,12 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 	})
 
 	it('retirement at commit chains: render-end → batch-retire → slot-release (causeChain)', () => {
-		const end = all(tr, 'render-end')[1]!
+		const end = all(tr, 'render-end')[1]
 		expect(end.data['disposition']).toBe('commit')
-		const ret = all(tr, 'batch-retire')[0]!
-		expect(ret.data).toEqual({ batch: 1, retiredSeq: tevents(tr, 'retired')[0]!.retiredSeq })
+		const ret = all(tr, 'batch-retire')[0]
+		expect(ret.data).toEqual({ batch: 1, retiredSeq: tevents(tr, 'retired')[0].retiredSeq })
 		expect(ret.cause).toBe(end.id) // retirement folded inside the commit
-		const rel = all(tr, 'slot-release')[0]!
+		const rel = all(tr, 'slot-release')[0]
 		expect(rel.data).toEqual({ slot: 0, batch: 1 })
 		expect(tr.causeChain(rel.id).map((e) => e.kind)).toEqual([
 			'slot-release',
@@ -193,10 +193,10 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		b.renderWatcher(p3.id, w.id)
 		b.renderEnd(p3.id, 'commit') // lock-in without retirement
 
-		const rc = all(tr, 'root-commit')[0]!
+		const rc = all(tr, 'root-commit')[0]
 		expect(rc.data).toEqual({ root: 'A', batch: t2.id, commitGen: 1 })
-		expect(rc.cause).toBe(all(tr, 'render-end')[2]!.id)
-		const re = all(tr, 'react-effect-run')[0]!
+		expect(rc.cause).toBe(all(tr, 'render-end')[2].id)
+		const re = all(tr, 'react-effect-run')[0]
 		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7, values: [7] }) // values are trace-only reads (model-compared)
 		expect(re.cause).toBe(rc.id)
 		expect(tr.whyEffectRan('RE').map((e) => e.kind)).toEqual([
@@ -377,19 +377,19 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 	})
 
 	it('stable human format: fixed grammar #id +Δµs kind(subject) k=v … [<- #cause]', () => {
-		const w1 = all(tr, 'write')[0]!
+		const w1 = all(tr, 'write')[0]
 		expect(formatTraceRecord(w1)).toMatch(
 			/^#\d+ \+\d+µs write\(flag\) op=set batch=1 slot=0 seq=\d+$/,
 		)
-		const d1 = all(tr, 'delivery')[0]!
+		const d1 = all(tr, 'delivery')[0]
 		expect(formatTraceRecord(d1)).toMatch(
 			/^#\d+ \+\d+µs delivery\(W\) batch=1 slot=0 seq=\d+ mode=fresh <- #\d+$/,
 		)
-		const fx = all(tr, 'mount-fixup')[0]!
+		const fx = all(tr, 'mount-fixup')[0]
 		expect(formatTraceRecord(fx)).toMatch(
 			/^#\d+ \+\d+µs mount-fixup\(W\) root=A disposition=fast-out correctives=0 <- #\d+$/,
 		)
-		const rc = all(tr, 'root-commit')[0]!
+		const rc = all(tr, 'root-commit')[0]
 		expect(formatTraceRecord(rc)).toMatch(
 			/^#\d+ \+\d+µs root-commit\(A\) batch=2 commitGen=1 <- #\d+$/,
 		)
@@ -449,7 +449,7 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 			for (const e of decoded.slice(-50)) {
 				const chain = tr.causeChain(e.id)
 				expect(chain.length).toBeGreaterThan(0)
-				expect(chain[chain.length - 1]!.cause).toBeUndefined()
+				expect(chain[chain.length - 1].cause).toBeUndefined()
 			}
 			expect(formatTrace(decoded).split('\n')).toHaveLength(decoded.length)
 			tr.stop()
@@ -480,7 +480,7 @@ describe('R11 slot backstop (fresh engine: 31 live tenants, keep-the-dirt table)
 		const t32 = b.openBatch()
 		b.write(t32.id, a, 0, 99) // no free slot → backstop
 		const back = last(tr, 'slot-backstop-release')
-		expect(back.data).toEqual({ slot: 0, batch: batches[0]!.id }) // oldest retiredSeq evicted
+		expect(back.data).toEqual({ slot: 0, batch: batches[0].id }) // oldest retiredSeq evicted
 		expect(last(tr, 'slot-claim').data).toEqual({ slot: 0, batch: t32.id })
 		b.renderEnd(p.id, 'discard')
 		b.retire(t32.id)

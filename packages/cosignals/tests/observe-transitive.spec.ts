@@ -58,7 +58,7 @@ describe('transitive observation through derived nodes', () => {
 	it('two watchers sharing one derived node: created ≠ observed, ONE observe at first liveness, release after the LAST leaves', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const node = b.internalsForAtom(atom as Atom<unknown>)
+		const node = b.internalsForAtom(atom)
 		const oc = b.computed('oc', (read) => read(node))
 		const p1 = b.renderStart('A', [])
 		const w1 = b.mountWatcher(p1.id, oc, 'W1')
@@ -84,8 +84,8 @@ describe('transitive observation through derived nodes', () => {
 		const b = freshEngine()
 		const { atom: atomA, log: logA } = observedAtom(10)
 		const { atom: atomB, log: logB } = observedAtom(20)
-		const na = b.internalsForAtom(atomA as Atom<unknown>)
-		const nb = b.internalsForAtom(atomB as Atom<unknown>)
+		const na = b.internalsForAtom(atomA)
+		const nb = b.internalsForAtom(atomB)
 		const flag = b.atom('flag', 1)
 		const oc = b.computed('oc', (read) => ((read(flag) as number) ? read(na) : read(nb)))
 		const p = b.renderStart('A', [])
@@ -118,7 +118,7 @@ describe('transitive observation through derived nodes', () => {
 	it('depth-2 chain retains the leaf atom; removeWatcher releases the whole closure', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(3)
-		const na = b.internalsForAtom(atom as Atom<unknown>)
+		const na = b.internalsForAtom(atom)
 		const cB = b.computed('cB', (read) => (read(na) as number) * 2)
 		const cA = b.computed('cA', (read) => (read(cB) as number) + 1)
 		const p = b.renderStart('A', [])
@@ -135,7 +135,7 @@ describe('transitive observation through derived nodes', () => {
 	it('quiesce: the K1 bulk-reset produces NO unobserve/reobserve flap while a watcher stays live', async () => {
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
-		const na = b.internalsForAtom(atom as Atom<unknown>)
+		const na = b.internalsForAtom(atom)
 		const oc = b.computed('oc', (read) => read(na))
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(p.id, oc, 'W')
@@ -154,7 +154,7 @@ describe('transitive observation through derived nodes', () => {
 
 	it('CONTRAST (kernel chain, pre-existing behavior): a K0 computed chain already retains transitively', async () => {
 		const { atom, log } = observedAtom(1)
-		const kc = new Computed(() => (atom.state as number) + 1)
+		const kc = new Computed(() => atom.state + 1)
 		const kc2 = new Computed(() => kc.state + 1)
 		const dispose = effect(() => {
 			void kc2.state
@@ -170,8 +170,8 @@ describe('transitive observation through derived nodes', () => {
 		const b = freshEngine()
 		const { atom: atomA, log: logA } = observedAtom(0)
 		const { atom: atomB, log: logB } = observedAtom(0)
-		const na = b.internalsForAtom(atomA as Atom<unknown>)
-		const nb = b.internalsForAtom(atomB as Atom<unknown>)
+		const na = b.internalsForAtom(atomA)
+		const nb = b.internalsForAtom(atomB)
 		const oc = b.computed('oc', (read) => {
 			const bv = read(nb) as number // read FIRST — stays retained through the throw
 			if (bv > 0) {

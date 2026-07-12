@@ -118,7 +118,7 @@ export function emitDiagnostic(event: Omit<DiagnosticEvent, 'sequence'>): Diagno
 }
 
 export function registerGraph(value: any, owner: Owner | null): void {
-	;(value as any)._owner = owner
+	value._owner = owner
 	if (owner) {
 		if (!(owner as any)._signals) {
 			;(owner as any)._signals = []

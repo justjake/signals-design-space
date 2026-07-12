@@ -102,7 +102,7 @@ describe('§16.2 engine choke-point emits', () => {
 		engine.setTracer(tr)
 
 		const a = engine.atom(0)
-		const c = engine.computed(() => (a.state as number) * 2)
+		const c = engine.computed(() => a.state * 2)
 		expect(c.state).toBe(0)
 		engine.watch(c)
 		const t = fork.openBatch('deferred')
@@ -136,7 +136,7 @@ describe('§16.2 engine choke-point emits', () => {
 	it('G-18 (structural form): no tracer → no records, engine behavior identical', () => {
 		const engine = createCosignalEngine()
 		const a = engine.atom(1)
-		const c = engine.computed(() => (a.state as number) + 1)
+		const c = engine.computed(() => a.state + 1)
 		a.set(2)
 		expect(c.state).toBe(3) // no tracer installed anywhere: nothing throws
 	})

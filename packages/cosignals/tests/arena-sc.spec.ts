@@ -81,9 +81,9 @@ describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)
 		const b = freshEngine()
 		const { atom: atomA, log: logA } = observedAtom(10)
 		const { atom: atomB, log: logB } = observedAtom(20)
-		const nA = b.internalsForAtom(atomA as Atom<unknown>)
+		const nA = b.internalsForAtom(atomA)
 		nA.name = 'A'
-		const nB = b.internalsForAtom(atomB as Atom<unknown>)
+		const nB = b.internalsForAtom(atomB)
 		nB.name = 'B'
 		const flag = b.atom('flag', 0)
 		// World-divergent deps: flag=0 → {flag, A}; flag=1 → {flag, B}.
@@ -356,7 +356,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		const poker = new Atom(0)
 		const pokerSeen: number[] = []
 		const disposePoker = effect(() => {
-			pokerSeen.push(poker.state as number)
+			pokerSeen.push(poker.state)
 		})
 		const pokerWriter = new Computed<number>(() => {
 			poker.set((flag.state ? a.state : bb.state) as number) // a write during the world evaluation

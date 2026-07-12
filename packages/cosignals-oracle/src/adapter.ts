@@ -66,7 +66,7 @@ export function snapshotModel(m: CosignalModel): ObservableSnapshot {
 	for (const root of m.roots.keys()) {
 		committed[root] = {}
 		for (const n of m.idToNode.values()) {
-			committed[root]![n.name] = m.committedValue(n, root)
+			committed[root][n.name] = m.committedValue(n, root)
 		}
 	}
 	for (const p of m.idToRenderPass.values()) {
@@ -75,7 +75,7 @@ export function snapshotModel(m: CosignalModel): ObservableSnapshot {
 		}
 		renderPasses[String(p.id)] = {}
 		for (const n of m.idToNode.values()) {
-			renderPasses[String(p.id)]![n.name] = m.renderValue(n, p)
+			renderPasses[String(p.id)][n.name] = m.renderValue(n, p)
 		}
 	}
 	return { newest, committed, renderPasses }
@@ -114,12 +114,12 @@ export function diffAgainstModel(
 		// events, then the observable snapshot (snapshotting evaluates nodes,
 		// which records dependency edges — it must run in the same position
 		// relative to the model's ops that the comparison assumes).
-		const expectedApplied = applyOneOp(m, ops[step]!) ? 'applied' : 'skipped'
+		const expectedApplied = applyOneOp(m, ops[step]) ? 'applied' : 'skipped'
 		const expectedEvents = JSON.stringify(comparableEvents(m.events.slice(drained)))
 		drained = m.events.length
 		const expectedSnapshot = JSON.stringify(snapshotModel(m))
 		// The engine's step, compared immediately.
-		const applied = engine.apply(ops[step]!)
+		const applied = engine.apply(ops[step])
 		if (applied !== expectedApplied) {
 			return {
 				seed,

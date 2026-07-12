@@ -896,7 +896,7 @@ export function signal<T>(initialValue?: T): SignalHandle<T | undefined> {
 		} else {
 			return E.read(id) as T | undefined
 		}
-	} as SignalHandle<T | undefined>
+	}
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {

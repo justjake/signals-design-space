@@ -192,7 +192,7 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 			// V8 gives every closure born in a scope the scope's one shared
 			// context; if that context also held `c`, fn would pin the handle
 			// and finalization could never fire.
-			const makeComputed = () => e.computed(() => (src.state as number) * 2)
+			const makeComputed = () => e.computed(() => src.state * 2)
 			const cycle = (): void => {
 				const c = makeComputed()
 				const stop = e.effect(() => void c.state) // watched
@@ -262,14 +262,14 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		fork.registerRoot('root')
 		const a = e.atom(0)
 		const b = e.atom(0)
-		const c = e.computed(() => (a.state as number) + (b.state as number))
+		const c = e.computed(() => a.state + b.state)
 		const w = e.watch(c, () => {})
 
 		for (let i = 1; i <= 100; ++i) {
 			const t = fork.openBatch('deferred')
 			t.run(() => {
 				a.set(i)
-				b.update((v) => (v as number) + 1)
+				b.update((v) => v + 1)
 			})
 			// Exercise writer's-world memos + certificates + slot chains.
 			e.debug.readWorld(c, { kind: 'writer', token: t.token })
@@ -310,7 +310,7 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		e.attachFork(fork)
 		fork.registerRoot('root')
 		const a = e.atom(0)
-		const c = e.computed(() => (a.state as number) * 2)
+		const c = e.computed(() => a.state * 2)
 		for (let i = 0; i < 20; ++i) {
 			const t1 = fork.openBatch('deferred')
 			const t2 = fork.openBatch('deferred')
@@ -333,7 +333,7 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		e.attachFork(fork)
 		fork.registerRoot('root')
 		const a = e.atom(0)
-		const c = e.computed(() => (a.state as number) + 1)
+		const c = e.computed(() => a.state + 1)
 		const t = fork.openBatch('deferred')
 		t.run(() => a.set(1))
 		e.debug.readWorld(c, { kind: 'writer', token: t.token }) // memo + cert exist
@@ -440,7 +440,7 @@ describe.runIf(hasGC)('heapUsed stabilizes (no strong refs to dead records)', ()
 		e.attachFork(fork)
 		fork.registerRoot('root')
 		const a = e.atom<number[]>([])
-		const c = e.computed(() => (a.state as number[]).length)
+		const c = e.computed(() => a.state.length)
 		const w = e.watch(c, () => {})
 		const cycle = (i: number): void => {
 			const t = fork.openBatch('deferred')
@@ -478,7 +478,7 @@ describe.runIf(hasGC)('heapUsed stabilizes (no strong refs to dead records)', ()
 			const handles = []
 			for (let i = 0; i < 100; ++i) {
 				const payload = new Array(512).fill(i) // captured by the closure
-				stops.push(e.effect(() => void ((a.state as number) + payload.length)))
+				stops.push(e.effect(() => void (a.state + payload.length)))
 				handles.push(e.watch(a, () => {}))
 			}
 			for (const s of stops) {

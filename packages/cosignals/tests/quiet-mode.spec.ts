@@ -180,7 +180,7 @@ describe('quiet-mode writes', () => {
 		// Reducers: registered dispatch folds once over base (the recorded op
 		// is an update whose closure carries the reducer and the action).
 		const rHandle = new ReducerAtom<number, string>((s, act) => (act === 'inc' ? s + 1 : s), 10)
-		const r = b.internalsForAtom(rHandle as unknown as Atom<number>)
+		const r = b.internalsForAtom(rHandle)
 		r.name = 'r'
 		rHandle.dispatch('inc')
 		expect(b.newestValue(r)).toBe(11)

@@ -264,7 +264,7 @@ export class Oracle {
 					}
 					return undefined as unknown as number
 				}
-				return v as number
+				return v
 			}
 			if (spec.type === 'asyncgate') {
 				const src = read(spec.srcs[0])
@@ -276,7 +276,7 @@ export class Oracle {
 			const out = evalComputedSpec(spec, read)
 			return sources.size !== 0 ? pendingOf(sources) : out
 		}
-		let acc = spec.initial as number
+		let acc = spec.initial
 		const eq = this.eqOf(idx)
 		for (const w of this.writes[idx]) {
 			if (!this.visible(w, world)) {
@@ -328,7 +328,7 @@ export class Oracle {
 					isOraclePending(v) || isOraclePending(baseline)
 						? v === baseline
 						: eq !== undefined
-							? eq(baseline as number, v as number)
+							? eq(baseline as number, v)
 							: Object.is(baseline, v)
 				if (!same) {
 					w.lb.set(tok, v)
@@ -386,17 +386,17 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					state: () => s.initial,
 					isEqual: s.eqMod !== undefined ? modEq(s.eqMod) : undefined,
 				})
-				lazyInstances.set(i, inst as unknown as { materialized: boolean })
+				lazyInstances.set(i, inst)
 				// Handle delegate: materializes on first id/state access.
 				handles.push({
 					get id(): number {
 						return inst.handle.id
 					},
 					get state(): number {
-						return inst.state as number
+						return inst.state
 					},
 				} as unknown as SignalHandle)
-				classReaders[handles.length - 1] = () => inst.state as number
+				classReaders[handles.length - 1] = () => inst.state
 				atomHandles.set(i, {
 					set: (v: number) => inst.set(v),
 					update: (f: (x: number) => number) => inst.update(f),
@@ -407,7 +407,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					s.eqMod !== undefined ? { isEqual: modEq(s.eqMod) } : undefined,
 				)
 				handles.push(h)
-				classReaders[handles.length - 1] = () => h.state as number
+				classReaders[handles.length - 1] = () => h.state
 				atomHandles.set(i, h)
 			}
 		} else if (s.kind === 'reducer') {
@@ -416,21 +416,21 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					state: () => s.initial,
 					reducer: REDUCER,
 				})
-				lazyInstances.set(i, inst as unknown as { materialized: boolean })
+				lazyInstances.set(i, inst)
 				handles.push({
 					get id(): number {
 						return inst.handle.id
 					},
 					get state(): number {
-						return inst.state as number
+						return inst.state
 					},
 				} as unknown as SignalHandle)
-				classReaders[handles.length - 1] = () => inst.state as number
+				classReaders[handles.length - 1] = () => inst.state
 				reducerHandles.set(i, { dispatch: (a: number) => inst.dispatch(a) })
 			} else {
 				const h = engine.reducerAtom<number, number>(s.initial, REDUCER)
 				handles.push(h)
-				classReaders[handles.length - 1] = () => h.state as number
+				classReaders[handles.length - 1] = () => h.state
 				reducerHandles.set(i, h)
 			}
 		} else {
@@ -450,7 +450,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 							fn: () => evalComputedSpec(spec, readIdx),
 							isEqual: spec.eqMod !== undefined ? modEq(spec.eqMod) : undefined,
 						})
-			handles.push(c.handle as unknown as SignalHandle)
+			handles.push(c.handle)
 			classReaders[handles.length - 1] = () => c.state
 		}
 	}
@@ -481,7 +481,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		if (spec === undefined || spec.kind !== 'computed') {
 			return
 		}
-		api.refresh(handles[idx] as { id: number } as never)
+		api.refresh(handles[idx])
 	}
 
 	// latest() invariant under fuzz: when a node's NEWEST value is NOT
@@ -497,7 +497,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 			}
 			let l: unknown
 			try {
-				l = api.latest(handles[i] as { id: number } as never)
+				l = api.latest(handles[i])
 			} catch (err) {
 				return fail(step, op, `latest(${i}) threw: ${String(err)}`)
 			}

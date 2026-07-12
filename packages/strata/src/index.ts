@@ -165,7 +165,7 @@ function sameRecords(a: ThenableRecord[], b: ThenableRecord[]): boolean {
 
 function pendingThenable(records: ThenableRecord[]): PromiseLike<unknown> {
 	if (records.length === 1) {
-		return records[0]!.thenable
+		return records[0].thenable
 	}
 	return new Promise<void>((resolve) => {
 		let remaining = records.length
@@ -175,7 +175,7 @@ function pendingThenable(records: ThenableRecord[]): PromiseLike<unknown> {
 			}
 		}
 		for (let i = 0; i < records.length; i++) {
-			records[i]!.thenable.then(settled, settled)
+			records[i].thenable.then(settled, settled)
 		}
 	})
 }
@@ -246,8 +246,8 @@ function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 	if (!consumer._dynamic) {
 		if (consumer._observing) {
 			for (let i = consumer._cursor; i < oldDeps.length; i++) {
-				removeSubscriber(oldDeps[i]!, consumer)
-				consumerRuntime(consumer)._release(oldDeps[i]!)
+				removeSubscriber(oldDeps[i], consumer)
+				consumerRuntime(consumer)._release(oldDeps[i])
 			}
 		}
 		oldDeps.length = consumer._cursor
@@ -276,7 +276,7 @@ function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 
 	if (consumer._observing) {
 		for (let i = 0; i < oldDeps.length; i++) {
-			const source = oldDeps[i]!
+			const source = oldDeps[i]
 			if (!containsSource(nextDeps, source)) {
 				removeSubscriber(source, consumer)
 				consumerRuntime(consumer)._release(source)
@@ -284,7 +284,7 @@ function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 		}
 
 		for (let i = 0; i < nextDeps.length; i++) {
-			const source = nextDeps[i]!
+			const source = nextDeps[i]
 			if (!containsSource(oldDeps, source)) {
 				addSubscriber(source, consumer)
 				consumerRuntime(consumer)._retain(source)
@@ -303,7 +303,7 @@ function reconcileDependencies(consumer: ConsumerState & Consumer): void {
 function detachConsumer(consumer: ConsumerState & Consumer): void {
 	const runtime = consumerRuntime(consumer)
 	for (let i = 0; i < consumer._deps.length; i++) {
-		const source = consumer._deps[i]!
+		const source = consumer._deps[i]
 		if (consumer._observing) {
 			removeSubscriber(source, consumer)
 			runtime._release(source)
@@ -442,7 +442,7 @@ export class Runtime {
 		}
 		if (--this.batchDepth === 0) {
 			for (let i = 0; i < this.batchAtoms.length; i++) {
-				const atom = this.batchAtoms[i]!
+				const atom = this.batchAtoms[i]
 				if (atom.equals(atom._batchValue, atom._value)) {
 					atom._version = atom._batchVersion
 				}
@@ -464,10 +464,10 @@ export class Runtime {
 	}
 
 	_useThenable<T>(thenable: PromiseLike<T>): T {
-		let record = this.thenables.get(thenable as object) as ThenableRecord<T> | undefined
+		let record = this.thenables.get(thenable) as ThenableRecord<T> | undefined
 		if (record === undefined) {
 			record = { thenable, status: 0, listeners: new Set() }
-			this.thenables.set(thenable as object, record as ThenableRecord)
+			this.thenables.set(thenable, record)
 			thenable.then(
 				(value) => {
 					record!.status = 1
@@ -518,7 +518,7 @@ export class Runtime {
 				}
 			}
 			if (!found) {
-				evaluation.pending.push(record as ThenableRecord)
+				evaluation.pending.push(record)
 			}
 			return undefined as T
 		}
@@ -561,7 +561,7 @@ export class Runtime {
 			return
 		}
 		for (let i = 0; i < subscriptions.length; i++) {
-			const subscription = subscriptions[i]!
+			const subscription = subscriptions[i]
 			subscription.record.listeners.delete(subscription.listener)
 		}
 		subscriptions.length = 0
@@ -577,7 +577,7 @@ export class Runtime {
 		const subscriptions = (computed._asyncSubscriptions ??= [])
 		const generation = ++computed._asyncGeneration
 		for (let i = 0; i < records.length; i++) {
-			const record = records[i]!
+			const record = records[i]
 			const listener = () => {
 				if (computed._asyncGeneration !== generation || computed._state === DISPOSED) {
 					return
@@ -612,7 +612,7 @@ export class Runtime {
 			return
 		}
 		for (let i = 0; i < records.length; i++) {
-			const record = records[i]!
+			const record = records[i]
 			const listener = () => {
 				if (world._released) {
 					return
@@ -842,7 +842,7 @@ export class Runtime {
 				const tape = computed._controlTape
 				if (tape !== undefined) {
 					for (let i = 0; i < tape.length; i++) {
-						if (tape[i]!.branch === branch && !tape[i]!.refresh) {
+						if (tape[i].branch === branch && !tape[i].refresh) {
 							settled = true
 							break
 						}
@@ -864,13 +864,13 @@ export class Runtime {
 	}
 
 	private _fold<T>(atom: Atom<T>, mode: 0 | 1 | 2 | 3, context?: Branch | RenderWorld): T {
-		let value = atom._base as T
+		let value = atom._base
 		const tape = atom._tape
 		if (tape === undefined) {
 			return atom._value
 		}
 		for (let i = 0; i < tape.length; i++) {
-			const operation = tape[i]!
+			const operation = tape[i]
 			let include: boolean
 			if (mode === 0) {
 				include = !operation.branch.deferred || operation.branch.status === 1
@@ -903,7 +903,7 @@ export class Runtime {
 			return computed._refreshEpoch
 		}
 		for (let i = 0; i < tape.length; i++) {
-			const operation = tape[i]!
+			const operation = tape[i]
 			if (!operation.refresh) {
 				continue
 			}
@@ -987,7 +987,7 @@ export class Runtime {
 		}
 		world._released = true
 		for (let i = 0; i < world._cleanups.length; i++) {
-			world._cleanups[i]!()
+			world._cleanups[i]()
 		}
 		world._cleanups.length = 0
 		world.memo.clear()
@@ -1126,7 +1126,7 @@ export class Runtime {
 				return this._readWorld(source, this.activeWorld)
 			} catch (error) {
 				if (isThenable(error) && source instanceof Computed) {
-					return source._hasStable ? (source._stableValue as T) : undefined
+					return source._hasStable ? source._stableValue : undefined
 				}
 				throw error
 			}
@@ -1151,7 +1151,7 @@ export class Runtime {
 		if (source._error !== undefined) {
 			throw source._error
 		}
-		return source._hasStable ? (source._stableValue as T) : undefined
+		return source._hasStable ? source._stableValue : undefined
 	}
 
 	committed<T>(source: Source<T>): T | undefined {
@@ -1166,9 +1166,9 @@ export class Runtime {
 				throw source._error
 			}
 			if (source._pending !== undefined) {
-				return source._hasStable ? (source._stableValue as T) : undefined
+				return source._hasStable ? source._stableValue : undefined
 			}
-			return source._value as T
+			return source._value
 		} finally {
 			this.activeWorld = previousWorld
 		}
@@ -1181,7 +1181,7 @@ export class Runtime {
 				return false
 			}
 			for (let i = 0; i < tape.length; i++) {
-				const branch = tape[i]!.branch
+				const branch = tape[i].branch
 				if (branch.deferred && branch.status === 0) {
 					return true
 				}
@@ -1276,7 +1276,7 @@ export class Runtime {
 				return
 			}
 			for (let i = 0; i < tape.length; i++) {
-				const operation = tape[i]!
+				const operation = tape[i]
 				visit(operation.branch, operation.seq, operation.cause)
 			}
 		} else {
@@ -1285,7 +1285,7 @@ export class Runtime {
 				return
 			}
 			for (let i = 0; i < tape.length; i++) {
-				const operation = tape[i]!
+				const operation = tape[i]
 				visit(operation.branch, operation.seq, operation.cause)
 			}
 		}
@@ -1307,7 +1307,7 @@ export class Runtime {
 		const state: Record<string, unknown> = {}
 		for (const key in atoms) {
 			if (Object.prototype.hasOwnProperty.call(atoms, key)) {
-				state[key] = this.committed(atoms[key]!)
+				state[key] = this.committed(atoms[key])
 			}
 		}
 		return JSON.stringify(state, replacer)
@@ -1324,7 +1324,7 @@ export class Runtime {
 				Object.prototype.hasOwnProperty.call(atoms, key) &&
 				Object.prototype.hasOwnProperty.call(state, key)
 			) {
-				this.installState(atoms[key]!, state[key])
+				this.installState(atoms[key], state[key])
 			}
 		}
 	}
@@ -1341,7 +1341,7 @@ export class Runtime {
 		this._updateComputed(source)
 		source._observing = true
 		for (let i = 0; i < source._deps.length; i++) {
-			const dependency = source._deps[i]!
+			const dependency = source._deps[i]
 			addSubscriber(dependency, source)
 			this._retain(dependency)
 		}
@@ -1357,7 +1357,7 @@ export class Runtime {
 		}
 		source._observing = false
 		for (let i = 0; i < source._deps.length; i++) {
-			const dependency = source._deps[i]!
+			const dependency = source._deps[i]
 			removeSubscriber(dependency, source)
 			this._release(dependency)
 		}
@@ -1414,8 +1414,8 @@ export class Runtime {
 			const nextDeps = (consumer._nextDeps ??= [])
 			const nextVersions = (consumer._nextVersions ??= [])
 			for (let i = 0; i < index; i++) {
-				nextDeps.push(consumer._deps[i]!)
-				nextVersions.push(consumer._depVersions[i]!)
+				nextDeps.push(consumer._deps[i])
+				nextVersions.push(consumer._depVersions[i])
 			}
 		}
 		const nextDeps = consumer._nextDeps!
@@ -1428,7 +1428,7 @@ export class Runtime {
 
 	private _recordLeaf(atom: Atom<any>): void {
 		for (let i = 0; i < this.collectors.length; i++) {
-			const collector = this.collectors[i]!
+			const collector = this.collectors[i]
 			let found = false
 			for (let j = 0; j < collector.length; j++) {
 				if (collector[j] === atom) {
@@ -1444,7 +1444,7 @@ export class Runtime {
 
 	private _recordLeaves(leaves: Atom<any>[]): void {
 		for (let i = 0; i < leaves.length; i++) {
-			this._recordLeaf(leaves[i]!)
+			this._recordLeaf(leaves[i])
 		}
 	}
 
@@ -1454,7 +1454,7 @@ export class Runtime {
 			return
 		}
 		for (let i = 0; i < source._deps.length; i++) {
-			this._recordSourceLeaves(source._deps[i]!)
+			this._recordSourceLeaves(source._deps[i])
 		}
 	}
 
@@ -1487,7 +1487,7 @@ export class Runtime {
 
 	private _consumerChanged(consumer: ConsumerState & Consumer): boolean {
 		for (let i = 0; i < consumer._deps.length; i++) {
-			const source = consumer._deps[i]!
+			const source = consumer._deps[i]
 			if (source instanceof Computed) {
 				this._updateComputed(source)
 			}
@@ -1523,7 +1523,7 @@ export class Runtime {
 		while (true) {
 			let changed = false
 			for (; index < computed._deps.length; index++) {
-				const dependency = computed._deps[index]!
+				const dependency = computed._deps[index]
 				if (
 					dependency instanceof Computed &&
 					(dependency._state !== CLEAN ||
@@ -1631,7 +1631,7 @@ export class Runtime {
 			computed._state = CLEAN
 			if (mutationEpoch !== this.mutationEpoch) {
 				for (let i = 0; i < computed._deps.length; i++) {
-					if (computed._deps[i]!._version !== computed._depVersions[i]) {
+					if (computed._deps[i]._version !== computed._depVersions[i]) {
 						computed._state = DIRTY
 						break
 					}
@@ -1671,7 +1671,7 @@ export class Runtime {
 			this._attachAsync(computed, result.pending)
 			pendingRecords.length = 0
 			for (let i = 0; i < result.pending.length; i++) {
-				pendingRecords.push(result.pending[i]!)
+				pendingRecords.push(result.pending[i])
 			}
 		} else {
 			if (computed._asyncSubscriptions?.length !== 0) {
@@ -1699,7 +1699,7 @@ export class Runtime {
 		}
 		computed._state = CLEAN
 		for (let i = 0; i < computed._deps.length; i++) {
-			if (computed._deps[i]!._version !== computed._depVersions[i]) {
+			if (computed._deps[i]._version !== computed._depVersions[i]) {
 				computed._state = DIRTY
 				break
 			}
@@ -1727,7 +1727,7 @@ export class Runtime {
 		this.flushing = true
 		try {
 			while (this.queueIndex < this.effectQueue.length) {
-				const reaction = this.effectQueue[this.queueIndex++]!
+				const reaction = this.effectQueue[this.queueIndex++]
 				reaction._queued = false
 				if (reaction._state !== DISPOSED) {
 					this._runReaction(reaction)
@@ -1874,7 +1874,7 @@ export class Atom<T = unknown> {
 			options = initialOrConfig
 			runtime = optionsOrRuntime instanceof Runtime ? optionsOrRuntime : runtime
 		} else {
-			initial = initialOrConfig as T | (() => T)
+			initial = initialOrConfig
 			options = optionsOrRuntime instanceof Runtime ? {} : optionsOrRuntime
 			if (optionsOrRuntime instanceof Runtime) {
 				runtime = optionsOrRuntime
@@ -2036,7 +2036,7 @@ class Scope {
 		}
 		this.disposed = true
 		for (let i = this._children.length - 1; i >= 0; i--) {
-			this._children[i]!.dispose()
+			this._children[i].dispose()
 		}
 		this._children.length = 0
 	}
@@ -2069,7 +2069,7 @@ class Reaction implements ConsumerState {
 
 	_disposeChildren(): void {
 		for (let i = this._children.length - 1; i >= 0; i--) {
-			this._children[i]!.dispose()
+			this._children[i].dispose()
 		}
 		this._children.length = 0
 	}

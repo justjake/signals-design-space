@@ -182,7 +182,7 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 		const shell = b.__TEST__arena('R')!
 		expect(shell.memory.length).toBeGreaterThan(16) // the buffers really doubled (grow-by-copy; ids stable, the armed check revalidates values)
 		expect(shell.clocks.length).toBe(shell.memory.length >> 3) // the clock column grew WITH the record store (one slot per record)
-		commitWrite(b, atoms[3]!, 100) // fanout + refold across the grown arena
+		commitWrite(b, atoms[3], 100) // fanout + refold across the grown arena
 		expect(b.committedValue(c, 'R')).toBe(163)
 	})
 

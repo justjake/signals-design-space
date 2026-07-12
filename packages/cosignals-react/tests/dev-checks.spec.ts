@@ -50,7 +50,7 @@ describe('render start over a still-open render', () => {
 		expect(first.state).toBe('ended') // the stale render was discarded (it can never double-account)
 		const open = [...h.bridge.idToRenderPass.values()].filter((p) => p.state !== 'ended')
 		expect(open).toHaveLength(1) // exactly the fresh render remains
-		expect(open[0]!.id).not.toBe(first.id)
+		expect(open[0].id).not.toBe(first.id)
 		shim.handleRenderEnd(container, false)
 	})
 })

@@ -65,7 +65,7 @@ describe('§13.4 committedEffect (useSignalEffect analogue)', () => {
 		const a = e.atom(0)
 		const seen: number[] = []
 		const dispose = e.committedEffect('A', () => {
-			seen.push(a.state as number)
+			seen.push(a.state)
 		})
 		expect(seen).toEqual([0]) // initial run
 
@@ -89,7 +89,7 @@ describe('§13.4 committedEffect (useSignalEffect analogue)', () => {
 	it('supports cleanup and tracks through computeds to leaf atoms', async () => {
 		const { e, fork } = activated()
 		const a = e.atom(1)
-		const c = e.computed(() => (a.state as number) * 10)
+		const c = e.computed(() => a.state * 10)
 		const log: string[] = []
 		e.committedEffect('A', () => {
 			log.push(`run:${c.state}`)

@@ -274,7 +274,7 @@ function beginPass(token: object, container: object, lanes: number, remainingLan
 		}
 		let deferred = false
 		for (let i = 0; i < included.length; i++) {
-			if (included[i]!.deferred) {
+			if (included[i].deferred) {
 				deferred = true
 				break
 			}
@@ -308,7 +308,7 @@ function disposeCandidate(candidate: Candidate<any>): void {
 	}
 	candidate.disposed = true
 	for (let i = 0; i < candidate.unsubscribes.length; i++) {
-		candidate.unsubscribes[i]!()
+		candidate.unsubscribes[i]()
 	}
 	candidate.unsubscribes.length = 0
 	candidate.pass.records.delete(candidate)
@@ -324,7 +324,7 @@ function disposeCandidate(candidate: Candidate<any>): void {
 			candidate.root.committed.delete(candidate)
 		}
 		for (let i = 0; i < candidate.leaves.length; i++) {
-			candidate.runtime._release(candidate.leaves[i]!)
+			candidate.runtime._release(candidate.leaves[i])
 		}
 		releaseRoot(candidate.root)
 	}
@@ -354,7 +354,7 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 				remainingLanes,
 			})
 			for (let i = 0; i < passWorld.included.length; i++) {
-				const branch = passWorld.included[i]!
+				const branch = passWorld.included[i]
 				const cutoff = Math.min(branch.lastSeq, passWorld.world.pin)
 				if (cutoff !== 0) {
 					const previous = pass.root.cutoffs.get(branch) ?? 0
@@ -387,13 +387,13 @@ function finishPass(pass: Pass, committed: boolean, lanes: number, remainingLane
 					}
 					let relevant: Branch | undefined
 					for (let i = 0; i < moved.length && relevant === undefined; i++) {
-						const branch = moved[i]!
+						const branch = moved[i]
 						if (candidate.source instanceof Computed && branch.signals.has(candidate.source)) {
 							relevant = branch
 							break
 						}
 						for (let j = 0; j < candidate.leaves.length; j++) {
-							if (branch.atoms.has(candidate.leaves[j]!)) {
+							if (branch.atoms.has(candidate.leaves[j])) {
 								relevant = branch
 								break
 							}
@@ -509,7 +509,7 @@ function worldFor(pass: Pass, runtime: Runtime): PassWorld {
 	}
 	let deferred = false
 	for (let i = 0; i < included.length; i++) {
-		if (included[i]!.deferred) {
+		if (included[i].deferred) {
 			deferred = true
 		}
 	}
@@ -595,7 +595,7 @@ function listenCandidate(candidate: Candidate<any>): void {
 		candidate.runtime.scanJournal(candidate.source, scan)
 	}
 	for (let i = 0; i < candidate.leaves.length; i++) {
-		const atom = candidate.leaves[i]!
+		const atom = candidate.leaves[i]
 		candidate.unsubscribes.push(candidate.runtime.subscribeJournal(atom, notify))
 		candidate.runtime.scanJournal(atom, scan)
 	}
@@ -622,11 +622,11 @@ function activateCandidate<T>(candidate: Candidate<T>): () => void {
 		}
 		retainRoot(candidate.root)
 		for (let i = 0; i < candidate.leaves.length; i++) {
-			candidate.runtime._retain(candidate.leaves[i]!)
+			candidate.runtime._retain(candidate.leaves[i])
 		}
 	}
 	for (let i = 0; i < candidate.missed.length; i++) {
-		const branch = candidate.missed[i]!
+		const branch = candidate.missed[i]
 		if (branch.status !== 0) {
 			continue
 		}
@@ -712,7 +712,7 @@ function useSignalValue<T>(source: Signal<T>, mode: 0 | 1 | 2 | 3): T | boolean 
 	let renderCause = 0
 	let renderSequence = 0
 	for (let i = 0; i < passWorld.included.length; i++) {
-		const branch = passWorld.included[i]!
+		const branch = passWorld.included[i]
 		if (branch.lastSeq <= renderSequence) {
 			continue
 		}
@@ -722,7 +722,7 @@ function useSignalValue<T>(source: Signal<T>, mode: 0 | 1 | 2 | 3): T | boolean 
 			continue
 		}
 		for (let j = 0; j < candidate.leaves.length; j++) {
-			if (branch.atoms.has(candidate.leaves[j]!)) {
+			if (branch.atoms.has(candidate.leaves[j])) {
 				renderSequence = branch.lastSeq
 				renderCause = branch.lastCause
 				break
@@ -753,12 +753,12 @@ export function useComputed<T>(
 
 function clearSignalEffectSubscriptions(record: SignalEffectRecord): void {
 	for (let i = 0; i < record.unsubscribes.length; i++) {
-		record.unsubscribes[i]!()
+		record.unsubscribes[i]()
 	}
 	record.unsubscribes.length = 0
 	if (record.runtime !== undefined) {
 		for (let i = 0; i < record.leaves.length; i++) {
-			record.runtime._release(record.leaves[i]!)
+			record.runtime._release(record.leaves[i])
 		}
 	}
 	record.leaves.length = 0
@@ -802,7 +802,7 @@ function runSignalEffect(record: SignalEffectRecord): void {
 		record.runtime.releaseWorld(world)
 	}
 	for (let i = 0; i < record.leaves.length; i++) {
-		const atom = record.leaves[i]!
+		const atom = record.leaves[i]
 		record.runtime._retain(atom)
 		record.unsubscribes.push(
 			record.runtime.subscribeJournal(atom, (branch, sequence, cause) => {

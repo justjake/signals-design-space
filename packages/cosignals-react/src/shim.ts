@@ -138,8 +138,8 @@ export class Shim {
 	private effectRunners = new Map<number, () => void>()
 	constructor(instance?: Cosignals) {
 		this.bridge = instance?.engine ?? engine
-		this.Computed = (instance?.Computed ?? Computed) as typeof Computed
-		this.ReducerAtom = (instance?.ReducerAtom ?? ReducerAtom) as typeof ReducerAtom
+		this.Computed = instance?.Computed ?? Computed
+		this.ReducerAtom = instance?.ReducerAtom ?? ReducerAtom
 		this.devChecks = this.bridge.devChecks
 		assertForkPresent()
 		this.registry = new ReactBatchRegistry(React)

@@ -22,7 +22,7 @@ export default {
 		const unregister = registerStrata(runtime)
 		return {
 			useCell(i) {
-				return useSignal(cells[i]!)
+				return useSignal(cells[i])
 			},
 			writeCell(i, value) {
 				cells[i]!.set(value)
@@ -30,7 +30,7 @@ export default {
 			writeMany(updates) {
 				runtime.batch(() => {
 					for (let i = 0; i < updates.length; i++) {
-						const update = updates[i]!
+						const update = updates[i]
 						cells[update[0]]!.set(update[1])
 					}
 				})
@@ -39,7 +39,7 @@ export default {
 				startSignalTransition(() => {
 					runtime.batch(() => {
 						for (let i = 0; i < updates.length; i++) {
-							const update = updates[i]!
+							const update = updates[i]
 							cells[update[0]]!.set(update[1])
 						}
 					})

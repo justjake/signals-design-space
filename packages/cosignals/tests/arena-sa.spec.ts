@@ -76,11 +76,11 @@ function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 	const t: PromiseLike<T> = {
 		then(onF): PromiseLike<never> {
 			if (onF) {
-				cbs.push(onF as (v: T) => void)
+				cbs.push(onF)
 			}
 			return undefined as never
 		},
-	} as PromiseLike<T>
+	}
 	return {
 		t,
 		settle: (v: T) => {
@@ -261,12 +261,12 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		let chain = 0
 		b.onCorrection = () => {
 			if (++chain < K) {
-				gates[chain]!.settle(`v${chain}`)
+				gates[chain].settle(`v${chain}`)
 			} // each iteration creates the next settlement
 		}
-		expect(() => gates[0]!.settle('v0')).toThrow(InvariantViolation)
+		expect(() => gates[0].settle('v0')).toThrow(InvariantViolation)
 		expect(chain).toBeGreaterThanOrEqual(8) // the loop made real progress up to the cap
-		expect(watchers[0]!.lastRenderedValue).toBe('v0')
+		expect(watchers[0].lastRenderedValue).toBe('v0')
 	})
 
 	it('suspended-list compaction (step 0): clear → re-suspend keeps the list a dense set; swap-remove preserves every stored index', async () => {
@@ -276,16 +276,16 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const cs: AnyInternals[] = gs.map((g, i) =>
 			suspending(b, `c${i}`, (read) => {
 				const gen = read(keyAtom) as number
-				return __TEST__ctxUse(cs[i]!.ix, `k${i}-${gen}`, () =>
+				return __TEST__ctxUse(cs[i].ix, `k${i}-${gen}`, () =>
 					gen === 0 ? g.promise : deferred<string>().promise,
 				)
 			}),
 		)
 		for (let i = 0; i < 3; i++) {
-			mount(b, 'R', cs[i]!, `W${i}`)
+			mount(b, 'R', cs[i], `W${i}`)
 		}
 		expect(b.__TEST__arenaStats().suspended).toBe(3)
-		gs[1]!.resolve('MID') // clear the MIDDLE entry: swap-remove moves the tail into its slot
+		gs[1].resolve('MID') // clear the MIDDLE entry: swap-remove moves the tail into its slot
 		await tick()
 		expect(b.__TEST__arenaStats().suspended).toBe(2) // dense; validator checked index integrity at the epilogue
 		// Re-suspend all three on fresh keys (new pending thenables):

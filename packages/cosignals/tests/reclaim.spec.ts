@@ -45,7 +45,7 @@ async function gcSettle(rounds = 8): Promise<void> {
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0))
 
 const idOf = (s: object): number => (s as { _id: number })._id
-const genOf = (id: number): number => E.buffer()[id + NodeField.GEN]!
+const genOf = (id: number): number => E.buffer()[id + NodeField.GEN]
 const stats = __TEST__reclaimStats
 
 function freshEngine(options?: EngineResetOptions): CosignalEngine {
@@ -125,7 +125,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('watcher-index row: skip while a watcher entry exists (live or dormant); removeWatcher retries and frees', async () => {
 		const b = freshEngine()
 		const at = new Atom(1)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const w = mount(b, 'R', an, 'W')
 		await tick() // let mount/lifecycle microtasks settle
 		const id = idOf(at)
@@ -142,7 +142,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('open-render arena membership row: skip while an open render arena holds the node; render end (arena release) retries and frees', async () => {
 		const b = freshEngine()
 		const at = new Atom(3)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const keep = b.computed('keep', () => 0) // no dep on the atom: isolates the membership row
 		const p = b.renderStart('R', [])
 		const w = b.mountWatcher(p.id, keep, 'W')
@@ -166,7 +166,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 		const b = freshEngine()
 		const gate = deferred<string>()
 		const pub = new Computed<unknown>((ctx) => ctx.use(gate.promise))
-		const cn = b.internalsForComputed(pub as unknown as Computed<unknown>)
+		const cn = b.internalsForComputed(pub)
 		const keep = b.computed('keep', () => 0)
 		mount(b, 'R', keep, 'W') // the committed arena lives without watching cn
 		expect(b.committedValue(cn, 'R')).toBeInstanceOf(SuspendedRead) // suspended in the committed arena
@@ -216,7 +216,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('obsRefs row: skip while a SignalEffect edge retains the node; edge removal retries and frees', async () => {
 		const b = freshEngine()
 		const at = new Atom(5)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const effect = b.mountSignalEffect('R', 'obs')
 		b.captureSignalEffectRun(effect.id, () => {
 			void b.readSignalEffectDep(an)
@@ -234,7 +234,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('WriteLog row: skip while episode membership holds (a non-empty write log); the episode drop retries and frees', async () => {
 		const b = freshEngine()
 		const at = new Atom(0)
-		const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+		const an = b.internalsForAtom(at)
 		const t = b.openBatch()
 		b.write(t.id, an, 0, 9)
 		const id = idOf(at)
@@ -441,7 +441,7 @@ describe.runIf(hasGC)('P-L1b: unwatch-then-drop computeds reclaim', () => {
 		// scope that does NOT capture the handle — the engine retains fn
 		// strongly (fns column), and a shared closure context holding `c`
 		// would pin the handle forever.
-		const makeComputed = () => new Computed(() => (src.state as number) * 2)
+		const makeComputed = () => new Computed(() => src.state * 2)
 		const cycle = (): void => {
 			const c = makeComputed()
 			const stop = effect(() => {
@@ -471,7 +471,7 @@ describe.runIf(hasGC)('P-L2: engine columns and maps release with the record', (
 		const churn = (n: number): void => {
 			for (let i = 0; i < n; ++i) {
 				const at = new Atom(i)
-				const an = b.internalsForAtom(at as unknown as Atom<unknown>)
+				const an = b.internalsForAtom(at)
 				commitWrite(b, an, i + 1) // log entry + retirement's episode close (guard exercised and cleared)
 			}
 		}

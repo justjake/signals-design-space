@@ -152,7 +152,7 @@ function runCheck(st: CheckerState): void {
 						const same =
 							ceq === undefined
 								? Object.is(aVal!, mVal!)
-								: v.runInFoldCallback(() => ceq(aVal!, mVal!))
+								: v.runInFoldCallback(() => ceq(aVal, mVal))
 						if (!same) {
 							throw new InvariantViolation(
 								`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
@@ -237,9 +237,9 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 		// A dead-GEN shadow is legal cold residue: the invariant is
 		// that it never serves — enforced at resolveShadow (re-tenant on consult),
 		// which every serve/link path routes through. No assert here.
-		const flags = memory[sh + ArenaField.FLAGS]!
+		const flags = memory[sh + ArenaField.FLAGS]
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
-			const slot = a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
+			const slot = a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
 			if (slot === 0 || a.suspended[slot - 1] !== sh) {
 				throw new InvariantViolation(
 					`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`,
@@ -257,7 +257,7 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 			)
 		}
 		// deps list symmetry
-		let cur = memory[sh + ArenaField.DEPS]!
+		let cur = memory[sh + ArenaField.DEPS]
 		let prev = 0
 		let steps = 0
 		while (cur !== 0) {
@@ -272,14 +272,14 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev) {
 				throw new InvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`)
 			}
-			const dep = memory[cur + ArenaLinkField.DEP]!
+			const dep = memory[cur + ArenaLinkField.DEP]
 			// Weak symmetry: the link must sit on its MODE's subs list —
 			// a weak-flagged link on the strong list (or vice versa) makes
 			// this search miss and throw (the segregated-list invariant).
 			let s =
-				(memory[cur + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0
-					? a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]!
-					: memory[dep + ArenaField.SUBS]!
+				(memory[cur + ArenaLinkField.MODE] & ArenaLinkMode.WEAK) !== 0
+					? a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]
+					: memory[dep + ArenaField.SUBS]
 			let found = false
 			let ssteps = 0
 			while (s !== 0) {

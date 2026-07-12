@@ -139,7 +139,7 @@ describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)',
 		// clause-2 visible below the held pin; the new tenant's sequences postdate it
 		expect(m.renderValue(a, held)).toBe(5)
 		// and the new tenant's own world folds the recycled slot's history in seq order
-		const lastLive = m.idToBatch.get(live[live.length - 1]!)!
+		const lastLive = m.idToBatch.get(live[live.length - 1])!
 		const q = openRender(m, 'A', [lastLive])
 		expect(m.renderValue(a, q)).toBe(126) // 5 retired +1s → 5, then the last set(126)
 		m.renderEnd(q.id, 'discard')

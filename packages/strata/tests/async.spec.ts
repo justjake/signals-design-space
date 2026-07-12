@@ -53,8 +53,8 @@ test('refresh preserves latest, advances the epoch, and ignores superseded settl
 
 	expect(latest(data)).toBeUndefined()
 	expect(isPending(data)).toBe(false)
-	requests[0]!.resolve(10)
-	await requests[0]!.promise
+	requests[0].resolve(10)
+	await requests[0].promise
 	await Promise.resolve()
 	expect(data.state).toBe(10)
 
@@ -63,14 +63,14 @@ test('refresh preserves latest, advances the epoch, and ignores superseded settl
 	expect(isPending(data)).toBe(true)
 	refresh(data)
 	expect(requests).toHaveLength(3)
-	requests[1]!.resolve(100)
-	await requests[1]!.promise
+	requests[1].resolve(100)
+	await requests[1].promise
 	await Promise.resolve()
 	expect(latest(data)).toBe(10)
 	expect(isPending(data)).toBe(true)
 
-	requests[2]!.resolve(20)
-	await requests[2]!.promise
+	requests[2].resolve(20)
+	await requests[2].promise
 	await Promise.resolve()
 	expect(data.state).toBe(20)
 	expect(isPending(data)).toBe(false)

@@ -180,7 +180,7 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'double':
 				return { kind: 'update', fn: (p) => (p as number) * 2 }
 			case 'equalNewest':
-				return { kind: 'set', value: m.newestValue(atoms[atomIdx]!) }
+				return { kind: 'set', value: m.newestValue(atoms[atomIdx]) }
 		}
 	}
 	const uniq = `${m.events.length}.${m.seq}.${m.epoch}`
@@ -204,12 +204,12 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				m.openBatch({ action: op.action })
 				break
 			case 'write': {
-				const atom = atoms[op.atom % atoms.length]!
+				const atom = atoms[op.atom % atoms.length]
 				m.write(batchAt(m, op.batch), atom, writeOp(op.kind, op.value, op.atom % atoms.length))
 				break
 			}
 			case 'bareWrite': {
-				const atom = atoms[op.atom % atoms.length]!
+				const atom = atoms[op.atom % atoms.length]
 				m.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length))
 				break
 			}
@@ -247,20 +247,20 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				})
 				break
 			case 'mount':
-				m.mountWatcher(renderPassAt(m, op.renderPass), nodes[op.node % nodes.length]!, `W${uniq}`)
+				m.mountWatcher(renderPassAt(m, op.renderPass), nodes[op.node % nodes.length], `W${uniq}`)
 				break
 			case 'render':
 				m.renderWatcher(renderPassAt(m, op.renderPass), watcherAt(m, op.watcher))
 				break
 			case 'reactEffect':
-				m.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`)
+				m.mountReactEffect(op.root, nodes[op.node % nodes.length], `E${uniq}`)
 				break
 			case 'reactEffectPick':
 				m.mountReactEffectPick(
 					op.root,
-					nodes[op.sel % nodes.length]!,
-					nodes[op.a % nodes.length]!,
-					nodes[op.b % nodes.length]!,
+					nodes[op.sel % nodes.length],
+					nodes[op.a % nodes.length],
+					nodes[op.b % nodes.length],
 					`E${uniq}`,
 				)
 				break
@@ -271,7 +271,7 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				m.replayReactEffect(effectAt(m, op.effect))
 				break
 			case 'coreEffect':
-				m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`)
+				m.mountCoreEffect(nodes[op.node % nodes.length], `CE${uniq}`)
 				break
 			case 'coreEffectWrite': {
 				const out = atomNamed(op.out % 2 === 0 ? 'out1' : 'out2')
@@ -286,7 +286,7 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 						throw new ScheduleError(`output atom ${out.name} already has a writing effect`)
 					}
 				}
-				m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`, out)
+				m.mountCoreEffect(nodes[op.node % nodes.length], `CE${uniq}`, out)
 				break
 			}
 			// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
@@ -360,7 +360,7 @@ export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
 	buildTopology(m)
 	const applied: ScheduleOp[] = []
 	for (let step = 0; step < ops.length; step++) {
-		const op = ops[step]!
+		const op = ops[step]
 		try {
 			if (applyOneOp(m, op)) {
 				applied.push(op)
@@ -382,7 +382,7 @@ function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
 	if (ids.length === 0) {
 		throw new ScheduleError(`no ${what} yet`)
 	}
-	return ids[index % ids.length]!
+	return ids[index % ids.length]
 }
 
 const batchAt = (m: CosignalModel, index: number): number => pickId(m.idToBatch, index, 'batches')
@@ -410,7 +410,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 				t: 'write',
 				batch,
 				atom: pick(4),
-				kind: kinds[pick(kinds.length)]!,
+				kind: kinds[pick(kinds.length)],
 				value: pick(10),
 			})
 			// same-batch bursts exercise the per-(watcher, slot) dedup and the
@@ -420,12 +420,12 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 					t: 'write',
 					batch,
 					atom: pick(4),
-					kind: kinds[pick(kinds.length)]!,
+					kind: kinds[pick(kinds.length)],
 					value: pick(10),
 				})
 			}
 		} else if (roll < 0.375) {
-			ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) })
+			ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)], value: pick(10) })
 		}
 		// R-2 corpus band: writes targeting the custom-equals member q — the
 		// asymmetric comparator's drop/accept decisions referee equality ORDER
@@ -437,11 +437,11 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 				ops.push({
 					t: 'writeQ',
 					batch: pick(34),
-					kind: kinds[pick(kinds.length)]!,
+					kind: kinds[pick(kinds.length)],
 					value: pick(10),
 				})
 			} else {
-				ops.push({ t: 'bareWriteQ', kind: kinds[pick(kinds.length)]!, value: pick(10) })
+				ops.push({ t: 'bareWriteQ', kind: kinds[pick(kinds.length)], value: pick(10) })
 			}
 		}
 		// This band emitted the deleted scope-write op (the action-scope write
@@ -472,11 +472,11 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			// pre-pin, open a render including that slot, then write post-pin —
 			// the started render cannot fold the write, so it must re-deliver
 			if (include.length > 0 && bool(0.5)) {
-				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) })
-				ops.push({ t: 'renderStart', root: ROOTS[pick(2)]!, include })
-				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) })
+				ops.push({ t: 'write', batch: include[0], atom: pick(4), kind: 'set', value: pick(10) })
+				ops.push({ t: 'renderStart', root: ROOTS[pick(2)], include })
+				ops.push({ t: 'write', batch: include[0], atom: pick(4), kind: 'set', value: pick(10) })
 			} else {
-				ops.push({ t: 'renderStart', root: ROOTS[pick(2)]!, include })
+				ops.push({ t: 'renderStart', root: ROOTS[pick(2)], include })
 			}
 		} else if (roll < 0.68) {
 			ops.push({ t: 'yield', renderPass: pick(20) })
@@ -506,11 +506,11 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			// snapshot lifecycle (recapture, cleanup, OL2 no-run-after-removal)
 			// fuzzes under every interleaving.
 			if (bool(0.5)) {
-				ops.push({ t: 'reactEffect', root: ROOTS[pick(2)]!, node: pick(8) })
+				ops.push({ t: 'reactEffect', root: ROOTS[pick(2)], node: pick(8) })
 			} else {
 				ops.push({
 					t: 'reactEffectPick',
-					root: ROOTS[pick(2)]!,
+					root: ROOTS[pick(2)],
 					sel: pick(8),
 					a: pick(8),
 					b: pick(8),
@@ -534,7 +534,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		// scenarios: bug 1 (a core/quiet-path write to a terminal's dependency)
 		// and bug 2 (a terminal body writing a sibling terminal's dependency).
 		else if (roll < 0.972) {
-			const root = ROOTS[pick(2)]!
+			const root = ROOTS[pick(2)]
 			const which = pick(4)
 			if (which === 0) {
 				ops.push({ t: 'mountTermReader', root, dep: 0 })

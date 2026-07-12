@@ -285,7 +285,7 @@ export function createSignal<T>(
 	second?: SignalOptions<T> & MemoOptions<T>,
 ): Signal<T | undefined> {
 	if (typeof first === 'function') {
-		const node = computed<T>(first as any, second as any)
+		const node = computed<T>(first as any, second)
 		node._config &= ~CONFIG_AUTO_DISPOSE
 		return [accessor<T | undefined>(node), setMemo.bind(null, node as any) as Setter<T | undefined>]
 	}
@@ -539,7 +539,7 @@ export function createReaction(
 	cleanup(() => cl?.())
 	const owner = getOwner()
 	return (tracking: () => void) => {
-		runWithOwner(owner!, () => {
+		runWithOwner(owner, () => {
 			effect(
 				() => (tracking(), getOwner()!),
 				(node) => {
@@ -652,14 +652,14 @@ export function createOptimistic<T>(
 	second?: SignalOptions<T> & MemoOptions<T>,
 ): Signal<T | undefined> {
 	if (typeof first === 'function') {
-		const node = optimisticComputed<T>(first as any, second as any)
+		const node = optimisticComputed<T>(first as any, second)
 		node._config &= ~CONFIG_AUTO_DISPOSE
 		return [
 			accessor<T | undefined>(node),
 			setSignal.bind(null, node as any) as Setter<T | undefined>,
 		]
 	}
-	const node = optimisticSignal<T>(first as any, second as SignalOptions<T>)
+	const node = optimisticSignal<T>(first as any, second)
 	if (__DEV__) {
 		registerGraph(node, getOwner())
 	}

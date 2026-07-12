@@ -475,11 +475,11 @@ export class Tracer implements TraceHooks {
 	 */
 	private bufFor(id: TraceEventId): Int32Array {
 		if (this.mode === 'ring') {
-			return this.chunks[0]!
+			return this.chunks[0]
 		}
 		const chunkIndex = id >> this.capLog
 		if (this.truncatedFlag || chunkIndex < this.chunks.length) {
-			return this.chunks[this.truncatedFlag ? this.chunks.length - 1 : chunkIndex]!
+			return this.chunks[this.truncatedFlag ? this.chunks.length - 1 : chunkIndex]
 		}
 		// chunk boundary: seal the current chunk, append the next — unless the
 		// budget is crossed, in which case degrade to ring over the final chunk.
@@ -487,10 +487,10 @@ export class Tracer implements TraceHooks {
 			(this.chunks.length + 1) * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD
 		if (nextBytes > this.maxBytes) {
 			this.truncatedFlag = true
-			return this.chunks[this.chunks.length - 1]!
+			return this.chunks[this.chunks.length - 1]
 		}
 		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE))
-		return this.chunks[this.chunks.length - 1]!
+		return this.chunks[this.chunks.length - 1]
 	}
 
 	/** The one write path: id creation, time delta, cause register, 8 integer stores. */
@@ -762,11 +762,11 @@ export class Tracer implements TraceHooks {
 			return
 		} // attached mid-evaluation: nothing to pair
 		this.evalSp--
-		const packed: PackedWorld = this.evalWorld[this.evalSp]!
-		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]!), MAX_I32)
+		const packed: PackedWorld = this.evalWorld[this.evalSp]
+		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]), MAX_I32)
 		this.rec(
 			K.evalDone | ((packed & WorldPack.MOUNT_FIX_BIT) !== 0 ? KindBits.FLAG_A : 0),
-			this.evalSubj[this.evalSp]!,
+			this.evalSubj[this.evalSp],
 			packed >> WorldPack.PAYLOAD_SHIFT,
 			dur,
 			this.evalSp,
@@ -825,13 +825,13 @@ export class Tracer implements TraceHooks {
 	private peek(id: TraceEventId, field: TraceField): number {
 		const buf =
 			this.mode === 'ring'
-				? this.chunks[0]!
+				? this.chunks[0]
 				: this.chunks[
 						this.truncatedFlag && id >= (this.chunks.length - 1) * this.cap
 							? this.chunks.length - 1
 							: id >> this.capLog
-					]!
-		return buf[(id & this.capMask) * TraceRec.STRIDE + field]!
+					]
+		return buf[(id & this.capMask) * TraceRec.STRIDE + field]
 	}
 
 	private refValue(refId: RefId): unknown {
@@ -1002,7 +1002,7 @@ export class Tracer implements TraceHooks {
 		}
 		return {
 			id,
-			kind: KIND_NAMES[kind] as TraceKind,
+			kind: KIND_NAMES[kind],
 			dt: this.peek(id, TraceField.DT),
 			cause: cause === 0 ? undefined : cause - 1,
 			data,
@@ -1176,7 +1176,7 @@ function formatValue(v: unknown, subject = false): string {
 export function formatTraceRecord(e: TraceRecord): string {
 	const entries = Object.entries(e.data)
 	// the first field is the subject, rendered inside the parens
-	const head = entries.length > 0 ? formatValue(entries[0]![1], true) : ''
+	const head = entries.length > 0 ? formatValue(entries[0][1], true) : ''
 	const rest = entries
 		.slice(1)
 		.map(([k, v]) => `${k}=${formatValue(v)}`)

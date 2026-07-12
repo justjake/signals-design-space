@@ -99,7 +99,7 @@ export class CausalityLog implements TraceSink {
 		const chain = this.why(target)
 		const result: string[] = []
 		for (let i = 0; i < chain.length; i++) {
-			const event = chain[i]!
+			const event = chain[i]
 			result.push(
 				`#${event.id} ${event.kind}${
 					event.target === undefined ? '' : ` ${event.target}`

@@ -205,7 +205,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		const sum2 = b.computed('sum2', (read) => more.reduce((s, n) => s + (read(n) as number), 0))
 		const w2 = mount(b, 'S', sum2, 'W2')
 		expect(w2.lastRenderedValue).toBe(276)
-		commitWrite(b, more[7]!, 1007) // fanout + refold across the re-grown arena
+		commitWrite(b, more[7], 1007) // fanout + refold across the re-grown arena
 		expect(b.committedValue(sum2, 'S')).toBe(276 - 7 + 1007)
 	})
 
@@ -240,11 +240,11 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		// Validation walks the wide dependency chain: a write to a LATE
 		// dep — its shadow was allocated after several doublings — re-fires
 		// exactly once...
-		commitWrite(b, atoms[20]!, 999)
+		commitWrite(b, atoms[20], 999)
 		expect(e.runs).toBe(1)
 		// ...and an identity-equal write (rejected at acceptance) leaves every
 		// dep clean: the fast negative guard skips the chain.
-		commitWrite(b, atoms[20]!, 999)
+		commitWrite(b, atoms[20], 999)
 		expect(e.runs).toBe(1)
 	})
 
@@ -327,7 +327,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		expect(shell.readClock).toBeLessThan(1000) // the renumber restarted the clock
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
 		for (let nid = 0; nid < shell.nodeToShadow.length; nid++) {
-			const sh = shell.nodeToShadow[nid]!
+			const sh = shell.nodeToShadow[nid]
 			if (sh !== 0) {
 				expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock)
 			}

@@ -18,8 +18,8 @@ describe('causality log', () => {
 		let latestEffect = 0
 		const events = log.events()
 		for (let i = 0; i < events.length; i++) {
-			if (events[i]!.kind === 'effect-run') {
-				latestEffect = events[i]!.id
+			if (events[i].kind === 'effect-run') {
+				latestEffect = events[i].id
 			}
 		}
 		const chain = log.causeChain(latestEffect)

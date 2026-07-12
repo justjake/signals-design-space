@@ -56,14 +56,14 @@ function shippingFrame(): Frame {
 		log,
 		signal(initial) {
 			const a = e.atom(initial)
-			return { read: () => a.state as number, write: (v) => a.set(v) }
+			return { read: () => a.state, write: (v) => a.set(v) }
 		},
 		computed(fn, tag) {
 			const c = e.computed(() => {
 				log.push(`eval:${tag}`)
 				return fn()
 			})
-			return { read: () => c.state as number }
+			return { read: () => c.state }
 		},
 		effect: (fn) => e.effect(fn),
 		batch: (fn) => {

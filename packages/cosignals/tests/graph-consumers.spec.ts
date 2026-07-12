@@ -95,7 +95,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
 		const node = (() => {
-			const n0 = b.internalsForAtom(atom as Atom<unknown>)
+			const n0 = b.internalsForAtom(atom)
 			n0.name = 'a'
 			return n0
 		})()
@@ -120,7 +120,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		const b = freshEngine()
 		const { atom, log } = observedAtom(0)
 		const node = (() => {
-			const n0 = b.internalsForAtom(atom as Atom<unknown>)
+			const n0 = b.internalsForAtom(atom)
 			n0.name = 'a'
 			return n0
 		})()
@@ -148,7 +148,7 @@ describe('§1 rows 3/4 — kernel liveness transitions consult K0 only', () => {
 	it('T3: an unwatched kernel computed goes lazy-dirty regardless of live K1 watchers over the same atom', () => {
 		const b = freshEngine()
 		const handle = new Atom(1)
-		const node = b.internalsForAtom(handle as Atom<unknown>)
+		const node = b.internalsForAtom(handle)
 		node.name = 'a'
 		const p = b.renderStart('A', [])
 		const w = b.mountWatcher(
@@ -192,11 +192,11 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 	it('T5: a kernel effect (no K1 record) and an engine watcher (no K0 link) both hear one write', () => {
 		const b = freshEngine()
 		const handle = new Atom(0)
-		const node = b.internalsForAtom(handle as Atom<unknown>)
+		const node = b.internalsForAtom(handle)
 		node.name = 'a'
 		let kernelSeen = -1
 		const dispose = effect(() => {
-			kernelSeen = handle.state as number // kernel subscriber
+			kernelSeen = handle.state // kernel subscriber
 		})
 		const oc = b.computed('oc', (read) => read(node))
 		const p = b.renderStart('A', [])
@@ -219,12 +219,12 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 	it('T6 (re-pinned at S-C): a kernel computed read inside a world evaluation ADOPTS and evaluates under that world (arena links recorded); the kernel cache stays newest-coherent because worlds never touch it; kernel-frame reads still serve newest', () => {
 		const b = freshEngine()
 		const handle = new Atom(0)
-		const node = b.internalsForAtom(handle as Atom<unknown>)
+		const node = b.internalsForAtom(handle)
 		node.name = 'a'
 		let kcEvals = 0
 		const kc = new Computed(() => {
 			kcEvals++
-			return (handle.state as number) + 100
+			return handle.state + 100
 		})
 		const c = b.computed('c', () => kc.state) // standalone kernel computed inside an engine fn
 		const t = b.openBatch()
@@ -247,7 +247,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 		// during the open render sees newest.
 		let kernelSeen = -1
 		const dispose = effect(() => {
-			kernelSeen = kc.state as number
+			kernelSeen = kc.state
 		})
 		expect(kernelSeen).toBe(105)
 		b.renderEnd(p.id, 'discard')
@@ -259,7 +259,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 	it('T6b: untracked temporarily disables links, not the kernel-frame world', () => {
 		const b = freshEngine()
 		const handle = new Atom(0)
-		const node = b.internalsForAtom(handle as Atom<unknown>)
+		const node = b.internalsForAtom(handle)
 		const t = b.openBatch()
 		b.write(t.id, node, 0, 5)
 		const p = b.renderStart('A', []) // render world sees 0; kernel newest is 5
@@ -308,7 +308,7 @@ describe('§2 A4 — handle resolution vs the one engine registry', () => {
 		const b = freshEngine()
 		const handle = new Atom(0)
 		handle.set(1) // standalone history first (the node-less arm: kernel only)
-		const n = b.internalsForAtom(handle as Atom<unknown>) // content allocates ONCE; base seeds from kernel-current
+		const n = b.internalsForAtom(handle) // content allocates ONCE; base seeds from kernel-current
 		n.name = 'a'
 		expect(n.base).toBe(1) // the standalone history is committed-only base state
 		expect(b.internalsForAtom(handle as Atom<unknown>)).toBe(n) // idempotent: the handle-node link resolves, never re-allocates

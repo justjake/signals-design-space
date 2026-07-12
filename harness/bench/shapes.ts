@@ -192,7 +192,7 @@ const reads: Shape = (a, scale) => {
 	const rounds = Math.round(20_000 * scale)
 	const sigs = Array.from({ length: K }, (_, i) => a.signal(i))
 	const l1 = sigs.map((s) => a.computed(() => s.read() + 1))
-	const l2 = l1.map((c, i) => a.computed(() => c.read() + l1[(i + 1) % K]!.read()))
+	const l2 = l1.map((c, i) => a.computed(() => c.read() + l1[(i + 1) % K].read()))
 	// settle everything once
 	let sum = 0
 	for (const c of l2) {
@@ -200,7 +200,7 @@ const reads: Shape = (a, scale) => {
 	}
 	for (let r = 0; r < rounds; r++) {
 		for (let i = 0; i < K; i++) {
-			sum += l2[i]!.read()
+			sum += l2[i].read()
 		}
 	}
 	return sum
@@ -231,7 +231,7 @@ const isolate: Shape = (a, scale) => {
 	for (let r = 0; r < rounds; r++) {
 		aSrc.write(r) // unrelated write
 		for (let i = 0; i < K; i++) {
-			sum += bComps[i]!.read()
+			sum += bComps[i].read()
 		} // quiet reads of B
 	}
 	disposeA()
@@ -254,7 +254,7 @@ async function runChild(): Promise<void> {
 	const scale = Number(process.env.SHAPES_SCALE ?? '1')
 	const reps = Number(process.env.SHAPES_REPS ?? '3')
 	const wanted = (process.env.SHAPES ?? Object.keys(SHAPES).join(',')).split(',')
-	const adapter = await loadAdapter(name as never)
+	const adapter = await loadAdapter(name)
 
 	// GC observation. Node 24 quirk: observe({entryTypes:['gc']}) delivers
 	// nothing; observe({type:'gc', buffered:true}) works but replays the whole
@@ -318,8 +318,8 @@ async function runChild(): Promise<void> {
 		const row: Row = {
 			shape: p.shape,
 			framework: name,
-			ms: p.times[0]!,
-			p99: p.times[Math.min(p.times.length - 1, Math.floor(p.times.length * 0.99))]!,
+			ms: p.times[0],
+			p99: p.times[Math.min(p.times.length - 1, Math.floor(p.times.length * 0.99))],
 			mean: p.times.reduce((s, t) => s + t, 0) / p.times.length,
 			gcMs: gcSupported ? inWindow.reduce((s, e) => s + e.dur, 0) : 0,
 			gcN: gcSupported ? inWindow.length : -1,
@@ -392,7 +392,7 @@ function runParent(): void {
 	console.log(`\nruntime: ${runtime}`)
 	console.log(pad('shape', 10) + frameworks.map((f) => pad(f, colW)).join(''))
 	for (const [shapeName, m] of byShape) {
-		const baseRow = m.get(base!)
+		const baseRow = m.get(base)
 		let line = pad(shapeName, 10)
 		for (const fw of frameworks) {
 			const r = m.get(fw)

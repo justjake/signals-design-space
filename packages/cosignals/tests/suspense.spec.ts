@@ -155,19 +155,19 @@ describe('ctx.use', () => {
 			const q = query.state
 			return ctx.use(['fetch', q], () => {
 				fetches++
-				return gates[q]!.promise
+				return gates[q].promise
 			})
 		})
 		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead)
 		expect(fetches).toBe(1)
-		gates.q1!.resolve('DATA1')
-		await gates.q1!.promise
+		gates.q1.resolve('DATA1')
+		await gates.q1.promise
 		await tick()
 		expect(c.state).toBe('DATA1') // q1 settled
 		query.set('q2') // new key: fetches q2, suspends on IT
 		const e2 = catchOf(() => c.state)
 		expect(e2).toBeInstanceOf(SuspendedRead)
-		expect((e2 as SuspendedRead).thenable).toBe(gates.q2!.promise)
+		expect((e2 as SuspendedRead).thenable).toBe(gates.q2.promise)
 		expect(fetches).toBe(2)
 		query.set('q1') // back to the settled key while q2 is still pending
 		expect(c.state).toBe('DATA1') // synchronous replay — no suspension, no collision
@@ -222,14 +222,14 @@ describe('ctx.use', () => {
 			})
 		})
 		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead)
-		await boxes[0]!.promise
+		await boxes[0].promise
 		await tick()
 		expect(c.state).toBe(0)
 		expect(fetches).toBe(1)
 		gate.set(2) // NEW key: fresh entry, refetch
 		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead)
 		expect(fetches).toBe(2)
-		await boxes[1]!.promise
+		await boxes[1].promise
 		await tick()
 		expect(c.state).toBe(200)
 		gate.set(0) // back to a key that already settled: replay, NO refetch

@@ -74,7 +74,7 @@ function requireActive(): AltAReactHandle {
 export type SignalSource<T> = { readonly state: T } & ({ handle: SignalHandle } | { id: number })
 
 function handleOf(source: SignalSource<unknown>): SignalHandle {
-	return 'handle' in source ? source.handle : (source as SignalHandle)
+	return 'handle' in source ? source.handle : source
 }
 
 /** Read for render: §4 class getters already unbox (throw errors, suspend on
@@ -124,7 +124,7 @@ type WatchRec = {
  */
 export function useSignal<T>(source: SignalSource<T>): T {
 	const { engine } = requireActive()
-	const h = handleOf(source as SignalSource<unknown>)
+	const h = handleOf(source)
 	const [, force] = React.useReducer((c: number) => c + 1, 0)
 	const ref = React.useRef<{ current: WatchRec | null; retired: WatchRec[] } | null>(null)
 	if (ref.current === null) {
@@ -216,7 +216,7 @@ export function useReducerAtom<S, A>(
 	const [record] = React.useState(() => ({
 		atom: new api.ReducerAtom<S, A>({ state: initial, reducer }),
 	}))
-	const value = useSignal<S>(record.atom as SignalSource<S>)
+	const value = useSignal<S>(record.atom)
 	const dispatch = React.useCallback((action: A) => record.atom.dispatch(action), [record])
 	return [value, dispatch]
 }
@@ -250,7 +250,7 @@ export function useComputed<T>(
 		}
 		return undefined
 	}, [engine, computed])
-	return useSignal<T>(computed as SignalSource<T>)
+	return useSignal<T>(computed)
 }
 
 // ---- useSignalEffect ---------------------------------------------------------------
@@ -286,7 +286,7 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
  */
 export function useCommitted<T>(source: SignalSource<T>): T | undefined {
 	const { api, engine, bridge } = requireActive()
-	const h = handleOf(source as SignalSource<unknown>)
+	const h = handleOf(source)
 	const containerRef = React.useRef<Container>(undefined)
 	const ctx = bridge.engine === engine ? engine.renderInfo() : undefined
 	if (ctx !== undefined) {
@@ -337,11 +337,8 @@ export function useCommitted<T>(source: SignalSource<T>): T | undefined {
  * the source (the api.isPending probe subscribed like any signal). */
 export function useIsPending(source: SignalSource<unknown>): boolean {
 	const { api } = requireActive()
-	const probe = React.useMemo(
-		() => api.pendingProbe(handleOf(source as SignalSource<unknown>)),
-		[api, source],
-	)
-	return useSignal<boolean>(probe as unknown as SignalSource<boolean>)
+	const probe = React.useMemo(() => api.pendingProbe(handleOf(source)), [api, source])
+	return useSignal<boolean>(probe)
 }
 
 // ---- transitions --------------------------------------------------------------------

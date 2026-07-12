@@ -634,7 +634,7 @@ export function registerAltBReact(): AltBReactHandle {
 	if (activeFork !== undefined) {
 		throw new Error('cosignals-alt-b/react: already registered (dispose the previous handle first)')
 	}
-	const fork = new ReactFork(ReactNS as unknown as ReactRuntime)
+	const fork = new ReactFork(ReactNS)
 	attachFork(fork)
 	const bindings = createReactBindings(fork)
 	activeFork = fork
@@ -678,7 +678,7 @@ function useSignalRaw(signal: SignalLike & { state: unknown }): unknown {
 	if (ref.current === null || ref.current.of !== signal) {
 		ref.current?.hook.unmount()
 		ref.current = {
-			hook: b.mountSignal(signal, () => bump()) as AnySignalHook,
+			hook: b.mountSignal(signal, () => bump()),
 			of: signal,
 		}
 	}

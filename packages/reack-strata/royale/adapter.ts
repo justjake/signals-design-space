@@ -45,7 +45,7 @@ const adapter: RoyaleAdapter = {
 	slug: 'strata',
 	React,
 	ReactDOMClient,
-	act: act as RoyaleAdapter['act'],
+	act: act,
 	flushSync,
 
 	register(): RoyaleHandle {
@@ -161,7 +161,7 @@ const adapter: RoyaleAdapter = {
 				const chain = log.why(value as object)
 				const result: string[] = []
 				for (let i = 0; i < chain.length; i++) {
-					const event = chain[i]!
+					const event = chain[i]
 					result.push(
 						`#${event.id} ${event.kind}${
 							event.target === undefined ? '' : ` ${event.target}`
@@ -174,7 +174,7 @@ const adapter: RoyaleAdapter = {
 				const events = log.events()
 				const result: Array<{ id: number; kind: string; cause?: number }> = []
 				for (let i = 0; i < events.length; i++) {
-					const event = events[i]!
+					const event = events[i]
 					result.push({
 						id: event.id,
 						kind: event.kind,

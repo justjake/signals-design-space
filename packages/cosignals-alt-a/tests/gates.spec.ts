@@ -50,7 +50,7 @@ function loggedEngine(): { e: CosignalEngine; fork: ForkDouble } {
 function buildCone(e: CosignalEngine, size: number): { atom: ReturnType<CosignalEngine['atom']> } {
 	const atom = e.atom(0)
 	for (let i = 0; i < size; ++i) {
-		const c = e.computed(() => (atom.state as number) + i)
+		const c = e.computed(() => atom.state + i)
 		c.state // link canonically
 	}
 	return { atom }
@@ -147,13 +147,13 @@ describe('§18 gate measurements (reported; sanity ceilings only)', () => {
 			// DIRECT baseline: hot read of a computed over certLen atoms.
 			const d = directEngine()
 			const datoms = Array.from({ length: certLen }, (_, i) => d.atom(i))
-			const dc = d.computed(() => datoms.reduce((s, a) => s + (a.state as number), 0))
+			const dc = d.computed(() => datoms.reduce((s, a) => s + a.state, 0))
 			dc.state
 			const directNs = bench(() => dc.state, 20000)
 
 			const { e, fork } = loggedEngine()
 			const atoms = Array.from({ length: certLen }, (_, i) => e.atom(i))
-			const c = e.computed(() => atoms.reduce((s, a) => s + (a.state as number), 0))
+			const c = e.computed(() => atoms.reduce((s, a) => s + a.state, 0))
 			c.state
 			const t = fork.openBatch('deferred') // held open
 			t.run(() => atoms[0].set(100)) // marks the cone; unapplied entries live
@@ -170,10 +170,10 @@ describe('§18 gate measurements (reported; sanity ceilings only)', () => {
 		// tracer-slot checks (§16.5 discipline).
 		const d = directEngine()
 		const da = d.atom(0)
-		let prev = d.computed(() => (da.state as number) + 1)
+		let prev = d.computed(() => da.state + 1)
 		for (let i = 0; i < 30; ++i) {
 			const p = prev
-			prev = d.computed(() => (p.state as number) + 1)
+			prev = d.computed(() => p.state + 1)
 		}
 		const tail = prev
 		d.effect(() => {
@@ -198,7 +198,7 @@ describe('§18 gate measurements (reported; sanity ceilings only)', () => {
 		// pays ~20-25ns of performance.now() per emit.
 		const { e, fork } = loggedEngine()
 		const a = e.atom(0)
-		const c = e.computed(() => (a.state as number) + 1)
+		const c = e.computed(() => a.state + 1)
 		c.state
 		const holder = fork.openBatch('deferred')
 		holder.run(() => a.set(-1))
