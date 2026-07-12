@@ -58,7 +58,6 @@ export type EvalPass = Brand<number, 'EvalPass'>
 /** Identity of one poke walk; monotonic, never reused, so no per-walk
  * clearing is needed (same discipline as EvalPass). */
 export type PokePass = Brand<number, 'PokePass'>
-export type BatchPass = Brand<number, 'BatchPass'>
 
 /**
  * One flag bit. `Flag` names a bit; `Flags` (the stored word) stays a
@@ -261,7 +260,6 @@ const validAtColumn = new Float64Array(RECORD_CAPACITY)
 const observerColumn = new Int32Array(RECORD_CAPACITY)
 const causeColumn = new Int32Array(RECORD_CAPACITY)
 const pokeColumn = new Int32Array(RECORD_CAPACITY)
-const batchColumn = new Int32Array(RECORD_CAPACITY)
 // Bumped every time a record is reclaimed or detached (and never
 // zeroed), so an (id, generation) pair names one lifetime of one record.
 // The effect queue stores these pairs; an entry whose record moved on
@@ -525,7 +523,6 @@ function createGraphCore(
 	observerBase: Int32Array<ArrayBuffer>,
 	causeBase: Int32Array<ArrayBuffer>,
 	pokeBase: Int32Array<ArrayBuffer>,
-	batchStampBase: Int32Array<ArrayBuffer>,
 	generationBase: Int32Array<ArrayBuffer>,
 ) {
 	const M = memBase
@@ -535,7 +532,6 @@ function createGraphCore(
 	const observerColumn = observerBase
 	const causeColumn = causeBase
 	const pokeColumn = pokeBase
-	const batchColumn = batchStampBase
 	const generationColumn = generationBase
 	// Two-ended allocation: node records grow up from the bottom, link records
 	// grow down from the top. Node ids stay dense and contiguous (validation
@@ -1395,34 +1391,7 @@ function createGraphCore(
 		}
 	}
 
-	/** Cells written inside the current batch scope, with their pre-batch state:
-	 * a net-revert restores the changedAt reading so consumers validate as
-	 * unchanged. */
-	const batchBase = new Map<
-		CellNode<unknown>,
-		{ value: unknown; changedAtGraphChange: GraphChangeClock }
-	>()
-
-	/** Identity of the current top-level batch scope; ticks when a batch opens
-	 * at depth 0 (nested batches join the enclosing pass, matching batchBase's
-	 * lifetime). Cells store their reading in cell.batchPass. */
-	let batchPass: BatchPass = 0
-
-	/** First write to this cell in this batch pass: save the pre-batch state.
-	 * The pass stamp stands in for a batchBase.has probe on repeat writes. Out
-	 * of line so writeCell stays under the hot-cluster inlining budget. */
-	function saveBatchBase(cell: CellNode<unknown>, id: ReactiveNodeId): void {
-		batchColumn[id >> RECORD_SHIFT] = batchPass
-		batchBase.set(cell, {
-			value: cell.value,
-			changedAtGraphChange: changedAtOf(id),
-		})
-	}
-
 	function startBatch(): void {
-		if (batchDepth === 0) {
-			batchPass++
-		}
 		batchDepth++
 	}
 
@@ -1432,23 +1401,6 @@ function createGraphCore(
 		}
 		batchDepth--
 		if (batchDepth === 0) {
-			if (batchBase.size > 0) {
-				for (const [cell, base] of batchBase) {
-					if (cell.value !== UNINITIALIZED && base.value !== UNINITIALIZED) {
-						// Invariant: a net-revert restores the changedAt reading — the
-						// batch produced no real change, so consumers must validate as
-						// unchanged (the clock still ticked; they pay one reading compare).
-						// A cell whose record record-detached mid-batch (last consumer
-						// disposed) has nothing to restore — and must not write the
-						// shared detached-state record.
-						if (cell.id >= FIRST_REAL_RECORD && cell.equals(cell.value, base.value)) {
-							graphClocks[(cell.id >> ClockSlot.Shift) + ClockSlot.ChangedAt] =
-								base.changedAtGraphChange
-						}
-					}
-				}
-				batchBase.clear()
-			}
 			flush()
 		}
 	}
@@ -1622,9 +1574,6 @@ function createGraphCore(
 				return true
 			}
 			id = ensureNodeRecord(cell)
-		}
-		if (batchDepth > 0 && batchColumn[id >> RECORD_SHIFT] !== batchPass) {
-			saveBatchBase(cell as CellNode<unknown>, id)
 		}
 		cell.value = next
 		// Invariant: tick the clock FIRST, then stamp the change with the new
@@ -2134,7 +2083,7 @@ function createGraphCore(
 		validAtColumn[id >> RECORD_SHIFT] = 0
 		observerColumn[id >> RECORD_SHIFT] = 0
 		generationColumn[id >> RECORD_SHIFT]++
-		// pokePasses/batchPasses stay stale: pass ids are monotonic and never
+		// poke passes stay stale: pass ids are monotonic and never
 		// reused, so a stale reading can never equal a future pass. causeEvents
 		// stays stale too — it is read only under an attached tracer, and a
 		// recycled record's first wave overwrites it.
@@ -2353,7 +2302,6 @@ const core = createGraphCore(
 	observerColumn,
 	causeColumn,
 	pokeColumn,
-	batchColumn,
 	generationColumn,
 )
 

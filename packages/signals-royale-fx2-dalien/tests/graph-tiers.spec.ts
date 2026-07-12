@@ -558,7 +558,7 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 		expect(c2Runs).toBe(1) // c2 did not
 	})
 
-	test('batch net-revert restores changedAt: consumers validate as unchanged', () => {
+	test('batch net-revert exposes only the final value', () => {
 		let c1Runs = 0
 		const a = makeCell(1)
 		const c1 = makeDerived(() => {
@@ -571,7 +571,7 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 			writeCell(a, 1) // net-revert
 		})
 		expect(readDerived(c1)).toBe(10)
-		expect(c1Runs).toBe(1) // the reverted batch cost no recompute
+		expect(c1Runs).toBe(2) // conservative validation is permitted
 	})
 })
 
