@@ -1,12 +1,12 @@
 /** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
 import {
-	Computed,
 	batch,
 	computed,
 	effect,
 	effectScope,
 	installState,
 	signal,
+	type Computed,
 	type Signal,
 } from '../src/index.ts'
 

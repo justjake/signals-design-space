@@ -1,6 +1,5 @@
 /** FrameworkAdapter for the shared conformance/bench harness. */
 import {
-	Computed,
 	computed,
 	effect,
 	effectScope,
@@ -8,6 +7,7 @@ import {
 	installState,
 	signal,
 	startBatch,
+	type Computed,
 	type Signal,
 	untracked,
 } from '../src/index.ts'

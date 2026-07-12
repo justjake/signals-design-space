@@ -13,6 +13,7 @@ import {
 	reducerAtom,
 	serializeAtomState,
 	signal,
+	type Computed,
 	type Signal,
 	untracked,
 	update,
@@ -23,7 +24,9 @@ import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts'
 type Animal = { name: string }
 type Dog = Animal & { bark(): void }
 type ExpectFalse<T extends false> = T
+type ExpectTrue<T extends true> = T
 type SignalIsInvariant = ExpectFalse<Signal<Dog> extends Signal<Animal> ? true : false>
+type ComputedIsCovariant = ExpectTrue<Computed<Dog> extends Computed<Animal> ? true : false>
 
 const tick = () => new Promise<void>((r) => setTimeout(r))
 
@@ -146,15 +149,23 @@ describe('lazy initializers', () => {
 })
 
 describe('derived policy and APIs', () => {
-	test('writable factories return the graph node without runtime handle classes', () => {
+	test('factories return graph nodes without runtime handle classes', () => {
 		const source = signal(1)
 		const reduced = reducerAtom((state: number, action: number) => state + action, 1)
+		const derived = computed(() => source.get() + 1)
+		const otherDerived = computed(() => 0)
 		expect(nodeOf(source)).toBe(source)
 		expect(nodeOf(reduced)).toBe(reduced)
+		expect(nodeOf(derived)).toBe(derived)
+		expect(Object.getPrototypeOf(derived)).toBe(Object.prototype)
+		expect(derived.get).toBe(otherDerived.get)
+		expect(derived.peek).toBe(otherDerived.peek)
 		expect(fx2).not.toHaveProperty('Signal')
 		expect(fx2).not.toHaveProperty('ReducerAtom')
+		expect(fx2).not.toHaveProperty('Computed')
 		expect(fx2.signal).toBe(signal)
 		expect(fx2.reducerAtom).toBe(reducerAtom)
+		expect(fx2.computed).toBe(computed)
 	})
 
 	test('previous is the last settled canonical value', () => {

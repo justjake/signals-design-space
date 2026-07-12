@@ -32,7 +32,6 @@ import {
 	flushLifetimeTransitions,
 	getActiveConsumer,
 	isUninitialized,
-	makeDerived,
 	makeEffect,
 	makeScope,
 	peekCell,
@@ -176,28 +175,28 @@ function dispatchReducer<S, A>(this: ReducerSignal<S, A>, action: A): void {
 	this.update((state) => reduce(state, action))
 }
 
-export class Computed<T> {
-	/** @internal */
-	readonly node: DerivedNode<T>
-	constructor(fn: (use: UseFn, previous: T | undefined) => T, opts?: ComputedOptions<T>) {
-		this.node = makeDerived(fn, opts, true)
+export type Computed<out T> = {
+	get(): T
+	peek(): T
+}
+
+type ComputedNode<T> = Computed<T> & DerivedNode<T>
+
+function getComputed<T>(this: ComputedNode<T>): T {
+	const world = getCurrentWorld()
+	if (world !== null) {
+		// Inside a draft evaluation every read resolves that world.
+		return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
 	}
-	get(): T {
-		const node = this.node
-		const world = getCurrentWorld()
-		if (world !== null) {
-			// Inside a draft evaluation every read resolves that world.
-			return unwrapForEval(resolveState(node, world), getCurrentPark()!) as T
-		}
-		const value = readDerived(node)
-		if ((node.flags & Flag.AsyncMask) !== 0) {
-			return unwrapAsyncRead(node as DerivedNode<unknown>) as T
-		}
-		return value
+	const value = readDerived(this)
+	if ((this.flags & Flag.AsyncMask) !== 0) {
+		return unwrapAsyncRead(this as DerivedNode<unknown>) as T
 	}
-	peek(): T {
-		return graphUntracked(() => this.get())
-	}
+	return value
+}
+
+function peekComputed<T>(this: ComputedNode<T>): T {
+	return graphUntracked(() => this.get())
 }
 
 export type Readable<T> = Signal<T> | Computed<T>
@@ -223,17 +222,33 @@ export function computed<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: ComputedOptions<T>,
 ): Computed<T> {
-	return new Computed(fn, opts)
+	const node: ComputedNode<T> = {
+		flags: Flag.KindDerived | Flag.StaleDirty,
+		changedAtGraphChange: 0,
+		throwable: null,
+		subs: undefined,
+		subsTail: undefined,
+		deps: undefined,
+		depsTail: undefined,
+		observerCount: 0,
+		causeEvent: NO_EVENT,
+		label: opts?.label,
+		value: UNINITIALIZED,
+		fn,
+		equals: opts?.equals ?? Object.is,
+		validAtGraphChange: 0,
+		worldMemos: undefined,
+		pokePass: 0,
+		get: getComputed,
+		peek: peekComputed,
+	}
+	return node
 }
 
 /** @internal Resolve a handle to its engine node. */
 export function nodeOf(x: AnyReadable): ReactiveNode {
-	const signalNode = x as unknown as ReactiveNode
-	if ((signalNode.flags & Flag.KindCell) !== 0) {
-		return signalNode
-	}
-	const node = (x as Computed<unknown>).node
-	if (node !== undefined) {
+	const node = x as unknown as ReactiveNode
+	if ((node.flags & (Flag.KindCell | Flag.KindDerived)) !== 0) {
 		return node
 	}
 	throw new TypeError('expected a signal or computed handle')

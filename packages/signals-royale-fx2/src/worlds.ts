@@ -691,9 +691,6 @@ function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState
  * write path resolved for the draft; before the first touch, the draft world
  * is identical to base. The graph calls this once per reached node. */
 function changedInCutoffWorld(node: ReactiveNode): boolean {
-	if ((node.flags & Flag.KindDerived) !== 0 && (node.flags & Flag.WorldAware) === 0) {
-		return true
-	}
 	const world = cutoffWorld!
 	try {
 		const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD)

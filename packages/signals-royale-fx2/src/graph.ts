@@ -118,12 +118,9 @@ export const enum Flag {
 	Scheduled = 0b1000_0000_0000,
 	/** Canonical derived evaluation in progress. */
 	Computing = 0b1_0000_0000_0000,
-	/** Derived reads route through the active draft world. Raw graph-level
-	 * deriveds intentionally lack this capability. */
-	WorldAware = 0b10_0000_0000_0000,
 	/** Draft-world derived evaluation in progress. Separate because only a
 	 * canonical evaluation refreshes the graph-validation watermark. */
-	DraftComputing = 0b100_0000_0000_0000,
+	DraftComputing = 0b10_0000_0000_0000,
 
 	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
 	StaleMask = StaleCheck | StaleDirty,
@@ -291,31 +288,6 @@ export interface WatcherNode extends ReactiveNode {
 }
 
 export type UseFn = <U>(t: PromiseLike<U>) => U
-
-export function makeDerived<T>(
-	fn: (use: UseFn, previous: T | undefined) => T,
-	opts?: { equals?: EqualsFn<T>; label?: string },
-	worldAware = false,
-): DerivedNode<T> {
-	return {
-		flags: Flag.KindDerived | Flag.StaleDirty | (worldAware ? Flag.WorldAware : 0),
-		changedAtGraphChange: 0,
-		throwable: null,
-		subs: undefined,
-		subsTail: undefined,
-		deps: undefined,
-		depsTail: undefined,
-		observerCount: 0,
-		causeEvent: NO_EVENT,
-		label: opts?.label,
-		value: UNINITIALIZED,
-		fn,
-		equals: opts?.equals ?? Object.is,
-		validAtGraphChange: 0,
-		worldMemos: undefined,
-		pokePass: 0,
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Dependency linking

@@ -18,18 +18,21 @@ import {
 	Flag,
 	batch,
 	currentGraphChange,
-	makeDerived,
 	makeEffect,
 	observeNode,
 	readCell,
 	readDerived,
 	writeCell,
 } from '../src/graph.ts'
-import { nodeOf, signal, type SignalOptions } from '../src/index.ts'
+import { computed, nodeOf, signal, type Computed, type SignalOptions } from '../src/index.ts'
 import { appendDraftIntent, discardDraft, openDraft } from '../src/worlds.ts'
 
 function cell<T>(initial: T | (() => T), opts?: SignalOptions<T>): CellNode<T> {
 	return nodeOf(signal(initial, opts)) as CellNode<T>
+}
+
+function makeGraphDerived<T>(fn: DerivedNode<T>['fn']): DerivedNode<T> {
+	return nodeOf(computed(fn)) as DerivedNode<T>
 }
 
 /** Edges in dep's subscriber list pointing at sub (watched edges only). */
@@ -77,7 +80,7 @@ describe('two-tier graph: promote validation', () => {
 		// installed back-edges and trusted the stale Clean flags, so the watched
 		// fast path served the cached value.
 		const a = cell(1)
-		const d = makeDerived(() => readCell(a) * 2)
+		const d = makeGraphDerived(() => readCell(a) * 2)
 		expect(readDerived(d)).toBe(2) // caches while unwatched
 		writeCell(a, 2) // no back-edges: no push mark reaches d
 		const stop = observeNode(d, () => {}) // subscribe WITHOUT pulling
@@ -90,7 +93,7 @@ describe('two-tier graph: promote validation', () => {
 		// was stale when the subscriber arrived, and the wave's early-return on
 		// pre-existing staleness meant the new subscriber never heard anything.
 		const a = cell(1)
-		const d = makeDerived(() => readCell(a) * 2)
+		const d = makeGraphDerived(() => readCell(a) * 2)
 		const stopEffect = makeEffect(() => void readDerived(d))
 		batch(() => {
 			writeCell(a, 2) // marks d through the watched edge
@@ -110,8 +113,8 @@ describe('two-tier graph: promote validation', () => {
 		// invalidated c -> d1 while everything was unwatched; promote linked the
 		// closure without checking whether the flags deserved trust.
 		const c = cell(1)
-		const d1 = makeDerived(() => readCell(c) + 1)
-		const d2 = makeDerived(() => readDerived(d1) * 10)
+		const d1 = makeGraphDerived(() => readCell(c) + 1)
+		const d2 = makeGraphDerived(() => readDerived(d1) * 10)
 		expect(readDerived(d2)).toBe(20)
 		writeCell(c, 2)
 		const stop = observeNode(d2, () => {})
@@ -123,8 +126,8 @@ describe('two-tier graph: promote validation', () => {
 describe('two-tier graph: promote/demote structure', () => {
 	test('T4 [parity] promote links the dep closure; demote reverses it exactly', () => {
 		const c = cell(1)
-		const d1 = makeDerived(() => readCell(c) + 1)
-		const d2 = makeDerived(() => readDerived(d1) + 1)
+		const d1 = makeGraphDerived(() => readCell(c) + 1)
+		const d2 = makeGraphDerived(() => readDerived(d1) + 1)
 		expect(readDerived(d2)).toBe(3)
 		// Unwatched evaluation registered nothing subscriber-side.
 		expect(subEdgeCount(c)).toBe(0)
@@ -157,8 +160,8 @@ describe('two-tier graph: promote/demote structure', () => {
 
 	test('T5 [parity] demote seeds validAtGraphChange: the clock reading when Clean, 0 when stale', () => {
 		const c = cell(1)
-		const d1 = makeDerived(() => readCell(c) + 1)
-		const d2 = makeDerived(() => readDerived(d1) + 1)
+		const d1 = makeGraphDerived(() => readCell(c) + 1)
+		const d2 = makeGraphDerived(() => readDerived(d1) + 1)
 		const stop = observeNode(d2, () => {})
 		expect(readDerived(d2)).toBe(3)
 		stop() // Clean at demote: the next quiet read must short-circuit O(1)
@@ -179,8 +182,8 @@ describe('two-tier graph: promote/demote structure', () => {
 		let e1 = 0
 		let e2 = 0
 		const c = cell(1)
-		const d1 = makeDerived(() => (e1++, readCell(c) + 1))
-		const d2 = makeDerived(() => (e2++, readDerived(d1) + 1))
+		const d1 = makeGraphDerived(() => (e1++, readCell(c) + 1))
+		const d2 = makeGraphDerived(() => (e2++, readDerived(d1) + 1))
 		expect(readDerived(d2)).toBe(3)
 		expect([e1, e2]).toEqual([1, 1])
 
@@ -208,7 +211,7 @@ describe('two-tier graph: promote/demote structure', () => {
 	test('T8 [parity] quiet reads short-circuit: zero recomputes on a wide validated graph', () => {
 		const cells = Array.from({ length: 50 }, (_, i) => cell(i))
 		let evals = 0
-		const wide = makeDerived(() => {
+		const wide = makeGraphDerived(() => {
 			evals++
 			let sum = 0
 			for (const c of cells) {
@@ -233,7 +236,7 @@ describe('two-tier graph: promote/demote structure', () => {
 		let subscribeNow = false
 		let stop: (() => void) | undefined
 		let notified = 0
-		const d: DerivedNode<number> = makeDerived(() => {
+		const d: DerivedNode<number> = makeGraphDerived(() => {
 			const vx = readCell(x)
 			if (subscribeNow) {
 				subscribeNow = false
@@ -279,7 +282,7 @@ describe('two-tier graph: tracking and waves', () => {
 		// watched edge, double-counting the observer.
 		const a = cell(1)
 		const b = cell(2)
-		const d = makeDerived(() => readCell(a) + readCell(b) + readCell(a))
+		const d = makeGraphDerived(() => readCell(a) + readCell(b) + readCell(a))
 		const stop = observeNode(d, () => {})
 		expect(readDerived(d)).toBe(4)
 		expect(subEdgeCount(a, d)).toBe(1)
@@ -296,7 +299,7 @@ describe('two-tier graph: tracking and waves', () => {
 
 	test('T10 [parity pin] render notification is edge-triggered; a pull re-arms', () => {
 		const a = cell(1)
-		const d = makeDerived(() => readCell(a) * 2)
+		const d = makeGraphDerived(() => readCell(a) * 2)
 		expect(readDerived(d)).toBe(2) // Clean before subscribing: no wake due
 		let n = 0
 		const stop = observeNode(d, () => n++)
@@ -321,33 +324,33 @@ describe('two-tier graph: tracking and waves', () => {
 		// computeds over the drafted cell), so its walk needs the same
 		// iterative discipline. Pre-change failure quoted in the commit.
 		const DEPTH = 150_000
-		const base = cell(0)
+		const base = signal(0)
 		const disposers: Array<() => void> = []
 		let topNotified = 0
 		const wakes: number[] = []
-		let prev: ReactiveNode = base
+		const cutoffBreaker = cell(0)
+		let prev: Computed<number> = base
 		for (let i = 0; i < DEPTH; i++) {
 			const p = prev
-			const d = makeDerived(
-				() =>
-					((p.flags & Flag.KindCell) !== 0
-						? readCell(p as CellNode<number>)
-						: readDerived(p as DerivedNode<number>)) + 1,
-			)
+			const d = computed(() => p.get() + 1)
+			const node = nodeOf(d)
 			disposers.push(
 				i === DEPTH - 1
 					? observeNode(
-							d,
+							node,
 							() => topNotified++,
 							(id) => wakes.push(id),
 						)
-					: observeNode(d, () => {}),
+					: observeNode(node, () => {}),
 			)
-			readDerived(d)
+			d.get()
 			prev = d
 		}
 		const draft = openDraft()
-		appendDraftIntent(draft, base as CellNode<unknown>, 'set', 1)
+		// Isolate the iterative poke walk: the cutoff's dependency certificates
+		// are a separate concern from this deliberately 150k-deep traversal.
+		writeCell(cutoffBreaker, 1)
+		appendDraftIntent(draft, nodeOf(base) as CellNode<unknown>, 'set', 1)
 		expect(topNotified).toBe(1) // the poke reached the deepest subscriber
 		expect(wakes).toEqual([draft.id]) // and so did the draft-lane wake
 		discardDraft(draft.id) // rollback pokes the same closure again
@@ -355,7 +358,7 @@ describe('two-tier graph: tracking and waves', () => {
 		for (let i = disposers.length - 1; i >= 0; i--) {
 			disposers[i]()
 		}
-		expect(subEdgeCount(base)).toBe(0)
+		expect(subEdgeCount(nodeOf(base))).toBe(0)
 	})
 
 	test('T11 [falsify-first] a write through a deep watched chain completes', () => {
@@ -370,7 +373,7 @@ describe('two-tier graph: tracking and waves', () => {
 		let prev: ReactiveNode = base
 		for (let i = 0; i < DEPTH; i++) {
 			const p = prev
-			const d = makeDerived(
+			const d = makeGraphDerived(
 				() =>
 					((p.flags & Flag.KindCell) !== 0
 						? readCell(p as CellNode<number>)
@@ -463,11 +466,11 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 		let c1Runs = 0
 		let c2Runs = 0
 		const a = cell(1)
-		const c1 = makeDerived(() => {
+		const c1 = makeGraphDerived(() => {
 			c1Runs++
 			return readCell(a) * 10
 		})
-		const c2 = makeDerived(() => {
+		const c2 = makeGraphDerived(() => {
 			c2Runs++
 			return readDerived(c1) + 1
 		})
@@ -484,11 +487,11 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 		let c1Runs = 0
 		let c2Runs = 0
 		const a = cell(1)
-		const c1 = makeDerived(() => {
+		const c1 = makeGraphDerived(() => {
 			c1Runs++
 			return readCell(a) % 2
 		})
-		const c2 = makeDerived(() => {
+		const c2 = makeGraphDerived(() => {
 			c2Runs++
 			return readDerived(c1) * 100
 		})
@@ -502,7 +505,7 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 	test('batch net-revert restores changedAt: consumers validate as unchanged', () => {
 		let c1Runs = 0
 		const a = cell(1)
-		const c1 = makeDerived(() => {
+		const c1 = makeGraphDerived(() => {
 			c1Runs++
 			return readCell(a) * 10
 		})
@@ -535,7 +538,7 @@ describe('deps-from-eval invariant (test-side check, was a shipped dev assertion
 		const flag = cell(true, { label: 'flag' })
 		const x = cell(1, { label: 'x' })
 		const y = cell(2, { label: 'y' })
-		const d = makeDerived(() => (readCell(flag) ? readCell(x) : readCell(y)))
+		const d = makeGraphDerived(() => (readCell(flag) ? readCell(x) : readCell(y)))
 		expect(readDerived(d)).toBe(1)
 		expect(depsOf(d)).toEqual([flag, x])
 		writeCell(flag, false)
@@ -548,7 +551,7 @@ describe('deps-from-eval invariant (test-side check, was a shipped dev assertion
 
 	test('repeat reads within one evaluation keep one edge', () => {
 		const x = cell(3, { label: 'x' })
-		const d = makeDerived(() => readCell(x) + readCell(x) + readCell(x))
+		const d = makeGraphDerived(() => readCell(x) + readCell(x) + readCell(x))
 		expect(readDerived(d)).toBe(9)
 		expect(depsOf(d)).toEqual([x])
 	})

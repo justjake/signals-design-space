@@ -4,7 +4,6 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import {
-	Computed,
 	attachTracer,
 	batch,
 	committed,
@@ -20,6 +19,7 @@ import {
 	signal,
 	untracked,
 	update,
+	type Computed,
 	type Signal,
 	type SignalOptions,
 	type UseFn,

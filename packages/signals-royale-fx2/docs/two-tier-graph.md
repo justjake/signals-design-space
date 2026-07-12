@@ -291,8 +291,8 @@ contract. Where fx2 deliberately diverges from alien, and why:
   `shallowPropagate`; fx2 schedules watchers eagerly at mark time and
   validates at run (`runWatcher` 849-864). Both end at "effect re-runs iff a
   dep value actually changed"; fx2's exact counts stay the contract.
-- **Dirty producers are exhaustive and unchanged:** creation
-  (`makeDerived` 240), `invalidateDerived` — thenable settlement treated as
+- **Dirty producers are exhaustive and unchanged:** computed-node creation,
+  `invalidateDerived` — thenable settlement treated as
   a write (447-458), self-affecting evaluations (`recompute` exit
   rule, 755), and poke marking of leaf watchers only (475, 509). Alien's
   "signal write sets its own Dirty" has no fx2 equivalent: cells carry
