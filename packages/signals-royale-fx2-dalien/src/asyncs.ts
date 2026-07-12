@@ -96,7 +96,7 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  *   read rethrows (AsyncError), the Suspension whose .promise suspends a
  *   reader (AsyncSuspended), null in the value state.
  */
-export interface DerivedState {
+export interface ResolvedState {
 	flags: Flags
 	value: unknown
 	throwable: ErrorBox | Suspension | null

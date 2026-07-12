@@ -87,9 +87,12 @@ export const enum Flag {
 	WatchRender = 0b0000_0000_1000,
 	/** Schedule into the validated effect queue (runs the body). */
 	WatchRunEffect = 0b0000_0001_0000,
-	/** Draft pings and wakes reach this watcher; absent = base-state-only
-	 * (every engine effect today). */
+	/** Draft pings and wakes reach this watcher; absent = base-state-only.
+	 * Ordinary engine effects omit it; React-phase effects carry it. */
 	WatchDraft = 0b0000_0010_0000,
+	/** Validation asks the host to schedule the user body instead of running
+	 * it inside the graph flush. Used by React-phase signal effects. */
+	WatchSchedule = 0b1_0000_0000_0000_0000,
 
 	// Staleness: an exclusive pair; writes clear the whole field before
 	// setting, so a single-bit test reads the exact state.
@@ -130,7 +133,7 @@ export const enum Flag {
 	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
 	StaleMask = StaleCheck | StaleDirty,
 	/** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
-	 * state — how DerivedState views are read (see asyncs.ts). */
+	 * state — how ResolvedState views are read (see asyncs.ts). */
 	AsyncMask = AsyncError | AsyncSuspended,
 	/** Either kind of derived evaluation; any re-entry is a cycle. */
 	ComputingMask = Computing | DraftComputing,
@@ -245,6 +248,12 @@ export interface WatcherNode extends ReactiveNode {
 	onDraftWake: ((id: DraftId) => void) | undefined
 }
 
+export interface ScheduledEffect {
+	run(fn: () => void | (() => void)): Link | undefined
+	refresh<T>(fn: () => T): T
+	dispose(): void
+}
+
 export const RECORD_SHIFT = 3
 const RECORD_STRIDE = 1 << RECORD_SHIFT
 const NODE_STRIDE = 8
@@ -299,6 +308,9 @@ initDetachedRecords()
 /** The computed body executing now, independent of dependency tracking.
  * untracked() clears activeConsumer but must not bypass computed policies. */
 export let activeEvaluation: DerivedNode<unknown> | null = null
+/** Auxiliary watcher collecting draft-world certificate sources for the
+ * scheduled effect currently running. */
+export let activeWorldSourceConsumer: WatcherNode | null = null
 export type TraceFn = (
 	kind: string,
 	node: ReactiveNode | null,
@@ -964,6 +976,29 @@ function createGraphCore(
 		trackReadInsert(dep, sub)
 	}
 
+	/** Link a world-resolved read to the scheduled watcher collecting it.
+	 * Draft evaluation itself is untracked, so ordinary evaluations never
+	 * reach this path. */
+	function trackWorldRead(node: ReactiveNode): void {
+		const consumer = activeConsumer
+		if (
+			consumer !== null &&
+			(flagsOf(consumer) & (Flag.Watching | Flag.Watched)) ===
+				(Flag.Watching | Flag.Watched)
+		) {
+			trackRead(node, consumer)
+		}
+	}
+
+	/** Link one flattened draft-world certificate source to the scheduled
+	 * effect's wake-only watcher. */
+	function trackWorldSource(node: ReactiveNode): void {
+		const consumer = activeWorldSourceConsumer
+		if (consumer !== null && (flagsOf(consumer) & Flag.Watched) !== 0) {
+			trackRead(node, consumer)
+		}
+	}
+
 	function trackReadInsert(dep: ReactiveNode, sub: ReactiveNode): void {
 		const mem = M
 		const pins = pinnedInternals
@@ -1310,9 +1345,17 @@ function createGraphCore(
 						// Value hooks have a draft-lane callback and can use the optional
 						// computed cutoff. Probes carry no callback: they still need the
 						// poke because pendingness may change while the value stays equal.
-						if (w.onDraftWake === undefined || changed) {
+						if (
+							w.onDraftWake === undefined ||
+							changed ||
+							(flags & Flag.WatchSchedule) !== 0
+						) {
 							let nextFlags = flags
-							if ((flags & Flag.StaleMask) === 0) {
+							if ((flags & Flag.WatchSchedule) !== 0 && wake === undefined) {
+								// A root-relative world can change without changing base
+								// graph readings. Force the host callback to refresh it.
+								nextFlags = (nextFlags & ~Flag.StaleMask) | Flag.StaleDirty
+							} else if ((flags & Flag.StaleMask) === 0) {
 								nextFlags |= Flag.StaleCheck
 							}
 							scheduleWatcher(sub, nextFlags)
@@ -1821,11 +1864,14 @@ function createGraphCore(
 
 	function untracked<T>(fn: () => T): T {
 		const prev = activeConsumer
+		const prevWorldSource = activeWorldSourceConsumer
 		activeConsumer = null
+		activeWorldSourceConsumer = null
 		try {
 			return fn()
 		} finally {
 			activeConsumer = prev
+			activeWorldSourceConsumer = prevWorldSource
 		}
 	}
 
@@ -1897,8 +1943,14 @@ function createGraphCore(
 				return
 			}
 		}
-		setFlags(w, flagsOf(w) & ~Flag.StaleMask)
-		executeWatcher(w)
+		const nextFlags = flagsOf(w) & ~Flag.StaleMask
+		setFlags(w, nextFlags)
+		if ((nextFlags & Flag.WatchSchedule) !== 0) {
+			validAtColumn[id >> RECORD_SHIFT] = graphChangeClock
+			w.onNotify!()
+		} else {
+			executeWatcher(w)
+		}
 	}
 
 	/** Dispose every child even when one cleanup throws, then surface the
@@ -2158,6 +2210,55 @@ function createGraphCore(
 		nodeFinalizer = makeNodeFinalizer()
 	}
 
+	function makeScheduledEffect(
+		schedule: () => void,
+		draftWake: (id: DraftId) => void,
+	): ScheduledEffect {
+		const capabilities = Flag.WatchRunEffect | Flag.WatchDraft | Flag.WatchSchedule
+		const watcher = makeWatcher(undefined, capabilities)
+		const worldSources = makeWatcher(undefined, capabilities)
+		watcher.onNotify = schedule
+		watcher.onDraftWake = draftWake
+		worldSources.onNotify = schedule
+		worldSources.onDraftWake = draftWake
+		function runPrimary(): void {
+			executeWatcher(watcher)
+		}
+		const handle: ScheduledEffect = {
+			run(fn) {
+				if (
+					(flagsOf(watcher) & Flag.Watched) === 0 ||
+					(flagsOf(worldSources) & Flag.Watched) === 0
+				) {
+					return undefined
+				}
+				watcher.fn = fn
+				handle.refresh(runPrimary)
+				return depsOf(watcher.id)
+			},
+			refresh(fn) {
+				const previous = activeWorldSourceConsumer
+				activeWorldSourceConsumer = worldSources
+				const myPass: EvalPass = (evalPass = ++evalPassCounter)
+				worldSources.depsTail = 0
+				const preGraphChange = graphChangeClock
+				try {
+					return fn()
+				} finally {
+					evalPass = myPass
+					activeWorldSourceConsumer = previous
+					trimDeps(worldSources)
+					validAtColumn[worldSources.id >> RECORD_SHIFT] = preGraphChange
+				}
+			},
+			dispose() {
+				disposeWatcher(worldSources)
+				disposeWatcher(watcher)
+			},
+		}
+		return handle
+	}
+
 	function makeEffect(fn: () => void | (() => void)): () => void {
 		const w = makeWatcher(fn, Flag.WatchRunEffect)
 		const owner = activeScope
@@ -2291,7 +2392,10 @@ function createGraphCore(
 		readDerived,
 		untracked,
 		getActiveConsumer,
+		trackWorldRead,
+		trackWorldSource,
 		disposeWatcher,
+		makeScheduledEffect,
 		makeEffect,
 		makeScope,
 		observeNode,
@@ -2333,7 +2437,10 @@ export const ensureFresh = core.ensureFresh
 export const readDerived = core.readDerived
 export const untracked = core.untracked
 export const getActiveConsumer = core.getActiveConsumer
+export const trackWorldRead = core.trackWorldRead
+export const trackWorldSource = core.trackWorldSource
 export const disposeWatcher = core.disposeWatcher
+export const makeScheduledEffect = core.makeScheduledEffect
 export const makeEffect = core.makeEffect
 export const makeScope = core.makeScope
 export const observeNode = core.observeNode

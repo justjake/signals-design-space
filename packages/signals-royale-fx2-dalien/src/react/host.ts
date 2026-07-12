@@ -1,14 +1,20 @@
 /**
- * The host seam: registration, the provider registry that carries
- * transition drafts into React state, write classification for plain
- * React.startTransition scopes, the write-during-render guard, the
- * validity-gated render-world note, and draft-lane wake dispatch.
+ * This module glues the engine's drafts and worlds to a running React
+ * tree.
  *
- * The design premise of this package: React itself is the world clock.
- * A transition draft becomes visible to a render pass only because that
- * pass's React state contains the draft id — and React's own update queues
- * decide which passes those are. The bindings never guess at lanes; they
- * read worlds out of React state. Everything runs on stock React.
+ * The design premise is that React itself decides which render pass sees
+ * which drafts. Draft ids are dispatched into ordinary React state (each
+ * SignalScopeProvider's reducer, each useValue hook's reducer) from
+ * inside the owning transition, so React's own update queues determine
+ * visibility: urgent passes skip the pending update, the transition's passes include
+ * it. These bindings never guess at lanes or patch React; everything runs
+ * on stock React through public state and context primitives.
+ *
+ * This file contains, in order: render detection and the write-during-
+ * render guard; the render-world note (how a render pass declares which
+ * world it is); draft-wake dispatch and late-subscription repair; and the
+ * registry that broadcasts new drafts to scopes and retires them when
+ * every scope has committed.
  */
 // The `scheduler` package ships untyped; the ambient declaration lives in
 // scheduler.d.ts. The reference pulls it into any program that includes this
@@ -30,32 +36,45 @@ import {
 } from '../worlds.ts'
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
 
-/** One registered SignalScope instance (one per root in practice). The
- * record is identity-stable for the scope's lifetime: it is the ScopeContext
- * value (so context never re-renders consumers) and the key notes are
- * validity-checked against. */
-export interface ProviderRecord {
+/** One registered SignalScope instance (one per SignalScopeProvider in
+ * practice). The record is identity-stable for the scope's lifetime: it
+ * serves as the ScopeContext value (so context changes never re-render
+ * consumers) and as the key that render-world notes are validated against. */
+export interface SignalScope {
+	/** The scope's reducer dispatch; draft ids delivered here become part
+	 * of the worlds its render passes carry. */
 	dispatch: (id: DraftId) => void
+	/** Keys this root's committed world (see
+	 * SignalScopeProviderProps.container); null when the scope was mounted
+	 * without one. */
 	container: object | null
+	/** True only while this scope's first-child commit marker confirms its
+	 * current render, before descendant layout effects advance hook stashes. */
+	committing: boolean
 }
 
+/** Returned by registerReactSignals(): exposes captured errors and tears
+ * the registration down. */
 export interface ReactSignalsHandle {
 	/** Errors captured from user callbacks and React roots; tests assert []. */
 	errors: unknown[]
 	dispose(): void
 }
 
-const providers = new Set<ProviderRecord>()
+const providers = new Set<SignalScope>()
 interface HostedDraft {
 	draft: Draft
-	/** The React transition that owns this draft. Late deliveries restore it
-	 * so their dispatches join the original transition's lanes. */
+	/** The React transition object that owns this draft. Late deliveries
+	 * restore it so their dispatches join the original transition's
+	 * updates. */
 	owner: object | null
-	/** Providers that received the draft and have not committed it. */
-	recipients: Set<ProviderRecord>
-	/** Every provider that received the draft. A scope mounted later is absent:
-	 * its subscribers need a loud retirement because no pass carried the draft. */
-	audience: Set<ProviderRecord>
+	/** Providers that received the draft and have not committed it yet;
+	 * the draft retires when this empties. */
+	recipients: Set<SignalScope>
+	/** Every provider that received the draft at broadcast time. A scope
+	 * mounted later is absent, and its subscribers rely on the retirement
+	 * fold notifying them, since none of their passes carried the draft. */
+	audience: Set<SignalScope>
 }
 
 const hostedDrafts = new Map<DraftId, HostedDraft>()
@@ -74,15 +93,18 @@ function sharedInternals(): SharedInternals {
 	return secret ?? {}
 }
 
-/** Hook dispatchers observed during renders. React parks a context-only
- * dispatcher in H between renders (non-null!), so "H is set" alone cannot
- * gate render detection; only dispatchers captured while an fx2 hook was
- * executing identify a live component render. Dispatchers are per-build
- * singletons, so one capture covers every later render. */
+/** Hook dispatchers observed during renders. React exposes its current
+ * hooks dispatcher in the internals object's H slot, but H is non-null
+ * even between renders (React parks a context-only dispatcher there), so
+ * "H is set" alone cannot detect rendering. Instead, dispatchers are
+ * captured while one of our hooks is executing — which only happens
+ * inside a component body — and membership in this set identifies a live
+ * component render. Dispatchers are per-React-build singletons, so one
+ * capture covers every later render. */
 const renderDispatchers = new WeakSet<object>()
 
-/** Record "we are rendering under this dispatcher" — called on every scope
- * and hook render (they only execute inside component bodies). */
+/** Record "we are rendering under this dispatcher" — called from every
+ * scope and hook render. */
 function captureRenderDispatcher(): void {
 	const H = sharedInternals().H
 	if (H != null) {
@@ -106,41 +128,47 @@ function renderWriteGuard(): void {
 }
 
 // ---------------------------------------------------------------------------
-// The render-world note (validity-gated)
+// Render-world notes: how a render pass declares which world it is.
 // ---------------------------------------------------------------------------
 
-/** What the current render pass may see, as declared BY that pass: written
- * by the pass's SignalScope render (its reducer state is the pass world) and
- * refreshed by every fx2 hook the pass renders. Consumed by plain latest()/
- * isPending() calls in render bodies below, and by hooks mounting inside the
- * pass.
+/** A render pass's own declaration of which world it is executing in:
+ * written by the pass's SignalScopeProvider render (whose reducer state
+ * is the pass's world) and refreshed by every one of our hooks the pass
+ * renders. Consumed by plain latest()/isPending() calls in render bodies, and by
+ * hooks mounting inside the pass.
  *
- * Validity is the contract: a pass that did not refresh the note cannot
- * consume a stale one. Enforced by construction —
- * - the note dies when any render under a DIFFERENT scope record notes
- *   (foreign roots overwrite/clear, never inherit);
+ * The danger is a pass consuming a note some other pass wrote, so a note
+ * is only valid for the pass that wrote or refreshed it. Enforced by
+ * construction:
+ * - a note dies when any render under a different scope record writes one
+ *   (foreign roots overwrite or clear, never inherit);
  * - a note carrying live drafts dies at the end of the synchronous work
- *   chunk that wrote it: a microtask covers stack unwinds (event handlers,
- *   interleaved urgent flushes), and an immediate-priority scheduler task
- *   covers same-stack handoffs between React work-loop tasks (a suspended
- *   pass followed by another root's pass in one flush);
- * - consumption requires a live hooks dispatcher (render bodies only).
- * When no valid note exists during a render, reads fall back to BASE —
- * wrong-toward-base is the safe direction; stale worlds and draft
- * leaks into urgent passes are never acceptable. */
+ *   chunk that wrote it. A microtask covers every path that unwinds the
+ *   stack (event handlers, interleaved urgent flushes), and an
+ *   immediate-priority scheduler task covers same-stack handoffs between
+ *   React work-loop tasks, such as a suspended pass followed by another
+ *   root's pass in one flush;
+ * - consuming a note requires a live hooks dispatcher, i.e. a render body.
+ * When no valid note exists during a render, reads fall back to base
+ * state. Wrong-toward-base is the safe direction; serving a stale world,
+ * or leaking drafts into an urgent pass, is never acceptable. */
 interface RenderWorldNote {
-	scope: ProviderRecord | null
+	scope: SignalScope | null
 	ids: readonly DraftId[]
 }
 
 let note: RenderWorldNote | null = null
 
-function armNoteExpiry(mine: RenderWorldNote): void {
-	const expire = () => {
+function expiryFor(mine: RenderWorldNote): () => void {
+	return () => {
 		if (note === mine) {
 			note = null
 		}
 	}
+}
+
+function armNoteExpiry(mine: RenderWorldNote): void {
+	const expire = expiryFor(mine)
 	queueMicrotask(expire)
 	// The scheduler's task queue is a min-heap on expiration: an immediate
 	// task scheduled now runs before any waiting normal-priority render task,
@@ -153,10 +181,11 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 	}
 }
 
-/** The scope's own render: authoritative for its pass, always overwrites.
- * An empty world clears instead of installing — a null note already means
- * BASE to every consumer, and steady-state renders stay allocation-free. */
-export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]): void {
+/** Called by the scope's own render: authoritative for its pass, always
+ * overwrites. An empty world clears the note instead of installing one —
+ * a null note already means base state to every consumer, and steady-
+ * state renders stay allocation-free. */
+export function noteRenderWorld(scope: SignalScope, ids: readonly DraftId[]): void {
 	captureRenderDispatcher()
 	if (ids.length === 0) {
 		note = null
@@ -169,11 +198,12 @@ export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]):
 	armNoteExpiry(note)
 }
 
-/** Every fx2 hook render: kills a foreign scope's leftovers, and (when the
- * hook carries world state of its own) re-establishes a note for passes the
- * scope itself did not render — the hook's ids come from React's update
- * queues for THIS pass, so they never run ahead of it. */
-export function noteHookRender(scope: ProviderRecord | null, ids: readonly DraftId[] | null): void {
+/** Called by every hook render: kills a foreign scope's leftover note,
+ * and — when the hook carries world state of its own — re-establishes a
+ * note for passes the scope itself did not render. The hook's ids come
+ * from React's update queues for this very pass, so they can never run
+ * ahead of it. */
+export function noteHookRender(scope: SignalScope | null, ids: readonly DraftId[] | null): void {
 	captureRenderDispatcher()
 	if (note !== null && note.scope !== scope) {
 		note = null
@@ -185,16 +215,16 @@ export function noteHookRender(scope: ProviderRecord | null, ids: readonly Draft
 }
 
 /** The valid note's ids for a scope, or null. Hooks resolve their render
- * value against this when present (it covers components mounting inside a
- * transition pass, whose own reducers never received the dispatch). */
-export function renderPassIds(scope: ProviderRecord | null): readonly DraftId[] | null {
+ * value against this when present; it covers components mounting inside a
+ * transition pass, whose own reducers never received the dispatch. */
+export function renderPassIds(scope: SignalScope | null): readonly DraftId[] | null {
 	return note !== null && note.scope === scope ? note.ids : null
 }
 
 function renderWorldProvider(): readonly DraftId[] | 'base' | null {
 	if (!isRendering()) {
 		return null
-	} // ambient: newest intent
+	} // not rendering: ambient reads see the newest view
 	return note === null ? 'base' : note.ids
 }
 
@@ -202,18 +232,20 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
 // Draft wake dispatch
 // ---------------------------------------------------------------------------
 
-/** Test-only counter of draft-lane dispatches that actually reached a
- * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads it. */
+/** Test-only counter of draft-wake dispatches that actually reached a
+ * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads
+ * it. */
 export const draftWakeStats = { dispatches: 0 }
 
 /**
- * Dispatch a draft-lane wake. At write time React's ambient transition is
- * already installed (the write ran inside startTransition), so the dispatch
- * rides its lanes as-is. Corrections after the fact — late subscriptions,
- * appends delivered from plain contexts — restore the OWNING transition
- * object around the dispatch, so the update still classifies as that
- * transition's work instead of landing synchronously (which would commit
- * draft values into an urgent frame).
+ * Dispatch a draft wake into a hook's reducer. At write time React's
+ * ambient transition is already installed (the write ran inside
+ * startTransition), so the dispatch joins its updates as-is. Corrections
+ * after the fact — late subscriptions, appends delivered from plain
+ * contexts — restore the owning transition object around the dispatch, so
+ * the update still classifies as that transition's work instead of
+ * landing synchronously, which would commit draft values into an urgent
+ * frame.
  */
 export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
 	draftWakeStats.dispatches++
@@ -237,11 +269,11 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
 }
 
 /**
- * Dispatch outside any ambient transition, so the update is scheduled with
- * the URGENT semantics of its call site rather than joining a transition.
- * Mirrors React's own useTransition, whose isPending update is scheduled
- * before the transition scope — an indicator must not be held hostage by
- * the very transition it indicates.
+ * Dispatch outside any ambient transition, so the update is scheduled
+ * urgently rather than joining a transition. Mirrors React's own
+ * useTransition, which schedules its isPending update before entering the
+ * transition scope — an indicator must not be held hostage by the very
+ * transition it indicates.
  */
 export function dispatchUrgent(dispatch: () => void): void {
 	const internals = sharedInternals()
@@ -258,11 +290,15 @@ export function dispatchUrgent(dispatch: () => void): void {
 	}
 }
 
-/** A repair wake: never a live draft id (draft ids start at 1), so the
- * reducer leaves it out of ids while returning a fresh wrapper — an urgent
- * re-render against whatever the queues say the world is now. */
+/** A wake meaning "re-render against current state". Zero is never a
+ * live draft id (they start at 1), so the reducer leaves it out of the id
+ * set while still returning a fresh state object — producing a re-render
+ * against whatever the queues say the world is now. */
 export const REPAIR_WAKE: DraftId = 0
 
+/** What a hook last rendered: the world ids it resolved in and the value
+ * it showed. Late-subscription repair (correctSubscription) and the
+ * notify predicate (resolutionDiffers) compare current state against it. */
 export interface RenderedResolution {
 	ids: readonly DraftId[]
 	value: unknown
@@ -271,29 +307,28 @@ export interface RenderedResolution {
 }
 
 /**
- * Late-subscription repair, run when a scoped subscriber's engine
- * subscription attaches (React commits it after the render that created
- * it). Two gaps are possible for a subscriber that was not yet subscribed
- * at write time:
- * - a LIVE draft carried by this subscriber's root never reached its
- *   reducer (a component mounted mid-transition) — join the owning
- *   transition so this subscriber converges with that root's commit.
- *   Roots OUTSIDE the draft's audience stay on the committed world: their
- *   scope never carried the draft (stock parity — a new root never holds
- *   another root's pending updates), and the retirement fold is loud for
- *   exactly that case;
- * - base state moved past what this subscriber rendered (including a fold
- *   that completed in the gap) — repair urgently.
+ * Late-subscription repair, run when a subscriber's engine subscription
+ * attaches. React commits the subscription after the render that created
+ * it, so writes can slip into that gap. Two kinds of gap are possible:
+ * - a live draft carried by this subscriber's root never reached its
+ *   reducer (the component mounted mid-transition): deliver the draft id
+ *   inside the owning transition, so this subscriber converges with that
+ *   root's commit. Roots outside the draft's audience stay on the
+ *   committed world — their scope never carried the draft, matching how a
+ *   newly created React root never holds another root's pending updates —
+ *   and the retirement fold notifies their subscribers instead;
+ * - base state moved past what this subscriber rendered (including a
+ *   fold that completed in the gap): repair urgently.
  *
- * `deliver` is the hook's draft-lane channel: it dedupes against the ids
- * already dispatched since the hook's last render (a correction shares that
- * budget with write-time wakes) and restores the owning transition around
- * the dispatch. `dispatch` is the raw reducer for the urgent repair bump.
+ * `deliver` is the hook's draft-wake channel: it dedupes against the ids
+ * already dispatched since the hook's last render and restores the owning
+ * transition around the dispatch. `dispatch` is the raw reducer, used for
+ * the urgent repair bump.
  */
 export function correctSubscription(
 	node: ReactiveNode,
 	rendered: RenderedResolution,
-	scope: ProviderRecord,
+	scope: SignalScope,
 	deliver: (id: DraftId) => void,
 	dispatch: (id: DraftId) => void,
 ): void {
@@ -313,17 +348,19 @@ export function correctSubscription(
 }
 
 /**
- * The render-notify predicate: would re-rendering show this subscriber
- * something different from what it rendered? Resolves in the world the
- * subscriber RENDERED (its own reducer ids), so speculative activity in
- * worlds it does not carry compares equal — that is what keeps a silent
- * fold, a foreign transition's writes, and an equality-cutoff wave from
- * costing renders, with no global suppression state anywhere.
+ * Would re-rendering show this subscriber something different from what
+ * it rendered? The comparison resolves in the world the subscriber
+ * rendered (its own reducer ids), so activity in worlds the subscriber
+ * does not carry compares equal. That per-subscriber compare
+ * is what keeps a silent fold, a foreign transition's writes, and an
+ * equality-cutoff wave from costing renders — with no global suppression
+ * state anywhere.
  *
- * Async parity mirrors the unwrap rule: an error is always news; a
- * suspension with settled history serves its stale value, so it wakes only
- * when that stale value differs from what was rendered; a never-settled
- * suspension is always news (the subscriber must suspend).
+ * The async cases mirror the unwrap rule: an error is always news; a
+ * suspension with settled history serves its stale value, so it wakes
+ * the subscriber only when that stale value differs from what was
+ * rendered; a never-settled suspension is always news, because the
+ * subscriber must suspend.
  */
 export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResolution): boolean {
 	const st = resolveState(node, worldOf(rendered.ids))
@@ -341,10 +378,10 @@ export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResoluti
 // Draft broadcast and per-root commit bookkeeping
 // ---------------------------------------------------------------------------
 
-/** Drafts created for plain React.startTransition scopes (no helper). The
- * values are Draft RECORDS, not ids: an entry dies with its transition
- * object (WeakMap), and handing the record straight to write classification
- * spares every drafted write an id lookup. */
+/** Drafts created for React transition scopes, including the convenience
+ * helpers. The values are Draft records, not ids: an entry dies with its
+ * transition object (WeakMap), and handing the record straight to write
+ * classification spares every drafted write an id lookup. */
 const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
@@ -358,19 +395,21 @@ function ambientClassifier(): Draft | null {
 		draftsByTransition.set(T, draft)
 		broadcastDraft(draft)
 	}
-	// A retired or discarded draft classifies as urgent (base state): its
-	// effects are already folded or rolled back, so a late write under the same
-	// transition object must be urgent, never an append to a finished batch.
-	return draft.state === 'open' || draft.state === 'sealed' ? draft : null
+	// A retired or discarded draft classifies as urgent: its effects are
+	// already folded into base state or rolled back, so a late write under
+	// the same transition object must be a plain base-state write, never
+	// an append to a finished batch.
+	return draft.state === 'open' ? draft : null
 }
 
-/** Send a draft id to every scope, inside the current React context, so the
- * dispatches ride the transition's own lanes. Scopes are the only broadcast
- * audience: value subscribers are woken per drafted cell instead (see
- * dispatchDraftWake), so a transition re-renders each root's scope plus
- * exactly the subscribers its writes touch. */
+/** Send a new draft's id to every scope, dispatched inside the current
+ * React context so the updates join the transition. Scopes are the only
+ * broadcast audience: value subscribers are woken per drafted atom
+ * instead (see dispatchDraftWake), so a transition re-renders each root's
+ * scope plus exactly the subscribers its writes touch. */
 export function broadcastDraft(draft: Draft): void {
-	// Engine-side discard can finish a draft without visiting the host.
+	// Prune finished drafts: an engine-side discard can finish a draft
+	// without ever visiting the host's bookkeeping.
 	for (const [id, hosted] of hostedDrafts) {
 		if (hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed') {
 			hostedDrafts.delete(id)
@@ -388,8 +427,9 @@ export function broadcastDraft(draft: Draft): void {
 		p.dispatch(draft.id)
 	}
 	if (recipients.size === 0) {
-		// No mounted scope observes this draft; it retires as soon as the
-		// writing scope finishes (microtask keeps ops-append ordering).
+		// No mounted scope observes this draft, so nothing will ever commit
+		// it; retire it as soon as the writing scope finishes. The microtask
+		// keeps the retirement after any writes still being appended.
 		queueMicrotask(() => {
 			if (hostedDrafts.get(draft.id) === hosted && hosted.recipients.size === 0) {
 				hostedDrafts.delete(draft.id)
@@ -399,7 +439,7 @@ export function broadcastDraft(draft: Draft): void {
 	}
 }
 
-export function registerProvider(p: ProviderRecord): () => void {
+export function registerProvider(p: SignalScope): () => void {
 	providers.add(p)
 	return () => {
 		providers.delete(p)
@@ -413,41 +453,51 @@ export function registerProvider(p: ProviderRecord): () => void {
 }
 
 /** A provider committed a render pass whose world contained these drafts. */
-export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void {
-	if (p.container !== null) {
-		setCommittedWorld(p.container, ids)
-	}
-	// Per-root committed views changed; poke the draft watchers of every cell
-	// the committed drafts touched (the useValue crowd bails via the notify
-	// predicate when its resolution is unchanged, so this is cheap). No
-	// engine event exists for a root commit, so the poke carries no cause.
-	// Keep every poke before any retirement: pokes can flush synchronously,
-	// while retirement folds state and starts its own notification wave.
-	for (const id of ids) {
-		const hosted = hostedDrafts.get(id)
-		if (
-			hosted === undefined ||
-			(hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed')
-		) {
-			continue
+export function confirmCommit(p: SignalScope, ids: readonly DraftId[]): void {
+	p.committing = true
+	try {
+		// The scope itself is every hook's root-local committed-world key. The
+		// optional external container additionally supports committed(x,
+		// container) reads outside React.
+		setCommittedWorld(p, ids)
+		if (p.container !== null) {
+			setCommittedWorld(p.container, ids)
 		}
-		for (const cell of hosted.draft.cells) {
-			pokeDraftWatchers(cell, NO_EVENT)
+		// This root's committed view changed; poke the draft watchers of every
+		// atom the committed drafts touched. This is cheap: value subscribers
+		// bail through the notify predicate when their resolution is
+		// unchanged. No engine event exists for a root commit, so the poke
+		// carries no cause. All pokes run before any retirement, because pokes
+		// can flush synchronously while retirement folds state and starts its
+		// own notification wave.
+		for (const id of ids) {
+			const hosted = hostedDrafts.get(id)
+			if (
+				hosted === undefined ||
+				(hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed')
+			) {
+				continue
+			}
+			for (const cell of hosted.draft.cells) {
+				pokeDraftWatchers(cell, NO_EVENT)
+			}
 		}
-	}
-	for (const id of ids) {
-		const hosted = hostedDrafts.get(id)
-		if (hosted !== undefined && hosted.recipients.delete(p) && hosted.recipients.size === 0) {
-			hostedDrafts.delete(id)
-			// Fold loudness is per subscriber now: the fold's writes notify every
-			// subscriber over the touched cells, and each one's render-notify
-			// predicate compares its rendered value against the folded
-			// resolution. Subscribers whose render passes carried the draft
-			// compare equal and stay quiet; subscribers under a scope that never
-			// carried it (mounted mid-transition) see the folded values as new
-			// and re-render into them.
-			retireDraft(id)
+		for (const id of ids) {
+			const hosted = hostedDrafts.get(id)
+			if (hosted !== undefined && hosted.recipients.delete(p) && hosted.recipients.size === 0) {
+				hostedDrafts.delete(id)
+				// Every recipient committed: fold the draft into base state. The
+				// fold's writes notify every subscriber over the touched atoms,
+				// and each subscriber's render-notify predicate compares its
+				// rendered value against the folded resolution. Subscribers whose
+				// render passes carried the draft compare equal and stay quiet;
+				// subscribers under a scope that never carried it (mounted
+				// mid-transition) see the folded values as new and re-render.
+				retireDraft(id)
+			}
 		}
+	} finally {
+		p.committing = false
 	}
 }
 
@@ -458,9 +508,9 @@ export function reportError(e: unknown): void {
 }
 
 /**
- * Register the bindings against the current React build. Stock React is the
- * only requirement: the bindings drive everything through public state and
- * context primitives. Idempotent per process.
+ * Install the bindings' hooks into the engine (write classification, the
+ * write-during-render guard, the render-world provider). Idempotent per
+ * process.
  */
 export function registerReactSignals(): ReactSignalsHandle {
 	if (handle !== null) {

@@ -9,7 +9,7 @@ verbatim alien-signals core at `upstream-alien-signals/src/system.ts`. All fx2
 line numbers cite `src/graph.ts` at commit `8072ddd` unless another file is
 named.
 
-STATUS: LANDED, together with the DerivedState merge (section 11, an
+STATUS: LANDED, together with the ResolvedState merge (section 11, an
 owner-decided amendment sharing the same read-path surgery). Three deltas
 between this design and the as-built code, each found by the tests and
 documented inline where the design said something else:
@@ -198,7 +198,7 @@ export type Flags = Brand<number, 'Flags'>; // the stored word (see graph.ts)
 round converted them to the `const enum` above and branded the stored
 word — same bits, same table.)
 
-The two async bits are the DerivedState merge's exclusive value-plane field
+The two async bits are the ResolvedState merge's exclusive value-plane field
 (section 11): clear-then-set discipline exactly like `Flag.StaleMask`,
 both-clear is the plain-value state, `Flag.AsyncMask` is the read protocol.
 
@@ -443,8 +443,8 @@ promote is behavioral → covered by falsify-first probes A/B]
 - **Public API**: zero signature changes in `index.ts` or
   `reactIntegration`; the React bindings under `src/react/` reference no
   graph internals (verified by grep) and are untouched. (Scoped to the tier
-  rebuild alone. The DerivedState merge, section 11, deliberately changes
-  the read-protocol surface: `Envelope` → `DerivedState`,
+  rebuild alone. The ResolvedState merge, section 11, deliberately changes
+  the read-protocol surface: `Envelope` → `ResolvedState`,
   `reactIntegration.resolveEnvelope` → `resolveState`, and the bindings'
   unwrap sites moved with it. `reactIntegration` itself was later dissolved
   by owner ruling: the react directory is part of the library, so the
@@ -572,7 +572,7 @@ ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in RE
    through `writeCell`, so no overlay path leaves a watched derived
    Clean-but-stale — T6 pins this.
 
-## 11. DerivedState merge (owner-decided amendment, landed with the rebuild)
+## 11. ResolvedState merge (owner-decided amendment, landed with the rebuild)
 
 The duplication being removed: `envelopeOf` (asyncs.ts) manufactured a fresh
 Envelope record on EVERY base-state read — even the trivial value case — and
@@ -580,10 +580,10 @@ Envelope record on EVERY base-state read — even the trivial value case — and
 `node.asyncState` already encoded the same 3-state machine. One model
 replaces both: node-resident state read through one protocol.
 
-**The state shape** — `DerivedState` (asyncs.ts), and nodes ARE it:
+**The state shape** — `ResolvedState` (asyncs.ts), and nodes ARE it:
 
 ```ts
-interface DerivedState {
+interface ResolvedState {
   flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
   throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
@@ -625,7 +625,7 @@ interface DerivedState {
   `isPendingPassive` all read the protocol: value → `value`; error → throw
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
-- The `Envelope` type export is gone; `DerivedState`, `ErrorBox`,
+- The `Envelope` type export is gone; `ResolvedState`, `ErrorBox`,
   `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
   `isUninitialized` are the replacement protocol exports. No alias
   survives — one name per concept, and every importer (worlds, index,

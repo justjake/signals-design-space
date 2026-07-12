@@ -52,11 +52,12 @@ import {
 	ensureNodeRecord,
 	setHasLiveDrafts,
 	traceHook,
+	trackWorldSource,
 	untracked,
 	writeCell,
 } from './graph.ts'
 import {
-	type DerivedState,
+	type ResolvedState,
 	type ErrorBox,
 	type Suspension,
 	makeErrorBox,
@@ -584,7 +585,7 @@ interface WorldMemo {
 	validAtDraftChange: DraftChangeClock
 	nodeChangedAtGraphChange: GraphChangeClock
 	certificate: Certificate
-	state: DerivedState
+	state: ResolvedState
 }
 
 /** The certificate currently being collected by a draft-world computed.
@@ -643,7 +644,7 @@ function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
 }
 
 /** Passive view of a world memo's state (no evaluation, no validation). */
-export function peekWorldMemo(node: ReactiveNode, sig: string): DerivedState | undefined {
+export function peekWorldMemo(node: ReactiveNode, sig: string): ResolvedState | undefined {
 	return memoFor(node, sig)?.state
 }
 
@@ -680,7 +681,7 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 }
 
 /** Whether two resolutions are indistinguishable under the node's policy. */
-function statesEqual(node: ReactiveNode, left: DerivedState, right: DerivedState): boolean {
+function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedState): boolean {
 	const asyncBits = right.flags & Flag.AsyncMask
 	if ((left.flags & Flag.AsyncMask) !== asyncBits) {
 		return false
@@ -714,10 +715,10 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
 
 /** Resolve a node's value as seen by a world. The base world hits the
  * ordinary graph and returns the NODE ITSELF as the state view (cells and
- * deriveds carry the DerivedState shape; the trivial read allocates
+ * deriveds carry the ResolvedState shape; the trivial read allocates
  * nothing); drafted worlds replay intents (cells) or draft-evaluate
  * (deriveds) into memo records per (node, world signature). */
-export function resolveState(node: ReactiveNode, world: World): DerivedState {
+export function resolveState(node: ReactiveNode, world: World): ResolvedState {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -738,7 +739,7 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 		return memo.state
 	}
 	const certificate = memo?.certificate ?? { entries: [], count: 0 }
-	let fresh: DerivedState
+	let fresh: ResolvedState
 	if ((node.flags & Flag.KindCell) !== 0) {
 		const cell = node as CellNode<unknown>
 		const previousCount = certificate.count
@@ -790,12 +791,40 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
 	return state
 }
 
+export function resolveStateUntracked(node: ReactiveNode, world: World): ResolvedState {
+	const previous = activeCertificate
+	activeCertificate = null
+	try {
+		return resolveState(node, world)
+	} finally {
+		activeCertificate = previous
+	}
+}
+
+/** Give a scheduled effect wake-only edges to the actual sources used by a
+ * computed's current draft-world memo. */
+export function trackWorldSources(node: ReactiveNode, world: World): void {
+	if (world.drafts.length === 0) {
+		return
+	}
+	const memo = memoFor(node, world.sig)
+	if (memo === undefined) {
+		return
+	}
+	for (let i = 0; i < memo.certificate.count; i++) {
+		const source = memo.certificate.entries[i].node
+		if (source !== null) {
+			trackWorldSource(source)
+		}
+	}
+}
+
 function draftEvaluate(
 	node: DerivedNode<unknown>,
 	world: World,
-	prev: DerivedState | undefined,
+	prev: ResolvedState | undefined,
 	certificate: Certificate,
-): DerivedState {
+): ResolvedState {
 	// Suspense retries must observe one stable thenable per pending span.
 	const suspension =
 		prev !== undefined &&
@@ -866,7 +895,7 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
  * reader (no stale serve here — a world evaluation must not fold a stale
  * base value into a draft-world result). */
 export function unwrapForEval(
-	st: DerivedState,
+	st: ResolvedState,
 	park: (t: PromiseLike<unknown>) => unknown,
 ): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask

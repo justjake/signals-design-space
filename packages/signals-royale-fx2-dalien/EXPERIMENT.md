@@ -184,3 +184,38 @@ fixed offsets; the arena's advantage is density and no garbage-collector
 coupling, which is why it wins every row whose working set outgrows the
 cache. The two designs are each optimal on their own side of that line,
 and this suite weighs the small-graph side 12 rows to 6.
+
+## 2026-07-12 source convergence
+
+The fork now carries the source package's deterministic watcher ownership,
+conservative batch-revert semantics, structural `Atom`/`Computed` API,
+explicit signal policy errors, lazy ambient transition ownership, and
+React-phase tracked signal effects. The latter use two arena watchers per
+mounted effect: one owns the user's dependency edges and cleanup, while the
+other owns flattened draft-world source edges used only to wake root-relative
+comparisons. No per-node column or internals object was added.
+
+One representation experiment was rejected before commit. Making computed
+handles with `Object.create(ReactiveNode.prototype)` and storing `get` and
+`peek` as own fields, like the object-graph source package, regressed the
+isolated suite to 1.3015x geometric / 1.2619x aggregate. Keeping the same
+structural public type but using a private, non-exported class expression puts
+the shared methods on its prototype and restored the previous handle shape.
+The committed result measured 1.0395x geometric / 1.0049x aggregate over the
+20-row, three-round isolated comparison.
+
+The React seam benchmark also runs under the fork now (its child processes
+need Node's transform-types mode for the arena's `const enum`). One adjacent
+source/fork sample measured:
+
+| scenario | source fx2 | arena fork |
+| --- | ---: | ---: |
+| fanout median write-to-commit | 4.095 ms | 4.626 ms |
+| transition p95 urgent latency | 10.434 ms | 10.270 ms |
+| transition completion | 1664.513 ms | 1752.093 ms |
+| 5000-cell median mount | 60.032 ms | 65.303 ms |
+
+These single React samples are direction checks, not stable estimates; the
+isolated graph comparison is the repeatable performance gate. Typecheck and
+all 337 package tests, including the nine adversarial scheduled-effect cases,
+pass at this point.

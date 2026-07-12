@@ -253,10 +253,10 @@ describe('scenario 18 — SSR', () => {
 	})
 })
 
-describe('hooks demand a SignalScope', () => {
+describe('hooks demand a SignalScopeProvider', () => {
 	// The hooks have no unscoped mode: a scope is the world carrier, and a
 	// subscriber without one has no channel for transition worlds at all.
-	// Rendering any scope-consuming hook outside a SignalScope throws with a
+	// Rendering any scope-consuming hook outside a SignalScopeProvider throws with a
 	// message naming the fixes.
 	class Boundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
 		state: { error: Error | null } = { error: null }
@@ -284,7 +284,7 @@ describe('hooks demand a SignalScope', () => {
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
 			const div = document.body.appendChild(document.createElement('div'))
-			const root = createRoot(div) // deliberately no SignalScope
+			const root = createRoot(div) // deliberately no SignalScopeProvider
 			await act(() => {
 				root.render(
 					<Boundary>
@@ -293,7 +293,7 @@ describe('hooks demand a SignalScope', () => {
 				)
 			})
 			expect(text(div), name).toContain('caught:')
-			expect(text(div), name).toContain('SignalScope')
+			expect(text(div), name).toContain('SignalScopeProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
 			await act(() => root.unmount())
 			div.remove()

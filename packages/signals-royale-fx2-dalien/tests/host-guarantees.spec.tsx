@@ -56,6 +56,7 @@ describe('hosted draft lifetime', () => {
 		const unregister = registerProvider({
 			container: null,
 			dispatch: (id) => delivered.push(id),
+			committing: false,
 		})
 		const a = createAtom(0)
 		const draft = openDraft()

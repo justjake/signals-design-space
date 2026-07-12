@@ -645,12 +645,12 @@ node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2-dalien
 → libLoc 2362  (engine 1909 + react bindings 453)
 ```
 
-## 15. Two-tier graph rebuild + DerivedState merge
+## 15. Two-tier graph rebuild + ResolvedState merge
 
 The watched tier now runs the full alien-signals edge discipline; the
 unwatched tier keeps stamp-pull validation. Design and as-built deltas:
 `docs/two-tier-graph.md` (authoritative — mechanics, invariants, the three
-deviations found while landing, and the §11 DerivedState merge). Summary:
+deviations found while landing, and the §11 ResolvedState merge). Summary:
 
 - **Promote validates** (fixes two verified defects): the first observer's
   cascade links the dep closure depth-first and stamp-validates every edge
@@ -684,7 +684,7 @@ deviations found while landing, and the §11 DerivedState merge). Summary:
   0b0100_0000/0b1000_0000 form the exclusive async field (`ASYNC_MASK`).
   Link layout unchanged; `prevDep` stays omitted (all deps mutations are
   forward-only; justification in the doc §2).
-- **DerivedState merge** (owner amendment): `node.asyncState` and the
+- **ResolvedState merge** (owner amendment): `node.asyncState` and the
   per-read Envelope allocation are gone. Nodes carry `throwable`
   (ErrorBox | Suspension | null, initialized on every node kind) and the
   async flag bits; `resolveState` returns THE NODE for canonical worlds
@@ -693,7 +693,7 @@ deviations found while landing, and the §11 DerivedState merge). Summary:
   reuse, and settlement-as-write are preserved; `committedSnapshot` returns
   the identity-stable ErrorBox instead of allocating a marker per
   `getSnapshot` call (a uSES identity hazard). `Envelope` export replaced by
-  `DerivedState` + protocol exports; all importers converted, no alias.
+  `ResolvedState` + protocol exports; all importers converted, no alias.
 - **Leak story**: demote removes every back-edge promote installed; the
   leak audit gained two tests (promote/demote cycling leaves zero subs
   entries + dropped chain collects; a dropped watched subscription handle

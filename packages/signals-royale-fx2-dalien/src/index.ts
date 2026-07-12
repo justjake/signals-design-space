@@ -23,6 +23,7 @@ import {
 	UNINITIALIZED,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
+	activeWorldSourceConsumer,
 	activeEvaluation,
 	flushLifetimeTransitions,
 	getActiveConsumer,
@@ -36,6 +37,7 @@ import {
 	readDerived,
 	resetGraphForBenchmark,
 	runUpdater,
+	trackWorldRead,
 	startBatch as graphStartBatch,
 	endBatch as graphEndBatch,
 	batch as graphBatch,
@@ -44,7 +46,7 @@ import {
 	writeCell,
 	graphMemory,
 } from './graph.ts'
-import { type DerivedState, type ErrorBox, type Suspension, asyncPlaneUsed, isErrorBox } from './asyncs.ts'
+import { type ResolvedState, type ErrorBox, type Suspension, asyncPlaneUsed, isErrorBox } from './asyncs.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -63,7 +65,9 @@ import {
 	peekWorldMemo,
 	pokeRebasedCell,
 	resolveState,
+	resolveStateUntracked,
 	setAmbientClassifier,
+	trackWorldSources,
 	unwrapForEval,
 	worldOf,
 } from './worlds.ts'
@@ -114,7 +118,9 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 		const world = getCurrentWorld()
 		if (world !== null) {
 			// Inside a draft evaluation every read resolves that world.
-			return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
+			const state = resolveState(this, world)
+			trackWorldRead(this)
+			return state.value as T
 		}
 		return readCell(this)
 	}
@@ -128,6 +134,10 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 	}
 	/** Untracked base-state read. */
 	peek(): T {
+		const world = getCurrentWorld()
+		if (world !== null) {
+			return resolveStateUntracked(this, world).value as T
+		}
 		return peekCell(this)
 	}
 }
@@ -151,6 +161,20 @@ export type Computed<out T> = {
 	peek(): T
 }
 
+function unwrapComputedWorldState<T>(state: ResolvedState): T {
+	const park = getCurrentPark()
+	if (park !== null) {
+		return unwrapForEval(state, park) as T
+	}
+	if ((state.flags & Flag.AsyncError) !== 0) {
+		throw (state.throwable as ErrorBox).error
+	}
+	if ((state.flags & Flag.AsyncSuspended) !== 0 && isUninitialized(state.value)) {
+		throw (state.throwable as Suspension).promise
+	}
+	return state.value as T
+}
+
 const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 	declare value: T | typeof UNINITIALIZED
 	declare fn: DerivedNode<T>['fn']
@@ -162,7 +186,12 @@ const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
-			return unwrapForEval(resolveState(this, world), getCurrentPark()!) as T
+			const state = resolveState(this, world)
+			trackWorldRead(this)
+			if (activeWorldSourceConsumer !== null) {
+				trackWorldSources(this, world)
+			}
+			return unwrapComputedWorldState<T>(state)
 		}
 		const value = readDerived(this)
 		if (asyncPlaneUsed && (graphMemory[this.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
@@ -171,6 +200,10 @@ const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 		return value
 	}
 	peek(): T {
+		const world = getCurrentWorld()
+		if (world !== null) {
+			return unwrapComputedWorldState<T>(resolveStateUntracked(this, world))
+		}
 		return graphUntracked(() => this.get())
 	}
 }
@@ -234,7 +267,7 @@ function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
 /** The value slot of a state view, sentinel normalized: a suspended state
  * with no settled value reads as undefined on the never-suspending channels
  * (latest, committed). */
-function stateValue(st: DerivedState): unknown {
+function stateValue(st: ResolvedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
@@ -261,8 +294,16 @@ export function latest<T>(x: Signal<T>): T {
 		} else {
 			world = renderWorld() ?? latestWorld()
 		}
+	} else {
+		trackWorldRead(node)
 	}
 	const st = resolveState(node, world)
+	if (
+		activeWorldSourceConsumer !== null &&
+		(graphMemory[node.id + NodeSlot.Flags] & Flag.KindDerived) !== 0
+	) {
+		trackWorldSources(node, world)
+	}
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		throw (st.throwable as ErrorBox).error
 	}
@@ -516,8 +557,8 @@ export function resetEngineForTest(): void {
 	getActiveTracer()?.stop()
 }
 
-export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
-/** The DerivedState read protocol: the Flag bit constants (test async bits
+export type { ResolvedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
+/** The ResolvedState read protocol: the Flag bit constants (test async bits
  * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
  * check, and the never-settled sentinel test. */
 export { Flag, isErrorBox, isUninitialized }

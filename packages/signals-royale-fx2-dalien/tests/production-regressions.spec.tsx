@@ -99,7 +99,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			</React.Suspense>,
 		)
 		await start()
-		// A plain root (no SignalScope, zero hooks — plain latest() calls are
+		// A plain root (no SignalScopeProvider, zero hooks — plain latest() calls are
 		// legal anywhere) rendered right after the transition pass: no pass of
 		// this root ever refreshed any note.
 		const sampled: number[] = []

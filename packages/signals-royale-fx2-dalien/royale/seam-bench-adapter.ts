@@ -2,7 +2,7 @@
 import type { ComponentType, ReactNode } from 'react'
 import { batch, set, createAtom, type Atom } from 'signals-royale-fx2-dalien'
 import {
-	SignalScope,
+	SignalScopeProvider,
 	registerReactSignals,
 	startSignalTransition,
 	useValue,
@@ -55,7 +55,7 @@ const contender: Contender = {
 			dispose() {
 				cells.length = 0 // dropped handles reclaim structurally
 			},
-			Provider: SignalScope as ComponentType<{ children: ReactNode }>,
+			Provider: SignalScopeProvider as ComponentType<{ children: ReactNode }>,
 		}
 	},
 }
