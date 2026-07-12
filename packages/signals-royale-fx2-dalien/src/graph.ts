@@ -153,6 +153,7 @@ export type Link = Brand<number, 'Link'>
 export const enum NodeSlot {
 	Flags = 0,
 	Deps = 1,
+	/** Reserved; the live cursor is the handle depsTail field. */
 	DepsTail = 2,
 	Subs = 3,
 	SubsTail = 4,
@@ -195,6 +196,11 @@ export const enum LinkSlot {
 
 export abstract class ReactiveNode {
 	declare readonly id: ReactiveNodeId
+	/** Dependency-list append cursor for the evaluation in progress. A handle
+	 * field, not a record slot: every touch site holds the handle, and the
+	 * cursor is hit twice per tracked read — one property load beats an id
+	 * load plus an indexed load. */
+	declare depsTail: Link
 	declare throwable: ErrorBox | Suspension | null
 	declare label: string | undefined
 	declare worldMemos: Map<string, unknown> | null
@@ -358,6 +364,7 @@ export function initializeCell<T>(
 ): CellNode<T> {
 	const lazyInit = typeof initial === 'function'
 	;(cell as { id: ReactiveNodeId }).id = VIRGIN_CELL
+	cell.depsTail = 0
 	cell.throwable = null
 	cell.label = opts?.label
 	cell.value = lazyInit ? UNINITIALIZED : (initial as T)
@@ -383,6 +390,7 @@ export function initializeDerived<T>(
 	opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
 	;(node as { id: ReactiveNodeId }).id = VIRGIN_DERIVED
+	node.depsTail = 0
 	node.throwable = null
 	node.label = opts?.label
 	node.value = UNINITIALIZED
@@ -657,10 +665,6 @@ function createGraphCore(
 		return M[node + NodeSlot.Deps] || undefined
 	}
 
-	function depsTailOf(node: ReactiveNodeId): Link | undefined {
-		return M[node + NodeSlot.DepsTail] || undefined
-	}
-
 	function subsOf(node: ReactiveNodeId): Link | undefined {
 		return M[node + NodeSlot.Subs] || undefined
 	}
@@ -920,14 +924,14 @@ function createGraphCore(
 		const mem = M
 		const depId = dep.id
 		const subId = sub.id
-		const tail: Link = mem[subId + NodeSlot.DepsTail]
+		const tail: Link = sub.depsTail
 		if (tail !== 0 && mem[tail + LinkSlot.LinkDep] === depId) {
 			return
 		}
 		const next: Link = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
 		if (next !== 0 && mem[next + LinkSlot.LinkDep] === depId) {
 			mem[next + LinkSlot.LinkEvalPass] = evalPass
-			mem[subId + NodeSlot.DepsTail] = next
+			sub.depsTail = next
 			return
 		}
 		trackReadInsert(dep, sub)
@@ -941,7 +945,7 @@ function createGraphCore(
 		// watcher (eager records).
 		const depId = ensureDepRecord(dep)
 		const subId = sub.id
-		const tail: Link = mem[subId + NodeSlot.DepsTail]
+		const tail: Link = sub.depsTail
 		const next: Link = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
 		const watched = (mem[subId + NodeSlot.Flags] & Flag.Watched) !== 0
 		if (watched) {
@@ -974,7 +978,7 @@ function createGraphCore(
 		} else {
 			mem[tail + LinkSlot.LinkNextDep] = link
 		}
-		mem[subId + NodeSlot.DepsTail] = link
+		sub.depsTail = link
 		if (watched) {
 			linkIntoSubs(link, sub)
 			addObserver(dep)
@@ -988,7 +992,7 @@ function createGraphCore(
 	function trimDeps(sub: ReactiveNode): void {
 		const mem = M
 		const subId = sub.id
-		const tail = mem[subId + NodeSlot.DepsTail]
+		const tail = sub.depsTail
 		const stale = tail === 0 ? mem[subId + NodeSlot.Deps] : mem[tail + LinkSlot.LinkNextDep]
 		if (tail !== 0) {
 			mem[tail + LinkSlot.LinkNextDep] = 0
@@ -1627,7 +1631,7 @@ function createGraphCore(
 		activeConsumer = node
 		activeEvaluation = node
 		const myPass: EvalPass = (evalPass = ++evalPassCounter)
-		mem[id + NodeSlot.DepsTail] = 0
+		node.depsTail = 0
 		// The validation reading is taken at the PRE-eval clock: if the evaluation
 		// itself writes (self-affecting computed), the next read must revalidate.
 		const preGraphChange = graphChangeClock
@@ -1855,6 +1859,7 @@ function createGraphCore(
 			// drops at dispose; their edges never go through promote/demote
 			// counting. Capability bits are creation-fixed: they route scheduling
 			// for the watcher's whole life.
+			depsTail: 0,
 			throwable: null,
 			label: undefined,
 			fn,
@@ -1961,7 +1966,7 @@ function createGraphCore(
 		activeConsumer = w
 		activeScope = w
 		const myPass: EvalPass = (evalPass = ++evalPassCounter)
-		mem[id + NodeSlot.DepsTail] = 0
+		w.depsTail = 0
 		const cause =
 			traceHook !== null ? traceHook('effect-run', w, mem[id + NodeSlot.CauseEvent]) : NO_EVENT
 		// The validation reading is taken at the PRE-run clock: if the body
@@ -2025,7 +2030,7 @@ function createGraphCore(
 		const id = w.id
 		let l = mem[id + NodeSlot.Deps]
 		mem[id + NodeSlot.Deps] = 0
-		mem[id + NodeSlot.DepsTail] = 0
+		w.depsTail = 0
 		while (l !== 0) {
 			const next = mem[l + LinkSlot.LinkNextDep]
 			if (mem[l + LinkSlot.LinkInSubs] !== 0) {
@@ -2058,7 +2063,6 @@ function createGraphCore(
 		// reclaimed node. ChangedAt spans two words; the Float64 view clears both.
 		mem[id + NodeSlot.Flags] = 0
 		mem[id + NodeSlot.Deps] = 0
-		mem[id + NodeSlot.DepsTail] = 0
 		mem[id + NodeSlot.Subs] = 0
 		mem[id + NodeSlot.SubsTail] = 0
 		mem[id + NodeSlot.RefCount] = 0
@@ -2200,7 +2204,7 @@ function createGraphCore(
 		sub.onDraftWake = draftWake
 		newEvalPass()
 		const subId = sub.id
-		M[subId + NodeSlot.DepsTail] = 0
+		sub.depsTail = 0
 		const prevConsumer = activeConsumer
 		activeConsumer = sub
 		try {
