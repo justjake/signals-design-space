@@ -2006,8 +2006,16 @@ function createGraphCore(
 			}
 		} finally {
 			unlinkAllDeps(w)
-			pinnedInternals[w.id >> RECORD_SHIFT] = undefined
-			reclaimNodeRecord(w.id)
+			const id = w.id
+			pinnedInternals[id >> RECORD_SHIFT] = undefined
+			// Watcher records dirty only three slots over their whole life: the
+			// dep list head/tail (already zeroed by unlinkAllDeps above) and the
+			// validation watermark. They are never anyone's dependency (no
+			// RefCount, no ChangedAt, no Subs, no ObserverCount), and allocation
+			// overwrites Flags — so this slim reclaim replaces the full one.
+			graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ValidAt] = 0
+			M[id + NodeSlot.Generation]++
+			pushFreeNode(id)
 		}
 	}
 
