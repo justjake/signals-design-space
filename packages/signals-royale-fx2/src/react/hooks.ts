@@ -375,10 +375,8 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 function useSignalEffectImpl(
 	fn: () => void | (() => void),
 	usePhaseEffect: typeof useEffect,
+	connection: ReactRootConnection,
 ): void {
-	const connection = requireRootConnection(
-		usePhaseEffect === useLayoutEffect ? 'useSignalLayoutEffect' : 'useSignalEffect',
-	)
 	const [version, schedule] = useReducer(forceReducer, 0)
 	const stateRef = useRef<SignalEffectState | null>(null)
 	let state = stateRef.current
@@ -464,12 +462,12 @@ function useSignalEffectImpl(
 
 /** Run a tracked signal effect during React's passive-effect phase. */
 export function useSignalEffect(fn: () => void | (() => void)): void {
-	useSignalEffectImpl(fn, useEffect)
+	useSignalEffectImpl(fn, useEffect, requireRootConnection('useSignalEffect'))
 }
 
 /** Run a tracked signal effect during React's layout-effect phase. */
 export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
-	useSignalEffectImpl(fn, useLayoutEffect)
+	useSignalEffectImpl(fn, useLayoutEffect, requireRootConnection('useSignalLayoutEffect'))
 }
 
 /** True while newer data exists behind the committed value of x: a

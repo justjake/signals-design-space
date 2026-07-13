@@ -551,6 +551,7 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 				)
 			})
 			expect(text(div), name).toContain('caught:')
+			expect(text(div), name).toContain(`caught:${name}wasrendered`)
 			expect(text(div), name).toContain('SignalsFrameworkProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
 			await act(() => root.unmount())
