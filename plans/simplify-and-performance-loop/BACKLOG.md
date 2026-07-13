@@ -19,7 +19,6 @@ condition still leaves a useful direction.
 - Simplify `ErrorBox` branding without adding a registry or compatibility representation.
 - Add a non-allocating pendingness query only if it is simpler than constructing the complete affected-draft list.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
-- Simplify graph traversal storage only with explicit reentrancy and GC-retention proof.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
@@ -48,3 +47,4 @@ condition still leaves a useful direction.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
 - Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
+- Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
