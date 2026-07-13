@@ -498,22 +498,20 @@ export function draftsAffecting(node: ProducerNode): readonly DraftId[] {
 	if (liveDrafts.size === 0) {
 		return NO_IDS
 	}
-	const sources = new Set<AtomNode<unknown>>()
-	const visited = new Set<ProducerNode>()
-	const collect = (n: ProducerNode): void => {
-		if (visited.has(n)) {
-			return
+	const sources = new Set<ProducerNode>()
+	sources.add(node)
+	for (const source of sources) {
+		if ((source.flags & Flag.KindAtom) !== 0) {
+			continue
 		}
-		visited.add(n)
-		if ((n.flags & Flag.KindAtom) !== 0) {
-			sources.add(n as AtomNode<unknown>)
-			return
-		}
-		for (let l = (n as ComputedNode<unknown>).deps; l !== undefined; l = l.nextDep) {
-			collect(l.dep)
+		for (
+			let l = (source as ComputedNode<unknown>).deps;
+			l !== undefined;
+			l = l.nextDep
+		) {
+			sources.add(l.dep)
 		}
 	}
-	collect(node)
 	const out: DraftId[] = []
 	for (const [id, draft] of liveDrafts) {
 		for (const atom of draft.atoms) {

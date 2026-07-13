@@ -19,6 +19,7 @@ import {
 } from '../src/index.ts'
 import {
 	discardDraft,
+	draftsAffecting,
 	liveDraftCount,
 	openDraft,
 	rebaseLogIntentCount,
@@ -726,6 +727,25 @@ describe('computeds across worlds', () => {
 		expect(isPending(c2)).toBe(true) // transitive — through the computed
 		retireDraft(id)
 		expect(isPending(c2)).toBe(false)
+	})
+
+	test('draft discovery dedupes shared dependencies and keeps draft order', () => {
+		const a = createAtom(1)
+		const b = createAtom(2)
+		const unrelated = createAtom(3)
+		const left = createComputed(() => a.get() + b.get())
+		const right = createComputed(() => b.get() - a.get())
+		const root = createComputed(() => left.get() * right.get())
+		expect(read(root)).toBe(3)
+		const first = inDraft(() => a.set(4))
+		const ignored = inDraft(() => unrelated.set(5))
+		const second = inDraft(() => b.set(6))
+
+		expect(draftsAffecting(nodeOf(root))).toEqual([first, second])
+
+		discardDraft(second)
+		discardDraft(ignored)
+		discardDraft(first)
 	})
 
 	test('a draft append notifies subscribers of computeds over the atom', () => {
