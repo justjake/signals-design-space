@@ -21,7 +21,6 @@ condition still leaves a useful direction.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
 - Simplify graph traversal storage only with explicit reentrancy and GC-retention proof.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
-- Remove duplicate hook ownership only after preserving hook order and missing-provider diagnostics.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
 ## Recorded retry leads
@@ -33,6 +32,7 @@ condition still leaves a useful direction.
 - Drain settled thenable membership directly; reuse the Round 39 mechanism only with a stable construction control.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
+- Converge only `useIsPending` on `useSyncExternalStore`; keep `useCommitted`'s lower-latency manual snapshot path, subscribe during layout, and immediately check after attachment to repair the proven render-to-subscribe gap.
 
 ## Completed or deliberately closed
 
