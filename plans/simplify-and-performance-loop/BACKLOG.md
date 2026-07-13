@@ -25,7 +25,6 @@ condition still leaves a useful direction.
 - Remove duplicate hook ownership only after preserving hook order and missing-provider diagnostics.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 - Converge package and harness test adapters as a measurement-free maintenance round.
-- Have `materializeAtom` return the materialized value so its callers do not re-read `atom.value`.
 
 ## Recorded retry leads
 
@@ -35,6 +34,7 @@ condition still leaves a useful direction.
 - Let React own scheduled-effect versions; retry only with the Round 42 write/rerender controls.
 - Drain settled thenable membership directly; reuse the Round 39 mechanism only with a stable construction control.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
+- Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
 
 ## Completed or deliberately closed
 
@@ -47,4 +47,3 @@ condition still leaves a useful direction.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
 - Orphaned React error channel removed in favor of tracer events.
-
