@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { committed, createAtom, nodeOf, read, type Atom } from 'signals-royale-fx2'
+import { committed, createAtom, effect, nodeOf, read, type Atom } from 'signals-royale-fx2'
 import { liveDraftCount, openDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
 import {
 	registerReactSignals,
@@ -36,6 +36,45 @@ describe('registration', () => {
 		const h2 = registerReactSignals()
 		expect(h1).toBe(h2)
 		expect('errors' in h1).toBe(false)
+	})
+
+	test('[falsify-first] reset preserves registration until the handle is disposed', async () => {
+		resetReactSignalsForTest()
+		const handle = registerReactSignals()
+		resetReactSignalsForTest()
+
+		const drafted = createAtom(0)
+		startSignalTransition(() => drafted.set(1))
+		expect(read(drafted)).toBe(0)
+		await Promise.resolve()
+		expect(read(drafted)).toBe(1)
+
+		handle.dispose()
+		resetReactSignalsForTest()
+		const urgent = createAtom(0)
+		startSignalTransition(() => urgent.set(1))
+		expect(read(urgent)).toBe(1)
+	})
+
+	test('reset keeps disposal from a pending lifetime cleanup', async () => {
+		resetReactSignalsForTest()
+		const handle = registerReactSignals()
+		let cleaned = false
+		const observed = createAtom(0, {
+			onObserved: () => () => {
+				cleaned = true
+				handle.dispose()
+			},
+		})
+		const stop = effect(() => void observed.get())
+		await Promise.resolve()
+		stop()
+
+		resetReactSignalsForTest()
+		expect(cleaned).toBe(true)
+		const urgent = createAtom(0)
+		startSignalTransition(() => urgent.set(1))
+		expect(read(urgent)).toBe(1)
 	})
 
 	test('a detached connection record has no trace-only fields', async () => {

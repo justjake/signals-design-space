@@ -551,13 +551,12 @@ export function registerReactSignals(): ReactSignalsHandle {
 
 /** Test seam: engine reset plus host registry scrub. Keeps registration. */
 export function resetReactSignalsForTest(): void {
-	const wasRegistered = handle !== null
 	resetEngineForTest()
 	rootConnections.clear()
 	hostedDrafts.clear()
 	note = null
 	rejectedRenderWrite = false
-	if (wasRegistered) {
+	if (handle !== null) {
 		// resetEngineForTest cleared the engine hooks; re-arm them.
 		setAmbientClassifier(ambientClassifier)
 		setRenderWriteGuard(renderWriteGuard)
