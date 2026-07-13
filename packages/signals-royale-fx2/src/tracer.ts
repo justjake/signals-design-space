@@ -62,7 +62,7 @@ export class Tracer {
 	/** Events evicted by ring overflow. */
 	dropped = 0
 	/** Most recent delivery event per node (component re-render / effect run). */
-	private lastDelivery = new Map<ReactiveNode | object, TraceEventId>()
+	private lastDelivery = new WeakMap<object, TraceEventId>()
 
 	constructor(opts?: TracerOptions) {
 		const capacity = Math.max(Limit.MinCapacity, opts?.capacity ?? Limit.DefaultCapacity)

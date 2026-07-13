@@ -11,6 +11,7 @@
  */
 import { describe, expect, test } from 'vitest'
 import {
+	attachTracer,
 	createAtom,
 	createComputed,
 	effect,
@@ -204,6 +205,20 @@ describe('leak audit', () => {
 		await collect(10)
 		expect(savedRef.deref()).toBeUndefined()
 		expect(subCount(base)).toBe(0)
+	})
+
+	test('a tracer does not retain a dropped node after recording its delivery', async () => {
+		const tracer = attachTracer()
+		const nodeRef = (() => {
+			const node = nodeOf(createAtom(0, { label: 'temporary' }))
+			tracer.emit('deliver', node, 0)
+			expect(tracer.whyLastDelivery(node)[0]).toMatch(/deliver/)
+			return new WeakRef(node)
+		})()
+		await collect(10)
+		const retained = nodeRef.deref()
+		tracer.stop()
+		expect(retained).toBeUndefined()
 	})
 
 	test('[guard] effects preempted by a throwing flush collect after disposal (catch-path slots nulled)', async () => {
