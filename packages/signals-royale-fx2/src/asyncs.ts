@@ -47,10 +47,12 @@ export interface ThenableBox {
 	status: ThenableStatus
 	/** Fulfillment value or rejection reason, selected by status. */
 	result: unknown
-	/** Computeds whose latest base-state evaluation parked on this thenable. */
-	parkedNodes: Set<ComputedNode<unknown>>
-	/** Suspensions (base-state or per-world) waiting on this thenable. */
-	parkedSuspensions: Set<Suspension>
+	/** Computeds whose latest base-state evaluation parked on this thenable,
+	 * or null after settlement releases the membership owner. */
+	parkedNodes: Set<ComputedNode<unknown>> | null
+	/** Suspensions (base-state or per-world) waiting on this thenable, or
+	 * null after settlement releases the membership owner. */
+	parkedSuspensions: Set<Suspension> | null
 }
 
 /** One pending span: a stable promise that resolves when the span makes
@@ -140,16 +142,8 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	}
 	boxes.set(t, fresh)
 	t.then(
-		(v) => {
-			fresh.status = 'fulfilled'
-			fresh.result = v
-			settle(fresh)
-		},
-		(r) => {
-			fresh.status = 'rejected'
-			fresh.result = r
-			settle(fresh)
-		},
+		(v) => settle(fresh, 'fulfilled', v),
+		(r) => settle(fresh, 'rejected', r),
 	)
 	return fresh
 }
@@ -160,7 +154,16 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
  * waiting for a reader, and so passive probes observe the final state when
  * the wave's notifications run. Then release the suspensions, so suspended
  * renders retry against the already-settled graph. */
-function settle(box: ThenableBox): void {
+function settle(
+	box: ThenableBox,
+	status: 'fulfilled' | 'rejected',
+	result: unknown,
+): void {
+	if (box.status !== 'pending') {
+		return
+	}
+	box.status = status
+	box.result = result
 	const cause =
 		traceHook !== null
 			? traceHook('settle', null, NO_EVENT, {
@@ -169,10 +172,10 @@ function settle(box: ThenableBox): void {
 				})
 			: NO_EVENT
 	onSettlement?.()
-	const nodes = [...box.parkedNodes]
-	box.parkedNodes.clear()
-	const suspensions = [...box.parkedSuspensions]
-	box.parkedSuspensions.clear()
+	const nodes = box.parkedNodes!
+	box.parkedNodes = null
+	const suspensions = box.parkedSuspensions!
+	box.parkedSuspensions = null
 	const prevCause = setCurrentCause(cause)
 	startBatch()
 	try {
@@ -186,6 +189,7 @@ function settle(box: ThenableBox): void {
 			}
 		}
 	} finally {
+		nodes.clear()
 		endBatch()
 		setCurrentCause(prevCause)
 		for (const ep of suspensions) {
@@ -206,7 +210,7 @@ export function baseUse(
 	if (box.status === 'rejected') {
 		throw box.result
 	}
-	box.parkedNodes.add(consumer)
+	box.parkedNodes!.add(consumer)
 	const flags = consumer.flags
 	// Reuse the pending span's suspension so Suspense retries see one
 	// stable thenable — but never a settled one, or a suspended render
@@ -215,7 +219,7 @@ export function baseUse(
 		(flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
 			? (consumer.throwable as Suspension)
 			: makeSuspension()
-	box.parkedSuspensions.add(suspension)
+	box.parkedSuspensions!.add(suspension)
 	if (traceHook !== null) {
 		traceHook('compute-suspend', consumer, currentCause, { suspension })
 	}

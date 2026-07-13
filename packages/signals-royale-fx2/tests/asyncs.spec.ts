@@ -11,6 +11,7 @@ import {
 	read,
 } from '../src/index.ts'
 import { isErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
+import { observeNode } from '../src/graph.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -20,6 +21,26 @@ function deferred<T>() {
 		reject = rej
 	})
 	return { promise, resolve, reject }
+}
+
+function controlledThenable<T>() {
+	let fulfill!: (value: T) => unknown
+	let reject!: (reason: unknown) => unknown
+	const thenable = {
+		then(
+			onFulfilled: (value: T) => unknown,
+			onRejected: (reason: unknown) => unknown,
+		): undefined {
+			fulfill = onFulfilled
+			reject = onRejected
+			return undefined
+		},
+	} as unknown as PromiseLike<T>
+	return {
+		thenable,
+		fulfill: (value: T) => fulfill(value),
+		reject: (reason: unknown) => reject(reason),
+	}
 }
 
 const tick = () => new Promise<void>((r) => setTimeout(r))
@@ -116,6 +137,64 @@ describe('pending as graph state', () => {
 		gate.resolve(21)
 		await tick()
 		expect(seen).toEqual(['pending', 42])
+	})
+
+	test('settlement clears parked owners before recompute and notification', () => {
+		const gate = controlledThenable<number>()
+		const box = trackThenable(gate.thenable)
+		let ownerAbsentDuringCompute = false
+		const c = createComputed((use) => {
+			const value = use(gate.thenable)
+			ownerAbsentDuringCompute = box.parkedNodes === null
+			return value
+		})
+		const boom = new Error('notification')
+		let ownerAbsentDuringNotification = false
+		const stop = observeNode(nodeOf(c), () => {
+			ownerAbsentDuringNotification = box.parkedNodes === null
+			throw boom
+		})
+
+		expect(() => read(c)).toThrow()
+		expect(box.parkedNodes!.size).toBe(1)
+		expect(box.parkedSuspensions!.size).toBe(1)
+		expect(() => gate.fulfill(1)).toThrow(boom)
+		expect(ownerAbsentDuringCompute).toBe(true)
+		expect(ownerAbsentDuringNotification).toBe(true)
+		expect(box.parkedNodes).toBeNull()
+		expect(box.parkedSuspensions).toBeNull()
+
+		stop()
+	})
+
+	test('the first terminal callback wins and later scheduling still flushes', () => {
+		const fulfilled = controlledThenable<number>()
+		const value = createComputed((use) => use(fulfilled.thenable))
+		expect(() => read(value)).toThrow()
+		fulfilled.fulfill(1)
+		expect(read(value)).toBe(1)
+		expect(() => fulfilled.reject(new Error('late rejection'))).not.toThrow()
+		expect(() => fulfilled.fulfill(2)).not.toThrow()
+		expect(read(value)).toBe(1)
+
+		const rejected = controlledThenable<number>()
+		const failure = createComputed((use) => use(rejected.thenable))
+		const firstError = new Error('first rejection')
+		expect(() => read(failure)).toThrow()
+		rejected.reject(firstError)
+		expect(() => read(failure)).toThrow(firstError)
+		expect(() => rejected.fulfill(2)).not.toThrow()
+		expect(() => rejected.reject(new Error('late rejection'))).not.toThrow()
+		expect(() => read(failure)).toThrow(firstError)
+
+		const source = createAtom(0)
+		const seen: number[] = []
+		const stop = effect(() => {
+			seen.push(source.get())
+		})
+		source.set(1)
+		expect(seen).toEqual([0, 1])
+		stop()
 	})
 
 	test('status distinguishes undefined fulfillment from undefined rejection', async () => {

@@ -990,7 +990,7 @@ function draftEvaluate(
 			throw box.result
 		}
 		suspension ??= makeSuspension()
-		box.parkedSuspensions.add(suspension)
+		box.parkedSuspensions!.add(suspension)
 		throw WORLD_PARKED
 	}
 	const prevPark = currentPark
