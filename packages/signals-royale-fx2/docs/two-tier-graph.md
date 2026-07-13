@@ -723,7 +723,7 @@ document's sections above describe the code at landing time. The mapping:
   only for silent draft folds, and those two carry information no render
   pass has shown.
 - graph.ts carries a contract-matrix comment over the colocated walks
-  (propagateWave, pokeDraftWatchers, propagateFrom, invalidateComputed):
+  (propagateWave, pokeDraftWatchers, writeAtom, invalidateComputed):
   rows = walks, columns = marks staleness / bumps storeVersion / schedules
   effects / schedules render subscribers / dedup mechanism.
 - worlds.ts intents lost their write-only `seq` field (`OpSeq` died with

@@ -375,6 +375,23 @@ describe('two-tier graph: tracking and waves', () => {
 		stop()
 	})
 
+	test('T10a [falsify-first] changed writes propagate while equality and batching stay quiet', () => {
+		const source = atom(0)
+		const seen: number[] = []
+		const stop = makeEffect(() => {
+			seen.push(readAtom(source))
+		})
+
+		expect(writeAtom(source, 0)).toBe(false)
+		batch(() => {
+			expect(writeAtom(source, 1)).toBe(true)
+			expect(writeAtom(source, 2)).toBe(true)
+			expect(seen).toEqual([0])
+		})
+		expect(seen).toEqual([0, 2])
+		stop()
+	})
+
 	test('T11b [falsify-first] a drafted write pokes subscribers through a deep watched chain', () => {
 		// The drafted twin of T11: a draft intent travels the same watched
 		// closure as the wave (draft activity must reach subscribers of

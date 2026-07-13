@@ -718,7 +718,7 @@ function scheduleWatcher(w: WatcherNode): void {
 // rendered against what it would resolve now (see hooks.ts) and only
 // re-renders on a real difference.
 //
-// propagateFrom and invalidateComputed are the wave's entry points: they
+// Atom writes and invalidateComputed are the wave's entry points: they
 // record the root node's change, then run the wave.
 // ---------------------------------------------------------------------------
 
@@ -923,14 +923,6 @@ export function pokeDraftWatchers(
 				w.onDraftWake!(wake!)
 			}
 		}
-	}
-}
-
-/** Push an invalidation wave from an atom whose base value just changed. */
-export function propagateFrom(atom: AtomNode<unknown>, cause: TraceEventId): void {
-	propagateWave(atom.subs, cause)
-	if (batchDepth === 0) {
-		flush()
 	}
 }
 
@@ -1193,7 +1185,10 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T): boolean {
 	graphChangeClock++
 	atom.changedAtGraphChange = graphChangeClock
 	const cause = traceHook !== null ? traceHook('write', atom, currentCause) : NO_EVENT
-	propagateFrom(atom as AtomNode<unknown>, cause)
+	propagateWave(atom.subs, cause)
+	if (batchDepth === 0) {
+		flush()
+	}
 	return true
 }
 
