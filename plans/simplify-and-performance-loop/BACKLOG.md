@@ -7,8 +7,6 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Remove internal `untracked(() => ...)` adapters. Start with the remaining draft-evaluator `untracked(() => withWorld(...))` boundary, but only if direct world ownership restores both ambient contexts correctly.
-- Restore `currentCause` and decide suspension release when `endBatch` notification throws, while preserving the original thrown error; keep this separate from thenable settlement ownership.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
 - Converge Atom and Computed construction only with retained-allocation and V8 pretenuring parity.
 - Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
@@ -29,6 +27,8 @@ condition still leaves a useful direction.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
 - Delete the private one-caller `isErrorBox` guard; retry the exact Round 64 diff only after a natural compiler/runtime/layout change and keep its committed error/value, base error/value, and direct-brand controls.
+- Move selected-world ownership beside both graph collectors and remove the draft evaluator's `untracked(() => withWorld(...))` adapter; retry the exact Round 65 diff only after a natural compiler/runtime/layout change or separately stable base-computed control window, keeping all four frozen modes.
+- Restore `currentCause` and release suspensions after a throwing `endBatch` notification; retry the exact Round 66 nested `try/finally` only after a natural compiler/runtime/layout change, keeping the four Round 63 settlement modes and unchanged suspension control.
 
 ## Completed or deliberately closed
 
