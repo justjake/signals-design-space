@@ -22,7 +22,13 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react'
 import * as Scheduler from 'scheduler'
-import { Flag, isUninitialized, NO_EVENT, pokeDraftWatchers, type ProducerNode } from '../graph.ts'
+import {
+	Flag,
+	isUninitialized,
+	NO_EVENT,
+	pokeDraftWatchers,
+	type ProducerNode,
+} from '../graph.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -35,6 +41,7 @@ import {
 	worldOf,
 } from '../worlds.ts'
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
+import { getActiveTracer } from '../tracer.ts'
 
 /** One registered connection per SignalsFrameworkProvider. The record is
  * identity-stable for the root's lifetime. It is the context value, so
@@ -52,11 +59,8 @@ export interface ReactRootConnection {
 	committing: boolean
 }
 
-/** Returned by registerReactSignals(): exposes captured errors and tears
- * the registration down. */
+/** Returned by registerReactSignals(): tears the registration down. */
 export interface ReactSignalsHandle {
-	/** Errors captured from user callbacks and React roots; tests assert []. */
-	errors: unknown[]
 	dispose(): void
 }
 
@@ -119,10 +123,15 @@ function isRendering(): boolean {
 
 function renderWriteGuard(): void {
 	if (isRendering()) {
-		throw new Error(
+		const error = new Error(
 			'signals-royale-fx2: state was written during a React render. ' +
 				'Render must be pure; move the write into an event handler or effect.',
 		)
+		getActiveTracer()?.emit('policy-error', null, NO_EVENT, {
+			error,
+			phase: 'render-write',
+		})
+		throw error
 	}
 }
 
@@ -174,7 +183,12 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 	// even when the work loop continues in the same stack.
 	try {
 		Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire)
-	} catch {
+	} catch (error) {
+		getActiveTracer()?.emit('scheduler-fallback', null, NO_EVENT, {
+			error,
+			phase: 'render-note-expiry',
+			root: mine.connection ?? undefined,
+		})
 		// No scheduler host (non-DOM test rigs): the microtask still covers
 		// every path that unwinds the stack.
 	}
@@ -468,6 +482,10 @@ export function confirmRootCommit(
 		if (connection.container !== null) {
 			setCommittedWorld(connection.container, ids)
 		}
+		getActiveTracer()?.emit('provider-world-commit', null, NO_EVENT, {
+			root: connection,
+			world: ids,
+		})
 		// This root's committed view changed; poke the draft watchers of every
 		// atom the committed drafts touched. This is cheap: value subscribers
 		// bail through the notify predicate when their resolution is
@@ -510,12 +528,6 @@ export function confirmRootCommit(
 	}
 }
 
-export function reportError(e: unknown): void {
-	if (handle !== null) {
-		handle.errors.push(e)
-	}
-}
-
 /**
  * Install the bindings' hooks into the engine (write classification, the
  * write-during-render guard, the render-world provider). Idempotent per
@@ -529,7 +541,6 @@ export function registerReactSignals(): ReactSignalsHandle {
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
 	handle = {
-		errors: [],
 		dispose() {
 			if (handle === null) {
 				return
@@ -555,7 +566,6 @@ export function resetReactSignalsForTest(): void {
 		setAmbientClassifier(ambientClassifier)
 		setRenderWriteGuard(renderWriteGuard)
 		setRenderWorldProvider(renderWorldProvider)
-		handle!.errors.length = 0
 	}
 }
 

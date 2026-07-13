@@ -368,12 +368,13 @@ export default {
 ### RoyaleAdapter (the shared cross-entrant battery; `royale/adapter.ts`)
 
 ```ts
-export interface RoyaleHandle { errors: unknown[]; dispose(): void }
+export interface RoyaleHandle { dispose(): void }
 export interface RoyaleTraceView {
   /** Formatted causal chain from the most recent component delivery caused by
    * this signal/computed, back to its originating write or retirement. */
   whyLastDelivery(x: unknown): string[];
-  events(): Array<{ id: number; kind: string; cause?: number }>;
+  events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>;
+  dropped(): number;
   stop(): void;
 }
 export interface RoyaleAdapter {

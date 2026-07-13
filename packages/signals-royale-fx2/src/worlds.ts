@@ -68,6 +68,7 @@ import {
 	Flag,
 	NO_EVENT,
 	assertSignalReadAllowed,
+	currentCause,
 	currentGraphChange,
 	ensureFresh,
 	isUninitialized,
@@ -208,7 +209,8 @@ export function openDraft(): Draft {
 		cutoffAtGraphChange: alone ? currentGraphChange() : 0,
 		world: { drafts, sig: String(id) },
 		atoms: new Set(),
-		openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
+		openEvent:
+			traceHook !== null ? traceHook('draft-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)
@@ -250,7 +252,9 @@ export function appendDraftIntent(
 	draftRevisionByAtom.set(atom, draftChangeClock)
 	let cause: TraceEventId = NO_EVENT
 	if (traceHook !== null) {
-		cause = draft.lastWriteEvent = traceHook('write', atom, draft.openEvent, { draft: draft.id })
+		cause = draft.lastWriteEvent = traceHook('write', atom, draft.openEvent, {
+			draftId: draft.id,
+		})
 		atom.causeEvent = cause
 	}
 	if (draft.cutoffAtGraphChange === currentGraphChange()) {
@@ -338,10 +342,20 @@ function replayLog(atom: AtomNode<unknown>, world: World | null): unknown {
 /** Apply one intent to a value; shared by world replay and by the
  * dead-prefix folding in releaseLogs. */
 function applyIntent(atom: AtomNode<unknown>, value: unknown, intent: Intent): unknown {
-	const next =
-		intent.kind === 'set'
-			? intent.payload
-			: runUpdater(intent.payload as (p: unknown) => unknown, value)
+	let next = intent.payload
+	if (intent.kind === 'update') {
+		try {
+			next = runUpdater(intent.payload as (p: unknown) => unknown, value)
+		} catch (error) {
+			// A single-draft cutoff is advisory and swallows this replay below.
+			// Ordinary reads and retirement propagate it, so only those observed
+			// callback failures enter the trace.
+			if (cutoffWorld === null && traceHook !== null) {
+				traceHook('callback-error', atom, currentCause, { error, phase: 'updater' })
+			}
+			throw error
+		}
+	}
 	return atom.equals(value, next) ? value : next
 }
 
@@ -368,6 +382,7 @@ export function retireDraft(id: DraftId): void {
 					'draft-retire',
 					null,
 					draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
+					{ draftId: id },
 				)
 			: NO_EVENT
 	const prevCause = setCurrentCause(evt)
@@ -403,7 +418,10 @@ export function discardDraft(id: DraftId): void {
 	liveDrafts.delete(id)
 	draft.state = 'discarded'
 	draftChangeClock++
-	const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT
+	const evt =
+		traceHook !== null
+			? traceHook('draft-discard', null, draft.openEvent, { draftId: id })
+			: NO_EVENT
 	for (const atom of draft.atoms) {
 		draftRevisionByAtom.set(atom, draftChangeClock)
 		pokeDraftWatchers(atom, evt)
@@ -824,8 +842,41 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		certificate.count = 1
 		clearInactiveCertificateEntries(certificate, previousCount)
 		fresh = { flags: 0, value: replayLog(atom, world), throwable: null }
-	} else {
+	} else if (traceHook === null) {
 		fresh = draftEvaluate(node as ComputedNode<unknown>, world, memo?.state, certificate)
+	} else {
+		const previousState = memo?.state
+		const computeWorld: DraftId[] = []
+		for (const draft of world.drafts) {
+			computeWorld.push(draft.id)
+		}
+		const compute = traceHook('compute', node, node.causeEvent, { world: computeWorld })
+		const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
+		try {
+			fresh = draftEvaluate(
+				node as ComputedNode<unknown>,
+				world,
+				previousState,
+				certificate,
+			)
+		} finally {
+			if (compute !== NO_EVENT) {
+				setCurrentCause(prevCause)
+			}
+		}
+		if (traceHook !== null) {
+			if ((fresh.flags & Flag.AsyncSuspended) !== 0) {
+				traceHook('compute-suspend', node, compute, {
+					suspension: fresh.throwable as Suspension,
+					world: computeWorld,
+				})
+			} else if ((fresh.flags & Flag.AsyncError) !== 0 && fresh !== previousState) {
+				traceHook('compute-error', node, compute, {
+					error: (fresh.throwable as ErrorBox).error,
+					world: computeWorld,
+				})
+			}
+		}
 	}
 	// Keep the previous state record when the fresh resolution is
 	// indistinguishable from it, so subscribers that compare by identity do

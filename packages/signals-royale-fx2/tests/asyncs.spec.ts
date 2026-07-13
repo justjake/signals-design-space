@@ -1,6 +1,7 @@
 /** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from 'vitest'
 import { createAtom, createComputed, effect, isPending, latest, read } from '../src/index.ts'
+import { makeSuspension, trackThenable } from '../src/asyncs.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -13,6 +14,19 @@ function deferred<T>() {
 }
 
 const tick = () => new Promise<void>((r) => setTimeout(r))
+
+test('detached async records contain only execution state', () => {
+	const suspension = makeSuspension()
+	const box = trackThenable(new Promise<never>(() => {}))
+	expect(Object.keys(suspension)).toEqual(['promise', 'settled', 'resolve'])
+	expect(Object.keys(box)).toEqual([
+		'status',
+		'value',
+		'reason',
+		'parkedNodes',
+		'parkedSuspensions',
+	])
+})
 
 describe('pending as graph state', () => {
 	test('never-settled read throws a stable thenable; settlement converges', async () => {

@@ -28,6 +28,7 @@ import {
 	assertSignalWriteAllowed,
 	activeWorldSourceConsumer,
 	activeEvaluation,
+	currentCause,
 	flushLifetimeTransitions,
 	getActiveConsumer,
 	isUninitialized,
@@ -43,6 +44,7 @@ import {
 	batch as graphBatch,
 	untracked as graphUntracked,
 	useImpl,
+	traceHook,
 	writeAtom,
 } from './graph.ts'
 import { type ErrorBox, type ResolvedState, type Suspension, isErrorBox } from './asyncs.ts'
@@ -483,7 +485,16 @@ export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 		appendDraftIntent(draft, atom, 'update', fn)
 		return
 	}
-	const next = runUpdater(fn, peekAtom(atom) as T)
+	const previous = peekAtom(atom) as T
+	let next: T
+	try {
+		next = runUpdater(fn, previous)
+	} catch (error) {
+		if (traceHook !== null) {
+			traceHook('callback-error', activeEvaluation, currentCause, { error, phase: 'updater' })
+		}
+		throw error
+	}
 	const rebased = appendUrgentIntent(atom, 'update', fn)
 	const changed = writeAtom(atom, next)
 	if (rebased && !changed) {

@@ -9,7 +9,13 @@
  * silently.
  */
 
-import { type ReactiveNode, type TraceEventId, NO_EVENT, setTraceHook } from './graph.ts'
+import {
+	type ReactiveNode,
+	type TraceEventId,
+	type TraceFields,
+	NO_EVENT,
+	setTraceHook,
+} from './graph.ts'
 
 /** One entry in the tracer's ring. */
 export interface TraceEvent {
@@ -18,7 +24,13 @@ export interface TraceEvent {
 	/** Causal parent event id; NO_EVENT when the operation was a root cause. */
 	cause: TraceEventId
 	label: string | undefined
-	data: unknown
+	rootId: number | undefined
+	suspensionId: number | undefined
+	draftId: number | undefined
+	error: unknown
+	status: string | undefined
+	phase: string | undefined
+	world: readonly number[] | undefined
 }
 
 /** Options accepted by the Tracer constructor and attachTracer(). */
@@ -41,8 +53,12 @@ export class Tracer {
 	private ring: (TraceEvent | undefined)[]
 	private head = 0
 	private size = 0
-	private nextId: TraceEventId = 1
 	private stopped = false
+	private firstEventId: TraceEventId
+	private nextRootId = 1
+	private nextSuspensionId = 1
+	private rootIds = new WeakMap<object, number>()
+	private suspensionIds = new WeakMap<object, number>()
 	/** Events evicted by ring overflow. */
 	dropped = 0
 	/** Most recent delivery event per node (component re-render / effect run). */
@@ -51,14 +67,56 @@ export class Tracer {
 	constructor(opts?: TracerOptions) {
 		const capacity = Math.max(Limit.MinCapacity, opts?.capacity ?? Limit.DefaultCapacity)
 		this.ring = new Array(capacity)
+		this.firstEventId = nextTraceEventId
 	}
 
-	emit(kind: string, node: ReactiveNode | null, cause: TraceEventId, data?: unknown): TraceEventId {
-		if (this.stopped) {
+	emit(
+		kind: string,
+		node: ReactiveNode | null,
+		cause: TraceEventId,
+		fields?: TraceFields,
+	): TraceEventId {
+		// attachTracer is the only activation path. Inactive instances cannot
+		// emit, so event-id ranges from separate sessions never interleave.
+		if (this.stopped || activeTracer !== this) {
 			return NO_EVENT
 		}
-		const id = this.nextId++
-		const evt: TraceEvent = { id, kind, cause, label: node?.label, data }
+		const id = nextTraceEventId++
+		// Reactive nodes can outlive a trace session. Only causes emitted by
+		// this tracer are meaningful in its ring; older sessions are unrelated,
+		// not "evicted" ancestors of the new event.
+		const ownCause = cause >= this.firstEventId && cause < id ? cause : NO_EVENT
+		let rootId: number | undefined
+		const root = fields?.root
+		if (root !== undefined) {
+			rootId = this.rootIds.get(root)
+			if (rootId === undefined) {
+				rootId = this.nextRootId++
+				this.rootIds.set(root, rootId)
+			}
+		}
+		let suspensionId: number | undefined
+		const suspension = fields?.suspension
+		if (suspension !== undefined) {
+			suspensionId = this.suspensionIds.get(suspension)
+			if (suspensionId === undefined) {
+				suspensionId = this.nextSuspensionId++
+				this.suspensionIds.set(suspension, suspensionId)
+			}
+		}
+		const evt: TraceEvent = {
+			id,
+			kind,
+			cause: ownCause,
+			label: node?.label,
+			rootId,
+			suspensionId,
+			draftId: fields?.draftId,
+			error: fields?.error,
+			status: fields?.status,
+			phase: fields?.phase,
+			world: fields?.world,
+		}
 		if (this.size === this.ring.length) {
 			this.head = (this.head + 1) % this.ring.length
 			this.dropped++
@@ -101,8 +159,13 @@ export class Tracer {
 
 	format(evt: TraceEvent): string {
 		const label = evt.label !== undefined ? ` ${JSON.stringify(evt.label)}` : ''
-		const data = evt.data !== undefined && evt.data !== null ? ` ${JSON.stringify(evt.data)}` : ''
-		return `#${evt.id} ${evt.kind}${label}${data}`
+		const root = evt.rootId !== undefined ? ` root=${evt.rootId}` : ''
+		const suspension = evt.suspensionId !== undefined ? ` suspension=${evt.suspensionId}` : ''
+		const draft = evt.draftId !== undefined ? ` draft=${evt.draftId}` : ''
+		const status = evt.status !== undefined ? ` status=${evt.status}` : ''
+		const phase = evt.phase !== undefined ? ` phase=${evt.phase}` : ''
+		const error = evt.error instanceof Error ? ` error=${JSON.stringify(evt.error.message)}` : ''
+		return `#${evt.id} ${evt.kind}${label}${root}${suspension}${draft}${status}${phase}${error}`
 	}
 
 	/**
@@ -139,6 +202,9 @@ export class Tracer {
 }
 
 let activeTracer: Tracer | null = null
+/** Event ids never restart, so a node cannot accidentally point into a
+ * later tracer session after the tracer that recorded its cause stops. */
+let nextTraceEventId: TraceEventId = 1
 
 /** Attach a tracer (replacing any active one). Detach via session.stop(). */
 export function attachTracer(opts?: TracerOptions): Tracer {

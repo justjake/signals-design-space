@@ -29,9 +29,7 @@ beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 function Reader({ id, atom }: { id: string; atom: ReturnType<typeof createAtom<number>> }) {

@@ -24,12 +24,14 @@
 import {
 	type ComputedNode,
 	type Flags,
+	type TraceEventId,
 	Flag,
 	PARKED,
 	ensureFresh,
 	invalidateComputed,
 	isUninitialized,
 	NO_EVENT,
+	currentCause,
 	setCurrentCause,
 	setFinishComputeImpl,
 	setUseImpl,
@@ -59,7 +61,7 @@ export interface ThenableBox {
  * before. */
 export interface Suspension {
 	promise: Promise<void>
-	resolve: () => void
+	resolve: (cause?: TraceEventId) => void
 	settled: boolean
 }
 
@@ -121,12 +123,18 @@ export function makeSuspension(): Suspension {
 	const ep: Suspension = {
 		promise,
 		settled: false,
-		resolve: () => {
+		resolve: (cause = NO_EVENT) => {
 			if (ep.settled) {
 				return
 			}
 			ep.settled = true
 			resolveRaw()
+			if (traceHook !== null) {
+				// The suspension promise is now fulfilled. React may retry because
+				// of that fact, but the engine does not observe when it schedules or
+				// which later render is that retry.
+				traceHook('retry-ready', null, cause, { suspension: ep })
+			}
 		},
 	}
 	return ep
@@ -167,7 +175,13 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
  * the wave's notifications run. Then release the suspensions, so suspended
  * renders retry against the already-settled graph. */
 function settle(box: ThenableBox): void {
-	const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT
+	const cause =
+		traceHook !== null
+			? traceHook('settle', null, NO_EVENT, {
+					status: box.status,
+					error: box.status === 'rejected' ? box.reason : undefined,
+				})
+			: NO_EVENT
 	onSettlement?.()
 	const nodes = [...box.parkedNodes]
 	box.parkedNodes.clear()
@@ -189,7 +203,7 @@ function settle(box: ThenableBox): void {
 		endBatch()
 		setCurrentCause(prevCause)
 		for (const ep of suspensions) {
-			ep.resolve()
+			ep.resolve(cause)
 		}
 	}
 }
@@ -213,6 +227,9 @@ function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unkn
 			? (consumer.throwable as Suspension)
 			: makeSuspension()
 	box.parkedSuspensions.add(suspension)
+	if (traceHook !== null) {
+		traceHook('compute-suspend', consumer, currentCause, { suspension })
+	}
 	consumer.throwable = suspension
 	consumer.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended
 	throw PARKED
@@ -234,7 +251,7 @@ function finishCompute(
 	}
 	if (hasError) {
 		if ((flags & Flag.AsyncSuspended) !== 0) {
-			;(node.throwable as Suspension).resolve()
+			;(node.throwable as Suspension).resolve(currentCause)
 		}
 		const sameError =
 			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
@@ -245,7 +262,7 @@ function finishCompute(
 		return !sameError
 	}
 	if ((flags & Flag.AsyncSuspended) !== 0) {
-		;(node.throwable as Suspension).resolve()
+		;(node.throwable as Suspension).resolve(currentCause)
 	}
 	node.flags = flags & ~Flag.AsyncMask
 	node.throwable = null

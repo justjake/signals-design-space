@@ -10,18 +10,19 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import adapter from './ADAPTER'
-import type { RoyaleHandle } from './royale-types'
+import type { RoyaleTraceView } from './royale-types'
 
 const React = adapter.React
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-let handle: RoyaleHandle
 let roots: Array<{ render(node: unknown): void; unmount(): void }> = []
 let containers: HTMLElement[] = []
+let trace: RoyaleTraceView
 
 beforeEach(() => {
-	handle = adapter.register()
+	adapter.register()
+	trace = adapter.trace()
 })
 
 afterEach(async () => {
@@ -30,8 +31,16 @@ afterEach(async () => {
 			r.unmount()
 		}
 	})
-	// Snapshot before the scrub: reset must not be able to hide an error.
-	const errors = [...handle.errors]
+	const errors: unknown[] = []
+	for (const event of trace.events()) {
+		// Other events can carry an error as factual metadata, such as a
+		// rejected settlement or a scheduler fallback.
+		if (event.kind.endsWith('-error')) {
+			errors.push(event.error ?? event.kind)
+		}
+	}
+	expect(trace.dropped()).toBe(0)
+	trace.stop()
 	for (const c of containers) {
 		c.remove()
 	}
@@ -526,6 +535,15 @@ describe('scenario 10 — write-during-render fails loudly', () => {
 		const { container } = await mount(<Bad />)
 		expect(thrown).toBeTruthy()
 		expect(text(container)).toBe('0')
+		let traced = false
+		for (const event of trace.events()) {
+			if (event.kind === 'policy-error' && event.error === thrown) {
+				traced = true
+			}
+		}
+		expect(traced).toBe(true)
+		trace.stop()
+		trace = adapter.trace()
 	})
 })
 
@@ -817,7 +835,7 @@ describe('scenario 14 — lifetime effects: observation spans the union of subsc
 
 describe('scenario 15 — causality: the trace explains re-renders after scenario 3', () => {
 	test('urgent chain reaches a write; post-retirement chain reaches the retirement or write', async () => {
-		const t = adapter.trace()
+		const t = (trace = adapter.trace())
 		const a = adapter.atom(1)
 		const holdFlag = adapter.atom(false)
 		const gate = deferred<void>()
@@ -962,7 +980,8 @@ describe('scenario 18 — SSR: serialize, install on a fresh engine, hydration-c
 		// "Client": a fresh engine; install MUST NOT run lazy initializers
 		// (install is not a write) and MUST make the first render exact.
 		adapter.resetForTest()
-		handle = adapter.register()
+		adapter.register()
+		trace = adapter.trace()
 		let initRuns = 0
 		const c1 = adapter.atom((): number => {
 			initRuns++

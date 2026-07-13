@@ -37,13 +37,13 @@ import {
 } from '../src/react/index.ts'
 
 export interface RoyaleHandle {
-	errors: unknown[]
 	dispose(): void
 }
 
 export interface RoyaleTraceView {
 	whyLastDelivery(x: unknown): string[]
-	events(): Array<{ id: number; kind: string; cause?: number }>
+	events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>
+	dropped(): number
 	stop(): void
 }
 
@@ -136,10 +136,20 @@ const adapter = {
 			whyLastDelivery(x: unknown): string[] {
 				return t.whyLastDelivery(nodeOf(x as Signal<unknown>))
 			},
-			events(): Array<{ id: number; kind: string; cause?: number }> {
-				return t
-					.events()
-					.map((e) => ({ id: e.id, kind: e.kind, cause: e.cause === 0 ? undefined : e.cause }))
+			events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }> {
+				const events: Array<{ id: number; kind: string; cause?: number; error?: unknown }> = []
+				for (const event of t.events()) {
+					events.push({
+						id: event.id,
+						kind: event.kind,
+						cause: event.cause === 0 ? undefined : event.cause,
+						error: event.error,
+					})
+				}
+				return events
+			},
+			dropped(): number {
+				return t.dropped
 			},
 			stop(): void {
 				t.stop()

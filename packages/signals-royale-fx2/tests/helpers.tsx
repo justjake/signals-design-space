@@ -28,7 +28,6 @@ export function makeHarness(): Harness {
 	resetReactSignalsForTest()
 	;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 	const handle = registerReactSignals()
-	handle.errors.length = 0
 	const containers: HTMLElement[] = []
 	const roots: Array<{ render(node: unknown): void; unmount(): void }> = []
 	return {

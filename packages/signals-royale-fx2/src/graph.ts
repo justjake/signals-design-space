@@ -259,8 +259,21 @@ export type TraceFn = (
 	kind: string,
 	node: ReactiveNode | null,
 	cause: TraceEventId,
-	data?: unknown,
+	fields?: TraceFields,
 ) => TraceEventId
+
+/** Optional semantic identities and outcomes attached to a trace event.
+ * The tracer converts object identities to stable numeric ids before it
+ * stores the event. */
+export interface TraceFields {
+	root?: object
+	suspension?: object
+	draftId?: DraftId
+	error?: unknown
+	status?: string
+	phase?: string
+	world?: readonly DraftId[]
+}
 
 export let traceHook: TraceFn | null = null
 export function setTraceHook(fn: TraceFn | null): void {
@@ -515,13 +528,34 @@ export function flushLifetimeTransitions(): void {
 					writeAtom(atom, v)
 				},
 			}
-			const cleanup = atom.lifetime!(ctx)
+			let cleanup: void | (() => void)
+			try {
+				cleanup = atom.lifetime!(ctx)
+			} catch (error) {
+				if (traceHook !== null) {
+					traceHook('callback-error', atom, atom.causeEvent, {
+						error,
+						phase: 'on-observed',
+					})
+				}
+				throw error
+			}
 			atom.lifetimeCleanup = typeof cleanup === 'function' ? cleanup : undefined
 		} else {
 			const cleanup = atom.lifetimeCleanup
 			atom.lifetimeCleanup = undefined
 			if (cleanup !== undefined) {
-				untracked(cleanup)
+				try {
+					untracked(cleanup)
+				} catch (error) {
+					if (traceHook !== null) {
+						traceHook('cleanup-error', atom, atom.causeEvent, {
+							error,
+							phase: 'on-observed',
+						})
+					}
+					throw error
+				}
 			}
 		}
 	}
@@ -969,7 +1003,11 @@ export function flush(): void {
 		let guard = 0
 		while (queueHead < effectCount) {
 			if (++guard > Limit.FlushRuns) {
-				throw new Error('effect flush did not settle (cycle?)')
+				const error = new Error('effect flush did not settle (cycle?)')
+				if (traceHook !== null) {
+					traceHook('flush-error', null, currentCause, { error, phase: 'cycle' })
+				}
+				throw error
 			}
 			const i = queueHead++
 			const w = effectQueue[i]!
@@ -1053,18 +1091,29 @@ export const FORBID_WRITE_FROM_COMPUTED: boolean = true
 let readsForbidden: string | null = null
 let writesForbidden: string | null = null
 
+/** Cold policy path shared by read and write guards. Keeping construction
+ * and tracing here leaves the successful guards as their original checks. */
+function throwSignalAccessForbidden(kind: 'read' | 'write', reason: string): never {
+	const error =
+		kind === 'read' ? new SignalReadForbidden(reason) : new SignalWriteForbidden(reason)
+	if (traceHook !== null) {
+		traceHook('policy-error', activeEvaluation, currentCause, { error, phase: kind })
+	}
+	throw error
+}
+
 export function assertSignalReadAllowed(): void {
 	if (readsForbidden !== null) {
-		throw new SignalReadForbidden(readsForbidden)
+		throwSignalAccessForbidden('read', readsForbidden)
 	}
 }
 
 export function assertSignalWriteAllowed(): void {
 	if (writesForbidden !== null) {
-		throw new SignalWriteForbidden(writesForbidden)
+		throwSignalAccessForbidden('write', writesForbidden)
 	}
 	if (FORBID_WRITE_FROM_COMPUTED && activeEvaluation !== null) {
-		throw new SignalWriteForbidden('writes inside computeds are forbidden')
+		throwSignalAccessForbidden('write', 'writes inside computeds are forbidden')
 	}
 }
 
@@ -1103,6 +1152,9 @@ function materializeAtom<T>(atom: AtomNode<T>): void {
 		atom.value = init()
 	} catch (error) {
 		atom.initializer = init
+		if (traceHook !== null) {
+			traceHook('callback-error', atom, currentCause, { error, phase: 'initializer' })
+		}
 		throw error
 	} finally {
 		activeConsumer = prevConsumer
@@ -1214,6 +1266,8 @@ function recompute(node: ComputedNode<unknown>): void {
 	let hasError = false
 	let error: unknown
 	let value: unknown
+	const compute = traceHook !== null ? traceHook('compute', node, node.causeEvent) : NO_EVENT
+	const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 	try {
 		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
 	} catch (e) {
@@ -1222,8 +1276,14 @@ function recompute(node: ComputedNode<unknown>): void {
 		} else {
 			hasError = true
 			error = e
+			if (traceHook !== null) {
+				traceHook('compute-error', node, compute, { error: e })
+			}
 		}
 	} finally {
+		if (compute !== NO_EVENT) {
+			setCurrentCause(prevCause)
+		}
 		// A nested evaluation advanced the pass id; restore ours so dep
 		// trimming sees the right pass.
 		evalPass = myPass
@@ -1536,6 +1596,9 @@ function executeWatcher(w: WatcherNode): void {
 		try {
 			untracked(c)
 		} catch (e) {
+			if (traceHook !== null) {
+				traceHook('cleanup-error', w, w.causeEvent, { error: e })
+			}
 			// A throwing cleanup poisons the effect: dispose it fully so it never
 			// half-runs again, then surface the error.
 			disposeWatcher(w)
@@ -1553,7 +1616,8 @@ function executeWatcher(w: WatcherNode): void {
 	activeEffectOwner = w
 	const myPass = newEvalPass()
 	w.depsTail = undefined
-	const cause = traceHook !== null ? traceHook('effect-run', w, w.causeEvent) : NO_EVENT
+	const trace = traceHook
+	const cause = trace !== null ? trace('effect-run', w, w.causeEvent) : NO_EVENT
 	// The validation watermark is taken before the body runs: if the body
 	// itself writes, its dependencies may change during the run, the write's
 	// wave re-schedules this watcher, and the next validation must see those
@@ -1562,7 +1626,15 @@ function executeWatcher(w: WatcherNode): void {
 	const preGraphChange = graphChangeClock
 	const prevCause = setCurrentCause(cause)
 	try {
-		const ret = w.fn!()
+		let ret: void | (() => void)
+		try {
+			ret = w.fn!()
+		} catch (error) {
+			if (traceHook !== null) {
+				traceHook('effect-error', w, cause, { error })
+			}
+			throw error
+		}
 		if (typeof ret === 'function') {
 			w.cleanup = ret
 		}
@@ -1599,6 +1671,9 @@ export function disposeWatcher(w: WatcherNode): void {
 			try {
 				untracked(c)
 			} catch (error) {
+				if (traceHook !== null) {
+					traceHook('cleanup-error', w, w.causeEvent, { error })
+				}
 				if (!failed) {
 					failed = true
 					failure = error
@@ -1725,6 +1800,9 @@ export function makeScope(fn: () => void): () => void {
 			activeConsumer = prevConsumer
 		}
 	} catch (error) {
+		if (traceHook !== null) {
+			traceHook('callback-error', null, currentCause, { error, phase: 'scope' })
+		}
 		try {
 			disposeChildren(owner)
 		} catch {

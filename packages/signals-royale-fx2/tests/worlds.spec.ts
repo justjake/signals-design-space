@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'vitest'
 import {
 	Flag,
+	attachTracer,
 	createComputed,
 	effect,
 	isPending,
@@ -60,6 +61,86 @@ function valueState(value: unknown): { flags: number; value: unknown; throwable:
 }
 
 describe('draft visibility', () => {
+	test('world computation correlates unrelated drafts without inventing one as its cause', () => {
+		const source = createAtom(0)
+		const unrelated = createAtom(0)
+		const computed = createComputed(() => source.get(), { label: 'computed' })
+		const tracer = attachTracer()
+		const sourceDraft = openDraft()
+		runWithDraftWrites(sourceDraft, () => source.set(1))
+		sealDraft(sourceDraft)
+		const unrelatedDraft = openDraft()
+		runWithDraftWrites(unrelatedDraft, () => unrelated.set(2))
+		sealDraft(unrelatedDraft)
+
+		expect(stateIn(computed, [sourceDraft.id, unrelatedDraft.id])).toEqual(valueState(1))
+		const compute = tracer
+			.events()
+			.find((event) => event.kind === 'compute' && event.label === 'computed')!
+		expect(compute.cause).toBe(0)
+		expect(compute.draftId).toBeUndefined()
+		expect(compute.world).toEqual([sourceDraft.id, unrelatedDraft.id])
+
+		tracer.stop()
+		discardDraft(unrelatedDraft.id)
+		discardDraft(sourceDraft.id)
+	})
+
+	test('world computation traces a stable error only when it first becomes the result', () => {
+		const boom = new Error('computed boom')
+		const source = createAtom(0)
+		const computed = createComputed(
+			() => {
+				source.get()
+				throw boom
+			},
+			{ label: 'failing computed' },
+		)
+		const tracer = attachTracer()
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => source.set(1))
+		const world = worldOf([draft.id])
+
+		const first = resolveState(nodeOf(computed), world)
+		expect(first.flags & Flag.AsyncError).toBe(Flag.AsyncError)
+		const failure = tracer.events().find((event) => event.kind === 'compute-error')!
+		const firstCompute = tracer.find(failure.cause)!
+		expect(firstCompute.kind).toBe('compute')
+		expect(failure.error).toBe(boom)
+		expect(failure.world).toEqual([draft.id])
+
+		runWithDraftWrites(draft, () => source.set(2))
+		expect(resolveState(nodeOf(computed), world)).toBe(first)
+		expect(tracer.events().filter((event) => event.kind === 'compute-error')).toHaveLength(1)
+
+		tracer.stop()
+		discardDraft(draft.id)
+	})
+
+	test('a swallowed cutoff replay reports its updater only when an ordinary read propagates it', () => {
+		const boom = new Error('updater boom')
+		const atom = createAtom(0)
+		const computed = createComputed(() => atom.get())
+		const stop = effect(() => void computed.get())
+		const tracer = attachTracer()
+		const draft = openDraft()
+		runWithDraftWrites(draft, () =>
+			atom.update(() => {
+				throw boom
+			}),
+		)
+		expect(
+			tracer.events().some((event) => event.kind === 'callback-error' && event.error === boom),
+		).toBe(false)
+		expect(() => stateIn(atom, [draft.id])).toThrow(boom)
+		expect(
+			tracer.events().some((event) => event.kind === 'callback-error' && event.error === boom),
+		).toBe(true)
+		tracer.stop()
+		stop()
+		discardDraft(draft.id)
+	})
+
 	test('runWithDraftWrites targets writes only; reads stay in the base world', () => {
 		const atom = createAtom(0)
 		const draft = openDraft()

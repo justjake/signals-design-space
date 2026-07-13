@@ -54,6 +54,7 @@ import {
 } from '../index.ts'
 import {
 	Flag,
+	NO_EVENT,
 	activeWorldSourceConsumer,
 	makeScheduledEffect,
 	observeNode,
@@ -182,23 +183,17 @@ function disposeSignalEffect(state: SignalEffectState): void {
 function requireRootConnection(hook: string): ReactRootConnection {
 	const connection = useContext(ReactRootConnectionContext)
 	if (connection === null) {
-		throw new Error(
+		const error = new Error(
 			`${hook} was rendered without a SignalsFrameworkProvider above it. ` +
 				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.',
 		)
+		getActiveTracer()?.emit('policy-error', null, NO_EVENT, {
+			error,
+			phase: 'missing-provider',
+		})
+		throw error
 	}
 	return connection
-}
-
-const lastDelivered = new WeakMap<ProducerNode, unknown>()
-const NEVER = Symbol('never-delivered')
-
-function traceDelivery(node: ProducerNode, value: unknown): void {
-	const prev = lastDelivered.has(node) ? lastDelivered.get(node) : NEVER
-	if (prev !== value) {
-		lastDelivered.set(node, value)
-		getActiveTracer()?.emit('deliver', node, node.causeEvent)
-	}
 }
 
 /**
@@ -211,21 +206,33 @@ function traceDelivery(node: ProducerNode, value: unknown): void {
  *   flash;
  * - a never-settled value suspends everywhere.
  */
-function unwrapState(st: ResolvedState, world: World): unknown {
+function unwrapState(
+	st: ResolvedState,
+	world: World,
+	connection: ReactRootConnection,
+	node: ProducerNode,
+): unknown {
 	const asyncBits = st.flags & Flag.AsyncMask
 	if (asyncBits === 0) {
 		return st.value
 	}
 	if (asyncBits === Flag.AsyncError) {
-		throw (st.throwable as ErrorBox).error
+		const error = (st.throwable as ErrorBox).error
+		getActiveTracer()?.emit('render-error', node, node.causeEvent, { error, root: connection })
+		throw error
 	}
 	const suspension = st.throwable as Suspension
-	if (world.drafts.length > 0) {
-		throw suspension.promise
-	}
-	if (!isUninitialized(st.value)) {
+	// Base-world refreshes keep serving settled history while pending.
+	if (world.drafts.length === 0 && !isUninitialized(st.value)) {
 		return st.value
-	} // settled history: stale serves
+	}
+	// This render path is about to throw the suspension promise. The root
+	// identifies the rendering connection; it does not claim that React catches
+	// the promise, parks work, or schedules a retry.
+	getActiveTracer()?.emit('render-suspend', node, NO_EVENT, {
+		root: connection,
+		suspension,
+	})
 	throw suspension.promise
 }
 
@@ -321,11 +328,15 @@ export function useValue<T>(x: Signal<T>): T {
 	}, [node, connection, state, deliver, wake, onNotify])
 	const world = worldOf(ids)
 	const st = resolveState(node, world)
-	const value = unwrapState(st, world)
+	const value = unwrapState(st, world, connection, node)
 	const stash = state.rendered
 	stash.ids = ids
 	stash.value = value
 	stash.live = true
+	const renderEvent =
+		getActiveTracer()?.emit('render-value', node, node.causeEvent, {
+			root: connection,
+		}) ?? NO_EVENT
 	// Advance the committed stash at commit time. No dependency array: the
 	// effect runs on every commit with that render's resolution, and a
 	// suspended render never reaches it.
@@ -334,8 +345,8 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
+		getActiveTracer()?.emit('deliver', node, renderEvent, { root: connection })
 	})
-	traceDelivery(node, value)
 	return value as T
 }
 
@@ -492,6 +503,10 @@ export function useCommitted<T>(x: Signal<T>): T {
 	}, [node, connection])
 	useEffect(() => observeNode(node, onNotify), [node, onNotify])
 	if (isErrorBox(snap)) {
+		getActiveTracer()?.emit('render-error', node, node.causeEvent, {
+			error: snap.error,
+			root: connection,
+		})
 		throw snap.error
 	}
 	return snap as T

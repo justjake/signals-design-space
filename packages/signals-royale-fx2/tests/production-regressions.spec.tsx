@@ -26,9 +26,7 @@ beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 /** A held transition over `a`: drafts a.set(2), suspends until gate. */

@@ -28,8 +28,8 @@
  */
 import * as React from 'react'
 import { NO_EVENT } from '../graph.ts'
-import { isLiveDraft, type DraftId } from '../worlds.ts'
 import { getActiveTracer } from '../tracer.ts'
+import { isLiveDraft, type DraftId } from '../worlds.ts'
 import {
 	confirmRootCommit,
 	noteRenderWorld,
@@ -92,7 +92,6 @@ function ReactRootCommit({
 }): null {
 	React.useLayoutEffect(() => registerRootConnection(connection), [connection])
 	React.useLayoutEffect(() => {
-		getActiveTracer()?.emit('root-commit', null, NO_EVENT, { world: world.ids })
 		confirmRootCommit(connection, world.ids)
 	}, [connection, world])
 	return null
@@ -102,11 +101,16 @@ function ReactRootCommit({
  * would replace this connection for part of the subtree, so nesting throws. */
 export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
 	if (React.useContext(ReactRootConnectionContext) !== null) {
-		throw new Error(
+		const error = new Error(
 			'SignalsFrameworkProvider cannot be nested inside another ' +
 				'SignalsFrameworkProvider. Mount it outside the other provider, ' +
 				'or use wrapCreateRoot(createRoot).',
 		)
+		getActiveTracer()?.emit('policy-error', null, NO_EVENT, {
+			error,
+			phase: 'nested-provider',
+		})
+		throw error
 	}
 	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
 	const container = props.container ?? null

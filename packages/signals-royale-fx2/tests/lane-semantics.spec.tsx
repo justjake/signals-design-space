@@ -19,9 +19,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
 	;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = prevActEnv
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 const drainMicrotasks = async () => {

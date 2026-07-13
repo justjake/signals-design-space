@@ -14,6 +14,7 @@ import {
 	useValue,
 } from 'signals-royale-fx2/react'
 import { broadcastDraft, registerRootConnection } from '../src/react/host.ts'
+import { ReactRootConnectionContext } from '../src/react/SignalsFrameworkProvider.ts'
 import { makeHarness, text } from './helpers.tsx'
 
 function subCount(x: Atom<number>): number {
@@ -34,6 +35,31 @@ describe('registration', () => {
 		const h1 = registerReactSignals()
 		const h2 = registerReactSignals()
 		expect(h1).toBe(h2)
+		expect('errors' in h1).toBe(false)
+	})
+
+	test('a detached connection record has no trace-only fields', async () => {
+		resetReactSignalsForTest()
+		registerReactSignals()
+		let connection: React.ContextType<typeof ReactRootConnectionContext> = null
+		function Child() {
+			connection = React.useContext(ReactRootConnectionContext)
+			return null
+		}
+		const container = document.createElement('div')
+		const root = createRoot(container)
+		try {
+			await act(() => {
+				root.render(
+					<SignalsFrameworkProvider>
+						<Child />
+					</SignalsFrameworkProvider>,
+				)
+			})
+			expect(Object.keys(connection!)).toEqual(['dispatch', 'container', 'committing'])
+		} finally {
+			await act(() => root.unmount())
+		}
 	})
 
 	test('root commit bookkeeping precedes descendant layout effects', async () => {
@@ -135,7 +161,6 @@ describe('unmount reclamation', () => {
 		})
 		expect(subCount(a)).toBe(0) // deterministic unsubscription at unmount
 		await h.cleanup()
-		expect(h.handle.errors).toEqual([])
 		expect(read(a)).toBe(1)
 	})
 

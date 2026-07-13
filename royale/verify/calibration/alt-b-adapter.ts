@@ -54,9 +54,7 @@ function ensureRegistered(): { alt: AltBReactHandle; handle: RoyaleHandle } {
 	if (registration === undefined) {
 		scrub()
 		const alt = registerAltBReact()
-		const errors: unknown[] = []
 		const handle: RoyaleHandle = {
-			errors,
 			dispose() {
 				if (registration?.alt === alt) {
 					alt.dispose()
@@ -69,15 +67,10 @@ function ensureRegistered(): { alt: AltBReactHandle; handle: RoyaleHandle } {
 	return registration
 }
 
-/** Push adapter-plumbing failures into the active handle's error channel. */
-function reportError(err: unknown): void {
-	registration?.handle.errors.push(err)
-}
-
 // ---- causality trace ---------------------------------------------------------------
 //
 // Mapping gaps (alt-b's tracer is engine-scoped, not bindings-scoped):
-// - no root-commit / effect-run / component-render event kinds exist; the
+// - no provider-world-commit / effect-run / component-render event kinds exist; the
 //   closest delivery record is 'broadcast' (a watcher notification — the
 //   setState behind a component re-render). whyLastDelivery walks from the
 //   latest broadcast for the node.
@@ -110,6 +103,9 @@ function makeTraceView(): RoyaleTraceView {
 			return tracer
 				.events()
 				.map((e) => ({ id: e.id, kind: e.kindName, cause: e.cause === 0 ? undefined : e.cause }))
+		},
+		dropped() {
+			return tracer.droppedBefore()
 		},
 		stop() {
 			stopTracing()
@@ -264,18 +260,10 @@ const adapter: RoyaleAdapter = {
 		// commit; container is root.containerInfo (the createRoot element).
 		return alt.fork.subscribeToExternalRuntime({
 			onBeforeMutation(container) {
-				try {
-					cb('start', container as Element)
-				} catch (err) {
-					reportError(err)
-				}
+				cb('start', container as Element)
 			},
 			onAfterMutation(container) {
-				try {
-					cb('stop', container as Element)
-				} catch (err) {
-					reportError(err)
-				}
+				cb('stop', container as Element)
 			},
 		})
 	},

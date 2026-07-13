@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import * as fx2 from '../src/index.ts'
 import {
 	attachTracer,
+	Tracer,
 	createComputed,
 	effect,
 	initializeAtomState,
@@ -17,6 +18,7 @@ import {
 	type Computed,
 	untracked,
 	update,
+	getActiveTracer,
 } from '../src/index.ts'
 import {
 	FORBID_WRITE_FROM_COMPUTED,
@@ -301,6 +303,121 @@ describe('SSR', () => {
 })
 
 describe('causality tracer', () => {
+	test('only the explicitly attached tracer can emit', () => {
+		const detached = new Tracer()
+		expect(detached.emit('manual', null, 0)).toBe(0)
+		expect(detached.events()).toEqual([])
+	})
+
+	test('a lazy initializer failure during update is not mislabeled as an updater failure', () => {
+		const tracer = attachTracer()
+		const boom = new Error('initializer')
+		let updaterRuns = 0
+		const atom = createAtom((): number => {
+			throw boom
+		})
+		expect(() =>
+			update(atom, (value) => {
+				updaterRuns++
+				return value + 1
+			}),
+		).toThrow(boom)
+		expect(updaterRuns).toBe(0)
+		const failures = tracer
+			.events()
+			.filter((event) => event.kind === 'callback-error' && event.error === boom)
+		expect(failures.map((event) => event.phase)).toEqual(['initializer'])
+		tracer.stop()
+	})
+
+	test('policy errors are retained only by an explicitly attached tracer', () => {
+		const source = createAtom(0)
+		const first = createComputed(() => {
+			source.set(1)
+			return 1
+		})
+		expect(getActiveTracer()).toBeNull()
+		expect(() => read(first)).toThrow(SignalWriteForbidden)
+		expect(getActiveTracer()).toBeNull()
+
+		const tracer = attachTracer()
+		const second = createComputed(() => {
+			source.set(2)
+			return 2
+		})
+		let thrown: unknown
+		try {
+			read(second)
+		} catch (error) {
+			thrown = error
+		}
+		const policy = tracer.events().find((event) => event.kind === 'policy-error')!
+		expect(thrown).toBeInstanceOf(SignalWriteForbidden)
+		expect(policy.error).toBe(thrown)
+		expect(policy.phase).toBe('write')
+		const compute = tracer.find(policy.cause)!
+		expect(compute.kind).toBe('compute')
+		tracer.stop()
+		expect(getActiveTracer()).toBeNull()
+	})
+
+	test('effect and cleanup errors retain the propagated error object', () => {
+		const tracer = attachTracer()
+		const bodyError = new Error('body')
+		expect(() =>
+			effect(() => {
+				throw bodyError
+			}),
+		).toThrow(bodyError)
+		const cleanupError = new Error('cleanup')
+		const dispose = effect(
+			() => () => {
+				throw cleanupError
+			},
+		)
+		expect(dispose).toThrow(cleanupError)
+		const events = tracer.events()
+		expect(events.find((event) => event.kind === 'effect-error')?.error).toBe(bodyError)
+		expect(events.find((event) => event.kind === 'cleanup-error')?.error).toBe(cleanupError)
+		expect(
+			events.some((event) => event.kind === 'effect-error' && event.error === cleanupError),
+		).toBe(false)
+		tracer.stop()
+	})
+
+	test('an effect failure is reported to the tracer attached by its body', () => {
+		const attachedError = new Error('attached in body')
+		let attached!: Tracer
+		expect(() =>
+			effect(() => {
+				attached = attachTracer()
+				throw attachedError
+			}),
+		).toThrow(attachedError)
+		const attachedEvent = attached
+			.events()
+			.find((event) => event.kind === 'effect-error' && event.error === attachedError)!
+		expect(attachedEvent.cause).toBe(0)
+		attached.stop()
+
+		const first = attachTracer()
+		const replacementError = new Error('replacement in body')
+		let replacement!: Tracer
+		expect(() =>
+			effect(() => {
+				replacement = attachTracer()
+				throw replacementError
+			}),
+		).toThrow(replacementError)
+		expect(first.events().some((event) => event.kind === 'effect-run')).toBe(true)
+		expect(first.events().some((event) => event.kind === 'effect-error')).toBe(false)
+		const replacementEvent = replacement
+			.events()
+			.find((event) => event.kind === 'effect-error' && event.error === replacementError)!
+		expect(replacementEvent.cause).toBe(0)
+		replacement.stop()
+	})
+
 	test('chains: effect run -> write -> parent write; ring bounds with counted overflow', () => {
 		const t = attachTracer({ capacity: 16 })
 		const a = createAtom(0, { label: 'a' })
