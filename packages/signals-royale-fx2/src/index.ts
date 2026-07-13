@@ -43,11 +43,16 @@ import {
 	endBatch as graphEndBatch,
 	batch as graphBatch,
 	untracked as graphUntracked,
-	useImpl,
 	traceHook,
 	writeAtom,
 } from './graph.ts'
-import { type ErrorBox, type ResolvedState, type Suspension, isErrorBox } from './asyncs.ts'
+import {
+	type ErrorBox,
+	type ResolvedState,
+	type Suspension,
+	baseUse,
+	isErrorBox,
+} from './asyncs.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -314,7 +319,7 @@ function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
 	const consumer = getActiveConsumer()
 	if (consumer !== null && (consumer.flags & Flag.KindComputed) !== 0) {
 		// Pending forwards: park the evaluating computed on this suspension.
-		useImpl(suspension.promise, consumer as ComputedNode<unknown>)
+		baseUse(suspension.promise, consumer as ComputedNode<unknown>)
 	}
 	if (!isUninitialized(node.value)) {
 		return node.value as T

@@ -33,8 +33,6 @@ import {
 	NO_EVENT,
 	currentCause,
 	setCurrentCause,
-	setFinishComputeImpl,
-	setUseImpl,
 	startBatch,
 	endBatch,
 	traceHook,
@@ -208,7 +206,10 @@ function settle(box: ThenableBox): void {
 }
 
 /** Handles use(t) inside a base-state evaluation. */
-function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unknown {
+export function baseUse(
+	t: PromiseLike<unknown>,
+	consumer: ComputedNode<unknown>,
+): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
 		return box.result
@@ -234,7 +235,8 @@ function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unkn
 	throw PARKED
 }
 
-function finishCompute(
+/** Fold a recompute's value, park, or throw into the node's async state. */
+export function finishCompute(
 	node: ComputedNode<unknown>,
 	parked: boolean,
 	hasError: boolean,
@@ -274,6 +276,3 @@ function finishCompute(
 	// a pending or error span (readers may have parked or thrown).
 	return (flags & Flag.AsyncMask) !== 0
 }
-
-setUseImpl(baseUse)
-setFinishComputeImpl(finishCompute)

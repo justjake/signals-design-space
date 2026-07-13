@@ -43,7 +43,7 @@
  * never compare them for order.
  */
 
-import type { ErrorBox, Suspension } from './asyncs.ts'
+import { type ErrorBox, type Suspension, baseUse, finishCompute } from './asyncs.ts'
 import type { DraftId } from './worlds.ts'
 
 /** Value equality for the cutoff: when a write or recompute produces an
@@ -1190,14 +1190,6 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T): boolean {
 /** Thrown by an evaluation when it parks on an unresolved thenable. */
 export const PARKED = Symbol('parked')
 
-/** Installed by asyncs.ts: handles use(t) inside a base-state evaluation. */
-export let useImpl: (t: PromiseLike<unknown>, consumer: ComputedNode<unknown>) => unknown = () => {
-	throw new Error('async use() is not installed')
-}
-export function setUseImpl(impl: typeof useImpl): void {
-	useImpl = impl
-}
-
 /** The use() argument passed to every base-state recompute. One shared
  * function with no per-node closure: at call time the evaluating computed
  * is activeConsumer, so the function can find its owner. (Draft
@@ -1210,32 +1202,7 @@ const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 	if (consumer === null || (consumer.flags & Flag.KindComputed) === 0) {
 		throw new Error('use() called outside a computed evaluation')
 	}
-	return useImpl(t, consumer as ComputedNode<unknown>) as U
-}
-
-/** Installed by asyncs.ts: finish a recompute, folding a park or a throw
- * into the node's async state. Takes the outcome as positional arguments
- * rather than an object because it runs once per recompute and must not
- * allocate. */
-export let finishComputeImpl: (
-	node: ComputedNode<unknown>,
-	parked: boolean,
-	hasError: boolean,
-	error: unknown,
-	value: unknown,
-) => boolean = (node, parked, hasError, error, value) => {
-	if (parked || hasError) {
-		throw hasError ? error : new Error('parked without async layer')
-	}
-	const prev = node.value
-	if (prev === UNINITIALIZED || !node.equals(prev, value)) {
-		node.value = value
-		return true
-	}
-	return false
-}
-export function setFinishComputeImpl(impl: typeof finishComputeImpl): void {
-	finishComputeImpl = impl
+	return baseUse(t, consumer as ComputedNode<unknown>) as U
 }
 
 function recompute(node: ComputedNode<unknown>): void {
@@ -1282,7 +1249,7 @@ function recompute(node: ComputedNode<unknown>): void {
 		trimDeps(node)
 		node.flags &= ~Flag.Computing
 	}
-	const changed = finishComputeImpl(node, parked, hasError, error, value)
+	const changed = finishCompute(node, parked, hasError, error, value)
 	// Only a real value change advances the changedAt reading; an
 	// equal-value recompute keeps the old stamp so downstream consumers
 	// validate as unchanged. Stamped with the current clock (see the
