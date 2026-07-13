@@ -212,6 +212,8 @@ export interface ConsumerNode extends ReactiveNode {
 	/** Dependency list in first-read order. */
 	deps: Link | undefined
 	depsTail: Link | undefined
+	/** The clock reading at this consumer's last successful validation or run. */
+	validAtGraphChange: GraphChangeClock
 	/** The last poke walk that reached this node. Equality with the
 	 * running walk's pass means the walk already visited it. */
 	pokePass: PokePass
@@ -314,10 +316,6 @@ export interface ComputedNode<T> extends ProducerNode, ConsumerNode {
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
-	/** The clock reading at this node's last successful validation. When it
-	 * equals the current clock, nothing in the graph changed since, so an
-	 * unwatched read can return immediately without walking dependencies. */
-	validAtGraphChange: GraphChangeClock
 }
 
 /** State needed while a scope or effect body owns nested effects. A real
@@ -332,9 +330,6 @@ interface EffectOwner {
 /** A node that reacts when its dependencies change: effects and
  * render-notify subscribers. */
 export interface WatcherNode extends ConsumerNode, EffectOwner {
-	/** The clock reading at this watcher's last validation or run; same
-	 * meaning as ComputedNode.validAtGraphChange. */
-	validAtGraphChange: GraphChangeClock
 	fn: (() => void | (() => void)) | undefined
 	cleanup: (() => void) | undefined
 	/** Delivery callback: render notification for WatchRender watchers, or
