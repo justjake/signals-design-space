@@ -958,10 +958,10 @@ function draftEvaluate(
 	const worldUse = (t: PromiseLike<unknown>): unknown => {
 		const box = trackThenable(t)
 		if (box.status === 'fulfilled') {
-			return box.value
+			return box.result
 		}
 		if (box.status === 'rejected') {
-			throw box.reason
+			throw box.result
 		}
 		suspension ??= makeSuspension()
 		box.parkedSuspensions.add(suspension)

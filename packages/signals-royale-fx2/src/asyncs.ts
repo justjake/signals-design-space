@@ -48,8 +48,8 @@ export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected'
  * currently parked on it. */
 export interface ThenableBox {
 	status: ThenableStatus
-	value: unknown
-	reason: unknown
+	/** Fulfillment value or rejection reason, selected by status. */
+	result: unknown
 	/** Computeds whose latest base-state evaluation parked on this thenable. */
 	parkedNodes: Set<ComputedNode<unknown>>
 	/** Suspensions (base-state or per-world) waiting on this thenable. */
@@ -147,8 +147,7 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	}
 	const fresh: ThenableBox = {
 		status: 'pending',
-		value: undefined,
-		reason: undefined,
+		result: undefined,
 		parkedNodes: new Set(),
 		parkedSuspensions: new Set(),
 	}
@@ -156,12 +155,12 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	t.then(
 		(v) => {
 			fresh.status = 'fulfilled'
-			fresh.value = v
+			fresh.result = v
 			settle(fresh)
 		},
 		(r) => {
 			fresh.status = 'rejected'
-			fresh.reason = r
+			fresh.result = r
 			settle(fresh)
 		},
 	)
@@ -179,7 +178,7 @@ function settle(box: ThenableBox): void {
 		traceHook !== null
 			? traceHook('settle', null, NO_EVENT, {
 					status: box.status,
-					error: box.status === 'rejected' ? box.reason : undefined,
+					error: box.status === 'rejected' ? box.result : undefined,
 				})
 			: NO_EVENT
 	onSettlement?.()
@@ -212,10 +211,10 @@ function settle(box: ThenableBox): void {
 function baseUse(t: PromiseLike<unknown>, consumer: ComputedNode<unknown>): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
-		return box.value
+		return box.result
 	}
 	if (box.status === 'rejected') {
-		throw box.reason
+		throw box.result
 	}
 	box.parkedNodes.add(consumer)
 	const flags = consumer.flags

@@ -21,8 +21,7 @@ test('detached async records contain only execution state', () => {
 	expect(Object.keys(suspension)).toEqual(['promise', 'settled', 'resolve'])
 	expect(Object.keys(box)).toEqual([
 		'status',
-		'value',
-		'reason',
+		'result',
 		'parkedNodes',
 		'parkedSuspensions',
 	])
@@ -108,6 +107,28 @@ describe('pending as graph state', () => {
 		gate.resolve(21)
 		await tick()
 		expect(seen).toEqual(['pending', 42])
+	})
+
+	test('status distinguishes undefined fulfillment from undefined rejection', async () => {
+		const fulfilled = deferred<undefined>()
+		const rejected = deferred<never>()
+		const value = createComputed((use) => use(fulfilled.promise))
+		const failure = createComputed((use) => use(rejected.promise))
+		expect(() => read(value)).toThrow()
+		expect(() => read(failure)).toThrow()
+
+		fulfilled.resolve(undefined)
+		rejected.reject(undefined)
+		await tick()
+		expect(read(value)).toBeUndefined()
+		let didThrow = false
+		try {
+			read(failure)
+		} catch (reason) {
+			didThrow = true
+			expect(reason).toBeUndefined()
+		}
+		expect(didThrow).toBe(true)
 	})
 })
 
