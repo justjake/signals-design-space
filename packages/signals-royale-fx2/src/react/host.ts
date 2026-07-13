@@ -4,7 +4,7 @@
  *
  * The design premise is that React itself decides which render pass sees
  * which drafts. Draft ids are dispatched into ordinary React state (each
- * SignalScopeProvider's reducer, each useValue hook's reducer) from
+ * SignalsFrameworkProvider's reducer, each useValue hook's reducer) from
  * inside the owning transition, so React's own update queues determine
  * visibility: urgent passes skip the pending update, the transition's passes include
  * it. These bindings never guess at lanes or patch React; everything runs
@@ -13,8 +13,8 @@
  * This file contains, in order: render detection and the write-during-
  * render guard; the render-world note (how a render pass declares which
  * world it is); draft-wake dispatch and late-subscription repair; and the
- * registry that broadcasts new drafts to scopes and retires them when
- * every scope has committed.
+ * registry that broadcasts new drafts to connections and retires them when
+ * every connection has committed.
  */
 // The `scheduler` package ships untyped; the ambient declaration lives in
 // scheduler.d.ts. The reference pulls it into any program that includes this
@@ -36,19 +36,18 @@ import {
 } from '../worlds.ts'
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
 
-/** One registered SignalScope instance (one per SignalScopeProvider in
- * practice). The record is identity-stable for the scope's lifetime: it
- * serves as the ScopeContext value (so context changes never re-render
- * consumers) and as the key that render-world notes are validated against. */
-export interface SignalScope {
-	/** The scope's reducer dispatch; draft ids delivered here become part
-	 * of the worlds its render passes carry. */
+/** One registered connection per SignalsFrameworkProvider. The record is
+ * identity-stable for the root's lifetime. It is the context value, so
+ * publishing it does not re-render consumers, and the key used to
+ * validate render-world notes. */
+export interface ReactRootConnection {
+	/** Draft ids delivered here become part of the worlds this root's
+	 * render passes carry. */
 	dispatch: (id: DraftId) => void
-	/** Keys this root's committed world (see
-	 * SignalScopeProviderProps.container); null when the scope was mounted
-	 * without one. */
+	/** Keys this root's committed world for reads outside React. Null when
+	 * the provider was mounted without a container. */
 	container: object | null
-	/** True only while this scope's first-child commit marker confirms its
+	/** True only while the first-child commit marker confirms this root's
 	 * current render, before descendant layout effects advance hook stashes. */
 	committing: boolean
 }
@@ -61,20 +60,20 @@ export interface ReactSignalsHandle {
 	dispose(): void
 }
 
-const providers = new Set<SignalScope>()
+const rootConnections = new Set<ReactRootConnection>()
 interface HostedDraft {
 	draft: Draft
 	/** The React transition object that owns this draft. Late deliveries
 	 * restore it so their dispatches join the original transition's
 	 * updates. */
 	owner: object | null
-	/** Providers that received the draft and have not committed it yet;
+	/** Root connections that received the draft and have not committed it;
 	 * the draft retires when this empties. */
-	recipients: Set<SignalScope>
-	/** Every provider that received the draft at broadcast time. A scope
+	recipients: Set<ReactRootConnection>
+	/** Every connection that received the draft at broadcast time. A root
 	 * mounted later is absent, and its subscribers rely on the retirement
 	 * fold notifying them, since none of their passes carried the draft. */
-	audience: Set<SignalScope>
+	audience: Set<ReactRootConnection>
 }
 
 const hostedDrafts = new Map<DraftId, HostedDraft>()
@@ -104,7 +103,7 @@ function sharedInternals(): SharedInternals {
 const renderDispatchers = new WeakSet<object>()
 
 /** Record "we are rendering under this dispatcher" — called from every
- * scope and hook render. */
+ * connection and hook render. */
 function captureRenderDispatcher(): void {
 	const H = sharedInternals().H
 	if (H != null) {
@@ -132,7 +131,7 @@ function renderWriteGuard(): void {
 // ---------------------------------------------------------------------------
 
 /** A render pass's own declaration of which world it is executing in:
- * written by the pass's SignalScopeProvider render (whose reducer state
+ * written by the pass's SignalsFrameworkProvider render (whose reducer state
  * is the pass's world) and refreshed by every one of our hooks the pass
  * renders. Consumed by plain latest()/isPending() calls in render bodies, and by
  * hooks mounting inside the pass.
@@ -140,7 +139,7 @@ function renderWriteGuard(): void {
  * The danger is a pass consuming a note some other pass wrote, so a note
  * is only valid for the pass that wrote or refreshed it. Enforced by
  * construction:
- * - a note dies when any render under a different scope record writes one
+ * - a note dies when any render under a different connection record writes one
  *   (foreign roots overwrite or clear, never inherit);
  * - a note carrying live drafts dies at the end of the synchronous work
  *   chunk that wrote it. A microtask covers every path that unwinds the
@@ -153,7 +152,7 @@ function renderWriteGuard(): void {
  * state. Wrong-toward-base is the safe direction; serving a stale world,
  * or leaking drafts into an urgent pass, is never acceptable. */
 interface RenderWorldNote {
-	scope: SignalScope | null
+	connection: ReactRootConnection | null
 	ids: readonly DraftId[]
 }
 
@@ -181,44 +180,47 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 	}
 }
 
-/** Called by the scope's own render: authoritative for its pass, always
+/** Called by the connection's own render: authoritative for its pass, always
  * overwrites. An empty world clears the note instead of installing one —
  * a null note already means base state to every consumer, and steady-
  * state renders stay allocation-free. */
-export function noteRenderWorld(scope: SignalScope, ids: readonly DraftId[]): void {
+export function noteRenderWorld(connection: ReactRootConnection, ids: readonly DraftId[]): void {
 	captureRenderDispatcher()
 	if (ids.length === 0) {
 		note = null
 		return
 	}
-	if (note !== null && note.scope === scope && note.ids === ids) {
+	if (note !== null && note.connection === connection && note.ids === ids) {
 		return
 	} // StrictMode re-render
-	note = { scope, ids }
+	note = { connection, ids }
 	armNoteExpiry(note)
 }
 
-/** Called by every hook render: kills a foreign scope's leftover note,
+/** Called by every hook render: kills a foreign connection's leftover note,
  * and — when the hook carries world state of its own — re-establishes a
- * note for passes the scope itself did not render. The hook's ids come
+ * note for passes the connection itself did not render. The hook's ids come
  * from React's update queues for this very pass, so they can never run
  * ahead of it. */
-export function noteHookRender(scope: SignalScope | null, ids: readonly DraftId[] | null): void {
+export function noteHookRender(
+	connection: ReactRootConnection | null,
+	ids: readonly DraftId[] | null,
+): void {
 	captureRenderDispatcher()
-	if (note !== null && note.scope !== scope) {
+	if (note !== null && note.connection !== connection) {
 		note = null
 	}
 	if (note === null && ids !== null && ids.length > 0) {
-		note = { scope, ids }
+		note = { connection, ids }
 		armNoteExpiry(note)
 	}
 }
 
-/** The valid note's ids for a scope, or null. Hooks resolve their render
+/** The valid note's ids for a connection, or null. Hooks resolve their render
  * value against this when present; it covers components mounting inside a
  * transition pass, whose own reducers never received the dispatch. */
-export function renderPassIds(scope: SignalScope | null): readonly DraftId[] | null {
-	return note !== null && note.scope === scope ? note.ids : null
+export function renderPassIds(connection: ReactRootConnection | null): readonly DraftId[] | null {
+	return note !== null && note.connection === connection ? note.ids : null
 }
 
 function renderWorldProvider(): readonly DraftId[] | 'base' | null {
@@ -272,7 +274,7 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
  * Dispatch outside any ambient transition, so the update is scheduled
  * urgently rather than joining a transition. Mirrors React's own
  * useTransition, which schedules its isPending update before entering the
- * transition scope — an indicator must not be held hostage by the very
+ * transition context — an indicator must not be held hostage by the very
  * transition it indicates.
  */
 export function dispatchUrgent(dispatch: () => void): void {
@@ -314,7 +316,7 @@ export interface RenderedResolution {
  *   reducer (the component mounted mid-transition): deliver the draft id
  *   inside the owning transition, so this subscriber converges with that
  *   root's commit. Roots outside the draft's audience stay on the
- *   committed world — their scope never carried the draft, matching how a
+ *   committed world — their connection never carried the draft, matching how a
  *   newly created React root never holds another root's pending updates —
  *   and the retirement fold notifies their subscribers instead;
  * - base state moved past what this subscriber rendered (including a
@@ -328,7 +330,7 @@ export interface RenderedResolution {
 export function correctSubscription(
 	node: ProducerNode,
 	rendered: RenderedResolution,
-	scope: SignalScope,
+	connection: ReactRootConnection,
 	deliver: (id: DraftId) => void,
 	dispatch: (id: DraftId) => void,
 ): void {
@@ -337,7 +339,7 @@ export function correctSubscription(
 			continue
 		}
 		const hosted = hostedDrafts.get(id)
-		if (hosted === undefined || !hosted.audience.has(scope)) {
+		if (hosted === undefined || !hosted.audience.has(connection)) {
 			continue
 		}
 		deliver(id)
@@ -378,7 +380,7 @@ export function resolutionDiffers(node: ProducerNode, rendered: RenderedResoluti
 // Draft broadcast and per-root commit bookkeeping
 // ---------------------------------------------------------------------------
 
-/** Drafts created for React transition scopes, including the convenience
+/** Drafts created for React transition contexts, including the convenience
  * helpers. The values are Draft records, not ids: an entry dies with its
  * transition object (WeakMap), and handing the record straight to write
  * classification spares every drafted write an id lookup. */
@@ -402,11 +404,11 @@ function ambientClassifier(): Draft | null {
 	return draft.state === 'open' ? draft : null
 }
 
-/** Send a new draft's id to every scope, dispatched inside the current
- * React context so the updates join the transition. Scopes are the only
+/** Send a new draft's id to every connection, dispatched inside the current
+ * React context so the updates join the transition. Connections are the only
  * broadcast audience: value subscribers are woken per drafted atom
  * instead (see dispatchDraftWake), so a transition re-renders each root's
- * scope plus exactly the subscribers its writes touch. */
+ * connection plus exactly the subscribers its writes touch. */
 export function broadcastDraft(draft: Draft): void {
 	// Prune finished drafts: an engine-side discard can finish a draft
 	// without ever visiting the host's bookkeeping.
@@ -415,7 +417,7 @@ export function broadcastDraft(draft: Draft): void {
 			hostedDrafts.delete(id)
 		}
 	}
-	const recipients = new Set(providers)
+	const recipients = new Set(rootConnections)
 	const hosted: HostedDraft = {
 		draft,
 		owner: sharedInternals().T ?? null,
@@ -423,12 +425,12 @@ export function broadcastDraft(draft: Draft): void {
 		audience: new Set(recipients),
 	}
 	hostedDrafts.set(draft.id, hosted)
-	for (const p of recipients) {
-		p.dispatch(draft.id)
+	for (const connection of recipients) {
+		connection.dispatch(draft.id)
 	}
 	if (recipients.size === 0) {
-		// No mounted scope observes this draft, so nothing will ever commit
-		// it; retire it as soon as the writing scope finishes. The microtask
+		// No mounted connection observes this draft, so nothing will ever commit
+		// it; retire it as soon as the writing callback finishes. The microtask
 		// keeps the retirement after any writes still being appended.
 		queueMicrotask(() => {
 			if (hostedDrafts.get(draft.id) === hosted && hosted.recipients.size === 0) {
@@ -439,12 +441,12 @@ export function broadcastDraft(draft: Draft): void {
 	}
 }
 
-export function registerProvider(p: SignalScope): () => void {
-	providers.add(p)
+export function registerRootConnection(connection: ReactRootConnection): () => void {
+	rootConnections.add(connection)
 	return () => {
-		providers.delete(p)
+		rootConnections.delete(connection)
 		for (const [id, hosted] of hostedDrafts) {
-			if (hosted.recipients.delete(p) && hosted.recipients.size === 0) {
+			if (hosted.recipients.delete(connection) && hosted.recipients.size === 0) {
 				hostedDrafts.delete(id)
 				retireDraft(id)
 			}
@@ -452,16 +454,19 @@ export function registerProvider(p: SignalScope): () => void {
 	}
 }
 
-/** A provider committed a render pass whose world contained these drafts. */
-export function confirmCommit(p: SignalScope, ids: readonly DraftId[]): void {
-	p.committing = true
+/** A root committed a render pass whose world contained these drafts. */
+export function confirmRootCommit(
+	connection: ReactRootConnection,
+	ids: readonly DraftId[],
+): void {
+	connection.committing = true
 	try {
-		// The scope itself is every hook's root-local committed-world key. The
+		// The connection itself is every hook's root-local committed-world key. The
 		// optional external container additionally supports committed(x,
 		// container) reads outside React.
-		setCommittedWorld(p, ids)
-		if (p.container !== null) {
-			setCommittedWorld(p.container, ids)
+		setCommittedWorld(connection, ids)
+		if (connection.container !== null) {
+			setCommittedWorld(connection.container, ids)
 		}
 		// This root's committed view changed; poke the draft watchers of every
 		// atom the committed drafts touched. This is cheap: value subscribers
@@ -484,20 +489,24 @@ export function confirmCommit(p: SignalScope, ids: readonly DraftId[]): void {
 		}
 		for (const id of ids) {
 			const hosted = hostedDrafts.get(id)
-			if (hosted !== undefined && hosted.recipients.delete(p) && hosted.recipients.size === 0) {
+			if (
+				hosted !== undefined &&
+				hosted.recipients.delete(connection) &&
+				hosted.recipients.size === 0
+			) {
 				hostedDrafts.delete(id)
 				// Every recipient committed: fold the draft into base state. The
 				// fold's writes notify every subscriber over the touched atoms,
 				// and each subscriber's render-notify predicate compares its
 				// rendered value against the folded resolution. Subscribers whose
 				// render passes carried the draft compare equal and stay quiet;
-				// subscribers under a scope that never carried it (mounted
+				// subscribers under a connection that never carried it (mounted
 				// mid-transition) see the folded values as new and re-render.
 				retireDraft(id)
 			}
 		}
 	} finally {
-		p.committing = false
+		connection.committing = false
 	}
 }
 
@@ -538,7 +547,7 @@ export function registerReactSignals(): ReactSignalsHandle {
 export function resetReactSignalsForTest(): void {
 	const wasRegistered = handle !== null
 	resetEngineForTest()
-	providers.clear()
+	rootConnections.clear()
 	hostedDrafts.clear()
 	note = null
 	if (wasRegistered) {

@@ -14,7 +14,7 @@
  *
  * - Draft ids: when a transition writes an atom, exactly the subscribers
  *   of that atom (and of watched computeds over it) receive the draft id,
- *   dispatched inside the transition's own scope. React's update queues
+ *   dispatched inside the transition's own context. React's update queues
  *   then decide visibility per pass: urgent passes skip the update and
  *   see base state, the transition's passes include it, rebased retries
  *   recompute it. Deduped per hook per render window (see `delivered`).
@@ -80,10 +80,14 @@ import {
 	renderPassIds,
 	resolutionDiffers,
 	REPAIR_WAKE,
-	type SignalScope,
+	type ReactRootConnection,
 	type RenderedResolution,
 } from './host.ts'
-import { EMPTY_WORLD, ScopeContext, worldsReducer } from './SignalScopeProvider.ts'
+import {
+	EMPTY_WORLD,
+	ReactRootConnectionContext,
+	worldsReducer,
+} from './SignalsFrameworkProvider.ts'
 
 interface UseValueState {
 	delivered: Set<DraftId>
@@ -100,8 +104,8 @@ interface UseValueState {
 
 interface SignalEffectState {
 	effect: ScheduledEffect | null
-	/** The scope whose committed world the installed watcher currently uses. */
-	scope: SignalScope | null
+	/** The connection whose committed world the installed watcher currently uses. */
+	connection: ReactRootConnection | null
 	/** The watcher owns dependency identity and edges. This is only its
 	 * current link head plus parallel per-root committed values. */
 	dependencies: Link | undefined
@@ -148,10 +152,10 @@ function signalEffectDependenciesChanged(state: SignalEffectState, world: World)
  * later cleanup hook in the same commit would never get a chance to mount. */
 function disposeSignalEffect(state: SignalEffectState): void {
 	const effect = state.effect
-	const scope = state.scope
+	const connection = state.connection
 	try {
 		if (effect !== null) {
-			const world = scope === null ? null : committedWorldOf(scope)
+			const world = connection === null ? null : committedWorldOf(connection)
 			if (world === null || world.drafts.length === 0) {
 				effect.dispose()
 			} else {
@@ -160,7 +164,7 @@ function disposeSignalEffect(state: SignalEffectState): void {
 		}
 	} finally {
 		state.effect = null
-		state.scope = null
+		state.connection = null
 		state.dependencies = undefined
 		state.version = -1
 		state.running = false
@@ -172,19 +176,18 @@ function disposeSignalEffect(state: SignalEffectState): void {
 	}
 }
 
-/** These hooks cannot work without a SignalScopeProvider: the scope carries
- * transition worlds, and a subscriber without one would have no channel
- * for them at all. Rendering a scope-consuming hook outside a scope is a
- * wiring error — fail loudly, at the hook, naming the fixes. */
-function requireScope(hook: string): SignalScope {
-	const scope = useContext(ScopeContext)
-	if (scope === null) {
+/** These hooks cannot work without a SignalsFrameworkProvider. The root
+ * connection carries transition worlds, and a subscriber without one has
+ * no channel for them. Fail at the hook and name both supported fixes. */
+function requireRootConnection(hook: string): ReactRootConnection {
+	const connection = useContext(ReactRootConnectionContext)
+	if (connection === null) {
 		throw new Error(
-			`${hook} was rendered without a SignalScopeProvider above it. ` +
-				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalScopeProvider>.',
+			`${hook} was rendered without a SignalsFrameworkProvider above it. ` +
+				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.',
 		)
 	}
-	return scope
+	return connection
 }
 
 const lastDelivered = new WeakMap<ProducerNode, unknown>()
@@ -231,7 +234,7 @@ function unwrapState(st: ResolvedState, world: World): unknown {
  * would show changes.
  *
  * The hook renders in a world chosen from React state: the pass's valid
- * note when the hook's scope wrote one (covering components that mount
+ * note when the hook's connection wrote one (covering components that mount
  * inside a transition pass, whose reducers never received the write-time
  * dispatch), and otherwise the hook's own reducer state. Both come from
  * React state for this very pass, so neither can run ahead of it.
@@ -244,10 +247,10 @@ function unwrapState(st: ResolvedState, world: World): unknown {
  */
 export function useValue<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
-	const scope = requireScope('useValue')
+	const connection = requireRootConnection('useValue')
 	const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
-	noteHookRender(scope, hookWorld.ids)
-	const ids = renderPassIds(scope) ?? hookWorld.ids
+	noteHookRender(connection, hookWorld.ids)
+	const ids = renderPassIds(connection) ?? hookWorld.ids
 	// One record per hook owns the delivery/repair protocol. Initialize it
 	// explicitly because useRef evaluates a non-primitive initializer every
 	// render even though React consumes that value only on mount.
@@ -293,11 +296,11 @@ export function useValue<T>(x: Signal<T>): T {
 	// now?". The dispatch inherits the ambient scheduling context —
 	// exactly useState's semantics for the write that caused it.
 	const onNotify = useCallback(() => {
-		// The scope's first-child marker confirms before descendant layout
+		// The connection's first-child marker confirms before descendant layout
 		// effects. During that narrow window this render is the one committing,
 		// so compare against it directly; outside it, never trust speculative
 		// render state over the last completed commit.
-		const stash = scope.committing ? state.rendered : state.committed
+		const stash = connection.committing ? state.rendered : state.committed
 		if (!stash.live || state.repairPending) {
 			return
 		}
@@ -306,16 +309,16 @@ export function useValue<T>(x: Signal<T>): T {
 		}
 		state.repairPending = true
 		wake(REPAIR_WAKE)
-	}, [node, scope, state, wake])
+	}, [node, connection, state, wake])
 	// Subscribe in a passive effect, at commit time; correctSubscription
 	// closes the gap between rendering and the subscription attaching.
 	useEffect(() => {
 		const off = observeNode(node, onNotify, deliver)
 		if (state.rendered.live) {
-			correctSubscription(node, state.rendered, scope, deliver, wake)
+			correctSubscription(node, state.rendered, connection, deliver, wake)
 		}
 		return off
-	}, [node, scope, state, deliver, wake, onNotify])
+	}, [node, connection, state, deliver, wake, onNotify])
 	const world = worldOf(ids)
 	const st = resolveState(node, world)
 	const value = unwrapState(st, world)
@@ -336,11 +339,11 @@ export function useValue<T>(x: Signal<T>): T {
 	return value as T
 }
 
-/** A component-scoped computed. No explicit disposal: an unwatched
+/** A component-owned computed. No explicit disposal: an unwatched
  * computed only holds references toward its dependencies, so dropping it
  * at unmount makes it garbage-collectible. */
 export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
-	requireScope('useComputed') // fail with this hook's name, not useValue's
+	requireRootConnection('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	const c = useMemo(() => createComputed(fn), deps)
 	return useValue(c)
@@ -350,7 +353,7 @@ function useSignalEffectImpl(
 	fn: () => void | (() => void),
 	usePhaseEffect: typeof useEffect,
 ): void {
-	const scope = requireScope(
+	const connection = requireRootConnection(
 		usePhaseEffect === useLayoutEffect ? 'useSignalLayoutEffect' : 'useSignalEffect',
 	)
 	const [version, schedule] = useReducer(forceReducer, 0)
@@ -359,7 +362,7 @@ function useSignalEffectImpl(
 	if (state === null) {
 		state = {
 			effect: null,
-			scope: null,
+			connection: null,
 			dependencies: undefined,
 			dependencyValues: [],
 			dependencyCount: 0,
@@ -370,18 +373,18 @@ function useSignalEffectImpl(
 		stateRef.current = state
 	}
 	usePhaseEffect(() => {
-		const scopeChanged = state.scope !== scope
+		const connectionChanged = state.connection !== connection
 		const signalRequested = state.version !== version
 		const rerunRequested = state.rerunRequested
-		if (!scopeChanged && !signalRequested && !rerunRequested) {
+		if (!connectionChanged && !signalRequested && !rerunRequested) {
 			return
 		}
-		state.scope = scope
+		state.connection = connection
 		state.version = version
 		state.rerunRequested = false
-		const world = committedWorldOf(scope)
+		const world = committedWorldOf(connection)
 		if (
-			!scopeChanged &&
+			!connectionChanged &&
 			!rerunRequested &&
 			state.effect !== null &&
 			!state.effect.refresh(() => signalEffectDependenciesChanged(state, world))
@@ -395,10 +398,10 @@ function useSignalEffectImpl(
 					schedule()
 					return
 				}
-				const committedScope = state.scope
-				if (committedScope !== null && state.effect !== null) {
+				const committedConnection = state.connection
+				if (committedConnection !== null && state.effect !== null) {
 					const changed = state.effect.refresh(() =>
-						signalEffectDependenciesChanged(state, committedWorldOf(committedScope)),
+						signalEffectDependenciesChanged(state, committedWorldOf(committedConnection)),
 					)
 					if (changed) {
 						schedule()
@@ -451,7 +454,7 @@ export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
  * stale value. */
 export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
-	noteHookRender(requireScope('useIsPending'), null)
+	noteHookRender(requireRootConnection('useIsPending'), null)
 	const [, force] = useReducer(forceReducer, 0)
 	const pending = isPendingPassive(node, null)
 	const shown = useRef(pending)
@@ -461,8 +464,8 @@ export function useIsPending(x: Signal<any>): boolean {
 	const onNotify = useCallback(() => {
 		// The flip escapes any ambient transition: an indicator scheduled
 		// inside the transition it indicates would be held hostage by it.
-		// React's own useTransition schedules isPending before the scope
-		// for the same reason.
+		// React's own useTransition schedules isPending before entering the
+		// transition for the same reason.
 		if (isPendingPassive(node, null) !== shown.current) {
 			dispatchUrgent(force)
 		}
@@ -474,19 +477,19 @@ export function useIsPending(x: Signal<any>): boolean {
 /** What this root's screen shows for x (the per-root committed view). */
 export function useCommitted<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
-	const scope = requireScope('useCommitted')
-	noteHookRender(scope, null)
+	const connection = requireRootConnection('useCommitted')
+	noteHookRender(connection, null)
 	const [, force] = useReducer(forceReducer, 0)
-	const snap = committedSnapshot(node, scope)
+	const snap = committedSnapshot(node, connection)
 	const shown = useRef(snap)
 	shown.current = snap
 	// The committed snapshot has stable identity (a value, or a stable
 	// error box), so Object.is is the whole comparison.
 	const onNotify = useCallback(() => {
-		if (!Object.is(committedSnapshot(node, scope), shown.current)) {
+		if (!Object.is(committedSnapshot(node, connection), shown.current)) {
 			force()
 		}
-	}, [node, scope])
+	}, [node, connection])
 	useEffect(() => observeNode(node, onNotify), [node, onNotify])
 	if (isErrorBox(snap)) {
 		throw snap.error

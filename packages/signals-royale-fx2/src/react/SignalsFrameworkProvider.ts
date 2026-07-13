@@ -1,24 +1,24 @@
 /**
- * SignalScopeProvider: the component that carries transition worlds for
+ * SignalsFrameworkProvider: the component that carries transition worlds for
  * one root.
  *
  * Its reducer state is the set of transition draft ids this root has been
  * told about. Because every draft id is dispatched inside its
- * transition's scope, React's own update queues decide which render
+ * transition's context, React's own update queues decide which render
  * passes see which ids: urgent passes skip the pending update and see the
  * committed base world, the transition's own passes include it, and a
  * rebased retry recomputes the same queue over new state. That queue
  * behavior is the entire definition of a render pass's world — the
  * bindings keep no lane bookkeeping of their own.
  *
- * The scope's render notes the pass's world in the host (for plain
+ * The connection's render notes the pass's world in the host (for plain
  * latest()/isPending() calls in render bodies and for hooks mounting
  * inside the pass). Its first child is a null-rendering commit marker,
  * whose layout effect confirms the drafts before application descendants'
- * layout effects run. The ScopeContext value is an identity-stable record
- * and the application children element is unchanged, so only components
- * with their own pending updates render. Value subscribers are woken per
- * drafted atom through their own reducers.
+ * layout effects run. The context value is an identity-stable connection
+ * record and the application children element is unchanged, so only
+ * components with their own pending updates render. Value subscribers
+ * are woken per drafted atom through their own reducers.
  *
  * The reducer returns a fresh state object even for an id it already
  * contains, to handle one hazard: a wake for an already-rendered draft (a
@@ -30,9 +30,14 @@ import * as React from 'react'
 import { NO_EVENT } from '../graph.ts'
 import { isLiveDraft, type DraftId } from '../worlds.ts'
 import { getActiveTracer } from '../tracer.ts'
-import { confirmCommit, noteRenderWorld, registerProvider, type SignalScope } from './host.ts'
+import {
+	confirmRootCommit,
+	noteRenderWorld,
+	registerRootConnection,
+	type ReactRootConnection,
+} from './host.ts'
 
-/** Reducer state for a scope or hook: the live draft ids delivered to it
+/** Reducer state for a connection or hook: the live draft ids delivered to it
  * so far, i.e. the world its render passes carry. */
 export interface WorldState {
 	ids: readonly DraftId[]
@@ -40,7 +45,7 @@ export interface WorldState {
 
 export const EMPTY_WORLD: WorldState = { ids: [] }
 
-/** Shared by the scope and every useValue hook: accumulate live draft
+/** Shared by the connection and every useValue hook: accumulate live draft
  * ids and prune dead ones — retired and discarded drafts resolve to base
  * state anyway, and a long-lived subscriber must not grow history
  * forever. Always returns a fresh object so a re-dispatched id still
@@ -61,12 +66,11 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	return { ids }
 }
 
-/** The scope's identity-stable record, or null outside any
- * SignalScopeProvider. Scope-consuming hooks throw on null (see
- * requireScope in hooks.ts). */
-export const ScopeContext = React.createContext<SignalScope | null>(null)
+/** The nearest root connection, or null outside a provider. Hooks consume
+ * it, and providers use it to detect an ancestor provider. */
+export const ReactRootConnectionContext = React.createContext<ReactRootConnection | null>(null)
 
-export interface SignalScopeProviderProps {
+export interface SignalsFrameworkProviderProps {
 	/** Keys this root's committed world for committed(x, container) reads;
 	 * wrapCreateRoot passes the root's DOM element. Hooks always use the
 	 * provider record itself as their committed-world key, so this is needed
@@ -77,49 +81,63 @@ export interface SignalScopeProviderProps {
 
 /** A separate first-child fiber gives this layout effect commit order
  * before the application subtree. Registration lives on the same stable
- * marker so the scope is registered before its first confirmation and is
- * unregistered when the provider unmounts. */
-function SignalScopeCommit({ scope, world }: { scope: SignalScope; world: WorldState }): null {
-	React.useLayoutEffect(() => registerProvider(scope), [scope])
+ * marker so the connection is registered before its first confirmation
+ * and is unregistered when the provider unmounts. */
+function ReactRootCommit({
+	connection,
+	world,
+}: {
+	connection: ReactRootConnection
+	world: WorldState
+}): null {
+	React.useLayoutEffect(() => registerRootConnection(connection), [connection])
 	React.useLayoutEffect(() => {
 		getActiveTracer()?.emit('root-commit', null, NO_EVENT, { world: world.ids })
-		confirmCommit(scope, world.ids)
-	}, [scope, world])
+		confirmRootCommit(connection, world.ids)
+	}, [connection, world])
 	return null
 }
 
-export function SignalScopeProvider(props: SignalScopeProviderProps): React.ReactElement {
+/** Connect a React subtree to the signals runtime. A descendant provider
+ * would replace this connection for part of the subtree, so nesting throws. */
+export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
+	if (React.useContext(ReactRootConnectionContext) !== null) {
+		throw new Error(
+			'SignalsFrameworkProvider cannot be nested inside another ' +
+				'SignalsFrameworkProvider. Mount it outside the other provider, ' +
+				'or use wrapCreateRoot(createRoot).',
+		)
+	}
 	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
 	const container = props.container ?? null
-	const scope = React.useMemo<SignalScope>(
+	const connection = React.useMemo<ReactRootConnection>(
 		() => ({ dispatch, container, committing: false }),
 		[dispatch, container],
 	)
 	// Note this pass's world in the host. Every pass that carries drafts
-	// re-renders this scope (the drafts live in its reducer state), so the
-	// note lands at the top of the pass, in tree order, before any
+	// re-renders this provider (the drafts live in its reducer state), so
+	// the note lands at the top of the pass, in tree order, before any
 	// component can read.
-	noteRenderWorld(scope, world.ids)
+	noteRenderWorld(connection, world.ids)
 	return React.createElement(
-		ScopeContext.Provider,
-		{ value: scope },
-		React.createElement(SignalScopeCommit, { scope, world }),
+		ReactRootConnectionContext.Provider,
+		{ value: connection },
+		React.createElement(ReactRootCommit, { connection, world }),
 		props.children,
 	)
 }
 
-/** A React root whose render() wraps the tree in that root's own
- * SignalScopeProvider. */
+/** A React root whose render() wraps the tree in a
+ * SignalsFrameworkProvider. */
 export interface WrappedRoot {
 	render(node: React.ReactNode): void
 	unmount(): void
 }
 
 /**
- * A createRoot with the scope pre-installed: every render() is wrapped in
- * this root's SignalScopeProvider, so apps (and the shared battery) get
- * transition worlds and per-root committed views without composing
- * anything.
+ * A createRoot with the provider pre-installed: every render() is wrapped
+ * in this root's SignalsFrameworkProvider, so apps get transition worlds
+ * and per-root committed views without composing anything.
  */
 export function wrapCreateRoot(
 	createRoot: (
@@ -131,7 +149,7 @@ export function wrapCreateRoot(
 		const root = createRoot(el, opts)
 		return {
 			render(node: React.ReactNode) {
-				root.render(React.createElement(SignalScopeProvider, { container: el }, node))
+				root.render(React.createElement(SignalsFrameworkProvider, { container: el }, node))
 			},
 			unmount() {
 				root.unmount()

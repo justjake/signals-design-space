@@ -715,8 +715,9 @@ document's sections above describe the code at landing time. The mapping:
 - The per-node uSES counter is now `storeVersion` — THE useSyncExternalStore
   snapshot; bump = subscribers re-render. Its base-clock companion (a second
   per-node counter that served the unscoped hook mode) is deleted with that
-  mode: every scope-consuming hook now requires a SignalScopeProvider and throws
-  without one, so the silent-fold delivery channel is always the render-pass
+  mode: every provider-dependent hook now requires a
+  `SignalsFrameworkProvider` and throws without one, so the silent-fold
+  delivery channel is always the render-pass
   world. Settlement and discard bump through one helper
   (`bumpStoreVersionLoud`) that bypasses suppression: suppression exists
   only for silent draft folds, and those two carry information no render

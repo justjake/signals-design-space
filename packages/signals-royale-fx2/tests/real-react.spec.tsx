@@ -434,7 +434,7 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 	// subscribers whose root carried the draft. The shape below never
 	// carried it, so the fold is its only delivery channel: it must
 	// converge, not stay stale until the next write.
-	test('a scope mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
+	test('a provider mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
 		const a = createAtom(1)
 		const gate = deferred<void>()
 		function Suspender() {

@@ -9,11 +9,11 @@ import { liveDraftCount, openDraft, runWithDraftWrites, sealDraft } from '../src
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
-	SignalScopeProvider,
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'
-import { broadcastDraft, registerProvider } from '../src/react/host.ts'
+import { broadcastDraft, registerRootConnection } from '../src/react/host.ts'
 import { makeHarness, text } from './helpers.tsx'
 
 function subCount(x: Atom<number>): number {
@@ -54,9 +54,9 @@ describe('registration', () => {
 		try {
 			await act(() => {
 				root.render(
-					<SignalScopeProvider container={container}>
+					<SignalsFrameworkProvider container={container}>
 						<Child />
-					</SignalScopeProvider>,
+					</SignalsFrameworkProvider>,
 				)
 			})
 			expect(seen).toEqual([[0, 0, 0]])
@@ -73,7 +73,7 @@ describe('registration', () => {
 })
 
 describe('hosted draft lifetime', () => {
-	test('a draft with no providers retires after its writing scope', async () => {
+	test('a draft with no providers retires after its writing callback', async () => {
 		resetReactSignalsForTest()
 		const a = createAtom(0)
 		const draft = openDraft()
@@ -89,7 +89,7 @@ describe('hosted draft lifetime', () => {
 	test('unregistering the last recipient retires its live drafts', () => {
 		resetReactSignalsForTest()
 		const delivered: number[] = []
-		const unregister = registerProvider({
+		const unregister = registerRootConnection({
 			container: null,
 			committing: false,
 			dispatch: (id) => delivered.push(id),

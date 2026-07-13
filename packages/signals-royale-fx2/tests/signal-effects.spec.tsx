@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { committed, createAtom, createComputed, latest, nodeOf, read } from 'signals-royale-fx2'
 import {
-	SignalScopeProvider,
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useSignalEffect,
 	useSignalLayoutEffect,
@@ -256,7 +256,7 @@ describe('scheduled React signal effects', () => {
 		expect(seen).toEqual([0, 1])
 	})
 
-	test('containerless scopes run effects in their own committed worlds', async () => {
+	test('containerless providers run effects in their own committed worlds', async () => {
 		const atom = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
@@ -281,17 +281,17 @@ describe('scheduled React signal effects', () => {
 		try {
 			await act(() => {
 				firstRoot.render(
-					<SignalScopeProvider>
+					<SignalsFrameworkProvider>
 						<React.Suspense fallback={null}>
 							<Effect seen={firstSeen} />
 							<Suspender />
 						</React.Suspense>
-					</SignalScopeProvider>,
+					</SignalsFrameworkProvider>,
 				)
 				secondRoot.render(
-					<SignalScopeProvider>
+					<SignalsFrameworkProvider>
 						<Effect seen={secondSeen} />
-					</SignalScopeProvider>,
+					</SignalsFrameworkProvider>,
 				)
 			})
 			expect(firstSeen).toEqual([0])

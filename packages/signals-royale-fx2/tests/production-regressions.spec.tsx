@@ -5,7 +5,7 @@
  * Tear family: latest()/isPending() in any render body must resolve that
  * pass's world or fall back to base state. Wrong-toward-base is
  * acceptable; wrong-toward-stale-world or wrong-toward-drafts never is.
- * Each shape below renders a component that did not refresh the scope's
+ * Each shape below renders a component that did not refresh its connection's
  * render-world note and asserts it cannot consume a stale one.
  *
  * Wake family: a transition's render passes re-render only subscribers
@@ -81,7 +81,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			</>,
 		)
 		await start() // held: the transition pass noted its world and suspended
-		// The urgent pass dirties only the probe; the scope (and every hook)
+		// The urgent pass dirties only the probe; the provider (and every hook)
 		// bails out, so nothing refreshed the note for this pass.
 		await act(() => bump())
 		expect(text(container)).toContain('p:1;')
@@ -99,7 +99,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			</React.Suspense>,
 		)
 		await start()
-		// A plain root (no SignalScopeProvider, zero hooks — plain latest()
+		// A plain root (no SignalsFrameworkProvider, zero hooks — plain latest()
 		// calls are legal anywhere) rendered right after the transition pass:
 		// no pass of this root ever refreshed any note.
 		const sampled: number[] = []
@@ -112,7 +112,7 @@ describe('tear: the render-world note is validity-gated', () => {
 		await act(() => {
 			plainRoot.render(<Plain />)
 		})
-		expect(sampled).toEqual([1]) // base-state fallback, not the scoped draft
+		expect(sampled).toEqual([1]) // base-state fallback, not the held draft
 		await release()
 		await act(() => plainRoot.unmount())
 		div.remove()
@@ -144,7 +144,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			)
 		}
 		const { container } = await h.mount(<List />)
-		// Root B: no scope, none of our hooks; re-rendered by flushSync
+		// Root B: no provider, none of our hooks; re-rendered by flushSync
 		// mid-slice.
 		const sampled: number[] = []
 		let bump!: () => void
@@ -346,7 +346,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		})
 		await act(async () => {})
 		// T2 woke exactly b's subscriber; its commit rides behind T1's hold
-		// because both drafts flow through the scope's one reducer queue and
+		// because both drafts flow through the connection's one reducer queue and
 		// React entangles same-queue transition updates (stock updater rules).
 		expect(bRenders).toBeGreaterThan(1)
 		expect(text(container)).toBe('a:0;b:0;')

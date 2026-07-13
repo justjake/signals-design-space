@@ -9,20 +9,20 @@ import { batch } from '../graph.ts'
 
 /** Run writes in one signal batch and transition draft, invisible to
  * base-state readers and the committed DOM until React commits. */
-export function startSignalTransition(scope: () => void): void {
+export function startSignalTransition(fn: () => void): void {
 	React.startTransition(() => {
-		batch(scope)
+		batch(fn)
 	})
 }
 
 /** React's useTransition combined with a signal batch and engine draft:
  * isPending covers the draft's whole lifetime, including held renders. */
-export function useSignalTransition(): [boolean, (scope: () => void) => void] {
+export function useSignalTransition(): [boolean, (fn: () => void) => void] {
 	const [isPending, startTransition] = React.useTransition()
-	const startRef = React.useRef<((scope: () => void) => void) | null>(null)
-	startRef.current ??= (scope) => {
+	const startRef = React.useRef<((fn: () => void) => void) | null>(null)
+	startRef.current ??= (fn) => {
 		startTransition(() => {
-			batch(scope)
+			batch(fn)
 		})
 	}
 	return [isPending, startRef.current]

@@ -19,7 +19,7 @@ uSES provided three things beyond a subscription:
    ruling: "it should behave like useState"). One indicator is exempt by
    the same logic React itself uses: `useIsPending`'s flip dispatches
    OUTSIDE any ambient transition (`dispatchUrgent`), mirroring
-   `useTransition`, whose isPending update is scheduled before the scope —
+   `useTransition`, whose isPending update is scheduled before the transition —
    an indicator must not be held by the transition it indicates.
 2. **The commit-time snapshot compare** ("did the store move between my
    render and my subscription attaching?"). Replaced by the extended
@@ -51,10 +51,10 @@ so it advances exactly at commits. Targeting the committed tree (not the
 latest render) is load-bearing three ways:
 
 - **Fold silence is exact.** A carrier's committed world resolves the
-  folded value it already shows → equal → no dispatch. A scope that never
+  folded value it already shows → equal → no dispatch. A root that never
   carried the draft resolves news → repair. Per-subscriber comparison
   replaced the global suppression flag, `retireDraft`'s silent option, and
-  `confirmCommit`'s loudness decision — all deleted.
+  `confirmRootCommit`'s loudness decision — all deleted.
 - **A held pass's speculation stays in the draft channel.** A late append
   to a draft the hook carries changes the PASS's resolution, not the
   committed tree's; the draft channel re-dispatches the id (in the owning
@@ -111,7 +111,7 @@ current reading. (Found by test T12; the fix is the `validate` guard in
 `useSyncExternalStore` (both uses), `storeVersion` + its brand + three
 constructor inits + wave/write bump sites, `storeVersionSuppressed`,
 `withSuppressedStoreVersion`, `bumpStoreVersionLoud`, `retireDraft`'s
-`silent` option, `confirmCommit`'s `foldReachedEveryScope` loudness
+`silent` option, `confirmRootCommit`'s `foldReachedEveryScope` loudness
 decision, `NodeVersion` + `node.version` + `link.version` and every
 compare/stamp site. The counter taxonomy is now: two clocks
 (`graphChangeClock`, `draftChangeClock`), readings (`changedAt<Clock>`,
@@ -138,8 +138,8 @@ compare/stamp site. The counter taxonomy is now: two clocks
 
 ## SSR note
 
-Server rendering works (SignalScopeProvider is a useReducer component; its layout
-effect is client-only). Hydration consistency is the standard signals-SSR
-seeding concern — give the client engine the values the server rendered —
-and the post-hydration gap is case 2 above. `getServerSnapshot` machinery
-is not needed and has no analog here.
+Server rendering works (`SignalsFrameworkProvider` is a `useReducer`
+component; its layout effect is client-only). Hydration consistency is the
+standard signals-SSR seeding concern — give the client engine the values
+the server rendered — and the post-hydration gap is case 2 above.
+`getServerSnapshot` machinery is not needed and has no analog here.

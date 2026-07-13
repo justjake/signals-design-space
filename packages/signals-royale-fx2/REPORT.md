@@ -16,7 +16,7 @@ React is the world clock. The engine keeps canonical state in a conventional
 signal graph and layers concurrency as a replay overlay: transition writes
 become drafts (ordered intent logs), and a reader resolves values in a world
 = canonical + a specific draft set. Which passes see which drafts is decided
-by React itself: draft ids are dispatched into each root's `SignalScopeProvider`
+by React itself: draft ids are dispatched into each root's `SignalsFrameworkProvider`
 reducer inside the owning `startTransition`, so React's own update queues
 carry the world — urgent passes skip it, the transition's passes include it,
 rebased retries recompute it, and functional updates replay against each
@@ -194,7 +194,7 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
    *ambient* `latest()` after any render resolved that render's world (a
    canonical last pass hid live drafts). Fix: the seam is now a provider —
    the host answers "what world is rendering right now", gated on React's
-   live hook dispatcher, noted by the SignalScopeProvider render (top of every
+   live hook dispatcher, noted by the SignalsFrameworkProvider render (top of every
    draft-carrying pass, in tree order) and by every world-reading hook.
    Regression tests at both levels were written first and verified to fail
    pre-fix (engine: worlds.spec `latest() context resolution` x4; React:
@@ -265,7 +265,7 @@ Nothing in the shared battery is disputed.
   should close most of the 1.3–1.5x.
 - Fanout claim path: batch uSES notify fan-out per commit to cut the ~0.5 ms
   fanout delta and mount cost.
-- A per-pass world beacon: teach `SignalScopeProvider` to re-render at the top of
+- A per-pass world beacon: teach `SignalsFrameworkProvider` to re-render at the top of
   urgent passes too (context-selector trick) to close the last latest()
   corner without a fork line.
 - Wire the causality tracer into the playground UI (the format is already
@@ -280,12 +280,12 @@ correctness gaps. Both are fixed below; the fork is untouched (tree still
 
 ### 10.1 Mixed-root fold staleness (moderate)
 
-A `useValue` subscriber in a root without `SignalScopeProvider` went stale when a
+A `useValue` subscriber in a root without `SignalsFrameworkProvider` went stale when a
 transition retired via a scoped root's commit: the silent fold suppresses
 the `reactEpoch` snapshot bump, so epoch-snapshot subscribers outside any
 scope bailed forever (judge probe E i-b pinned the unscoped root at `b:1;` with
 canonical already 2, repaired only by the next canonical write). Resolution:
-converge, not enforce — `SignalScopeProvider` is a public export, and a scope-less
+converge, not enforce — `SignalsFrameworkProvider` is a public export, and a scope-less
 root is a legitimate degraded mode (canonical-only view, no transition
 worlds). Two parts:
 
@@ -414,7 +414,7 @@ Before: every draft dispatch changed the WorldContext value (`{ids, rev}`),
 re-rendering EVERY `useValue` consumer in the transition pass — renders
 scaled with subscriber count. Now:
 
-- ScopeContext's value is the scope's identity-stable record (never
+- ReactRootConnectionContext's value is the scope's identity-stable record (never
   replaced), so the scope re-renders alone and React bails out below it;
   world membership travels through the scope's note and per-hook state.
 - Each `useValue` owns a draft-lane channel: a second `useReducer` next to
@@ -868,19 +868,19 @@ battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
 the unhandled error is the same refresh TypeError).
 
-## 20. Walk modernization (mandatory SignalScopeProvider, unified poke walk, flag table)
+## 20. Walk modernization (mandatory SignalsFrameworkProvider, unified poke walk, flag table)
 
 Owner-specified in full; two commits (the WaveFrame amortization is the
 second, separately revertable).
 
-- **Mandatory SignalScopeProvider.** The unscoped hook mode is deleted: every
+- **Mandatory SignalsFrameworkProvider.** The unscoped hook mode is deleted: every
   scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
   `useCommitted`) throws without a scope, naming `wrapCreateRoot` and
-  `<SignalScopeProvider>` as the fixes (falsify-first: the throw test rendered fine
+  `<SignalsFrameworkProvider>` as the fixes (falsify-first: the throw test rendered fine
   pre-change). `canonicalEpoch` is deleted entirely; `reactEpoch` is renamed
   `storeEpoch` — THE useSyncExternalStore snapshot; bump = subscribers
   re-render. Fold loudness is unchanged: loud folds bump it, silent folds
-  suppress it, and the audience decision stays in `confirmCommit`. The
+  suppress it, and the audience decision stays in `confirmRootCommit`. The
   unscoped-convergence tests died with the contract they tested.
 - **Oracle model swap + coverage delta.** The scope-less subscriber model
   class and its canary modeled the deleted contract and are gone. Replacing
@@ -941,7 +941,7 @@ re-renders get exactly `useState`'s lanes (owner ruling), with
 `useIsPending`'s flip dispatched outside ambient transitions (the
 `useTransition` precedent) and the notify predicate targeting the COMMITTED
 tree (fold silence is per-subscriber comparison now — the suppression flag,
-`retireDraft({silent})`, and `confirmCommit`'s loudness decision are all
+`retireDraft({silent})`, and `confirmRootCommit`'s loudness decision are all
 deleted). Change B: `NodeVersion`/`link.version` deleted; validation is
 `dep.changedAtGraphChange > sub.validAtGraphChange` under three named
 ordering invariants (tick-then-stamp, real-changes-only + net-revert

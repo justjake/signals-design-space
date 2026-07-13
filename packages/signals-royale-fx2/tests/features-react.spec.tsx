@@ -16,6 +16,7 @@ import {
 	type Atom,
 } from 'signals-royale-fx2'
 import {
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useAtom,
 	useCommitted,
@@ -255,11 +256,11 @@ describe('scenario 18 — SSR', () => {
 	})
 })
 
-describe('hooks demand a SignalScopeProvider', () => {
-	// Hooks have no unscoped mode: a scope is the world carrier, and a
-	// subscriber without one has no channel for transition worlds at all.
-	// Rendering any scope-consuming hook outside a SignalScopeProvider
-	// throws with a message naming the fixes.
+describe('hooks demand a SignalsFrameworkProvider', () => {
+	// Hooks have no provider-free mode. The root connection carries
+	// transition worlds, so a subscriber without one has no channel for
+	// them. Rendering a provider-dependent hook without a provider throws
+	// with a message naming the fixes.
 	class Boundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
 		state: { error: Error | null } = { error: null }
 		static getDerivedStateFromError(error: Error) {
@@ -274,7 +275,7 @@ describe('hooks demand a SignalScopeProvider', () => {
 		}
 	}
 
-	test('[falsify-first] every scope-consuming hook throws without a scope, naming the fixes', async () => {
+	test('[falsify-first] provider-dependent hooks throw without a provider and name the fixes', async () => {
 		const { createRoot } = await import('react-dom/client')
 		const a = createAtom(1)
 		const cases: Array<[string, () => React.ReactNode]> = [
@@ -300,7 +301,7 @@ describe('hooks demand a SignalScopeProvider', () => {
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
 			const div = document.body.appendChild(document.createElement('div'))
-			const root = createRoot(div) // deliberately no SignalScopeProvider
+			const root = createRoot(div) // deliberately no SignalsFrameworkProvider
 			await act(() => {
 				root.render(
 					<Boundary>
@@ -309,8 +310,35 @@ describe('hooks demand a SignalScopeProvider', () => {
 				)
 			})
 			expect(text(div), name).toContain('caught:')
-			expect(text(div), name).toContain('SignalScopeProvider')
+			expect(text(div), name).toContain('SignalsFrameworkProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
+			await act(() => root.unmount())
+			div.remove()
+		}
+	})
+
+	test('[falsify-first] a descendant provider throws before its connection mounts', async () => {
+		const { createRoot } = await import('react-dom/client')
+		const div = document.body.appendChild(document.createElement('div'))
+		const root = createRoot(div)
+		try {
+			await act(() => {
+				root.render(
+					<SignalsFrameworkProvider>
+						<Boundary>
+							<SignalsFrameworkProvider>
+								<span>nested child</span>
+							</SignalsFrameworkProvider>
+						</Boundary>
+					</SignalsFrameworkProvider>,
+				)
+			})
+			expect(text(div)).toContain(
+				'caught:SignalsFrameworkProvidercannotbenestedinsideanotherSignalsFrameworkProvider.',
+			)
+			expect(text(div)).toContain('wrapCreateRoot(createRoot)')
+			expect(text(div)).not.toContain('nestedchild')
+		} finally {
 			await act(() => root.unmount())
 			div.remove()
 		}
@@ -355,7 +383,7 @@ describe('fx2 extras', () => {
 		const a = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
-		let start!: (scope: () => void) => void
+		let start!: (fn: () => void) => void
 		const pendingSeen: boolean[] = []
 		function Controls() {
 			const [isPending, startFn] = useSignalTransition()
@@ -420,7 +448,7 @@ describe('fx2 extras', () => {
 		})
 		await act(async () => {})
 		expect(text(container)).toBe('n:2;c:2;')
-		// The transition renders the draft, then confirmCommit advances the
+		// The transition renders the draft, then confirmRootCommit advances the
 		// root-local committed screen for useCommitted.
 		expect(renders).toBe(4)
 	})

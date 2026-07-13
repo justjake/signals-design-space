@@ -29,7 +29,7 @@ const stop = effect(() => console.log(double.get())); // runs now, then on chang
 
 count.set(2);                 // effect logs 4
 count.update((x) => x + 1);   // functional update
-batch(() => {                 // one flush for the whole scope
+batch(() => {                 // one flush for the whole callback
   count.set(10);
   count.set(3);               // net revert: effects see only the final value
 });
@@ -210,13 +210,14 @@ at sync priority, no matter where the write came from).
 These bindings invert the relationship. The engine never decides what a
 render pass may see; React does:
 
-- Each root gets a `SignalScopeProvider` (installed automatically by the packaged
-  `createRoot` wrapper). Its only state is a list of TRANSITION DRAFT ids,
-  managed by `useReducer`; its context value is an identity-stable record,
-  so the scope itself never re-renders its subtree.
+- `SignalsFrameworkProvider` connects a React subtree to the signals runtime;
+  the packaged `createRoot` wrapper installs one around the root. Providers
+  cannot be nested. A provider's only state is a list of transition draft ids
+  managed by `useReducer`. Its context value is identity-stable, so publishing
+  the connection never re-renders consumers.
 - A transition write opens an engine draft. The draft id is dispatched from
-  inside `React.startTransition` to each root's scope AND — per written
-  atom — to exactly the subscribers of that atom (and of computeds over
+  inside `React.startTransition` to each root connection and, for each written
+  atom, to exactly the subscribers of that atom (and of computeds over
   it), each through its own `useReducer`. The dispatches ride the
   transition's own lanes, so React's update queues — not this library —
   decide which render passes include the draft: urgent passes skip it, the
@@ -261,13 +262,13 @@ a pass that did not refresh it (an urgent pass over an untouched subtree,
 another root's render, an interleaved flush) falls back to BASE rather
 than consuming a stale world or leaking live drafts into an urgent frame.
 
-Every scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
-`useCommitted`) requires a `SignalScopeProvider` above it and throws without one:
-the scope is the world carrier, and a subscriber outside any scope would
-have no channel for transition worlds at all. Create roots with
-`wrapCreateRoot(createRoot)` (the packaged wrapper installs the scope per
-root) or wrap the tree in `<SignalScopeProvider>` yourself. Plain function reads
-(`latest`, `committed`, `isPending`) work anywhere, scope or not.
+Every provider-dependent hook (`useValue`, `useComputed`, `useIsPending`,
+`useCommitted`, `useSignalEffect`, and `useSignalLayoutEffect`) requires a
+`SignalsFrameworkProvider` above it and throws without one. The root
+connection carries transition worlds, so a subscriber outside a provider has
+no channel for them. Create roots with `wrapCreateRoot(createRoot)` or wrap
+the tree in `<SignalsFrameworkProvider>`. Plain function reads (`latest`,
+`committed`, `isPending`) work anywhere.
 
 ## Out of scope: DOM-mutation attribution
 
@@ -310,7 +311,7 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   handing React the engine's stable pending promise (a transition holds; an
   urgent render with settled history serves stale instead — no fallback
   flash).
-- `useComputed(fn, deps)` — component-scoped computed.
+- `useComputed(fn, deps)` — component-owned computed.
 - `useSignalEffect(fn)` / `useSignalLayoutEffect(fn)` — tracked effects on
   this root's committed values, run in React's passive or layout phase;
   cleanup honored; StrictMode nets one.
@@ -318,7 +319,7 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   per-root committed view.
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after
   unmount.
-- `startSignalTransition(scope)` / `useSignalTransition()` — transition
+- `startSignalTransition(fn)` / `useSignalTransition()` — transition
   batches. Plain `React.startTransition` also works: the first engine write
   inside any transition context is classified into a draft automatically.
 - Writing during render throws.

@@ -7,14 +7,13 @@
  * while urgent updates keep committing — the participation the transition
  * scenario exists to separate.
  *
- * SignalScopeProvider is mandatory (hooks throw unscoped), so this
- * contender sets Provider. registerReactSignals() is idempotent and
- * process-wide.
+ * SignalsFrameworkProvider is mandatory, so this contender sets Provider.
+ * registerReactSignals() is idempotent and process-wide.
  */
 import { batch, createAtom, type Atom } from 'signals-royale-fx2'
 import {
 	registerReactSignals,
-	SignalScopeProvider,
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'
@@ -47,7 +46,7 @@ const fx2React: Contender = {
 				})
 			},
 			dispose() {},
-			Provider: SignalScopeProvider,
+			Provider: SignalsFrameworkProvider,
 		}
 	},
 }

@@ -22,7 +22,7 @@ export interface Harness {
 	cleanup(): Promise<void>
 }
 
-const scopedCreateRoot = wrapCreateRoot(createRoot as never)
+const frameworkCreateRoot = wrapCreateRoot(createRoot as never)
 
 export function makeHarness(): Harness {
 	resetReactSignalsForTest()
@@ -38,7 +38,7 @@ export function makeHarness(): Harness {
 		async mount(node) {
 			const container = document.createElement('div')
 			document.body.appendChild(container)
-			const root = scopedCreateRoot(container)
+			const root = frameworkCreateRoot(container)
 			containers.push(container)
 			roots.push(root)
 			await act(() => {
