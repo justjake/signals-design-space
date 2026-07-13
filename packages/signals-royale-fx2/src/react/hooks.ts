@@ -481,23 +481,19 @@ export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
 export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireRootConnection('useIsPending'), null)
-	const [, force] = useReducer(forceReducer, 0)
-	const pending = isPendingPassive(node, null)
-	const shown = useRef(pending)
-	shown.current = pending
-	// Dispatch only when the boolean this hook shows would actually flip;
-	// pokes and waves over-notify by design.
-	const onNotify = useCallback(() => {
-		// The flip escapes any ambient transition: an indicator scheduled
-		// inside the transition it indicates would be held hostage by it.
-		// React's own useTransition schedules isPending before entering the
-		// transition for the same reason.
-		if (isPendingPassive(node, null) !== shown.current) {
-			dispatchUrgent(force)
-		}
-	}, [node])
-	useEffect(() => observeNode(node, onNotify), [node, onNotify])
-	return pending
+	const subscribe = useCallback(
+		(notify: () => void) =>
+			observeNode(node, () => {
+				// The flip escapes any ambient transition: an indicator scheduled
+				// inside the transition it indicates would be held hostage by it.
+				// React's own useTransition schedules isPending before entering the
+				// transition for the same reason.
+				dispatchUrgent(notify)
+			}),
+		[node],
+	)
+	const getSnapshot = useCallback(() => isPendingPassive(node, null), [node])
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
@@ -516,7 +512,17 @@ export function useCommitted<T>(x: Signal<T>): T {
 			force()
 		}
 	}, [node, connection])
-	useEffect(() => observeNode(node, onNotify), [node, onNotify])
+	useLayoutEffect(() => {
+		let notified = false
+		const off = observeNode(node, () => {
+			notified = true
+			onNotify()
+		})
+		if (!notified) {
+			onNotify()
+		}
+		return off
+	}, [node, onNotify])
 	if (isErrorBox(snap)) {
 		getActiveTracer()?.emit('render-error', node, node.causeEvent, {
 			error: snap.error,

@@ -719,6 +719,79 @@ describe('fx2 extras', () => {
 		expect(renders).toBe(4)
 	})
 
+	test('[falsify-first] useCommitted repairs a write between render and subscription', async () => {
+		const a = createAtom(0)
+		const c = createComputed(() => a.get())
+		read(c)
+		let renders = 0
+		function Reader() {
+			renders++
+			return <span>c:{useCommitted(c)};</span>
+		}
+		function LayoutWriter() {
+			React.useLayoutEffect(() => {
+				a.set(1)
+			}, [])
+			return null
+		}
+		const { container } = await h.mount(
+			<>
+				<LayoutWriter />
+				<Reader />
+			</>,
+		)
+		expect(text(container)).toBe('c:1;')
+		expect(renders).toBe(2)
+	})
+
+	test('[falsify-first] committed and pending snapshots bail out when a draft is held', async () => {
+		const a = createAtom(0)
+		const hold = createAtom(false)
+		const gate = deferred<void>()
+		let committedRenders = 0
+		let pendingRenders = 0
+		function CommittedProbe() {
+			committedRenders++
+			return <i>c:{useCommitted(a)};</i>
+		}
+		function PendingProbe() {
+			pendingRenders++
+			return <i>p:{useIsPending(hold) ? 1 : 0};</i>
+		}
+		function Suspender() {
+			if (useValue(hold) && !gate.settled) {
+				throw gate.promise
+			}
+			return null
+		}
+		const { container } = await h.mount(
+			<>
+				<CommittedProbe />
+				<PendingProbe />
+				<React.Suspense fallback={null}>
+					<Suspender />
+				</React.Suspense>
+			</>,
+		)
+		expect(text(container)).toBe('c:0;p:0;')
+		await act(() => {
+			startSignalTransition(() => {
+				a.set(1)
+				hold.set(true)
+			})
+		})
+		expect(text(container)).toBe('c:0;p:1;')
+		expect(committedRenders).toBe(1)
+		expect(pendingRenders).toBe(2)
+		await act(async () => {
+			gate.resolve()
+			await gate.promise
+		})
+		expect(text(container)).toBe('c:1;p:0;')
+		expect(committedRenders).toBe(2)
+		expect(pendingRenders).toBe(3)
+	})
+
 	test('useAtom is component-owned; useComputed derives; useSignalEffect observes commits', async () => {
 		const base = createAtom(2)
 		const effectSeen: number[] = []
