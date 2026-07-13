@@ -28,6 +28,7 @@ import {
 	NO_EVENT,
 	pokeDraftWatchers,
 	type ProducerNode,
+	type TraceEventId,
 } from '../graph.ts'
 import {
 	type Draft,
@@ -243,11 +244,6 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
 // Draft wake dispatch
 // ---------------------------------------------------------------------------
 
-/** Test-only counter of draft-wake dispatches that actually reached a
- * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads
- * it. */
-export const draftWakeStats = { dispatches: 0 }
-
 /**
  * Dispatch a draft wake into a hook's reducer. At write time React's
  * ambient transition is already installed (the write ran inside
@@ -259,7 +255,6 @@ export const draftWakeStats = { dispatches: 0 }
  * frame.
  */
 export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
-	draftWakeStats.dispatches++
 	const internals = sharedInternals()
 	if (internals.T != null) {
 		dispatch(id)
@@ -340,7 +335,7 @@ export function correctSubscription(
 	node: ProducerNode,
 	rendered: RenderedResolution,
 	connection: ReactRootConnection,
-	deliver: (id: DraftId) => void,
+	deliver: (id: DraftId, cause: TraceEventId) => void,
 	dispatch: (id: DraftId) => void,
 ): void {
 	for (const id of draftsAffecting(node)) {
@@ -351,7 +346,7 @@ export function correctSubscription(
 		if (hosted === undefined || !hosted.audience.has(connection)) {
 			continue
 		}
-		deliver(id)
+		deliver(id, hosted.draft.lastWriteEvent)
 	}
 	if (resolutionDiffers(node, rendered)) {
 		dispatch(REPAIR_WAKE)

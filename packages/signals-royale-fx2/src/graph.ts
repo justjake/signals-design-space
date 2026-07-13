@@ -335,11 +335,11 @@ export interface WatcherNode extends ConsumerNode, EffectOwner {
 	/** Delivery callback: render notification for WatchRender watchers, or
 	 * the React-phase scheduler for a deferred effect. */
 	onNotify: (() => void) | undefined
-	/** Draft-wake callback: receives the id of a transition draft whose new
-	 * write touches this subscriber's sources. Separate from onNotify so
-	 * draft activity never looks like a base-state change to subscribers
-	 * that compare snapshots. */
-	onDraftWake: ((id: DraftId) => void) | undefined
+	/** Draft-wake callback: receives the id and cause of a transition draft
+	 * whose new write touches this subscriber's sources. Separate from
+	 * onNotify so draft activity never looks like a base-state change to
+	 * subscribers that compare snapshots. */
+	onDraftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined
 }
 
 /** The `use` function handed to computed bodies: read a promise-like,
@@ -915,7 +915,7 @@ export function pokeDraftWatchers(
 	if (wakes !== null) {
 		for (const w of wakes) {
 			if ((w.flags & Flag.Watched) !== 0) {
-				w.onDraftWake!(wake!)
+				w.onDraftWake!(wake!, cause)
 			}
 		}
 	}
@@ -1677,7 +1677,7 @@ export interface ScheduledEffect {
  * unmount disposal, so this internal handle needs no abandonment finalizer. */
 export function makeScheduledEffect(
 	schedule: () => void,
-	draftWake: (id: DraftId) => void,
+	draftWake: (id: DraftId, cause: TraceEventId) => void,
 ): ScheduledEffect {
 	const capabilities = Flag.WatchRunEffect | Flag.WatchDraft | Flag.WatchSchedule
 	const w = makeWatcher(undefined, capabilities)
@@ -1782,7 +1782,7 @@ export function makeScope(fn: () => void): () => void {
 export function observeNode(
 	node: ProducerNode,
 	notify: () => void,
-	draftWake?: (id: DraftId) => void,
+	draftWake?: (id: DraftId, cause: TraceEventId) => void,
 ): () => void {
 	const sub = makeWatcher(undefined, Flag.WatchRender | Flag.WatchDraft)
 	sub.onNotify = notify

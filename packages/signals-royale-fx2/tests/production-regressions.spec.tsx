@@ -16,10 +16,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
-import { createAtom, latest, read } from 'signals-royale-fx2'
+import {
+	attachTracer,
+	createAtom,
+	createComputed,
+	latest,
+	read,
+	type TraceEvent,
+} from 'signals-royale-fx2'
 import { startSignalTransition, useValue } from 'signals-royale-fx2/react'
 import { openDraft, runWithDraftWrites, sealDraft, type Draft } from '../src/worlds.ts'
-import { broadcastDraft, draftWakeStats } from '../src/react/host.ts'
+import { broadcastDraft } from '../src/react/host.ts'
 
 let h: Harness
 beforeEach(() => {
@@ -357,11 +364,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 
 	test('a same-cell write burst dispatches one draft-lane wake per subscriber, not one per write', async () => {
 		const SUBS = 4
-		const cell = createAtom(0)
+		const cell = createAtom(0, { label: 'burst' })
+		const computed = createComputed(() => cell.get(), { label: 'burst-computed' })
 		const renders = new Array<number>(SUBS).fill(0)
 		function Sub({ i }: { i: number }) {
 			renders[i]++
-			return <i>{useValue(cell)};</i>
+			return <i>{useValue(computed)};</i>
 		}
 		const { container } = await h.mount(
 			<>
@@ -370,22 +378,98 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 				))}
 			</>,
 		)
-		draftWakeStats.dispatches = 0
-		let dispatchesBeforeRender = -1
-		await act(() => {
-			startSignalTransition(() => {
-				for (let k = 1; k <= 100; k++) {
-					cell.set(k)
+		const tracer = attachTracer()
+		const wakesBeforeRender: TraceEvent[] = []
+		try {
+			await act(() => {
+				startSignalTransition(() => {
+					for (let k = 1; k <= 100; k++) {
+						cell.set(k)
+					}
+				})
+				// Sampled synchronously after the writes, before React renders the
+				// transition pass: what the burst itself cost in reducer dispatches.
+				for (const event of tracer.events()) {
+					if (event.kind === 'draft-wake') {
+						wakesBeforeRender.push(event)
+					}
 				}
 			})
-			// Sampled synchronously after the writes, before React renders the
-			// transition pass: what the burst itself cost in reducer dispatches.
-			dispatchesBeforeRender = draftWakeStats.dispatches
-		})
-		expect(dispatchesBeforeRender).toBe(SUBS) // one per subscribing hook
+		} finally {
+			tracer.stop()
+		}
+		expect(wakesBeforeRender).toHaveLength(SUBS) // one per subscribing hook
+		const draftId = wakesBeforeRender[0]!.draftId
+		const rootId = wakesBeforeRender[0]!.rootId
+		expect(draftId).toBeDefined()
+		expect(rootId).toBeDefined()
+		for (const wake of wakesBeforeRender) {
+			expect(wake).toMatchObject({ label: 'burst-computed', draftId, rootId })
+			expect(tracer.find(wake.cause)).toMatchObject({
+				kind: 'write',
+				label: 'burst',
+				draftId,
+			})
+		}
 		await act(async () => {})
 		expect(text(container)).toBe('100;'.repeat(SUBS))
 		expect(renders).toEqual(new Array(SUBS).fill(2)) // mount + one transition pass
+	})
+
+	test('a computed mounted after a draft write traces its late-subscription wake to that write', async () => {
+		const source = createAtom(0, { label: 'late-source' })
+		const computed = createComputed(() => source.get(), { label: 'late-computed' })
+		const gate = deferred<void>()
+		function Suspender() {
+			const value = useValue(source)
+			if (value > 0 && !gate.settled) {
+				throw gate.promise
+			}
+			return <b>s:{value};</b>
+		}
+		function LateReader() {
+			return <i>r:{useValue(computed)};</i>
+		}
+		function App({ late }: { late: boolean }) {
+			return (
+				<>
+					<React.Suspense fallback={null}>
+						<Suspender />
+					</React.Suspense>
+					{late ? <LateReader /> : null}
+				</>
+			)
+		}
+		const { root, container } = await h.mount(<App late={false} />)
+		const tracer = attachTracer()
+		try {
+			await act(() => {
+				startSignalTransition(() => source.set(1))
+			})
+			await act(() => {
+				root.render(<App late={true} />)
+			})
+		} finally {
+			tracer.stop()
+		}
+		expect(text(container)).toBe('s:0;r:0;')
+		const wakes: TraceEvent[] = []
+		for (const event of tracer.events()) {
+			if (event.kind === 'draft-wake' && event.label === 'late-computed') {
+				wakes.push(event)
+			}
+		}
+		expect(wakes).toHaveLength(1)
+		expect(tracer.find(wakes[0]!.cause)).toMatchObject({
+			kind: 'write',
+			label: 'late-source',
+			draftId: wakes[0]!.draftId,
+		})
+		await act(async () => {
+			gate.resolve()
+			await gate.promise
+		})
+		expect(text(container)).toBe('s:1;r:1;')
 	})
 
 	test('late append to a cell the transition pass already rendered re-dispatches and lands', async () => {

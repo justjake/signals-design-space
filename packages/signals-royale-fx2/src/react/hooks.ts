@@ -62,6 +62,7 @@ import {
 	type Link,
 	type ProducerNode,
 	type ScheduledEffect,
+	type TraceEventId,
 } from '../graph.ts'
 import {
 	committedWorldOf,
@@ -296,14 +297,18 @@ export function useValue<T>(x: Signal<T>): T {
 	// delivery can race the clear.
 	state.delivered.clear()
 	const deliver = useCallback(
-		(id: DraftId) => {
+		(id: DraftId, cause: TraceEventId) => {
 			if (state.delivered.has(id)) {
 				return
 			}
 			state.delivered.add(id)
+			getActiveTracer()?.emit('draft-wake', node, cause, {
+				draftId: id,
+				root: connection,
+			})
 			dispatchDraftWake(id, wake)
 		},
-		[state, wake],
+		[connection, node, state, wake],
 	)
 	// At most one REPAIR_WAKE per render window, cleared alongside
 	// `delivered` under the same reasoning: a pending dispatch already
