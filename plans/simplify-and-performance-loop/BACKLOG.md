@@ -8,7 +8,7 @@ condition still leaves a useful direction.
 ## Open leads
 
 - Drain settled thenable sets without snapshot arrays while preserving clear-before-observable-work and thrown-flush cleanup.
-- Remove internal uses of `untracked(() => ...)`; converge on direct graph/world mechanisms that restore every collector correctly.
+- Remove the remaining draft-evaluator `untracked(() => withWorld(...))` boundary only if direct world ownership restores both ambient contexts correctly.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
 - Converge Atom and Computed construction only with retained-allocation and V8 pretenuring parity.
 - Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
@@ -23,7 +23,6 @@ condition still leaves a useful direction.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
 - Remove duplicate hook ownership only after preserving hook order and missing-provider diagnostics.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
-- Converge package and harness test adapters as a measurement-free maintenance round.
 
 ## Recorded retry leads
 
@@ -47,3 +46,5 @@ condition still leaves a useful direction.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
+- `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
+- Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
