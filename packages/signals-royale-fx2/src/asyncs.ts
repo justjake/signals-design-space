@@ -36,7 +36,6 @@ import {
 	startBatch,
 	endBatch,
 	traceHook,
-	untracked,
 } from './graph.ts'
 
 /** Settlement state recorded for a tracked thenable. */
@@ -190,7 +189,7 @@ function settle(box: ThenableBox): void {
 		for (const node of nodes) {
 			invalidateComputed(node, cause)
 			try {
-				untracked(() => ensureFresh(node))
+				ensureFresh(node)
 			} catch {
 				// The evaluation outcome (pending or error) is recorded on the
 				// node; readers encounter it at their own read sites.

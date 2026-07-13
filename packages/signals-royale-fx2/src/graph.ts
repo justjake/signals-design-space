@@ -1326,9 +1326,20 @@ function chainResolve(start: ComputedNode<unknown>, first: Link): void {
 
 /** Bring a computed up to date. Which conservative invalidations require
  * a recomputation is an implementation detail; resolved values and effect
- * observations are the semantic contract. */
+ * observations are the semantic contract. Refreshing is detached from both
+ * ambient collectors: dependencies belong to the computed being refreshed,
+ * and draft-world sources belong only to an explicit outer read. */
 export function ensureFresh(node: ComputedNode<unknown>): void {
-	ensureFreshAt(node, 0)
+	const prevConsumer = activeConsumer
+	const prevWorldSource = activeWorldSourceConsumer
+	activeConsumer = null
+	activeWorldSourceConsumer = null
+	try {
+		ensureFreshAt(node, 0)
+	} finally {
+		activeConsumer = prevConsumer
+		activeWorldSourceConsumer = prevWorldSource
+	}
 }
 
 function ensureFreshAt(node: ComputedNode<unknown>, depth: number): void {

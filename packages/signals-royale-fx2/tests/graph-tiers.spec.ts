@@ -29,6 +29,7 @@ import {
 	readComputed,
 	setTraceHook,
 	trackWorldRead,
+	trackWorldSource,
 	writeAtom,
 } from '../src/graph.ts'
 import {
@@ -38,7 +39,14 @@ import {
 	type AtomOptions,
 	type Computed,
 } from '../src/index.ts'
-import { appendDraftIntent, discardDraft, openDraft, withWorld } from '../src/worlds.ts'
+import {
+	appendDraftIntent,
+	BASE_WORLD,
+	discardDraft,
+	openDraft,
+	resolveState,
+	withWorld,
+} from '../src/worlds.ts'
 
 function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): AtomNode<T> {
 	return nodeOf(createAtom(initial, opts)) as AtomNode<T>
@@ -664,6 +672,46 @@ describe('watcher ownership', () => {
 })
 
 describe('scheduled effect tracking', () => {
+	test('[falsify-first] throwing detached refresh restores the world-source collector', () => {
+		const hiddenSource = atom(0)
+		const throwingTrigger = atom(0)
+		const explicitSource = atom(0)
+		const boom = new Error('equals')
+		const throwing = nodeOf(
+			createComputed(
+				() => {
+					trackWorldSource(hiddenSource)
+					return readAtom(throwingTrigger)
+				},
+				{
+					equals() {
+						throw boom
+					},
+				},
+			),
+		) as ComputedNode<number>
+		readComputed(throwing)
+		writeAtom(throwingTrigger, 1)
+		let schedules = 0
+		const effect = makeScheduledEffect(
+			() => schedules++,
+			() => {},
+		)
+
+		effect.refresh(() => {
+			expect(() => resolveState(throwing, BASE_WORLD)).toThrow(boom)
+			trackWorldSource(explicitSource)
+		})
+
+		expect(hiddenSource.observerCount).toBe(0)
+		expect(explicitSource.observerCount).toBe(1)
+		writeAtom(hiddenSource, 1)
+		expect(schedules).toBe(0)
+		writeAtom(explicitSource, 1)
+		expect(schedules).toBe(1)
+		effect.dispose()
+	})
+
 	test('base invalidations validate equality before scheduling the deferred body', () => {
 		const source = atom(1)
 		let computedRuns = 0

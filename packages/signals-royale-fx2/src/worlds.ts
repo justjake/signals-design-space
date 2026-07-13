@@ -808,7 +808,7 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		if ((node.flags & Flag.KindAtom) !== 0) {
 			peekAtom(node as AtomNode<unknown>)
 		} else {
-			untracked(() => ensureFresh(node as ComputedNode<unknown>))
+			ensureFresh(node as ComputedNode<unknown>)
 		}
 		recordSource(node)
 		return node as AtomNode<unknown> | ComputedNode<unknown>
