@@ -62,6 +62,7 @@ import {
 	atomHasDraftIntents,
 	classifyWrite,
 	committedWorldOf,
+	computedHasDraftIntents,
 	discardAllDrafts,
 	getCurrentPark,
 	getCurrentWorld,
@@ -443,7 +444,7 @@ export function isPendingPassive(node: ProducerNode, world: World | null): boole
 	// A drafted input anywhere in the dependency closure means newer data
 	// is pending behind this computed's base value. Pendingness is
 	// transitive: a computed over a pending source is itself pending.
-	return draftsAffecting(node).length > 0
+	return computedHasDraftIntents(node as ComputedNode<unknown>)
 }
 
 // ---------------------------------------------------------------------------

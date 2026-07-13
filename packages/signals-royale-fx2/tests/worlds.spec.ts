@@ -729,6 +729,39 @@ describe('computeds across worlds', () => {
 		expect(isPending(c2)).toBe(false)
 	})
 
+	test('isPending follows current dependencies and live intents during overlapping teardown', () => {
+		const chooseLeft = createAtom(true)
+		const left = createAtom(0)
+		const right = createAtom(0)
+		const selected = createComputed(() => (chooseLeft.get() ? left.get() : right.get()))
+		const flips: boolean[] = []
+		const unsub = observeNode(nodeOf(selected), () => flips.push(isPending(selected)))
+		expect(read(selected)).toBe(0)
+
+		const leftDraft = inDraft(() => left.set(1))
+		expect(isPending(selected)).toBe(true)
+		chooseLeft.set(false)
+		expect(read(selected)).toBe(0)
+		expect(isPending(selected)).toBe(false)
+
+		const firstRightDraft = inDraft(() => right.set(1))
+		const secondRightDraft = inDraft(() => right.set(2))
+		expect(isPending(selected)).toBe(true)
+		discardDraft(firstRightDraft)
+		expect(isPending(selected)).toBe(true)
+
+		flips.length = 0
+		retireDraft(secondRightDraft)
+		// Fold notifications run before releaseLogs removes the retired intent.
+		// Pendingness must inspect draft state instead of treating log presence
+		// as a live draft.
+		expect(flips[flips.length - 1]).toBe(false)
+		expect(isPending(selected)).toBe(false)
+
+		discardDraft(leftDraft)
+		unsub()
+	})
+
 	test('draft discovery dedupes shared dependencies and keeps draft order', () => {
 		const a = createAtom(1)
 		const b = createAtom(2)
