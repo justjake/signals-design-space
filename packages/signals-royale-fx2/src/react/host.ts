@@ -22,7 +22,7 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react'
 import * as Scheduler from 'scheduler'
-import { Flag, isUninitialized, NO_EVENT, pokeDraftWatchers, type ReactiveNode } from '../graph.ts'
+import { Flag, isUninitialized, NO_EVENT, pokeDraftWatchers, type ProducerNode } from '../graph.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -326,7 +326,7 @@ export interface RenderedResolution {
  * the urgent repair bump.
  */
 export function correctSubscription(
-	node: ReactiveNode,
+	node: ProducerNode,
 	rendered: RenderedResolution,
 	scope: SignalScope,
 	deliver: (id: DraftId) => void,
@@ -362,7 +362,7 @@ export function correctSubscription(
  * rendered; a never-settled suspension is always news, because the
  * subscriber must suspend.
  */
-export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResolution): boolean {
+export function resolutionDiffers(node: ProducerNode, rendered: RenderedResolution): boolean {
 	const st = resolveState(node, worldOf(rendered.ids))
 	const asyncBits = st.flags & Flag.AsyncMask
 	if (asyncBits === Flag.AsyncError) {

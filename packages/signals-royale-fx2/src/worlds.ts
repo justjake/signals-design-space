@@ -62,8 +62,7 @@ import {
 	type Brand,
 	type AtomNode,
 	type ComputedNode,
-	type ConsumerNode,
-	type ReactiveNode,
+	type ProducerNode,
 	type TraceEventId,
 	type GraphChangeClock,
 	Flag,
@@ -173,7 +172,7 @@ const rebaseLogs = new Map<AtomNode<unknown>, RebaseLog>()
 const draftRevisionByAtom = new WeakMap<AtomNode<unknown>, DraftChangeClock>()
 let draftChangeClock: DraftChangeClock = 1
 /** Nodes currently holding world memos, so quiescence can sweep them. */
-const memoNodes = new Set<ReactiveNode>()
+const memoNodes = new Set<ProducerNode>()
 /** Per-root committed draft sets, recorded by the React bindings at each
  * root commit. */
 const committedWorlds = new WeakMap<object, readonly DraftId[]>()
@@ -477,13 +476,13 @@ const NO_IDS: readonly DraftId[] = []
  * itself for an atom; its transitive dependency atoms for a computed). Used
  * for late-subscription repair: a subscriber that mounted after the
  * write-time wakes asks which transitions it missed. */
-export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
+export function draftsAffecting(node: ProducerNode): readonly DraftId[] {
 	if (liveDrafts.size === 0) {
 		return NO_IDS
 	}
 	const sources = new Set<AtomNode<unknown>>()
-	const visited = new Set<ReactiveNode>()
-	const collect = (n: ReactiveNode): void => {
+	const visited = new Set<ProducerNode>()
+	const collect = (n: ProducerNode): void => {
 		if (visited.has(n)) {
 			return
 		}
@@ -492,7 +491,7 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 			sources.add(n as AtomNode<unknown>)
 			return
 		}
-		for (let l = (n as ConsumerNode).deps; l !== undefined; l = l.nextDep) {
+		for (let l = (n as ComputedNode<unknown>).deps; l !== undefined; l = l.nextDep) {
 			collect(l.dep)
 		}
 	}
@@ -628,7 +627,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 // later if every certified source still carries the same readings.
 
 interface CertificateEntry {
-	node: ReactiveNode | null
+	node: ProducerNode | null
 	changedAtGraphChange: GraphChangeClock
 	draftRevision: DraftChangeClock
 }
@@ -656,7 +655,7 @@ interface WorldMemo {
 let activeCertificate: Certificate | null = null
 
 function appendCertificate(
-	node: ReactiveNode,
+	node: ProducerNode,
 	changedAtGraphChange: GraphChangeClock,
 	draftRevision: DraftChangeClock,
 ): void {
@@ -680,7 +679,7 @@ function appendCertificate(
 	certificate.count = count + 1
 }
 
-function recordSource(node: ReactiveNode): void {
+function recordSource(node: ProducerNode): void {
 	const draftRevision =
 		(node.flags & Flag.KindAtom) !== 0
 			? (draftRevisionByAtom.get(node as AtomNode<unknown>) ?? 0)
@@ -691,7 +690,7 @@ function recordSource(node: ReactiveNode): void {
 function inheritCertificate(certificate: Certificate): void {
 	for (let i = 0; i < certificate.count; i++) {
 		const entry = certificate.entries[i]
-		appendCertificate(entry.node as ReactiveNode, entry.changedAtGraphChange, entry.draftRevision)
+		appendCertificate(entry.node as ProducerNode, entry.changedAtGraphChange, entry.draftRevision)
 	}
 }
 
@@ -702,16 +701,16 @@ function clearInactiveCertificateEntries(certificate: Certificate, previousCount
 	}
 }
 
-function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
+function memoFor(node: ProducerNode, sig: string): WorldMemo | undefined {
 	return node.worldMemos?.get(sig) as WorldMemo | undefined
 }
 
 /** Passive view of a world memo's state: no evaluation, no validation. */
-export function peekWorldMemo(node: ReactiveNode, sig: string): ResolvedState | undefined {
+export function peekWorldMemo(node: ProducerNode, sig: string): ResolvedState | undefined {
 	return memoFor(node, sig)?.state
 }
 
-function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
+function memoValid(node: ProducerNode, memo: WorldMemo): boolean {
 	const graphChange = currentGraphChange()
 	if (memo.validAtGraphChange === graphChange && memo.validAtDraftChange === draftChangeClock) {
 		return true
@@ -727,7 +726,7 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 	}
 	for (let i = 0; i < memo.certificate.count; i++) {
 		const entry = memo.certificate.entries[i]
-		const source = entry.node as ReactiveNode
+		const source = entry.node as ProducerNode
 		if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
 			return false
 		}
@@ -745,7 +744,7 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
 
 /** Whether two resolutions are indistinguishable to a reader: same async
  * state, and equal values under the node's own equality function. */
-function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedState): boolean {
+function statesEqual(node: ProducerNode, left: ResolvedState, right: ResolvedState): boolean {
 	const asyncBits = right.flags & Flag.AsyncMask
 	if ((left.flags & Flag.AsyncMask) !== asyncBits) {
 		return false
@@ -765,7 +764,7 @@ function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedSta
  * resolution in the draft's world against a fresh one, and skip the
  * node's subscribers when they are equal. Before the draft first touched
  * the node, its world resolution is identical to base state. */
-function changedInCutoffWorld(node: ReactiveNode): boolean {
+function changedInCutoffWorld(node: ProducerNode): boolean {
 	const world = cutoffWorld!
 	try {
 		const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD)
@@ -784,7 +783,7 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
  * view (nodes carry the ResolvedState shape), so nothing is allocated. For
  * a drafted world, atoms replay their logs and computeds re-evaluate under
  * the world, with results memoized per (node, world signature). */
-export function resolveState(node: ReactiveNode, world: World): ResolvedState {
+export function resolveState(node: ProducerNode, world: World): ResolvedState {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -862,7 +861,7 @@ export function resolveState(node: ReactiveNode, world: World): ResolvedState {
  * dependency certificate. The target computed still collects its own
  * certificate if it must evaluate; only the caller's dependency is
  * suppressed. */
-export function resolveStateUntracked(node: ReactiveNode, world: World): ResolvedState {
+export function resolveStateUntracked(node: ProducerNode, world: World): ResolvedState {
 	const previous = activeCertificate
 	activeCertificate = null
 	try {
@@ -874,7 +873,7 @@ export function resolveStateUntracked(node: ReactiveNode, world: World): Resolve
 
 /** Give a scheduled effect wake-only edges to the actual sources used by a
  * computed's current draft-world memo. No-op outside a scheduled effect. */
-export function trackWorldSources(node: ReactiveNode, world: World): void {
+export function trackWorldSources(node: ProducerNode, world: World): void {
 	if (world.drafts.length === 0) {
 		return
 	}

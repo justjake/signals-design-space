@@ -14,6 +14,7 @@ import {
 	type ComputedNode,
 	type ConsumerNode,
 	type Link,
+	type ProducerNode,
 	type ReactiveNode,
 	Flag,
 	NO_EVENT,
@@ -26,6 +27,7 @@ import {
 	observeNode,
 	readAtom,
 	readComputed,
+	setTraceHook,
 	trackWorldRead,
 	writeAtom,
 } from '../src/graph.ts'
@@ -47,7 +49,7 @@ function makeGraphComputed<T>(fn: ComputedNode<T>['fn']): ComputedNode<T> {
 }
 
 /** Edges in dep's subscriber list pointing at sub (watched edges only). */
-function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
+function subEdgeCount(dep: ProducerNode, sub?: ConsumerNode): number {
 	let n = 0
 	for (let l: Link | undefined = dep.subs; l !== undefined; l = l.nextSub) {
 		if (sub === undefined || l.sub === sub) {
@@ -58,7 +60,7 @@ function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
 }
 
 /** Edges in sub's dependency list pointing at dep (both tiers). */
-function depEdgeCount(sub: ConsumerNode, dep: ReactiveNode): number {
+function depEdgeCount(sub: ConsumerNode, dep: ProducerNode): number {
 	let n = 0
 	for (let l: Link | undefined = sub.deps; l !== undefined; l = l.nextDep) {
 		if (l.dep === dep) {
@@ -68,7 +70,7 @@ function depEdgeCount(sub: ConsumerNode, dep: ReactiveNode): number {
 	return n
 }
 
-function isWatched(n: ReactiveNode): boolean {
+function isWatched(n: ProducerNode): boolean {
 	return (n.flags & Flag.Watched) !== 0
 }
 
@@ -76,7 +78,7 @@ function isWatched(n: ReactiveNode): boolean {
  * the Watched bit mirrors observerCount (watchers own their bit through
  * create/dispose). A path that set Watched without promote-validation would
  * resurrect the stale-Clean serve that promote exists to prevent. */
-function expectTierInvariant(nodes: ReactiveNode[]): void {
+function expectTierInvariant(nodes: ProducerNode[]): void {
 	for (const n of nodes) {
 		if ((n.flags & Flag.Watching) !== 0) {
 			continue
@@ -135,6 +137,39 @@ describe('two-tier graph: promote validation', () => {
 })
 
 describe('two-tier graph: promote/demote structure', () => {
+	test('watchers do not carry producer-only graph state', () => {
+		let watcher: ReactiveNode | null = null
+		let stop: (() => void) | undefined
+		setTraceHook((kind, node) => {
+			if (kind === 'effect-run') watcher = node
+			return NO_EVENT
+		})
+		try {
+			stop = makeEffect(() => {})
+			const captured = watcher
+			if (captured === null) {
+				throw new Error('effect watcher was not traced')
+			}
+			expect(Object.hasOwn(captured, 'changedAtGraphChange')).toBe(false)
+			expect(Object.hasOwn(captured, 'throwable')).toBe(false)
+			expect(Object.hasOwn(captured, 'subs')).toBe(false)
+			expect(Object.hasOwn(captured, 'subsTail')).toBe(false)
+			expect(Object.hasOwn(captured, 'observerCount')).toBe(false)
+			expect(Object.hasOwn(captured, 'worldMemos')).toBe(false)
+
+			const computed = makeGraphComputed(() => 1)
+			expect(Object.hasOwn(computed, 'changedAtGraphChange')).toBe(true)
+			expect(Object.hasOwn(computed, 'throwable')).toBe(true)
+			expect(Object.hasOwn(computed, 'subs')).toBe(true)
+			expect(Object.hasOwn(computed, 'subsTail')).toBe(true)
+			expect(Object.hasOwn(computed, 'observerCount')).toBe(true)
+			expect(Object.hasOwn(computed, 'worldMemos')).toBe(true)
+		} finally {
+			setTraceHook(null)
+			stop?.()
+		}
+	})
+
 	test('atoms do not carry consumer-only graph state', () => {
 		const source = atom(1)
 		const computed = makeGraphComputed(() => readAtom(source))
@@ -392,7 +427,7 @@ describe('two-tier graph: tracking and waves', () => {
 		const side = atom(0)
 		const disposers: Array<() => void> = []
 		let topNotified = 0
-		let prev: ReactiveNode = makeGraphComputed(() => readAtom(base) + readAtom(side))
+		let prev: ProducerNode = makeGraphComputed(() => readAtom(base) + readAtom(side))
 		disposers.push(observeNode(prev, () => {}))
 		readComputed(prev as ComputedNode<number>)
 		for (let i = 0; i < DEPTH; i++) {

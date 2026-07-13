@@ -58,7 +58,7 @@ import {
 	makeScheduledEffect,
 	observeNode,
 	type Link,
-	type ReactiveNode,
+	type ProducerNode,
 	type ScheduledEffect,
 } from '../graph.ts'
 import {
@@ -118,7 +118,7 @@ function forceReducer(count: number): number {
 	return count + 1
 }
 
-function signalEffectValue(node: ReactiveNode, world: World): unknown {
+function signalEffectValue(node: ProducerNode, world: World): unknown {
 	const state = resolveState(node, world)
 	if (activeWorldSourceConsumer !== null && (node.flags & Flag.KindComputed) !== 0) {
 		trackWorldSources(node, world)
@@ -187,10 +187,10 @@ function requireScope(hook: string): SignalScope {
 	return scope
 }
 
-const lastDelivered = new WeakMap<ReactiveNode, unknown>()
+const lastDelivered = new WeakMap<ProducerNode, unknown>()
 const NEVER = Symbol('never-delivered')
 
-function traceDelivery(node: ReactiveNode, value: unknown): void {
+function traceDelivery(node: ProducerNode, value: unknown): void {
 	const prev = lastDelivered.has(node) ? lastDelivered.get(node) : NEVER
 	if (prev !== value) {
 		lastDelivered.set(node, value)

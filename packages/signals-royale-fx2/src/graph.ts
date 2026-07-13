@@ -148,7 +148,7 @@ export type Flags = Brand<number, 'Flags'>
  * and, while the subscriber is watched, the dependency's subscriber list
  * (prevSub/nextSub). */
 export interface Link {
-	dep: ReactiveNode
+	dep: ProducerNode
 	sub: ConsumerNode
 	nextDep: Link | undefined
 	prevSub: Link | undefined
@@ -161,10 +161,18 @@ export interface Link {
 	evalPass: EvalPass
 }
 
-/** State every graph node carries, whatever its kind (atom, computed, or
- * watcher). */
+/** State every graph node carries, whether it produces values, consumes
+ * dependencies, or does both. */
 export interface ReactiveNode {
 	flags: Flags
+	/** Tracing: the event that caused the latest invalidation to reach
+	 * this node. */
+	causeEvent: TraceEventId
+	label: string | undefined
+}
+
+/** State carried only by value producers: atoms and computeds. */
+export interface ProducerNode extends ReactiveNode {
 	/**
 	 * The clock reading at this node's last value-changing atom write or real
 	 * computed-value change. A recompute that produced an equal value does
@@ -182,10 +190,9 @@ export interface ReactiveNode {
 	/**
 	 * The object backing the async flags: the ErrorBox to rethrow
 	 * (AsyncError) or the Suspension being awaited (AsyncSuspended); null
-	 * when the node holds a plain value. Present on every node kind so all
-	 * nodes share one object shape — atoms never set the async bits but
-	 * are read through the same { flags, value, throwable } protocol
-	 * (ResolvedState, asyncs.ts).
+	 * when the node holds a plain value. Atoms never set the async bits, but
+	 * atoms and computeds share the same { flags, value, throwable }
+	 * ResolvedState protocol.
 	 */
 	throwable: ErrorBox | Suspension | null
 	/** Subscriber list: watched consumers and store subscriptions. */
@@ -194,10 +201,6 @@ export interface ReactiveNode {
 	/** Number of observers: watched consumer edges, effects, and React
 	 * subscriptions. */
 	observerCount: number
-	/** Tracing: the event that caused the latest invalidation to reach
-	 * this node. */
-	causeEvent: TraceEventId
-	label: string | undefined
 	/** Per-world resolution memos, managed by worlds.ts; undefined while
 	 * no transition drafts are live. */
 	worldMemos: Map<string, unknown> | undefined
@@ -282,7 +285,7 @@ export function setCurrentCause(id: TraceEventId): TraceEventId {
 const UNINITIALIZED = Symbol('uninitialized')
 
 /** A writable value node — the engine side of an atom. */
-export interface AtomNode<T> extends ReactiveNode {
+export interface AtomNode<T> extends ProducerNode {
 	value: T | typeof UNINITIALIZED
 	initializer: (() => T) | undefined
 	equals: EqualsFn<T>
@@ -294,7 +297,7 @@ export interface AtomNode<T> extends ReactiveNode {
 }
 
 /** A cached computed-value node — the engine side of a computed. */
-export interface ComputedNode<T> extends ConsumerNode {
+export interface ComputedNode<T> extends ProducerNode, ConsumerNode {
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
@@ -394,7 +397,7 @@ function unlinkFromSubs(link: Link): void {
  * marks rely on: for every watched edge, a stale dependency implies a
  * stale or scheduled subscriber.
  */
-export function addObserver(node: ReactiveNode): void {
+export function addObserver(node: ProducerNode): void {
 	node.observerCount++
 	if (node.observerCount === 1) {
 		node.flags |= Flag.Watched
@@ -441,7 +444,7 @@ export function addObserver(node: ReactiveNode): void {
  * dependencies. No staleness needs to be seeded here; the promote path
  * re-validates whenever the node becomes watched again.
  */
-export function removeObserver(node: ReactiveNode): void {
+export function removeObserver(node: ProducerNode): void {
 	node.observerCount--
 	if (node.observerCount === 0) {
 		node.flags &= ~Flag.Watched
@@ -479,7 +482,7 @@ let lifetimeFlushScheduled = false
 
 /** Called whenever an atom's observer count crosses zero in either
  * direction. */
-function noteLifetimeTransition(node: ReactiveNode): void {
+function noteLifetimeTransition(node: ProducerNode): void {
 	if ((node.flags & Flag.KindAtom) === 0) {
 		return
 	}
@@ -528,7 +531,7 @@ export function flushLifetimeTransitions(): void {
  * dependency list is reused in place: depsTail is a cursor that advances
  * as the evaluation re-reads dependencies in the same order as last time,
  * so a stable evaluation allocates nothing. */
-function trackRead(dep: ReactiveNode, sub: ConsumerNode): Link {
+function trackRead(dep: ProducerNode, sub: ConsumerNode): Link {
 	const tail = sub.depsTail
 	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
 		return tail
@@ -578,7 +581,7 @@ function trackRead(dep: ReactiveNode, sub: ConsumerNode): Link {
 /** Link a world-resolved read to the watcher currently collecting
  * dependencies. World evaluation itself runs untracked, so only an
  * explicit watcher run reaches this path. */
-export function trackWorldRead(node: ReactiveNode): void {
+export function trackWorldRead(node: ProducerNode): void {
 	const consumer = activeConsumer
 	if (
 		consumer !== null &&
@@ -590,7 +593,7 @@ export function trackWorldRead(node: ReactiveNode): void {
 
 /** Link one flattened draft-world certificate source to the auxiliary
  * wake-only watcher of the scheduled effect currently running. */
-export function trackWorldSource(node: ReactiveNode): void {
+export function trackWorldSource(node: ProducerNode): void {
 	const consumer = activeWorldSourceConsumer
 	if (consumer !== null && (consumer.flags & Flag.Watched) !== 0) {
 		trackRead(node, consumer)
@@ -635,14 +638,14 @@ let effectCount = 0
  * its own buffer while entries scheduled during delivery land in the
  * spare, so an iteration never sees entries added mid-delivery. Same
  * retained-capacity treatment as effectQueue. */
-let renderNotifyQueue: Array<ReactiveNode | undefined> = []
+let renderNotifyQueue: Array<WatcherNode | undefined> = []
 let renderNotifyCount = 0
 /** Spare render-notify buffer; null while a draining flush has it
  * checked out. Delivery can nest (an onNotify callback may write, and that
  * write's flush drains the buffer the outer flush is filling), and a
  * doubly-nested flush must not reuse a buffer that is mid-iteration — it
  * allocates a fresh one instead. */
-let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
+let spareRenderNotify: Array<WatcherNode | undefined> | null = []
 
 /** Route a watcher into its flush queue by capability bit. */
 function scheduleWatcher(w: WatcherNode): void {
@@ -740,7 +743,7 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 			if ((flags & Flag.Watching) !== 0) {
 				scheduleWatcher(sub as WatcherNode)
 			} else if ((flags & Flag.KindComputed) !== 0) {
-				const subSubs = sub.subs
+				const subSubs = (sub as ComputedNode<unknown>).subs
 				if (subSubs !== undefined) {
 					cur = subSubs
 					if (cur.nextSub !== undefined) {
@@ -805,10 +808,10 @@ let pokePass: PokePass = 0
  * draft id.
  */
 export function pokeDraftWatchers(
-	node: ReactiveNode,
+	node: ProducerNode,
 	cause: TraceEventId,
 	wake?: DraftId,
-	valueChanged?: (node: ReactiveNode) => boolean,
+	valueChanged?: (node: ProducerNode) => boolean,
 ): void {
 	const pass = ++pokePass
 	let wakes: WatcherNode[] | null = null
@@ -846,9 +849,9 @@ export function pokeDraftWatchers(
 						}
 					}
 				} else if ((flags & Flag.KindComputed) !== 0) {
-					const subSubs = sub.subs
+					const subSubs = (sub as ComputedNode<unknown>).subs
 					if (subSubs !== undefined) {
-						const subChanged = valueChanged?.(sub) ?? true
+						const subChanged = valueChanged?.(sub as ComputedNode<unknown>) ?? true
 						cur = subSubs
 						if (cur.nextSub !== undefined) {
 							stack = { value: next, changed: subChanged, prev: stack }
@@ -1007,14 +1010,14 @@ export function flush(): void {
 			spareRenderNotify = null
 			renderNotifyCount = 0
 			for (let i = 0; i < n; i++) {
-				const w = delivering[i] as WatcherNode
+				const w = delivering[i]!
 				// Render-notify watchers are never validated, so Scheduled and
 				// the staleness bits can clear together in one store.
 				w.flags &= ~(Flag.Scheduled | Flag.StaleMask)
 			}
 			try {
 				for (let i = 0; i < n; i++) {
-					const w = delivering[i] as WatcherNode
+					const w = delivering[i]!
 					if ((w.flags & Flag.Watched) !== 0) {
 						w.onNotify!()
 					}
@@ -1253,7 +1256,7 @@ function chainResolve(start: ComputedNode<unknown>, first: Link): void {
 	let depth = base
 	let node = start
 	let link = first
-	let dep: ReactiveNode
+	let dep: ProducerNode
 	try {
 		while (true) {
 			chainNodes[depth++] = node
@@ -1424,14 +1427,9 @@ function makeWatcher(
 		// it drops at dispose. Capability bits are fixed at creation and
 		// route scheduling for the watcher's whole life.
 		flags: Flag.Watching | Flag.Watched | capabilities,
-		changedAtGraphChange: 0,
 		validAtGraphChange: 0,
-		throwable: null,
-		subs: undefined,
-		subsTail: undefined,
 		deps: undefined,
 		depsTail: undefined,
-		observerCount: 0,
 		causeEvent: NO_EVENT,
 		label: undefined,
 		fn,
@@ -1439,7 +1437,6 @@ function makeWatcher(
 		children: undefined,
 		onNotify: undefined,
 		onDraftWake: undefined,
-		worldMemos: undefined,
 		pokePass: 0,
 	}
 }
@@ -1748,7 +1745,7 @@ export function makeScope(fn: () => void): () => void {
  * (isPending, committed views) that install none.
  */
 export function observeNode(
-	node: ReactiveNode,
+	node: ProducerNode,
 	notify: () => void,
 	draftWake?: (id: DraftId) => void,
 ): () => void {

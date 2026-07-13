@@ -18,7 +18,7 @@ import {
 	type Flags,
 	type GraphChangeClock,
 	type Link,
-	type ReactiveNode,
+	type ProducerNode,
 	type TraceEventId,
 	type UseFn,
 	Flag,
@@ -289,8 +289,8 @@ export function createComputed<T>(
 }
 
 /** @internal Resolve a handle to its engine node. */
-export function nodeOf(x: Signal<any>): ReactiveNode {
-	const node = x as unknown as ReactiveNode
+export function nodeOf(x: Signal<any>): ProducerNode {
+	const node = x as unknown as ProducerNode
 	if ((node.flags & (Flag.KindAtom | Flag.KindComputed)) !== 0) {
 		return node
 	}
@@ -394,7 +394,7 @@ export function committed<T>(x: Signal<T>, container?: object): T {
 /** Committed-view snapshot with stable identity, used by the React
  * bindings' useCommitted: the value, or the ErrorBox itself — identity-
  * stable for the whole error span — whose error the caller rethrows. */
-export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
+export function committedSnapshot(node: ProducerNode, container: object | undefined): unknown {
 	const st = resolveState(node, committedWorldOf(container))
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		return st.throwable
@@ -413,7 +413,7 @@ export function isPending(x: Signal<any>): boolean {
 /** Node-level pendingness probe, also used by the React bindings'
  * useIsPending. `world` scopes the suspended-memo check; null means
  * ambient. */
-export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
+export function isPendingPassive(node: ProducerNode, world: World | null): boolean {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.KindAtom) !== 0) {
 		return atomHasDraftIntents(node as AtomNode<unknown>)
