@@ -7,8 +7,8 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Drain settled thenable sets without snapshot arrays while preserving clear-before-observable-work and thrown-flush cleanup.
 - Remove internal `untracked(() => ...)` adapters. Start with the remaining draft-evaluator `untracked(() => withWorld(...))` boundary, but only if direct world ownership restores both ambient contexts correctly.
+- Restore `currentCause` and decide suspension release when `endBatch` notification throws, while preserving the original thrown error; keep this separate from thenable settlement ownership.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
 - Converge Atom and Computed construction only with retained-allocation and V8 pretenuring parity.
 - Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
@@ -17,7 +17,6 @@ condition still leaves a useful direction.
 - Remove `pokeRebasedAtom`'s temporary Set only with dense-draft controls.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
-- Delete the private one-caller `isErrorBox` guard so the private class identity is the sole brand, with brand/error/value controls.
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
@@ -27,9 +26,9 @@ condition still leaves a useful direction.
 - Move `draftRevisionByAtom` into `RebaseLog`; retry the exact Round 48 model only under a stable control window.
 - Replace internal ambient-state getters with ESM live bindings; retry the exact Round 50 three-getter diff under a stable control window.
 - Let React own scheduled-effect versions; retry only with the Round 42 write/rerender controls.
-- Drain settled thenable membership directly; reuse the Round 39 mechanism only with a stable construction control.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
+- Delete the private one-caller `isErrorBox` guard; retry the exact Round 64 diff only after a natural compiler/runtime/layout change and keep its committed error/value, base error/value, and direct-brand controls.
 
 ## Completed or deliberately closed
 
@@ -47,6 +46,7 @@ condition still leaves a useful direction.
 - Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
 - Private `ErrorBox` class identity owns error branding; the duplicate `WeakSet`, factory, and accidental public type/guard exports are gone.
 - Computed pendingness traverses current dependencies and early-exits through canonical atom rebase logs; it no longer constructs an exact draft-id list for a boolean answer, while atoms retain their direct fast path.
+- Thenable membership sets exist only while pending; settlement detaches and traverses them directly, terminal boxes retain no collections, and the first terminal callback wins.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
 - Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
