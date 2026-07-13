@@ -951,12 +951,12 @@ function draftEvaluate(
 ): ResolvedState {
 	// Reuse the previous pending span's suspension: Suspense retries must
 	// observe one stable thenable per span.
-	const suspension =
+	let suspension =
 		prev !== undefined &&
 		(prev.flags & Flag.AsyncSuspended) !== 0 &&
 		!(prev.throwable as Suspension).settled
 			? (prev.throwable as Suspension)
-			: makeSuspension()
+			: null
 	const worldUse = (t: PromiseLike<unknown>): unknown => {
 		const box = trackThenable(t)
 		if (box.status === 'fulfilled') {
@@ -965,6 +965,7 @@ function draftEvaluate(
 		if (box.status === 'rejected') {
 			throw box.reason
 		}
+		suspension ??= makeSuspension()
 		box.parkedSuspensions.add(suspension)
 		throw WORLD_PARKED
 	}
@@ -984,7 +985,7 @@ function draftEvaluate(
 		if (e === WORLD_PARKED) {
 			// The node's base value doubles as the stale value to serve; the
 			// uninitialized sentinel means there is none yet.
-			return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension }
+			return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension! }
 		}
 		if (
 			prev !== undefined &&

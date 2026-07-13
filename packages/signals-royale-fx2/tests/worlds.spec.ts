@@ -667,6 +667,36 @@ describe('computeds across worlds', () => {
 		discardDraft(draft.id)
 	})
 
+	test('a world suspension is stable for one pending span and fresh for the next', async () => {
+		const firstGate = deferred<number>()
+		const secondGate = deferred<number>()
+		const phase = createAtom(0)
+		let runs = 0
+		const c = createComputed((use) => {
+			runs++
+			return use(phase.get() === 0 ? firstGate.promise : secondGate.promise)
+		})
+		const draft = openDraft()
+		const first = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(first.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+
+		runWithDraftWrites(draft, () => phase.set(0))
+		const retry = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(runs).toBe(2)
+		expect(retry).toBe(first)
+		expect(retry.throwable).toBe(first.throwable)
+
+		firstGate.resolve(7)
+		await tick()
+		expect(stateIn(c, [draft.id])).toEqual(valueState(7))
+
+		runWithDraftWrites(draft, () => phase.set(1))
+		const next = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(next.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(next.throwable).not.toBe(first.throwable)
+		discardDraft(draft.id)
+	})
+
 	test('isPending flips for drafted atoms and computeds over them', () => {
 		const a = createAtom(1)
 		const c = createComputed(() => a.get() * 2)
