@@ -29,11 +29,21 @@ if (process.argv[2] === undefined) {
 	process.stdout.write('scenario,contender,stat,ms\n')
 	for (const scenario of scenarios) {
 		for (const contender of contenders) {
-			const r = spawnSync(process.execPath, [join(HERE, 'react-bench.mjs'), scenario, contender], {
-				encoding: 'utf8',
-				stdio: ['ignore', 'pipe', 'inherit'],
-				timeout: 180000,
-			})
+			const r = spawnSync(
+				process.execPath,
+				['--experimental-transform-types', join(HERE, 'react-bench.mjs'), scenario, contender],
+				{
+					encoding: 'utf8',
+					stdio: ['ignore', 'pipe', 'inherit'],
+					timeout: 180000,
+				},
+			)
+			if (r.error !== undefined) {
+				throw r.error
+			}
+			if (r.status !== 0) {
+				process.exit(r.status ?? 1)
+			}
 			process.stdout.write(r.stdout ?? '')
 		}
 	}

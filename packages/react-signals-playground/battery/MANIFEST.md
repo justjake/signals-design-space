@@ -120,7 +120,7 @@ firing order (EF4).
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
 | RCC-UM1.rebase | +10 transition and +1 urgent dispatched in one task: urgent commits alone first, final = 11, committed sequence never shows 10 (sources: R-lab rebase, daishi-6) | same-task dispatch | all pass | count text trace | implemented |
-| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | first four pass · **royale-fx2 FINDING:** throws after mutating the atom | render-write probe, error boundary | implemented |
+| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | all pass | render-write probe, error boundary | implemented |
 | RCC-UM3 | tolerance: React's same-component setState-in-render pattern is not extended to library state; battery never exercises a render-phase library write channel | — | — | — | doc: tolerance |
 | RCC-UM4.replay | interrupted/replayed renders are idempotent: interruption burst produces exact arithmetic, no duplicate resource creations per epoch | during DAISHI-5 + SU1 | all pass | fetch counters | implemented (asserted inside DAISHI-5 / RCC-SU1) |
 
@@ -217,15 +217,15 @@ stronger than the original on purpose, noted here for comparability.
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
 | DAISHI-1 | no tearing finally on update (transition): 5 transition increments over the mounted lattice → all readers settle at exactly 5 | transition increments | all pass | lattice | implemented |
-| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | first four pass · **royale-fx2 FINDING:** torn passive commits during mount | lattice, auto-inc, dual latch | implemented |
+| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | all pass | lattice, auto-inc, dual latch | implemented |
 | DAISHI-3 | no tearing temporarily on update: per-commit latch stays clean through the increment burst | transition increments | all pass | lattice latch | implemented |
-| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | first four pass · **royale-fx2 FINDING** (shares DAISHI-2) | lattice latch | implemented |
+| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | all pass | lattice latch | implemented |
 | DAISHI-5 | can interrupt render: avg click-to-return < 300ms with 20ms×20 reader work | lattice work 20ms | all pass | in-page timestamps | implemented |
 | DAISHI-6 | can branch state (wip): settle at 1; two pending transition +1s; while pending readers still show 1; urgent double → 2 everywhere; settle → 6 | transition +1 button, double button | all pass | lattice, count trace | implemented |
 | DAISHI-7 | useDeferredValue: no tearing finally on update (urgent increments, deferred readers) | deferred lattice | all pass | deferred lattice | implemented |
-| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | first four pass · **royale-fx2 FINDING:** torn passive commits during mount | deferred lattice | implemented |
+| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | all pass | deferred lattice | implemented |
 | DAISHI-9 | useDeferredValue: no tearing temporarily on update | deferred lattice | all pass | deferred latch | implemented |
-| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | first four pass · **royale-fx2 FINDING** (shares DAISHI-8) | deferred latch | implemented |
+| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | all pass | deferred latch | implemented |
 
 ## M. Session-finding regression pins (7 rows)
 

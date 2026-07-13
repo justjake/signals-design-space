@@ -60,24 +60,6 @@ const TABLE: Record<string, PerImpl> = {
 	// RCC-UM2.render-write: solid-react accepted render-phase writes
 	// silently; fixed 2026-07-08 (bridge rejects writes while React render
 	// is on the callstack).
-	'RCC-UM2.render-write': {
-		'royale-fx2': {
-			kind: 'finding',
-			note: 'throws during render, but the shared atom is mutated before the guard rejects the write',
-		},
-	},
-	'DAISHI-2': {
-		'royale-fx2': {
-			kind: 'finding',
-			note: 'readers mounted during urgent interval writes can paint values from different commits',
-		},
-	},
-	'DAISHI-8': {
-		'royale-fx2': {
-			kind: 'finding',
-			note: 'deferred readers mounted during urgent interval writes can paint values from different commits',
-		},
-	},
 	'FIND-ALTB-WEDGE.filter': {
 		'alt-b': {
 			kind: 'finding',

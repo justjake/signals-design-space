@@ -24,11 +24,10 @@
  *   it something different from what it rendered (resolutionDiffers in
  *   host.ts). Deduped per render window (see `repairPending`).
  *
- * Subscriptions attach in a passive effect, at commit time. The gap
- * between rendering and attaching — hydration's first commit is just the
- * widest such gap — is closed by correctSubscription, which replays
- * missed drafts and compares the rendered resolution against current
- * state.
+ * Subscriptions attach in a layout effect, at commit time. The gap between
+ * rendering and attaching — hydration's first commit is just the widest
+ * such gap — is closed before paint by correctSubscription, which replays
+ * missed drafts and compares the rendered resolution against current state.
  */
 import type * as React from 'react'
 import {
@@ -39,6 +38,7 @@ import {
 	useMemo,
 	useReducer,
 	useRef,
+	useSyncExternalStore,
 } from 'react'
 import {
 	committedSnapshot,
@@ -58,12 +58,14 @@ import {
 	activeWorldSourceConsumer,
 	makeScheduledEffect,
 	observeNode,
+	type GraphChangeClock,
 	type Link,
 	type ProducerNode,
 	type ScheduledEffect,
 } from '../graph.ts'
 import {
 	committedWorldOf,
+	BASE_WORLD,
 	resolveState,
 	trackWorldSources,
 	withWorld,
@@ -102,6 +104,9 @@ interface UseValueState {
 	 * their values and keeps live appends from double-dispatching repairs. */
 	committed: RenderedResolution
 }
+
+const NOOP = (): void => {}
+const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
 interface SignalEffectState {
 	effect: ScheduledEffect | null
@@ -256,6 +261,13 @@ export function useValue<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const connection = requireRootConnection('useValue')
 	const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
+	const baseSnapshot = useCallback((): GraphChangeClock => {
+		resolveState(node, BASE_WORLD)
+		return node.changedAtGraphChange
+	}, [node])
+	// This subscription's only job is React's pre-commit snapshot check.
+	// The engine watcher below owns notifications and transition scheduling.
+	useSyncExternalStore(NO_STORE_SUBSCRIPTION, baseSnapshot, baseSnapshot)
 	noteHookRender(connection, hookWorld.ids)
 	const ids = renderPassIds(connection) ?? hookWorld.ids
 	// One record per hook owns the delivery/repair protocol. Initialize it
@@ -317,9 +329,9 @@ export function useValue<T>(x: Signal<T>): T {
 		state.repairPending = true
 		wake(REPAIR_WAKE)
 	}, [node, connection, state, wake])
-	// Subscribe in a passive effect, at commit time; correctSubscription
-	// closes the gap between rendering and the subscription attaching.
-	useEffect(() => {
+	// Subscribe in a layout effect so correctSubscription repairs a value
+	// that changed during a time-sliced mount before the frame can paint.
+	useLayoutEffect(() => {
 		const off = observeNode(node, onNotify, deliver)
 		if (state.rendered.live) {
 			correctSubscription(node, state.rendered, connection, deliver, wake)

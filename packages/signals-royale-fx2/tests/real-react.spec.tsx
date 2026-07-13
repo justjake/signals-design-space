@@ -534,6 +534,30 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 })
 
 describe('scenario 10 — write-during-render fails loudly', () => {
+	test('set() before the component calls a hook throws without mutating', async () => {
+		const a = createAtom(0)
+		class Boundary extends React.Component<React.PropsWithChildren, { rejected: boolean }> {
+			override state = { rejected: false }
+			static getDerivedStateFromError() {
+				return { rejected: true }
+			}
+			override render() {
+				return this.state.rejected ? <span>rejected</span> : this.props.children
+			}
+		}
+		function Bad() {
+			a.set(1)
+			return null
+		}
+		const { container } = await h.mount(
+			<Boundary>
+				<Bad />
+			</Boundary>,
+		)
+		expect(text(container)).toBe('rejected')
+		expect(read(a)).toBe(0)
+	})
+
 	test('set() from a component body throws synchronously', async () => {
 		const a = createAtom(0)
 		let thrown: unknown

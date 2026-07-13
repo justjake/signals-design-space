@@ -85,7 +85,7 @@ const hostedDrafts = new Map<DraftId, HostedDraft>()
 let handle: ReactSignalsHandle | null = null
 
 interface SharedInternals {
-	H?: object | null
+	H?: { useEffect?: unknown; useState?: unknown } | null
 	T?: object | null
 }
 
@@ -96,33 +96,30 @@ function sharedInternals(): SharedInternals {
 	return secret ?? {}
 }
 
-/** Hook dispatchers observed during renders. React exposes its current
- * hooks dispatcher in the internals object's H slot, but H is non-null
- * even between renders (React parks a context-only dispatcher there), so
- * "H is set" alone cannot detect rendering. Instead, dispatchers are
- * captured while one of our hooks is executing — which only happens
- * inside a component body — and membership in this set identifies a live
- * component render. Dispatchers are per-React-build singletons, so one
- * capture covers every later render. */
-const renderDispatchers = new WeakSet<object>()
-
-/** Record "we are rendering under this dispatcher" — called from every
- * connection and hook render. */
-function captureRenderDispatcher(): void {
-	const H = sharedInternals().H
-	if (H != null) {
-		renderDispatchers.add(H)
-	}
-}
-
-/** True while React is executing a component render on this thread. */
+/** React parks a context-only dispatcher between renders. All of its hooks
+ * point to the same invalid-hook function; live render dispatchers install
+ * distinct implementations. This detects a render before the component
+ * calls its first hook, which is required to reject an immediate signal
+ * write without letting it mutate state first. */
 function isRendering(): boolean {
 	const H = sharedInternals().H
-	return H != null && renderDispatchers.has(H)
+	return H != null && H.useState !== H.useEffect
 }
 
+let rejectedRenderWrite = false
+
 function renderWriteGuard(): void {
-	if (isRendering()) {
+	if (isRendering() || rejectedRenderWrite) {
+		if (!rejectedRenderWrite) {
+			// React may call the component again outside its render dispatcher
+			// while it builds the error stack. Keep rejecting writes through that
+			// synchronous diagnostic replay so it cannot perform the mutation the
+			// real render rejected.
+			rejectedRenderWrite = true
+			queueMicrotask(() => {
+				rejectedRenderWrite = false
+			})
+		}
 		const error = new Error(
 			'signals-royale-fx2: state was written during a React render. ' +
 				'Render must be pure; move the write into an event handler or effect.',
@@ -199,7 +196,6 @@ function armNoteExpiry(mine: RenderWorldNote): void {
  * a null note already means base state to every consumer, and steady-
  * state renders stay allocation-free. */
 export function noteRenderWorld(connection: ReactRootConnection, ids: readonly DraftId[]): void {
-	captureRenderDispatcher()
 	if (ids.length === 0) {
 		note = null
 		return
@@ -220,7 +216,6 @@ export function noteHookRender(
 	connection: ReactRootConnection | null,
 	ids: readonly DraftId[] | null,
 ): void {
-	captureRenderDispatcher()
 	if (note !== null && note.connection !== connection) {
 		note = null
 	}
@@ -561,6 +556,7 @@ export function resetReactSignalsForTest(): void {
 	rootConnections.clear()
 	hostedDrafts.clear()
 	note = null
+	rejectedRenderWrite = false
 	if (wasRegistered) {
 		// resetEngineForTest cleared the engine hooks; re-arm them.
 		setAmbientClassifier(ambientClassifier)
