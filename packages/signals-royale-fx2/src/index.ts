@@ -51,7 +51,6 @@ import {
 	type ResolvedState,
 	type Suspension,
 	baseUse,
-	isErrorBox,
 } from './asyncs.ts'
 import {
 	type Draft,
@@ -641,10 +640,9 @@ export function resetEngineForTest(): void {
 	getActiveTracer()?.stop()
 }
 
-export type { ResolvedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
+export type { ResolvedState, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
 /** For consumers reading ResolvedState views directly: the Flag bit
  * constants (test async bits via Flag.AsyncMask/AsyncError/
- * AsyncSuspended), the error-box identity check, and the uninitialized
- * sentinel test. */
-export { Flag, isErrorBox, isUninitialized }
+ * AsyncSuspended) and the uninitialized sentinel test. */
+export { Flag, isUninitialized }
 export { BASE_WORLD }

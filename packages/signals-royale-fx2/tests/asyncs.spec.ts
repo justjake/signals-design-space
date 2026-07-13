@@ -1,7 +1,16 @@
 /** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from 'vitest'
-import { createAtom, createComputed, effect, isPending, latest, read } from '../src/index.ts'
-import { makeSuspension, trackThenable } from '../src/asyncs.ts'
+import {
+	committedSnapshot,
+	createAtom,
+	createComputed,
+	effect,
+	isPending,
+	latest,
+	nodeOf,
+	read,
+} from '../src/index.ts'
+import { isErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -133,6 +142,31 @@ describe('pending as graph state', () => {
 })
 
 describe('errors are reference-stable boxes', () => {
+	test('only engine error boxes are recognized through value snapshots', () => {
+		const source = createAtom(0)
+		const boom = new Error('boxed')
+		const failure = createComputed(() => {
+			source.get()
+			throw boom
+		})
+		try {
+			read(failure)
+		} catch {}
+		const first = committedSnapshot(nodeOf(failure), undefined)
+		expect(isErrorBox(first)).toBe(true)
+
+		source.set(1)
+		try {
+			read(failure)
+		} catch {}
+		expect(committedSnapshot(nodeOf(failure), undefined)).toBe(first)
+
+		const value = createComputed(() => ({ error: boom }))
+		const spoof = committedSnapshot(nodeOf(value), undefined)
+		expect(spoof).toEqual({ error: boom })
+		expect(isErrorBox(spoof)).toBe(false)
+	})
+
 	test('a rejected thenable rethrows the same reason at every read site', async () => {
 		const gate = deferred<never>()
 		const boom = new Error('boom')

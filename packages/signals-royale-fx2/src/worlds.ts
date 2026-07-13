@@ -86,9 +86,8 @@ import {
 } from './graph.ts'
 import {
 	type ResolvedState,
-	type ErrorBox,
+	ErrorBox,
 	type Suspension,
-	makeErrorBox,
 	makeSuspension,
 	setOnSettlement,
 	trackThenable,
@@ -992,7 +991,7 @@ function draftEvaluate(
 		) {
 			return prev
 		}
-		return { flags: Flag.AsyncError, value: node.value, throwable: makeErrorBox(e) }
+		return { flags: Flag.AsyncError, value: node.value, throwable: new ErrorBox(e) }
 	} finally {
 		clearInactiveCertificateEntries(certificate, previousCertificateCount)
 		activeCertificate = prevCertificate

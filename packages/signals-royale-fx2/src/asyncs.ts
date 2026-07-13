@@ -63,24 +63,14 @@ export interface Suspension {
 }
 
 /** A thrown error, boxed so an erroring evaluation has one stable result
- * object to compare and rethrow (see the header on stability). */
-export interface ErrorBox {
-	error: unknown
-}
-
-/** Every ErrorBox ever made, so code that receives a box through a value
- * channel (committedSnapshot hands boxes to callers) can tell it apart
- * from a user value without adding a marker property to the box. */
-const errorBoxes = new WeakSet<object>()
-
-export function makeErrorBox(error: unknown): ErrorBox {
-	const box: ErrorBox = { error }
-	errorBoxes.add(box)
-	return box
+ * object to compare and rethrow (see the header on stability). The class
+ * identity distinguishes engine errors from error-shaped user values. */
+export class ErrorBox {
+	constructor(public error: unknown) {}
 }
 
 export function isErrorBox(v: unknown): v is ErrorBox {
-	return typeof v === 'object' && v !== null && errorBoxes.has(v)
+	return v instanceof ErrorBox
 }
 
 /**
@@ -256,7 +246,7 @@ export function finishCompute(
 		const sameError =
 			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
 		if (!sameError) {
-			node.throwable = makeErrorBox(error)
+			node.throwable = new ErrorBox(error)
 		}
 		node.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncError
 		return !sameError

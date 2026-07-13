@@ -44,7 +44,6 @@ import {
 	committedSnapshot,
 	createAtom,
 	createComputed,
-	isErrorBox,
 	isPendingPassive,
 	isUninitialized,
 	nodeOf,
@@ -52,6 +51,7 @@ import {
 	type AtomOptions,
 	type Signal,
 } from '../index.ts'
+import { isErrorBox, type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
 	Flag,
 	NO_EVENT,
@@ -74,7 +74,6 @@ import {
 	type DraftId,
 	type World,
 } from '../worlds.ts'
-import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import { getActiveTracer } from '../tracer.ts'
 import {
 	correctSubscription,

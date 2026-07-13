@@ -628,17 +628,16 @@ interface ResolvedState {
   `isPendingPassive` all read the protocol: value → `value`; error → throw
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
-- The `Envelope` type export is gone; `ResolvedState`, `ErrorBox`,
-  `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
-  `isUninitialized` are the replacement protocol exports. No alias
-  survives — one name per concept, and every importer (worlds, index,
-  react hooks/host, tests, the oracle) consumes the new shape directly.
+- The `Envelope` type export is gone. `ResolvedState`, `Suspension`, `Flag`
+  (with `Flag.AsyncMask`), and `isUninitialized` are the replacement
+  protocol exports. `ErrorBox` and `isErrorBox` remain internal because
+  only the engine and React bindings consume error snapshots.
 - `committedSnapshot`'s per-call `{ engineErrorBox }` marker allocation is
   gone (it was also identity-unstable — a fresh object per `getSnapshot`
   call is a useSyncExternalStore hazard): the snapshot returns the ErrorBox
   itself, identity-stable for the whole error span, and `useCommitted`
-  detects it with `isErrorBox` (a WeakSet brand — no shape change to the
-  box, no marker field to collide with user values).
+  detects it with the class identity. The box itself is the brand; there is
+  no parallel registry or marker field.
 
 **What still allocates on reads, honestly:** drafted-world resolutions
 allocate one memo record per (node, world-signature) per clock change
