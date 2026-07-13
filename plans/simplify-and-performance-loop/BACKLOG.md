@@ -15,7 +15,6 @@ condition still leaves a useful direction.
 - Converge pull validation between computed and watcher paths without hiding watcher disposal semantics in a helper.
 - Converge world-key construction without reintroducing deferred string flattening or extra collections.
 - Remove `pokeRebasedAtom`'s temporary Set only with dense-draft controls.
-- Simplify lifetime transitions only if both the common zero-crossing call and flush-time snapshot/closure work disappear coherently.
 - Simplify `ErrorBox` branding without adding a registry or compatibility representation.
 - Add a non-allocating pendingness query only if it is simpler than constructing the complete affected-draft list.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
@@ -48,3 +47,4 @@ condition still leaves a useful direction.
 - Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
+- Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
