@@ -1,4 +1,4 @@
-# battery — browser-real verification of four concurrent-signals implementations
+# battery — browser-real verification of five concurrent-signals implementations
 
 A Playwright battery that drives the playground app in a real Chromium
 against every implementation entry and asserts the React compliance
@@ -12,7 +12,7 @@ instrumentation contract.
 ```sh
 cd packages/react-signals-playground
 npx playwright install chromium   # once per machine: the pinned bundled browser
-pnpm battery                      # full battery: builds, previews, runs all four projects
+pnpm battery                      # full battery: builds, previews, runs all five projects
 pnpm battery --project=alt-b      # one implementation
 pnpm battery -g RCC-RT4           # one manifest row family
 ```
@@ -20,9 +20,9 @@ pnpm battery -g RCC-RT4           # one manifest row family
 - The browser is the **bundled Chromium** pinned by the exact
   `@playwright/test` version in `package.json` — never `channel: 'chrome'` —
   so local runs and CI drive the identical engine.
-- Five projects: one per implementation plus **react-control**, which runs
+- Six projects: one per implementation plus **react-control**, which runs
   only `k1-host-control.spec.ts` against the vanilla-React `/control/` page
-  (same patched React build, no signals engine). Behavior shared by all four
+  (same patched React build, no signals engine). Behavior shared by all five
   implementations is attributed against the control before blaming an engine.
 - The web server is `vite build && vite preview` on port 4599: every run
   verifies a fresh production build, never a checked-in `dist/`. Locally a

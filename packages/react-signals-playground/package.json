@@ -22,6 +22,7 @@
 		"cosignals-alt-a": "workspace:*",
 		"cosignals-alt-b": "workspace:*",
 		"cosignals-react": "workspace:*",
+		"signals-royale-fx2": "workspace:*",
 		"react": "*",
 		"react-dom": "*"
 	},

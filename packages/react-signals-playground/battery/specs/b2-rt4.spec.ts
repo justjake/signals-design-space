@@ -3,8 +3,7 @@
  * is ruled (or discovered) to follow and skips the other with the ruling as
  * the annotation — see the manifest's implementation table for provenance:
  * cosignals → newest (scenario R15); alt-a/alt-b → drafts-hidden
- * (ambient-W0); solid-react → drafts-hidden (discovered: bare accessors
- * resolve committed state; the runWithOwner idiom would resolve newest).
+ * (ambient-W0); solid-react and royale-fx2 → drafts-hidden.
  */
 import { expect, test } from '../fixtures'
 import { applyExpectation } from '../expectations'

@@ -58,7 +58,7 @@ test('RCC-AT3.rejoin: a re-wrapped continuation write commits with the pending b
 	await expect(page.getByTestId('action-post')).toHaveText('1')
 	// …while the re-wrapped one (startSignalTransition in the continuation)
 	// stays with the still-parked deferred work (pinned 2026-07-08 on all
-	// four implementations).
+	// five implementations).
 	await expect(page.getByTestId('action-rejoin')).toHaveText('0')
 	await expect(page.getByTestId('action-sync')).toHaveText('0')
 

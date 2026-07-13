@@ -1,12 +1,11 @@
 /**
- * The battery's view of the four implementations. Segments, labels, and
+ * The battery's view of the five implementations. Segments, labels, and
  * shim names come straight from the app's own implementation table
  * (src/shims/implementations.ts), so a new implementation row automatically
  * becomes a candidate battery project.
  *
  * `holdStyle` is declared here rather than imported: each shim declares its
- * TransitionHoldStyle in its own module (src/shims/{cosignals,alt-a,alt-b,
- * solid-react}.ts), and importing those modules in Node would initialize the
+ * TransitionHoldStyle in its own module, and importing those modules in Node would initialize the
  * engines. The smoke spec verifies this table against the running page
  * (window.__store.holdStyle under ?test=1), so drift fails loudly.
  */
@@ -30,6 +29,7 @@ const HOLD_STYLES: Record<string, HoldStyle> = {
 	'alt-a': 'suspense',
 	'alt-b': 'suspense',
 	'solid-react': 'defer-write',
+	'royale-fx2': 'suspense',
 }
 
 export const ENTRIES: readonly BatteryEntry[] = implementations.map((impl) => {

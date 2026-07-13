@@ -106,7 +106,8 @@ test('FIND-THENABLE.gate: a thrown foreign thenable holds the transition open on
 }, testInfo) => {
 	// History: solid-react's shim documents a commit freeze for thrown
 	// promises, measured against an earlier engine snapshot. Retested
-	// 2026-07-08: the hold works on all four, so this row pins the working
+	// 2026-07-08: the hold works on the original four; royale-fx2 now passes
+	// too, so this row pins the working
 	// behavior — if the freeze ever comes back, this goes red.
 	applyExpectation(test, 'FIND-THENABLE.gate', entry)
 	await gotoApp(page, entry)

@@ -9,10 +9,12 @@
  * - render subscription: useSignal, useComputed
  * - committed-world side effects: useSignalEffect
  * - transitions: startSignalTransition
+ * - root creation: installs any implementation-specific root provider
  * Implementation-specific extras (pending probes, reducer atoms, async
  * actions) stay on the packages' own entrypoints; a page that needs them is
  * no longer implementation-agnostic and should import the package directly.
  */
+import type { ReactNode } from 'react'
 
 /**
  * How an implementation keeps a navigation-style transition open while the
@@ -55,6 +57,12 @@ export interface ConcurrentSignalsShim {
 	 * module init) and before rendering any root. Throws on stock React.
 	 */
 	register(): void
+
+	/** Create a React root with any provider required by this implementation. */
+	createRoot(container: Element): {
+		render(node: ReactNode): void
+		unmount(): void
+	}
 
 	/** A module-level writable signal. */
 	createAtom<T>(initial: T, label?: string): WritableSignal<T>

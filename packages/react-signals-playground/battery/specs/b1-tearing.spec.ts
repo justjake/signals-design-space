@@ -27,8 +27,8 @@ test('RCC-RT1.scope-read: a transition scope reading its own write; ambient read
 	const probe = await page.evaluate(() => window.__store.transitionScopeProbe('storeOnly', 41))
 
 	if (expectation.kind === 'variant') {
-		// solid-react: a bare accessor resolves the committed value even
-		// inside the scope that just staged the write (pinned 2026-07-08).
+		// royale-fx2 hides drafts from bare reads, including reads in the
+		// transition callback that staged the write.
 		expect(probe).toEqual({ inScope: 0, ambient: 0 })
 	} else if (entry.label === 'cosignals') {
 		// RT4-newest family: ambient pre-commit reads include the staged write.

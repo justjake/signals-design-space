@@ -32,6 +32,8 @@ import {
 } from 'concurrent-solid-react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
+export { createRoot } from 'react-dom/client'
+
 export const name = 'concurrent-solid-react'
 
 // Originally measured in the playground's Playwright suite: a foreign

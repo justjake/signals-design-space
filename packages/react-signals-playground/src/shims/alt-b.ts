@@ -22,6 +22,8 @@ import {
 } from 'cosignals-alt-b/react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
+export { createRoot } from 'react-dom/client'
+
 export const name = 'cosignals-alt-b'
 
 // The hold itself works: a thrown promise keeps the transition pending and

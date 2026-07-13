@@ -17,7 +17,7 @@
  */
 import * as React from 'react'
 import { flushSync } from 'react-dom'
-import { createRoot, type Root } from 'react-dom/client'
+import { createRoot } from '#concurrent-signals-shim'
 import {
 	createAtom,
 	name,
@@ -679,7 +679,7 @@ function SecondRootMirror(): React.ReactElement {
 	)
 }
 
-let secondRoot: { root: Root; el: HTMLElement } | null = null
+let secondRoot: { root: ReturnType<typeof createRoot>; el: HTMLElement } | null = null
 
 function mountSecondRoot(): void {
 	if (secondRoot !== null) {

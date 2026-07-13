@@ -35,6 +35,7 @@ const impl: ConcurrentSignalsShim = await entry.load()
 
 export const name = impl.name
 export const register = impl.register
+export const createRoot = impl.createRoot
 export const createAtom = impl.createAtom
 export const createComputed = impl.createComputed
 export const useSignal = impl.useSignal

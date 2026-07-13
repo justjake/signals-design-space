@@ -82,7 +82,7 @@ test('RCC-SU3.interleaved-gates: two held transitions never alias; the joint com
 	await expect(page.getByTestId('count')).toHaveText('0')
 	await expect(page.getByTestId('pair')).toHaveText('0:0')
 
-	// Host fact, pinned 2026-07-08 identically on all four implementations
+	// Host fact, pinned identically on all five implementations
 	// and in BOTH release orders: two component-level suspended transitions
 	// on one root entangle — releasing one gate commits NOTHING until the
 	// other resolves. (Per-node keyed independence — alt-a#7/alt-b#6 —

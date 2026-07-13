@@ -1,6 +1,6 @@
 /**
  * daishi-concurrent-benchmark ports (all 10 levels), driven against the
- * four playground implementations through the shim surface. The lattice is
+ * five playground implementations through the shim surface. The lattice is
  * the testkit port of daishi's counter grid: 20 readers + a per-commit
  * equality latch + a main mirror, with a syncWork knob standing in for
  * syncBlock's ~20ms per component.

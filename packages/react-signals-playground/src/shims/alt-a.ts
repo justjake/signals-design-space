@@ -19,6 +19,8 @@ import {
 } from 'cosignals-alt-a/react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
+export { createRoot } from 'react-dom/client'
+
 export const name = 'cosignals-alt-a'
 
 // Verified in the playground's Playwright suite: a promise thrown from a

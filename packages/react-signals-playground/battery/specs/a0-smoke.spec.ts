@@ -44,7 +44,7 @@ test('META-ISOLATION: only the selected implementation chunk is requested (chunk
 		requested.some((url) => chunkOf(entry.label).test(url)),
 		`no chunk for ${entry.label} in ${requested.filter((u) => /assets|shims/.test(u)).join(', ')}`,
 	).toBe(true)
-	const others = ['cosignals', 'alt-a', 'alt-b', 'solid-react'].filter(
+	const others = ['cosignals', 'alt-a', 'alt-b', 'solid-react', 'royale-fx2'].filter(
 		(label) => label !== entry.label,
 	)
 	for (const other of others) {

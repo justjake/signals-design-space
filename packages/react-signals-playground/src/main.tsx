@@ -6,8 +6,7 @@
  * register() below couples the selected engine to a provider that already
  * exists — before any root renders.
  */
-import { createRoot } from 'react-dom/client'
-import { register } from '#concurrent-signals-shim'
+import { createRoot, register } from '#concurrent-signals-shim'
 import { App } from './App'
 
 register()

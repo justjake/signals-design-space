@@ -49,7 +49,7 @@ export default defineConfig<{ entry: BatteryEntry }>({
 		{
 			// The vanilla-React host-baseline group: drives the /control/ page
 			// (useState + startTransition + Suspense on the same patched React
-			// build, no signals engine), so behavior shared by all four
+			// build, no signals engine), so behavior shared by all five
 			// implementations can be attributed to React or to the engines.
 			name: 'react-control',
 			testMatch: '**/k1-host-control.spec.ts',

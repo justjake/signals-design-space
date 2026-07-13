@@ -1,10 +1,10 @@
 /**
- * The vanilla-React control page: the same patched React build the four
+ * The vanilla-React control page: the same patched React build the five
  * implementation entries run on, but ONLY React state — useState,
  * startTransition, Suspense, thrown promises. No signals engine loads and
  * register() is never called.
  *
- * Purpose: when all four implementations show the same behavior, this page
+ * Purpose: when all five implementations show the same behavior, this page
  * decides whether that behavior is React's own (reproduces here) or an
  * assumption every engine happens to share (does not reproduce here). The
  * battery's k1-host-control spec pins what this page does; entangle-class

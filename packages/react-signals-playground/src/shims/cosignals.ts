@@ -18,6 +18,8 @@ import {
 } from 'cosignals-react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
 
+export { createRoot } from 'react-dom/client'
+
 export const name = 'cosignals'
 
 // Verified in the playground's Playwright suite: a promise thrown from a

@@ -3,7 +3,7 @@
  * vanilla-React /control/ page (useState + startTransition + Suspense on
  * the same patched React build — no signals engine loads).
  *
- * Purpose: behavior observed identically on all four implementations is
+ * Purpose: behavior observed identically on all five implementations is
  * attributed here. If a control row's pinned behavior ever changes, the
  * matching implementation rows (they cite each other) must be re-examined
  * before blaming any engine.

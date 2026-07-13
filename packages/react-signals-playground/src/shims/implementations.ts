@@ -28,6 +28,12 @@ export const implementations: readonly Implementation[] = [
 		name: 'concurrent-solid-react',
 		load: () => import('./solid-react'),
 	},
+	{
+		segment: 'royale-fx2',
+		label: 'royale-fx2',
+		name: 'signals-royale-fx2',
+		load: () => import('./royale-fx2'),
+	},
 ]
 
 /** The entry URL for an implementation; segments map to directory entries served with a trailing slash. */
