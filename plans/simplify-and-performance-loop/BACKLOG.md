@@ -32,7 +32,6 @@ condition still leaves a useful direction.
 - Drain settled thenable membership directly; reuse the Round 39 mechanism only with a stable construction control.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
-- Converge only `useIsPending` on `useSyncExternalStore`; keep `useCommitted`'s lower-latency manual snapshot path, subscribe during layout, and immediately check after attachment to repair the proven render-to-subscribe gap.
 
 ## Completed or deliberately closed
 
@@ -48,3 +47,4 @@ condition still leaves a useful direction.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
 - Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
+- React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
