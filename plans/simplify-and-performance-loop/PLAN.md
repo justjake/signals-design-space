@@ -33,7 +33,7 @@ implementer may be ambitious: package-wide redesigns, object/layout changes,
 concept convergence, renaming, and data-oriented designs are in scope. Bound a
 round by one coherent causal story, not by diff size.
 
-Give it `prompts/implementer.md`, `RESULTS.md`, and applicable review feedback.
+Give it `prompts/implementer.md`, `BACKLOG.md`, `RESULTS.md`, and applicable review feedback.
 Retain its agent handle across rounds and revisions. If Ultra cannot select Sol
 xhigh with the standard/slow tier exactly, stop rather than substitute.
 
