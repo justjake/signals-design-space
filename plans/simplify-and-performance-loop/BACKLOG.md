@@ -7,7 +7,6 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Cache React shared internals once, if React object replacement is not a supported runtime transition.
 - Drain settled thenable sets without snapshot arrays while preserving clear-before-observable-work and thrown-flush cleanup.
 - Remove internal uses of `untracked(() => ...)`; converge on direct graph/world mechanisms that restore every collector correctly.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
@@ -47,3 +46,4 @@ condition still leaves a useful direction.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
 - Orphaned React error channel removed in favor of tracer events.
+- React client-internals container cached once; mutable `H` and `T` fields remain live reads.

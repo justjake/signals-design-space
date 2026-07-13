@@ -90,12 +90,10 @@ interface SharedInternals {
 	T?: object | null
 }
 
-function sharedInternals(): SharedInternals {
-	const secret = (React as unknown as Record<string, unknown>)[
+const reactInternals: SharedInternals =
+	((React as unknown as Record<string, unknown>)[
 		'__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE'
-	]
-	return secret ?? {}
-}
+	] as SharedInternals | undefined) ?? {}
 
 /** React parks a context-only dispatcher between renders. All of its hooks
  * point to the same invalid-hook function; live render dispatchers install
@@ -103,7 +101,7 @@ function sharedInternals(): SharedInternals {
  * calls its first hook, which is required to reject an immediate signal
  * write without letting it mutate state first. */
 function isRendering(): boolean {
-	const H = sharedInternals().H
+	const H = reactInternals.H
 	return H != null && H.useState !== H.useEffect
 }
 
@@ -255,8 +253,7 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
  * frame.
  */
 export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
-	const internals = sharedInternals()
-	if (internals.T != null) {
+	if (reactInternals.T != null) {
 		dispatch(id)
 		return
 	}
@@ -265,12 +262,12 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
 		dispatch(id)
 		return
 	}
-	const prev = internals.T
-	internals.T = owner
+	const prev = reactInternals.T
+	reactInternals.T = owner
 	try {
 		dispatch(id)
 	} finally {
-		internals.T = prev
+		reactInternals.T = prev
 	}
 }
 
@@ -282,17 +279,16 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
  * transition it indicates.
  */
 export function dispatchUrgent(dispatch: () => void): void {
-	const internals = sharedInternals()
-	const prev = internals.T
+	const prev = reactInternals.T
 	if (prev == null) {
 		dispatch()
 		return
 	}
-	internals.T = null
+	reactInternals.T = null
 	try {
 		dispatch()
 	} finally {
-		internals.T = prev
+		reactInternals.T = prev
 	}
 }
 
@@ -391,7 +387,7 @@ export function resolutionDiffers(node: ProducerNode, rendered: RenderedResoluti
 const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
-	const T = sharedInternals().T
+	const T = reactInternals.T
 	if (T == null) {
 		return null
 	}
@@ -424,7 +420,7 @@ export function broadcastDraft(draft: Draft): void {
 	const recipients = new Set(rootConnections)
 	const hosted: HostedDraft = {
 		draft,
-		owner: sharedInternals().T ?? null,
+		owner: reactInternals.T ?? null,
 		recipients,
 		audience: new Set(recipients),
 	}
