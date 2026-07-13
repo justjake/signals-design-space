@@ -10,35 +10,9 @@ import {
 	type ReactiveFramework,
 } from 'reactive-framework-test-suite'
 import adapter from '../royale/harness-adapter.ts'
-import { SignalWriteForbidden } from '../src/graph.ts'
 
 const framework = {
-	name: adapter.name,
-	signal(initialValue) {
-		const signal = adapter.signal(initialValue)
-		return {
-			read: signal.read,
-			write(value) {
-				try {
-					signal.write(value)
-				} catch (error) {
-					if (
-						error instanceof SignalWriteForbidden &&
-						error.message === 'writes inside computeds are forbidden'
-					) {
-						throw new SkipTest('computed writes are disabled by policy')
-					}
-					throw error
-				}
-			},
-		}
-	},
-	computed(fn) {
-		return adapter.computed(fn)
-	},
-	effect(fn) {
-		return adapter.effect(fn)
-	},
+	...adapter,
 	run(fn) {
 		adapter.effectScope(fn)()
 	},
@@ -50,7 +24,6 @@ const framework = {
 			adapter.endBatch()
 		}
 	},
-	untracked: adapter.untracked,
 } satisfies ReactiveFramework
 
 setExpect(expect)
