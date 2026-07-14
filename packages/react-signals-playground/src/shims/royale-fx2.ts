@@ -1,4 +1,5 @@
 /** `signals-royale-fx2` behind the common shim interface. */
+import { useRef } from 'react'
 import { createRoot as createReactRoot } from 'react-dom/client'
 import {
 	createAtom as createRoyaleAtom,
@@ -10,7 +11,7 @@ import {
 	registerReactSignals,
 	startSignalTransition,
 	useComputed,
-	useSignalEffect,
+	useSignalEffect as useRoyaleSignalEffect,
 	useValue,
 	wrapCreateRoot,
 } from 'signals-royale-fx2/react'
@@ -56,4 +57,13 @@ export function useSignal<T>(signal: ReadableSignal<T>): T {
 	return useValue((signal as RoyaleAtom<T> | RoyaleComputed<T>).signal)
 }
 
-export { startSignalTransition, useComputed, useSignalEffect }
+/** The interface's split shape is fx2's native shape. */
+export function useSignalEffect<T>(
+	compute: () => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	deps?: readonly unknown[],
+): void {
+	useRoyaleSignalEffect(compute, handler, deps ?? [])
+}
+
+export { startSignalTransition, useComputed }

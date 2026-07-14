@@ -110,18 +110,30 @@ export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
 	return packageUseComputed<T>(fn, [...deps])
 }
 
-export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
-	const fnRef = React.useRef(fn)
-	fnRef.current = fn
+export function useSignalEffect<T>(
+	compute: () => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	deps?: readonly unknown[],
+): void {
+	const fnRef = React.useRef({ compute, handler })
+	fnRef.current = { compute, handler }
+	const previous = React.useRef<T | undefined>(undefined)
 	// Same construction as the package's own useSignalEffect — a tracked
 	// effect (committed-world reads only; runs held while a transition is
 	// live, released at its commit) inside a disposable root — but keyed on
 	// `deps` so changed React values re-establish tracking, matching the
 	// interface's useEffect-like deps contract (undefined = every render).
+	// The interface's split shape composes on it: the handler runs inside
+	// the tracked body, so reads track exactly as the fused form did.
 	React.useEffect(
 		() =>
 			createRoot((disposeRoot: () => void) => {
-				createTrackedEffect(() => fnRef.current())
+				createTrackedEffect(() => {
+					const value = fnRef.current.compute()
+					const cleanup = fnRef.current.handler(value, previous.current)
+					previous.current = value
+					return cleanup
+				})
 				return disposeRoot
 			}),
 		deps === undefined ? undefined : [...deps],

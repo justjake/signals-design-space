@@ -503,19 +503,28 @@ function StatsPanel(): React.ReactElement {
 
 	// Committed-world side effects: the title and the timeline settle
 	// tracking follow what the user actually sees, so they lag pending
-	// transitions instead of revealing them early.
-	useSignalEffect(() => {
-		document.title = `${name} · ${currentRoute.state}`
-	}, [])
-	useSignalEffect(() => {
-		const settledEpoch = routeEpoch.state // tracked: fires when a navigation commits
-		const record = activeNav.state
-		if (record !== null && record.epoch <= settledEpoch) {
-			closeNavRecord(record, false)
-			activeNav.set(null)
-		}
-		pruneResources(settledEpoch)
-	}, [])
+	// transitions instead of revealing them early. Reads that re-run the
+	// effect live in the compute; the record bookkeeping (reads and writes
+	// alike) is the handler's.
+	useSignalEffect(
+		() => currentRoute.state,
+		(route) => {
+			document.title = `${name} · ${route}`
+		},
+		[],
+	)
+	useSignalEffect(
+		() => routeEpoch.state, // fires when a navigation commits
+		(settledEpoch) => {
+			const record = activeNav.state
+			if (record !== null && record.epoch <= settledEpoch) {
+				closeNavRecord(record, false)
+				activeNav.set(null)
+			}
+			pruneResources(settledEpoch)
+		},
+		[],
+	)
 
 	// A TORN verdict on committed UI is an integrity failure: latch it (the
 	// tile survives the frame that tore) and put it in the error strip.

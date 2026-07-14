@@ -89,11 +89,22 @@ export interface ConcurrentSignalsShim {
 	useComputed<T>(fn: () => T, deps: readonly unknown[]): T
 
 	/**
-	 * Like useEffect, but re-runs when the COMMITTED value of a signal read
-	 * inside `fn` changes — effects track what the user actually sees, never
-	 * pending transition state.
+	 * Committed-value side effect, split into a pure tracked compute and a
+	 * handler that runs with the computed (value, previous) pair and may
+	 * return a cleanup. Signal reads that should re-run the effect belong in
+	 * `compute`; writes and other side effects belong in `handler`. Effects
+	 * track what the user actually sees, never pending transition state.
+	 *
+	 * The split is the shape every implementation can express: autorun-style
+	 * effects compose it by running the handler inside their tracked body,
+	 * while a split-effect implementation (fx2) cannot express the reverse —
+	 * a single body that both tracks and writes.
 	 */
-	useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void
+	useSignalEffect<T>(
+		compute: () => T,
+		handler: (value: T, previous: T | undefined) => void | (() => void),
+		deps?: readonly unknown[],
+	): void
 
 	/**
 	 * React's startTransition with the implementation's write batching:

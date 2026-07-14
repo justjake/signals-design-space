@@ -590,15 +590,27 @@ function DoubleReadProbe(): React.ReactElement {
 }
 
 function EffectProbes(): null {
-	useSignalEffect(() => {
-		pushEffect('count', (signalOf('count') as ReadableSignal<number>).state)
-	}, [])
-	useSignalEffect(() => {
-		pushEffect('route', (signalOf('currentRoute') as ReadableSignal<string>).state)
-	}, [])
-	useSignalEffect(() => {
-		pushEffect('action-sync', actionSync.state)
-	}, [])
+	useSignalEffect(
+		() => (signalOf('count') as ReadableSignal<number>).state,
+		(value) => {
+			pushEffect('count', value)
+		},
+		[],
+	)
+	useSignalEffect(
+		() => (signalOf('currentRoute') as ReadableSignal<string>).state,
+		(value) => {
+			pushEffect('route', value)
+		},
+		[],
+	)
+	useSignalEffect(
+		() => actionSync.state,
+		(value) => {
+			pushEffect('action-sync', value)
+		},
+		[],
+	)
 	return null
 }
 
