@@ -88,14 +88,15 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  *   exists yet. A suspended state whose value is not the sentinel is
  *   "stale": the previous value keeps serving while the refetch runs.
  *   Unwrap sites normalize the sentinel to undefined.
- * - throwable: the ErrorBox whose .error every read rethrows (AsyncError),
- *   or the Suspension whose .promise suspends a reader (AsyncSuspended);
- *   null for a plain value.
+ * - throwable: present only for async states. It is the ErrorBox whose
+ *   .error every read rethrows (AsyncError), or the Suspension whose
+ *   .promise suspends a reader (AsyncSuspended). Computed nodes keep the
+ *   slot as null for a plain base value because they can become async.
  */
 export interface ResolvedState {
 	flags: Flags
 	value: unknown
-	throwable: ErrorBox | Suspension | null
+	throwable?: ErrorBox | Suspension | null
 }
 
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()

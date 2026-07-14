@@ -117,7 +117,6 @@ export type Atom<in out T> = {
 const Atom = class<T> implements AtomNode<T> {
 	declare flags: Flags
 	declare changedAtGraphChange: GraphChangeClock
-	declare throwable: ErrorBox | Suspension | null
 	declare subs: Link | undefined
 	declare subsTail: Link | undefined
 	declare observerCount: number
@@ -135,7 +134,6 @@ const Atom = class<T> implements AtomNode<T> {
 		const lazyInit = typeof initial === 'function'
 		this.flags = Flag.KindAtom
 		this.changedAtGraphChange = 0
-		this.throwable = null
 		this.subs = undefined
 		this.subsTail = undefined
 		this.observerCount = 0

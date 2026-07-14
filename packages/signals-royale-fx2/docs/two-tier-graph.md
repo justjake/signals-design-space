@@ -583,13 +583,14 @@ Envelope record on EVERY base-state read — even the trivial value case — and
 `node.asyncState` already encoded the same 3-state machine. One model
 replaces both: node-resident state read through one protocol.
 
-**The state shape** — `ResolvedState` (asyncs.ts), and nodes ARE it:
+**The state view** — `ResolvedState` (asyncs.ts), which producer nodes satisfy
+directly:
 
 ```ts
 interface ResolvedState {
   flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
-  throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
+  throwable?: ErrorBox | Suspension | null; // present on async memo states
 }
 ```
 
@@ -597,16 +598,15 @@ interface ResolvedState {
   0b0100_0000, `DerivedSuspended` 0b1000_0000; exclusive field with
   `Flag.AsyncMask`, clear-then-set exactly like `Flag.StaleMask`,
   both-clear = value state.
-- `node.throwable` is initialized `null` at construction on EVERY node kind
-  including atoms and watchers (shape discipline: no post-construction
-  property addition). Atoms never set the bits but share the uniform
-  `{ flags, value, throwable }` read protocol — which is what deletes the
-  base-world atom wrapper allocation. The slot stores the Suspension RECORD,
-  not its promise: the engine needs `.settled` for the identity-reuse rule
-  and `.resolve` at settlement; the promise is what gets thrown. It stores
-  the ErrorBox, not the error alone: box identity is the
-  rethrow-same-reference contract, and `sameError` reuse plus memo
-  reconciliation compare through it.
+- Only `ComputedNode` keeps a stable `throwable` slot, initialized to `null`,
+  because a computed can move between value, error, and suspended states.
+  Atoms never set the async bits and omit the slot. Both still satisfy the
+  state-view protocol directly, which deletes the base-world atom wrapper
+  allocation. The computed slot stores the Suspension record, not its promise:
+  the engine needs `.settled` for the identity-reuse rule and `.resolve` at
+  settlement; the promise is what gets thrown. It stores the ErrorBox, not the
+  error alone. Box identity preserves the rethrow-same-reference contract, and
+  `sameError` reuse plus memo reconciliation compare through it.
 - `node.asyncState` is deleted. Park/settle/error transitions
   (`baseUse`, `finishCompute`) are flag+slot writes preserving:
   suspension identity reuse while unsettled, sameError box reuse,
@@ -616,13 +616,12 @@ interface ResolvedState {
   (`!isUninitialized(node.value)`), so no information was lost; unwrap
   sites preserve the old normalize-to-undefined behavior via the sentinel
   check (`stateValue` in index.ts).
-- WorldMemo records keep the second-resolution role, reshaped to the same
-  `{ flags, value, throwable }` (same bit constants, small word — only the
-  async bits are ever set). `reconcileStates` (was `reconcileEnvelopes`) is
-  flag/value/throwable compares preserving `equals()`, suspension-identity
-  and box-identity semantics exactly.
+- WorldMemo records keep the second-resolution role. Plain records contain
+  `{ flags, value }`; error and suspended records also carry `throwable`.
+  `statesEqual` first reads `Flag.AsyncMask`, then compares the fields for that
+  state, preserving `equals()`, suspension identity, and box identity exactly.
 - `resolveEnvelope` → `resolveState`: the base world freshens the node
-  (`peekAtom`/`ensureFresh`) and returns THE NODE as the state view — zero
+  (`peekAtom`/`ensureFresh`) and returns the node as the state view — zero
   allocation; drafted worlds return memo records as before.
   `unwrapForEval`, hooks' `unwrapState`, `latest`, `committed`,
   `isPendingPassive` all read the protocol: value → `value`; error → throw

@@ -18,6 +18,7 @@ import {
 	type Signal,
 } from '../src/index.ts'
 import {
+	BASE_WORLD,
 	discardDraft,
 	draftsAffecting,
 	liveDraftCount,
@@ -55,13 +56,39 @@ function stateIn(x: Signal<any>, ids: readonly DraftId[]): unknown {
 	return resolveState(nodeOf(x), worldOf(ids))
 }
 
-/** A drafted world's memo record for a plain value (the ResolvedState shape:
- * async flag bits clear, no throwable). */
-function valueState(value: unknown): { flags: number; value: unknown; throwable: null } {
-	return { flags: 0, value, throwable: null }
+/** A drafted world's memo record for a plain value. */
+function valueState(value: unknown): { flags: number; value: unknown } {
+	return { flags: 0, value }
 }
 
 describe('draft visibility', () => {
+	test('only async-capable or async states own a throwable payload', () => {
+		const atom = createAtom(1)
+		const computed = createComputed(() => atom.get())
+		expect(Object.hasOwn(resolveState(nodeOf(atom), BASE_WORLD), 'throwable')).toBe(false)
+		expect(Object.hasOwn(resolveState(nodeOf(computed), BASE_WORLD), 'throwable')).toBe(true)
+
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => atom.set(2))
+		const world = worldOf([draft.id])
+		expect(Object.hasOwn(resolveState(nodeOf(atom), world), 'throwable')).toBe(false)
+		expect(Object.hasOwn(resolveState(nodeOf(computed), world), 'throwable')).toBe(false)
+
+		const boom = new Error('boom')
+		const failure = createComputed(() => {
+			throw boom
+		})
+		const failed = resolveState(nodeOf(failure), world)
+		expect(failed.flags & Flag.AsyncError).toBe(Flag.AsyncError)
+		expect(Object.hasOwn(failed, 'throwable')).toBe(true)
+
+		const pending = createComputed((use) => use(new Promise<never>(() => {})))
+		const suspended = resolveState(nodeOf(pending), world)
+		expect(suspended.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(Object.hasOwn(suspended, 'throwable')).toBe(true)
+		discardDraft(draft.id)
+	})
+
 	test('world computation correlates unrelated drafts without inventing one as its cause', () => {
 		const source = createAtom(0)
 		const unrelated = createAtom(0)

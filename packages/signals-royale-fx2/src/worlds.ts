@@ -859,7 +859,7 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		}
 		certificate.count = 1
 		clearInactiveCertificateEntries(certificate, previousCount)
-		fresh = { flags: 0, value: replayLog(atom, world), throwable: null }
+		fresh = { flags: 0, value: replayLog(atom, world) }
 	} else if (traceHook === null) {
 		fresh = draftEvaluate(node as ComputedNode<unknown>, world, memo?.state, certificate)
 	} else {
@@ -998,7 +998,7 @@ function draftEvaluate(
 	try {
 		const previous = isUninitialized(node.value) ? undefined : node.value
 		const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
-		return { flags: 0, value, throwable: null }
+		return { flags: 0, value }
 	} catch (e) {
 		if (e === WORLD_PARKED) {
 			// The node's base value doubles as the stale value to serve; the

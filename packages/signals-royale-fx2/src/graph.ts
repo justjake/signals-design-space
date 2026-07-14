@@ -187,14 +187,6 @@ export interface ProducerNode extends ReactiveNode {
 	 * recompute already holds a strictly older reading.
 	 */
 	changedAtGraphChange: GraphChangeClock
-	/**
-	 * The object backing the async flags: the ErrorBox to rethrow
-	 * (AsyncError) or the Suspension being awaited (AsyncSuspended); null
-	 * when the node holds a plain value. Atoms never set the async bits, but
-	 * atoms and computeds share the same { flags, value, throwable }
-	 * ResolvedState protocol.
-	 */
-	throwable: ErrorBox | Suspension | null
 	/** Subscriber list: watched consumers and store subscriptions. */
 	subs: Link | undefined
 	subsTail: Link | undefined
@@ -313,6 +305,10 @@ export interface AtomNode<T> extends ProducerNode {
 
 /** A cached computed-value node — the engine side of a computed. */
 export interface ComputedNode<T> extends ProducerNode, ConsumerNode {
+	/** The ErrorBox or Suspension selected by the async flags; null for a
+	 * plain value. The stable slot avoids changing shape when a computed
+	 * moves between value, error, and suspended states. */
+	throwable: ErrorBox | Suspension | null
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
