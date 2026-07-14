@@ -1,14 +1,12 @@
 import {
 	BASE_WORLD,
-	createComputed,
 	createAtom,
+	createComputed,
 	effect,
+	flushScheduledEffects,
 	type Computed,
 } from '../../packages/signals-royale-fx2/src/index.ts'
-import {
-	makeScheduledEffect,
-	withWorld,
-} from '../../packages/signals-royale-fx2/src/graph.ts'
+import { withWorld } from '../../packages/signals-royale-fx2/src/graph.ts'
 
 const depth = Number(process.env.SMOKE_DEPTH)
 const warmIters = Number(process.env.SMOKE_WARM ?? 50_000)
@@ -21,29 +19,34 @@ for (let i = 1; i < depth; i++) {
 	const previous = tail
 	tail = createComputed(() => previous.get() + 1)
 }
-const dispose = effect(() => {
-	sink = (sink ^ tail.get()) | 0
-})
-
-// Warm the React-phase watcher/world-read path separately from the steady
-// propagation source. Named callbacks keep this probe allocation-free.
-const scheduledSource = createAtom(0)
-const scheduledEffect = makeScheduledEffect(
-	() => {
-		sink++
+// Sync lane: every write below drains this effect two-phase (pull the
+// compute chain, then run the handler).
+const dispose = effect(
+	() => tail.get(),
+	(v) => {
+		sink = (sink ^ v) | 0
 	},
-	() => {},
 )
-function readScheduledAtom(): void {
-	sink ^= scheduledSource.get()
-}
-function runScheduledRead(): void {
-	scheduledEffect.run(readScheduledAtom)
+
+// Warm the paint-lane enqueue/drain and the world-selected read path
+// separately from the steady propagation source. Named callbacks keep this
+// probe allocation-free.
+const scheduledSource = createAtom(0)
+const disposeScheduled = effect(
+	() => scheduledSource.get(),
+	(v) => {
+		sink ^= v
+	},
+	{ schedule: 'before-paint' },
+)
+function readBaseWorld(): void {
+	sink ^= tail.get()
 }
 for (let i = 0; i < warmIters; i++) {
-	withWorld(BASE_WORLD, runScheduledRead)
+	withWorld(BASE_WORLD, readBaseWorld)
 }
 scheduledSource.set(1)
+flushScheduledEffects()
 
 function run(start: number, count: number): void {
 	for (let i = start; i < start + count; i++) {
@@ -54,10 +57,10 @@ function run(start: number, count: number): void {
 run(0, warmIters)
 console.log('@@STEADY-START')
 for (let i = 0; i < steadyIters; i++) {
-	withWorld(BASE_WORLD, runScheduledRead)
+	withWorld(BASE_WORLD, readBaseWorld)
 }
 run(warmIters, steadyIters)
 console.log('@@STEADY-END')
-scheduledEffect.dispose()
+disposeScheduled()
 dispose()
 console.log('sink:', sink)

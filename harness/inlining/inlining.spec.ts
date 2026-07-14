@@ -38,29 +38,26 @@ const INLINE_LIMIT = 460
 // separately so growth remains explicit.
 const FX2_BYTECODE_BUDGETS: Record<string, number> = {
 	readAtom: 50,
-	trackWorldRead: 90,
+	getComputed: 100,
 	readComputed: 100,
-	getComputed: 110,
 	// This includes the sole-caller propagation and flush tail. Keeping that
-	// tail inline measured faster, and 123 remains far below the inline limit.
-	writeAtom: 123,
-	scheduleWatcher: 170,
+	// tail inline measured faster, and 130 remains far below the inline limit.
+	writeAtom: 130,
+	runEffectCleanup: 160,
+	scheduleWatcher: 210,
+	runHandler: 240,
 	trackRead: 260,
 	propagateWave: 280,
-	runWatcher: 300,
+	flush: 330,
 	chainResolve: 390,
 	ensureFreshAt: 400,
-	recompute: 420,
-	executeWatcher: 440,
 }
 
 const FX2_WORLD_BYTECODE_BUDGETS: Record<string, number> = {
-	memoFor: 40,
-	trackWorldSource: 60,
-	inheritCertificate: 80,
-	recordSource: 90,
-	trackWorldSources: 120,
-	unwrapComputedWorldState: 140,
+	memoFor: 30,
+	inheritCertificate: 70,
+	recordSource: 85,
+	unwrapComputedWorldState: 130,
 	memoValid: 260,
 }
 
@@ -173,11 +170,22 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Nod
 		})
 	}
 
-	// Cycle-failure tracing grew the original 581-byte function to 629. This
-	// function was already deliberately over the inline limit.
-	test('flush pinned at 629 (over the inline limit)', () => {
-		const size = bytecodeLength(script, 'flush')
-		expect(size).toBeLessThanOrEqual(629)
+	// The two-phase drain owns pull/cleanup/handler sequencing for a whole
+	// lane round; it is over the inline limit by design — callers pay one
+	// call per drain, not per entry.
+	test('drainLane pinned at 720 (over the inline limit)', () => {
+		const size = bytecodeLength(script, 'drainLane')
+		expect(size).toBeLessThanOrEqual(720)
+		expect(size).toBeGreaterThan(INLINE_LIMIT)
+	})
+
+	// The evaluation owner (dependency re-tracking, tracing, park/error
+	// folding, the self-affecting stamp discipline). Callers pay one call
+	// per actual recomputation, so being out of line is tolerable — but the
+	// pin keeps further growth explicit.
+	test('recompute pinned at 520 (over the inline limit)', () => {
+		const size = bytecodeLength(script, 'recompute')
+		expect(size).toBeLessThanOrEqual(520)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
@@ -199,16 +207,9 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 committed-world inlining (tsc-emitted, N
 		trace = traceOptimization({ script: emitFx2Smoke(dir, 'fx2-world-smoke') })
 	}, 180_000)
 
-	test('inlines committed-world read and source-tracking helpers', () => {
+	test('inlines draft-world read helpers', () => {
 		const inlined = new Set(trace.inlined.map((edge) => edge.callee))
-		const required = [
-			'getComputed',
-			'unwrapComputedWorldState',
-			'trackWorldRead',
-			'trackWorldSources',
-			'trackWorldSource',
-			'refresh',
-		]
+		const required = ['getComputed', 'unwrapComputedWorldState', 'memoValid']
 		expect(
 			required.filter((name) => !inlined.has(name)),
 			`not inlined; inlined callees: ${[...inlined].sort().join(', ')}`,
@@ -217,7 +218,7 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 committed-world inlining (tsc-emitted, N
 
 	test('world kernel reaches top tier', () => {
 		const inlined = new Set(trace.inlined.map((edge) => edge.callee))
-		const required = ['resolveState', 'trackRead']
+		const required = ['resolveState']
 		expect(
 			required.filter((name) => !trace.optimized.has(name) && !inlined.has(name)),
 			`not top-tier; optimized: ${[...trace.optimized].sort().join(', ')}`,

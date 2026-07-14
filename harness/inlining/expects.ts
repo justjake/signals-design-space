@@ -53,21 +53,14 @@ export const expectations: InliningExpectation[] = [
 	{
 		framework: 'fx2',
 		minInlinedPairs: 10,
-		mustInline: [
-			'getComputed',
-			'readAtom',
-			'readComputed',
-			'trackRead',
-			'trackWorldRead',
-			'writeAtom',
-		],
+		mustInline: ['getComputed', 'readAtom', 'readComputed', 'trackRead', 'writeAtom'],
 		mustReachTopTier: [
 			'ensureFreshAt',
 			'recompute',
 			'propagateWave',
 			'scheduleWatcher',
-			'runWatcher',
-			'flush',
+			'drainLane',
+			'runHandler',
 		],
 	},
 ]
