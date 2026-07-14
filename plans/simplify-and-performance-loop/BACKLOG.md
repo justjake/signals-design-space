@@ -27,7 +27,6 @@ condition still leaves a useful direction.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the direct ESM binding and delete `currentDraftChange`; retry the exact Round 85 semantic diff in a new predeclared interleaved round that captures before/after manifests for both baseline and candidate artifacts, keeping synchronous, single-node, world-only, and suspension controls.
-- Let nullable one-shot resolution own suspension pendingness and delete `Suspension.settled`; retry the exact Round 82 three-file diff only under a separately frozen interleaved AB/BA window, keeping construction, repeated resolution, reuse, settlement, sequential suspension, world invalidation, and unchanged graph control.
 
 ## Completed or deliberately closed
 
@@ -52,6 +51,7 @@ condition still leaves a useful direction.
 - React root connections own their committed draft IDs directly; the committed-world WeakMap now serves only external container keys, and the test-only root `committedSnapshot` export is gone.
 - Atoms and plain world memo records omit the impossible async payload; computed nodes retain their stable nullable slot, and async world records retain their ErrorBox or Suspension.
 - Drafts now have one live state, `open`, plus the distinct terminal `retired` and `discarded` outcomes; the unsupported `sealed` state, `sealDraft`, equivalent branches, and test-only calls are gone.
+- Nullable one-shot `Suspension.resolve` owns pendingness, identity reuse, and settlement; the parallel `settled` boolean is gone.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
 - Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
