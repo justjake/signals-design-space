@@ -339,7 +339,7 @@ function replayLog(atom: AtomNode<unknown>, world: World | null): unknown {
 }
 
 /** Apply one intent to a value; shared by world replay and by the
- * dead-prefix folding in releaseLogs. */
+ * dead-prefix folding in releaseDraft. */
 function applyIntent(atom: AtomNode<unknown>, value: unknown, intent: Intent): unknown {
 	let next = intent.payload
 	if (intent.kind === 'update') {
@@ -402,8 +402,7 @@ export function retireDraft(id: DraftId): void {
 	} finally {
 		setCurrentCause(prevCause)
 	}
-	releaseLogs(draft)
-	maybeQuiesce()
+	releaseDraft(draft)
 }
 
 /** Roll back an abandoned draft. The poke reaches every subscriber over
@@ -425,16 +424,16 @@ export function discardDraft(id: DraftId): void {
 		draftRevisionByAtom.set(atom, draftChangeClock)
 		pokeDraftWatchers(atom, evt)
 	}
-	releaseLogs(draft)
-	maybeQuiesce()
+	releaseDraft(draft)
 }
 
-/** Clean up the dead draft's logs. A log whose intents are all dead is
+/** Release a dead draft's logs and, when it was the last live draft, every
+ * world memo. A log whose intents are all dead is
  * deleted. Otherwise its leading run of dead intents is folded into
  * valueBeforeDrafts so logs stay bounded. Folding must stop at the first
  * live intent: intents after it may be updater functions whose results
  * depend on that intent's world-specific value. */
-function releaseLogs(dead: Draft): void {
+function releaseDraft(dead: Draft): void {
 	for (const atom of dead.atoms) {
 		const log = rebaseLogs.get(atom)
 		if (log === undefined) {
@@ -461,16 +460,6 @@ function releaseLogs(dead: Draft): void {
 			intents.length -= prefix
 		}
 	}
-}
-
-/** @internal Test seam for the bounded-history invariant. */
-export function rebaseLogIntentCount<T>(atom: AtomNode<T>): number {
-	return rebaseLogs.get(atom as AtomNode<unknown>)?.intents.length ?? 0
-}
-
-/** With no live drafts, every per-draft structure empties: the engine
- * returns to holding zero transition state. */
-function maybeQuiesce(): void {
 	if (liveDrafts.size > 0) {
 		return
 	}
@@ -479,6 +468,11 @@ function maybeQuiesce(): void {
 		node.worldMemos = undefined
 	}
 	memoNodes.clear()
+}
+
+/** @internal Test seam for the bounded-history invariant. */
+export function rebaseLogIntentCount<T>(atom: AtomNode<T>): number {
+	return rebaseLogs.get(atom as AtomNode<unknown>)?.intents.length ?? 0
 }
 
 /** True while the draft is open or sealed. Retired and discarded ids are

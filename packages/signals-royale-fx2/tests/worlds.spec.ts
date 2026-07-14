@@ -752,7 +752,7 @@ describe('computeds across worlds', () => {
 
 		flips.length = 0
 		retireDraft(secondRightDraft)
-		// Fold notifications run before releaseLogs removes the retired intent.
+		// Fold notifications run before releaseDraft removes the retired intent.
 		// Pendingness must inspect draft state instead of treating log presence
 		// as a live draft.
 		expect(flips[flips.length - 1]).toBe(false)
@@ -933,6 +933,33 @@ describe('dead-prefix folding', () => {
 })
 
 describe('quiescence', () => {
+	test('a nested last discard clears logs before the outer retirement notification returns', () => {
+		const retiring = createAtom(0)
+		const discarded = createAtom(0)
+		const retiringDraft = inDraft(() => retiring.set(1))
+		const discardedDraft = inDraft(() => discarded.set(1))
+		const total = createComputed(() => retiring.get() + discarded.get())
+		stateIn(total, [retiringDraft, discardedDraft])
+		let retiringLogDuringNotification = -1
+		let memosClearedDuringNotification = false
+		const unsubscribe = observeNode(nodeOf(retiring), () => {
+			discardDraft(discardedDraft)
+			retiringLogDuringNotification = rebaseLogIntentCount(
+				nodeOf(retiring) as AtomNode<unknown>,
+			)
+			memosClearedDuringNotification = nodeOf(total).worldMemos === undefined
+		})
+
+		retireDraft(retiringDraft)
+
+		expect(retiringLogDuringNotification).toBe(0)
+		expect(memosClearedDuringNotification).toBe(true)
+		expect(rebaseLogIntentCount(nodeOf(discarded) as AtomNode<unknown>)).toBe(0)
+		expect(retiring.get()).toBe(1)
+		expect(discarded.get()).toBe(0)
+		unsubscribe()
+	})
+
 	test('retiring the last draft drops logs and world memos', async () => {
 		const a = createAtom(0)
 		const c = createComputed(() => a.get() + 1)
