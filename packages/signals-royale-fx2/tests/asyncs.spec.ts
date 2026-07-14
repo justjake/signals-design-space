@@ -11,7 +11,7 @@ import {
 	read,
 } from '../src/index.ts'
 import { isErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
-import { observeNode } from '../src/graph.ts'
+import { currentCause, observeNode, setCurrentCause } from '../src/graph.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -139,7 +139,7 @@ describe('pending as graph state', () => {
 		expect(seen).toEqual(['pending', 42])
 	})
 
-	test('settlement clears parked owners before recompute and notification', () => {
+	test('throwing settlement notification restores cause and releases suspension', () => {
 		const gate = controlledThenable<number>()
 		const box = trackThenable(gate.thenable)
 		let ownerAbsentDuringCompute = false
@@ -158,13 +158,26 @@ describe('pending as graph state', () => {
 		expect(() => read(c)).toThrow()
 		expect(box.parkedNodes!.size).toBe(1)
 		expect(box.parkedSuspensions!.size).toBe(1)
-		expect(() => gate.fulfill(1)).toThrow(boom)
-		expect(ownerAbsentDuringCompute).toBe(true)
-		expect(ownerAbsentDuringNotification).toBe(true)
-		expect(box.parkedNodes).toBeNull()
-		expect(box.parkedSuspensions).toBeNull()
-
-		stop()
+		const suspension = box.parkedSuspensions!.values().next().value!
+		const previousCause = setCurrentCause(123)
+		try {
+			let thrown: unknown
+			try {
+				gate.fulfill(1)
+			} catch (error) {
+				thrown = error
+			}
+			expect(thrown).toBe(boom)
+			expect(currentCause).toBe(123)
+			expect(suspension.settled).toBe(true)
+			expect(ownerAbsentDuringCompute).toBe(true)
+			expect(ownerAbsentDuringNotification).toBe(true)
+			expect(box.parkedNodes).toBeNull()
+			expect(box.parkedSuspensions).toBeNull()
+		} finally {
+			setCurrentCause(previousCause)
+			stop()
+		}
 	})
 
 	test('the first terminal callback wins and later scheduling still flushes', () => {

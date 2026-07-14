@@ -190,10 +190,13 @@ function settle(
 		}
 	} finally {
 		nodes.clear()
-		endBatch()
-		setCurrentCause(prevCause)
-		for (const ep of suspensions) {
-			ep.resolve(cause)
+		try {
+			endBatch()
+		} finally {
+			setCurrentCause(prevCause)
+			for (const ep of suspensions) {
+				ep.resolve(cause)
+			}
 		}
 	}
 }
