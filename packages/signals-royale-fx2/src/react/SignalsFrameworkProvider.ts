@@ -72,9 +72,9 @@ export const ReactRootConnectionContext = React.createContext<ReactRootConnectio
 
 export interface SignalsFrameworkProviderProps {
 	/** Keys this root's committed world for committed(x, container) reads;
-	 * wrapCreateRoot passes the root's DOM element. Hooks always use the
-	 * provider record itself as their committed-world key, so this is needed
-	 * only by reads outside React. */
+	 * wrapCreateRoot passes the root's DOM element. Hooks read committed ids
+	 * directly from the connection, so this key is only for reads outside
+	 * React. */
 	container?: object
 	children?: React.ReactNode
 }
@@ -115,7 +115,7 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
 	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
 	const container = props.container ?? null
 	const connection = React.useMemo<ReactRootConnection>(
-		() => ({ dispatch, container, committing: false }),
+		() => ({ dispatch, committedIds: EMPTY_WORLD.ids, container, committing: false }),
 		[dispatch, container],
 	)
 	// Note this pass's world in the host. Every pass that carries drafts

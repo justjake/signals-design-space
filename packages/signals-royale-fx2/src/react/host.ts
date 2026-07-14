@@ -52,6 +52,9 @@ export interface ReactRootConnection {
 	/** Draft ids delivered here become part of the worlds this root's
 	 * render passes carry. */
 	dispatch: (id: DraftId) => void
+	/** Draft ids in the last render this root committed. Hooks read this
+	 * directly; the stable connection record owns the root-local view. */
+	committedIds: readonly DraftId[]
 	/** Keys this root's committed world for reads outside React. Null when
 	 * the provider was mounted without a container. */
 	container: object | null
@@ -461,10 +464,10 @@ export function confirmRootCommit(
 ): void {
 	connection.committing = true
 	try {
-		// The connection itself is every hook's root-local committed-world key. The
-		// optional external container additionally supports committed(x,
-		// container) reads outside React.
-		setCommittedWorld(connection, ids)
+		// The stable connection owns the root-local view used by hooks. The
+		// optional external container remains a separate public lookup key for
+		// committed(x, container) reads outside React.
+		connection.committedIds = ids
 		if (connection.container !== null) {
 			setCommittedWorld(connection.container, ids)
 		}

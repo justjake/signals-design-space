@@ -398,17 +398,6 @@ export function committed<T>(x: Signal<T>, container?: object): T {
 	return stateValue(st) as T
 }
 
-/** Committed-view snapshot with stable identity, used by the React
- * bindings' useCommitted: the value, or the ErrorBox itself — identity-
- * stable for the whole error span — whose error the caller rethrows. */
-export function committedSnapshot(node: ProducerNode, container: object | undefined): unknown {
-	const st = resolveState(node, committedWorldOf(container))
-	if ((st.flags & Flag.AsyncError) !== 0) {
-		return st.throwable
-	}
-	return stateValue(st)
-}
-
 /** True while newer data exists behind what is on screen — a pending
  * transition draft on this atom, or an async refetch loading behind a
  * stale value. Passive by contract: never evaluates, never refetches,

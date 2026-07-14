@@ -690,8 +690,8 @@ deviations found while landing, and the §11 DerivedState merge). Summary:
   async flag bits; `resolveState` returns THE NODE for canonical worlds
   (zero-alloc reads) and reshaped memo records for drafted worlds; stale is
   derived (`value !== UNINITIALIZED`). Suspension-identity, sameError box
-  reuse, and settlement-as-write are preserved; `committedSnapshot` returns
-  the identity-stable ErrorBox instead of allocating a marker per
+  reuse, and settlement-as-write are preserved; React's committed snapshot
+  returns the identity-stable ErrorBox instead of allocating a marker per
   `getSnapshot` call (a uSES identity hazard). `Envelope` export replaced by
   `DerivedState` + protocol exports; all importers converted, no alias.
 - **Leak story**: demote removes every back-edge promote installed; the
@@ -753,9 +753,9 @@ user handles at their own boundary: hooks call `nodeOf(x)` once and work
 with `ReactiveNode` records (subscriptions are `observeNode(node, …)`, epoch
 snapshots are field reads), and the ambient classifier keys Draft RECORDS
 by transition object (`WeakMap<transition, Draft>`), deleting the per-
-drafted-write id→record lookup the old seam paid. Three engine members the
+drafted-write id→record lookup the old seam paid. Two engine members the
 object had privatized are exported from where they live: index.ts's
-`setRenderWorldProvider`, `isPendingPassive`, `committedSnapshot`. One rule
+`setRenderWorldProvider` and `isPendingPassive`. One rule
 survives the wall's demolition because it is a leak rule, not a privacy
 rule: long-lived React state (reducer worlds, committed id sets) holds draft
 IDS, never Draft records — a record captured in a committed reducer state

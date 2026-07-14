@@ -1,7 +1,6 @@
 /** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from 'vitest'
 import {
-	committedSnapshot,
 	createAtom,
 	createComputed,
 	effect,
@@ -12,6 +11,7 @@ import {
 } from '../src/index.ts'
 import { isErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
 import { currentCause, observeNode, setCurrentCause } from '../src/graph.ts'
+import { BASE_WORLD, resolveState } from '../src/worlds.ts'
 
 function deferred<T>() {
 	let resolve!: (v: T) => void
@@ -234,7 +234,7 @@ describe('pending as graph state', () => {
 })
 
 describe('errors are reference-stable boxes', () => {
-	test('only engine error boxes are recognized through value snapshots', () => {
+	test('only engine error boxes are recognized in resolved values', () => {
 		const source = createAtom(0)
 		const boom = new Error('boxed')
 		const failure = createComputed(() => {
@@ -244,17 +244,17 @@ describe('errors are reference-stable boxes', () => {
 		try {
 			read(failure)
 		} catch {}
-		const first = committedSnapshot(nodeOf(failure), undefined)
+		const first = resolveState(nodeOf(failure), BASE_WORLD).throwable
 		expect(isErrorBox(first)).toBe(true)
 
 		source.set(1)
 		try {
 			read(failure)
 		} catch {}
-		expect(committedSnapshot(nodeOf(failure), undefined)).toBe(first)
+		expect(resolveState(nodeOf(failure), BASE_WORLD).throwable).toBe(first)
 
 		const value = createComputed(() => ({ error: boom }))
-		const spoof = committedSnapshot(nodeOf(value), undefined)
+		const spoof = resolveState(nodeOf(value), BASE_WORLD).value
 		expect(spoof).toEqual({ error: boom })
 		expect(isErrorBox(spoof)).toBe(false)
 	})

@@ -41,7 +41,6 @@ import {
 	useSyncExternalStore,
 } from 'react'
 import {
-	committedSnapshot,
 	createAtom,
 	createComputed,
 	isPendingPassive,
@@ -65,7 +64,6 @@ import {
 	type TraceEventId,
 } from '../graph.ts'
 import {
-	committedWorldOf,
 	BASE_WORLD,
 	resolveState,
 	trackWorldSources,
@@ -125,6 +123,18 @@ function forceReducer(count: number): number {
 	return count + 1
 }
 
+function committedWorld(connection: ReactRootConnection): World {
+	return worldOf(connection.committedIds)
+}
+
+function committedSnapshot(node: ProducerNode, connection: ReactRootConnection): unknown {
+	const st = resolveState(node, committedWorld(connection))
+	if ((st.flags & Flag.AsyncError) !== 0) {
+		return st.throwable
+	}
+	return isUninitialized(st.value) ? undefined : st.value
+}
+
 function signalEffectValue(node: ProducerNode, world: World): unknown {
 	const state = resolveState(node, world)
 	if (activeWorldSourceConsumer !== null && (node.flags & Flag.KindComputed) !== 0) {
@@ -161,7 +171,7 @@ function disposeSignalEffect(state: SignalEffectState): void {
 	const connection = state.connection
 	try {
 		if (effect !== null) {
-			const world = connection === null ? null : committedWorldOf(connection)
+			const world = connection === null ? null : committedWorld(connection)
 			if (world === null || world.drafts.length === 0) {
 				effect.dispose()
 			} else {
@@ -401,7 +411,7 @@ function useSignalEffectImpl(
 		state.connection = connection
 		state.version = version
 		state.rerunRequested = false
-		const world = committedWorldOf(connection)
+		const world = committedWorld(connection)
 		if (
 			!connectionChanged &&
 			!rerunRequested &&
@@ -425,7 +435,7 @@ function useSignalEffectImpl(
 						signalEffectDependenciesChanged(
 							state,
 							dependencies,
-							committedWorldOf(committedConnection),
+							committedWorld(committedConnection),
 						),
 					)
 					if (changed) {

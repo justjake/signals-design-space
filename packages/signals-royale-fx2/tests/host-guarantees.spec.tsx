@@ -95,7 +95,13 @@ describe('registration', () => {
 					</SignalsFrameworkProvider>,
 				)
 			})
-			expect(Object.keys(connection!)).toEqual(['dispatch', 'container', 'committing'])
+			expect(Object.keys(connection!)).toEqual([
+				'dispatch',
+				'committedIds',
+				'container',
+				'committing',
+			])
+			expect(connection!.committedIds).toEqual([])
 		} finally {
 			await act(() => root.unmount())
 		}
@@ -108,8 +114,10 @@ describe('registration', () => {
 		const container = document.createElement('div')
 		document.body.appendChild(container)
 		const root = createRoot(container)
+		let connection: React.ContextType<typeof ReactRootConnectionContext> = null
 		const seen: Array<[rendered: number, committed: number, liveDrafts: number]> = []
 		function Child() {
+			connection = React.useContext(ReactRootConnectionContext)
 			const value = useValue(atom)
 			React.useLayoutEffect(() => {
 				seen.push([value, committed(atom, container), liveDraftCount()])
@@ -130,6 +138,7 @@ describe('registration', () => {
 			})
 			expect(seen).toContainEqual([1, 1, 0])
 			expect(seen).not.toContainEqual([1, 0, 1])
+			expect(connection!.committedIds).toHaveLength(1)
 		} finally {
 			await act(() => root.unmount())
 			container.remove()
@@ -156,6 +165,7 @@ describe('hosted draft lifetime', () => {
 		const delivered: number[] = []
 		const unregister = registerRootConnection({
 			container: null,
+			committedIds: [],
 			committing: false,
 			dispatch: (id) => delivered.push(id),
 		})
