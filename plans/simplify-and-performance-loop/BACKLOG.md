@@ -7,9 +7,7 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
 - Prevent nested last-draft quiescence from clearing an outer retirement's not-yet-folded multi-atom logs; preserve in-callback zero-live cleanup without losing retired intents.
-- Remove unmounted scopes from historical draft audiences if no late correction still consults them.
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
@@ -30,6 +28,7 @@ condition still leaves a useful direction.
 - Move Computed methods from own slots to a shared object-literal prototype; retry the exact Round 72 `__proto__` diff only after a natural compiler/runtime/layout change, keeping retained-size, no-GC construction, 1.2M pretenuring/subwindow, read, and Atom controls.
 - Protect an outer multi-atom retirement from nested updater/equality quiescence without changing callback-visible liveness; retry the exact Round 73 temporary-retiring-phase model only after a natural compiler/runtime/layout change, keeping all three reentrant modes as hard gates.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
+- Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 
 ## Completed or deliberately closed
 
@@ -53,3 +52,4 @@ condition still leaves a useful direction.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
 - Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
+- Shallow `ensureFreshAt` and deep `chainResolve` remain distinct: one uses the JS stack for common branching graphs, while the other adds reusable iterative scratch only after depth 16 so 150,000-node unary chains do not overflow.
