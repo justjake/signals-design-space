@@ -50,7 +50,7 @@ describe('lifetime effects', () => {
 		read(c) // unobserved computed chain: no observation
 		await tick()
 		expect(log).toEqual([])
-		const dispose = effect(() => void c.get()) // observes the chain into a
+		const dispose = effect(() => c.get(), () => {}) // observes the chain into a
 		await tick()
 		expect(log).toEqual(['on:0'])
 		const unsub = observeNode(nodeOf(a), () => {}) // second kind: store subscription
@@ -73,9 +73,9 @@ describe('lifetime effects', () => {
 				return () => log.push('off')
 			},
 		})
-		const d1 = effect(() => void a.get())
+		const d1 = effect(() => a.get(), () => {})
 		d1()
-		const d2 = effect(() => void a.get())
+		const d2 = effect(() => a.get(), () => {})
 		await tick()
 		expect(log).toEqual(['on']) // net one activation across the flap
 		expect(read(a)).toBe(42)
@@ -277,10 +277,12 @@ describe('SSR', () => {
 		})
 		const c2 = createAtom('default')
 		let effectRuns = 0
-		const dispose = effect(() => {
-			void c2.get()
-			effectRuns++
-		})
+		const dispose = effect(
+			() => c2.get(),
+			() => {
+				effectRuns++
+			},
+		)
 		initializeAtomState(json, [c1, c2])
 		expect(initRuns).toBe(0)
 		expect(effectRuns).toBe(1) // install did not count as a write
@@ -361,38 +363,57 @@ describe('causality tracer', () => {
 		expect(getActiveTracer()).toBeNull()
 	})
 
-	test('effect and cleanup errors retain the propagated error object', () => {
+	test('handler, cleanup, and compute errors retain the propagated error object', () => {
 		const tracer = attachTracer()
 		const bodyError = new Error('body')
 		expect(() =>
-			effect(() => {
-				throw bodyError
-			}),
+			effect(
+				() => 1,
+				() => {
+					throw bodyError
+				},
+			),
 		).toThrow(bodyError)
 		const cleanupError = new Error('cleanup')
 		const dispose = effect(
+			() => 1,
 			() => () => {
 				throw cleanupError
 			},
 		)
 		expect(dispose).toThrow(cleanupError)
+		// A creation-time compute error disposes the effect and rethrows; it
+		// is a compute error, not an effect error — the handler never saw it.
+		const computeError = new Error('compute')
+		expect(() =>
+			effect(
+				(): number => {
+					throw computeError
+				},
+				() => {},
+			),
+		).toThrow(computeError)
 		const events = tracer.events()
 		expect(events.find((event) => event.kind === 'effect-error')?.error).toBe(bodyError)
 		expect(events.find((event) => event.kind === 'cleanup-error')?.error).toBe(cleanupError)
+		expect(events.find((event) => event.kind === 'compute-error')?.error).toBe(computeError)
 		expect(
 			events.some((event) => event.kind === 'effect-error' && event.error === cleanupError),
 		).toBe(false)
 		tracer.stop()
 	})
 
-	test('an effect failure is reported to the tracer attached by its body', () => {
-		const attachedError = new Error('attached in body')
+	test('a handler failure is reported to the tracer attached by the handler', () => {
+		const attachedError = new Error('attached in handler')
 		let attached!: Tracer
 		expect(() =>
-			effect(() => {
-				attached = attachTracer()
-				throw attachedError
-			}),
+			effect(
+				() => 1,
+				() => {
+					attached = attachTracer()
+					throw attachedError
+				},
+			),
 		).toThrow(attachedError)
 		const attachedEvent = attached
 			.events()
@@ -401,13 +422,16 @@ describe('causality tracer', () => {
 		attached.stop()
 
 		const first = attachTracer()
-		const replacementError = new Error('replacement in body')
+		const replacementError = new Error('replacement in handler')
 		let replacement!: Tracer
 		expect(() =>
-			effect(() => {
-				replacement = attachTracer()
-				throw replacementError
-			}),
+			effect(
+				() => 1,
+				() => {
+					replacement = attachTracer()
+					throw replacementError
+				},
+			),
 		).toThrow(replacementError)
 		expect(first.events().some((event) => event.kind === 'effect-run')).toBe(true)
 		expect(first.events().some((event) => event.kind === 'effect-error')).toBe(false)
@@ -422,7 +446,10 @@ describe('causality tracer', () => {
 		const t = attachTracer({ capacity: 16 })
 		const a = createAtom(0, { label: 'a' })
 		const b = createAtom(0, { label: 'b' })
-		effect(() => b.set(a.get() + 1)) // writes b whenever a changes
+		effect(
+			() => a.get(),
+			(v) => b.set(v + 1),
+		) // writes b whenever a changes
 		a.set(1)
 		const events = t.events()
 		const kinds = events.map((e) => e.kind)

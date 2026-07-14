@@ -47,6 +47,8 @@ export interface RoyaleTraceView {
 	stop(): void
 }
 
+const NEVER_EQUAL = (): boolean => false
+
 const adapter = {
 	slug: 'fx2',
 	React,
@@ -96,7 +98,11 @@ const adapter = {
 		return isPending(x as Signal<unknown>)
 	},
 	effect(fn: () => void | (() => void)): () => void {
-		return effect(fn)
+		// The battery's effect is a single tracked body with an optional
+		// cleanup. Run the body as the compute (battery bodies read but never
+		// write signals); its fresh return value is the cleanup the handler
+		// installs. Never-equal delivery keeps one handler run per re-run.
+		return effect(() => fn(), (cleanup) => cleanup, { equals: NEVER_EQUAL })
 	},
 	batch(fn: () => void): void {
 		batch(fn)
@@ -118,7 +124,11 @@ const adapter = {
 		return useComputed(fn, deps)
 	},
 	useSignalEffect(fn: () => void | (() => void)): void {
-		useSignalEffect(fn)
+		// Same autorun shape as effect() above, latest-ref'd so re-renders
+		// refresh the body without re-creating the effect.
+		const latest = React.useRef(fn)
+		latest.current = fn
+		useSignalEffect(() => latest.current(), (cleanup) => cleanup, [], { equals: NEVER_EQUAL })
 	},
 	useIsPending(x: unknown): boolean {
 		return useIsPending(x as Signal<unknown>)

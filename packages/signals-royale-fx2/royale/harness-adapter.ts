@@ -42,7 +42,12 @@ const adapter = {
 		const c = createComputed(fn)
 		return { read: () => c.get() }
 	},
-	effect,
+	// The harness's effect is a single tracked body. It runs as the compute;
+	// a body that writes signals throws the computed write-policy error,
+	// which signal.write above converts to SkipTest.
+	effect(fn: () => void | (() => void)): () => void {
+		return effect(() => fn(), (cleanup) => cleanup, { equals: () => false })
+	},
 	effectScope,
 	startBatch,
 	endBatch,

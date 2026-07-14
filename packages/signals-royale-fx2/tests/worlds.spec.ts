@@ -145,7 +145,10 @@ describe('draft visibility', () => {
 		const boom = new Error('updater boom')
 		const atom = createAtom(0)
 		const computed = createComputed(() => atom.get())
-		const stop = effect(() => void computed.get())
+		const stop = effect(
+			() => computed.get(),
+			() => {},
+		)
 		const tracer = attachTracer()
 		const draft = openDraft()
 		runWithDraftWrites(draft, () =>
@@ -209,11 +212,13 @@ describe('draft visibility', () => {
 		const a = createAtom(0)
 		const b = createAtom(0)
 		let runs = 0
-		effect(() => {
-			a.get()
-			b.get()
-			runs++
-		})
+		// Fresh tuples never compare equal, so every delivered pull counts.
+		effect(
+			() => [a.get(), b.get()],
+			() => {
+				runs++
+			},
+		)
 		const id = inDraft(() => {
 			a.set(1)
 			b.set(2)
@@ -883,9 +888,12 @@ describe('latest() context resolution', () => {
 	test('latest() inside an effect tracks base state: re-runs on folds, never on draft writes', () => {
 		const a = createAtom(0)
 		const seen: number[] = []
-		effect(() => {
-			seen.push(latest(a))
-		})
+		effect(
+			() => latest(a),
+			(v) => {
+				seen.push(v)
+			},
+		)
 		a.set(1)
 		expect(seen).toEqual([0, 1])
 		const id = inDraft(() => a.set(9))

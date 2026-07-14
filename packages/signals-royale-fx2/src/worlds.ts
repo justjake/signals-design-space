@@ -81,7 +81,6 @@ import {
 	startBatch,
 	endBatch,
 	traceHook,
-	trackWorldSource,
 	writeAtom,
 } from './graph.ts'
 import {
@@ -926,24 +925,6 @@ export function resolveStateUntracked(node: ProducerNode, world: World): Resolve
 		return resolveState(node, world)
 	} finally {
 		activeCertificate = previous
-	}
-}
-
-/** Give a scheduled effect wake-only edges to the actual sources used by a
- * computed's current draft-world memo. No-op outside a scheduled effect. */
-export function trackWorldSources(node: ProducerNode, world: World): void {
-	if (world.drafts.length === 0) {
-		return
-	}
-	const memo = memoFor(node, world.sig)
-	if (memo === undefined) {
-		return
-	}
-	for (let i = 0; i < memo.certificate.count; i++) {
-		const source = memo.certificate.entries[i].node
-		if (source !== null) {
-			trackWorldSource(source)
-		}
 	}
 }
 

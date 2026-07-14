@@ -396,12 +396,14 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 					engComputeds.push(createComputed(fn))
 					if (effectRef === null && ix === 0) {
 						effectRef = { computed: 0 }
-						disposeEffect = effect(() => {
-							const v = engComputeds[0].get()
-							if (effectLog.length === 0 || effectLog[effectLog.length - 1] !== v) {
-								effectLog.push(v)
-							}
-						})
+						disposeEffect = effect(
+							() => engComputeds[0].get(),
+							(v) => {
+								if (effectLog.length === 0 || effectLog[effectLog.length - 1] !== v) {
+									effectLog.push(v)
+								}
+							},
+						)
 						refreshExpectedEffect()
 						attachScoped({ computed: 0 }, false)
 					}

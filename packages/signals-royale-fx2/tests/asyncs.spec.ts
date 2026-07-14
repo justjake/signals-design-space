@@ -168,17 +168,18 @@ describe('pending as graph state', () => {
 		const gate = deferred<number>()
 		const c = createComputed((use) => use(gate.promise) * 2)
 		const seen: unknown[] = []
-		effect(() => {
-			try {
-				seen.push(c.get())
-			} catch {
-				seen.push('pending')
-			}
-		})
-		expect(seen).toEqual(['pending'])
+		effect(
+			() => c.get(),
+			(v) => {
+				seen.push(v)
+			},
+		)
+		// A parked first evaluation is silent; the handler first fires at
+		// settlement, which behaves as a write.
+		expect(seen).toEqual([])
 		gate.resolve(21)
 		await tick()
-		expect(seen).toEqual(['pending', 42])
+		expect(seen).toEqual([42])
 	})
 
 	test('throwing settlement notification restores cause and releases suspension', () => {
@@ -244,9 +245,12 @@ describe('pending as graph state', () => {
 
 		const source = createAtom(0)
 		const seen: number[] = []
-		const stop = effect(() => {
-			seen.push(source.get())
-		})
+		const stop = effect(
+			() => source.get(),
+			(v) => {
+				seen.push(v)
+			},
+		)
 		source.set(1)
 		expect(seen).toEqual([0, 1])
 		stop()

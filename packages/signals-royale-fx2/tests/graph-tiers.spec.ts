@@ -17,20 +17,18 @@ import {
 	type ProducerNode,
 	type ReactiveNode,
 	Flag,
+	Lane,
 	NO_EVENT,
 	batch,
 	currentGraphChange,
 	getCurrentWorld,
 	invalidateComputed,
 	makeEffect,
-	makeScheduledEffect,
 	makeScope,
 	observeNode,
 	readAtom,
 	readComputed,
 	setTraceHook,
-	trackWorldRead,
-	trackWorldSource,
 	withWorld,
 	writeAtom,
 } from '../src/graph.ts'
@@ -55,6 +53,18 @@ function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): AtomNode<T> {
 
 function makeGraphComputed<T>(fn: ComputedNode<T>['fn']): ComputedNode<T> {
 	return nodeOf(createComputed(fn)) as ComputedNode<T>
+}
+
+/** A sync-lane engine effect over a spec-local compute. */
+function syncEffect<T>(
+	read: () => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void) = () => {},
+): () => void {
+	return makeEffect(
+		makeGraphComputed(read) as unknown as ComputedNode<unknown>,
+		handler as (value: unknown, previous: unknown) => void | (() => void),
+		Lane.Sync,
+	)
 }
 
 /** Edges in dep's subscriber list pointing at sub (watched edges only). */
@@ -116,7 +126,7 @@ describe('two-tier graph: promote validation', () => {
 		// pre-existing staleness meant the new subscriber never heard anything.
 		const a = atom(1)
 		const d = makeGraphComputed(() => readAtom(a) * 2)
-		const stopEffect = makeEffect(() => void readComputed(d))
+		const stopEffect = syncEffect(() => readComputed(d))
 		batch(() => {
 			writeAtom(a, 2) // marks d through the watched edge
 			stopEffect() // demote runs while d is stale
@@ -154,7 +164,7 @@ describe('two-tier graph: promote/demote structure', () => {
 			return NO_EVENT
 		})
 		try {
-			stop = makeEffect(() => {})
+			stop = syncEffect(() => 0)
 			const captured = watcher
 			if (captured === null) {
 				throw new Error('effect watcher was not traced')
@@ -165,6 +175,8 @@ describe('two-tier graph: promote/demote structure', () => {
 			expect(Object.hasOwn(captured, 'subsTail')).toBe(false)
 			expect(Object.hasOwn(captured, 'observerCount')).toBe(false)
 			expect(Object.hasOwn(captured, 'worldMemos')).toBe(false)
+			// Watchers never validate by clock; the watermark lives on computeds.
+			expect(Object.hasOwn(captured, 'validAtGraphChange')).toBe(false)
 
 			const computed = makeGraphComputed(() => 1)
 			expect(Object.hasOwn(computed, 'changedAtGraphChange')).toBe(true)
@@ -387,9 +399,12 @@ describe('two-tier graph: tracking and waves', () => {
 	test('T10a [falsify-first] changed writes propagate while equality and batching stay quiet', () => {
 		const source = atom(0)
 		const seen: number[] = []
-		const stop = makeEffect(() => {
-			seen.push(readAtom(source))
-		})
+		const stop = syncEffect(
+			() => readAtom(source),
+			(v) => {
+				seen.push(v)
+			},
+		)
 
 		expect(writeAtom(source, 0)).toBe(false)
 		batch(() => {
@@ -497,7 +512,7 @@ describe('two-tier graph: tracking and waves', () => {
 			const previous = top
 			top = createComputed(() => previous.get() + 1)
 		}
-		stop = makeEffect(() => void top.get())
+		stop = syncEffect(() => top.get())
 		base.set(2)
 		expect((nodeOf(top) as ComputedNode<number>).value).toBe(40)
 		expect(top.get()).toBe(40)
@@ -570,7 +585,7 @@ describe('watcher ownership', () => {
 	test('failed watcher setup releases every edge before rethrowing', () => {
 		const source = atom(0)
 		expect(() =>
-			makeEffect(() => {
+			syncEffect(() => {
 				readAtom(source)
 				throw new Error('effect setup')
 			}),
@@ -579,9 +594,7 @@ describe('watcher ownership', () => {
 
 		expect(() =>
 			makeScope(() => {
-				makeEffect(() => {
-					readAtom(source)
-				})
+				syncEffect(() => readAtom(source))
 				throw new Error('scope setup')
 			}),
 		).toThrow('scope setup')
@@ -603,15 +616,13 @@ describe('watcher ownership', () => {
 		const first = atom(0)
 		const second = atom(0)
 		const stop = makeScope(() => {
-			makeEffect(() => {
-				readAtom(first)
-				return () => {
+			syncEffect(
+				() => readAtom(first),
+				() => () => {
 					throw new Error('cleanup')
-				}
-			})
-			makeEffect(() => {
-				readAtom(second)
-			})
+				},
+			)
+			syncEffect(() => readAtom(second))
 		})
 		expect([first.observerCount, second.observerCount]).toEqual([1, 1])
 		expect(stop).toThrow('cleanup')
@@ -622,14 +633,19 @@ describe('watcher ownership', () => {
 	test('an effect replaces the children owned by its previous run', () => {
 		const source = atom(0)
 		const events: string[] = []
-		const stop = makeEffect(() => {
-			const value = readAtom(source)
-			events.push(`parent:${value}`)
-			void makeEffect(() => {
-				events.push(`child:${value}`)
-				return () => events.push(`cleanup:${value}`)
-			})
-		})
+		const stop = syncEffect(
+			() => readAtom(source),
+			(value) => {
+				events.push(`parent:${value}`)
+				void syncEffect(
+					() => 0,
+					() => {
+						events.push(`child:${value}`)
+						return () => events.push(`cleanup:${value}`)
+					},
+				)
+			},
+		)
 
 		writeAtom(source, 1)
 		expect(events).toEqual([
@@ -650,17 +666,21 @@ describe('watcher ownership', () => {
 		let childRuns = 0
 		let stopParent = () => {}
 		let stopChild = () => {}
-		stopParent = makeEffect(() => {
-			readAtom(parentSource)
-			parentRuns++
-			if (parentRuns === 2) {
-				stopParent()
-				stopChild = makeEffect(() => {
-					readAtom(childSource)
-					childRuns++
-				})
-			}
-		})
+		stopParent = syncEffect(
+			() => readAtom(parentSource),
+			() => {
+				parentRuns++
+				if (parentRuns === 2) {
+					stopParent()
+					stopChild = syncEffect(
+						() => readAtom(childSource),
+						() => {
+							childRuns++
+						},
+					)
+				}
+			},
+		)
 
 		writeAtom(parentSource, 1)
 		writeAtom(parentSource, 2)
@@ -669,228 +689,6 @@ describe('watcher ownership', () => {
 		writeAtom(childSource, 2)
 		expect([parentRuns, childRuns]).toEqual([2, 3])
 		stopChild()
-	})
-})
-
-describe('scheduled effect tracking', () => {
-	test('[falsify-first] nested throwing world boundary restores both collectors', () => {
-		const primaryBefore = atom(0)
-		const primaryInside = atom(0)
-		const primaryAfter = atom(0)
-		const wakeBefore = atom(0)
-		const wakeInside = atom(0)
-		const wakeAfter = atom(0)
-		const outer = openDraft()
-		const inner = openDraft()
-		const boom = new Error('world')
-		const effect = makeScheduledEffect(
-			() => {},
-			() => {},
-		)
-
-		effect.run(() => {
-			readAtom(primaryBefore)
-			trackWorldSource(wakeBefore)
-			expect(getCurrentWorld()).toBe(null)
-			expect(() =>
-				withWorld(outer.world, () => {
-					expect(getCurrentWorld()).toBe(outer.world)
-					withWorld(inner.world, () => {
-						expect(getCurrentWorld()).toBe(inner.world)
-						readAtom(primaryInside)
-						trackWorldSource(wakeInside)
-					})
-					expect(getCurrentWorld()).toBe(outer.world)
-					throw boom
-				}),
-			).toThrow(boom)
-			expect(getCurrentWorld()).toBe(null)
-			readAtom(primaryAfter)
-			trackWorldSource(wakeAfter)
-		})
-
-		expect([
-			primaryBefore.observerCount,
-			primaryInside.observerCount,
-			primaryAfter.observerCount,
-			wakeBefore.observerCount,
-			wakeInside.observerCount,
-			wakeAfter.observerCount,
-		]).toEqual([1, 0, 1, 1, 0, 1])
-		effect.dispose()
-		discardDraft(inner.id)
-		discardDraft(outer.id)
-	})
-
-	test('[falsify-first] throwing detached refresh restores the world-source collector', () => {
-		const hiddenSource = atom(0)
-		const throwingTrigger = atom(0)
-		const explicitSource = atom(0)
-		const boom = new Error('equals')
-		const throwing = nodeOf(
-			createComputed(
-				() => {
-					trackWorldSource(hiddenSource)
-					return readAtom(throwingTrigger)
-				},
-				{
-					equals() {
-						throw boom
-					},
-				},
-			),
-		) as ComputedNode<number>
-		readComputed(throwing)
-		writeAtom(throwingTrigger, 1)
-		let schedules = 0
-		const effect = makeScheduledEffect(
-			() => schedules++,
-			() => {},
-		)
-
-		effect.refresh(() => {
-			expect(() => resolveState(throwing, BASE_WORLD)).toThrow(boom)
-			trackWorldSource(explicitSource)
-		})
-
-		expect(hiddenSource.observerCount).toBe(0)
-		expect(explicitSource.observerCount).toBe(1)
-		writeAtom(hiddenSource, 1)
-		expect(schedules).toBe(0)
-		writeAtom(explicitSource, 1)
-		expect(schedules).toBe(1)
-		effect.dispose()
-	})
-
-	test('base invalidations validate equality before scheduling the deferred body', () => {
-		const source = atom(1)
-		let computedRuns = 0
-		const parity = makeGraphComputed(() => {
-			computedRuns++
-			return readAtom(source) & 1
-		})
-		let schedules = 0
-		let bodyRuns = 0
-		const effect = makeScheduledEffect(
-			() => schedules++,
-			() => {},
-		)
-		const first = effect.run(() => {
-			bodyRuns++
-			readComputed(parity)
-		})
-		expect(first?.dep).toBe(parity)
-		expect([computedRuns, bodyRuns, schedules]).toEqual([1, 1, 0])
-
-		writeAtom(source, 3) // parity stays odd: validate, then cut off
-		expect([computedRuns, bodyRuns, schedules]).toEqual([2, 1, 0])
-		writeAtom(source, 4) // parity changes: schedule, but do not run the body
-		expect([computedRuns, bodyRuns, schedules]).toEqual([3, 1, 1])
-		effect.run(() => {
-			bodyRuns++
-			readComputed(parity)
-		})
-		expect(bodyRuns).toBe(2)
-		effect.dispose()
-		expect(source.observerCount).toBe(0)
-	})
-
-	test('world reads link explicitly and draft ids use the separate wake callback', () => {
-		const source = atom(1)
-		let schedules = 0
-		const wakes: number[] = []
-		const effect = makeScheduledEffect(
-			() => schedules++,
-			(id) => wakes.push(id),
-		)
-		const deps = effect.run(() => trackWorldRead(source))
-		expect(deps?.dep).toBe(source)
-		expect(source.observerCount).toBe(1)
-
-		const draft = openDraft()
-		appendDraftIntent(draft, source as AtomNode<unknown>, 'set', 2)
-		expect(schedules).toBe(0) // the draft wake is the write-time host channel
-		expect(wakes).toEqual([draft.id])
-		discardDraft(draft.id)
-		expect(schedules).toBe(1) // no wake: refresh the root-relative world directly
-		expect(wakes).toEqual([draft.id]) // discard pokes but carries no new id
-		effect.dispose()
-		expect(source.observerCount).toBe(0)
-	})
-
-	test('run replaces the tracked dependency set and dispose unlinks it', () => {
-		const left = atom(0)
-		const right = atom(0)
-		let schedules = 0
-		const effect = makeScheduledEffect(
-			() => schedules++,
-			() => {},
-		)
-		effect.run(() => trackWorldRead(left))
-		const deps = effect.run(() => trackWorldRead(right))
-		expect(deps?.dep).toBe(right)
-		expect([left.observerCount, right.observerCount]).toEqual([0, 1])
-		writeAtom(left, 1)
-		expect(schedules).toBe(0)
-		writeAtom(right, 1)
-		expect(schedules).toBe(1)
-		effect.dispose()
-		expect(right.observerCount).toBe(0)
-	})
-
-	test('phase reruns clean up the previous body and dispose cleans up the last', () => {
-		const source = atom(0)
-		const events: string[] = []
-		const effect = makeScheduledEffect(
-			() => events.push('schedule'),
-			() => {},
-		)
-		effect.run(() => {
-			events.push('run:0')
-			readAtom(source)
-			return () => events.push('cleanup:0')
-		})
-		writeAtom(source, 1)
-		expect(events).toEqual(['run:0', 'schedule'])
-		effect.run(() => {
-			events.push('run:1')
-			readAtom(source)
-			return () => events.push('cleanup:1')
-		})
-		expect(events).toEqual(['run:0', 'schedule', 'cleanup:0', 'run:1'])
-		effect.dispose()
-		expect(events).toEqual(['run:0', 'schedule', 'cleanup:0', 'run:1', 'cleanup:1'])
-		expect(source.observerCount).toBe(0)
-	})
-
-	test('cleanup reads do not become committed-world wake sources', () => {
-		const marker = atom(0)
-		const mainSource = createAtom(1)
-		const hiddenSource = createAtom(1)
-		const main = createComputed(() => mainSource.get())
-		const hidden = createComputed(() => hiddenSource.get())
-		const draft = openDraft()
-		appendDraftIntent(draft, marker as AtomNode<unknown>, 'set', 1)
-		let schedules = 0
-		let wakes = 0
-		const effect = makeScheduledEffect(
-			() => schedules++,
-			() => wakes++,
-		)
-		withWorld(draft.world, () =>
-			effect.run(() => {
-				main.get()
-				return () => {
-					hidden.get()
-				}
-			}),
-		)
-		withWorld(draft.world, () => effect.run(() => void main.get()))
-		expect(nodeOf(hiddenSource).observerCount).toBe(0)
-		hiddenSource.set(2)
-		expect([schedules, wakes]).toEqual([0, 0])
-		effect.dispose()
-		discardDraft(draft.id)
 	})
 })
 

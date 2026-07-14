@@ -86,21 +86,18 @@ export const enum Flag {
 	// Watcher capabilities: fixed at creation, present on Watching nodes
 	// only. Scheduling dispatches on these bits, never on whether a callback
 	// happens to be installed. A component subscription is
-	// Watching|WatchRender|WatchDraft; an engine effect is
-	// Watching|WatchRunEffect.
-	/** Deliver through the render-notify queue, after effects settle. The
-	 * subscriber's own notify callback decides whether the delivery becomes
-	 * a re-render. */
+	// Watching|WatchRender|WatchDraft; an effect is Watching|WatchRunEffect.
+	/** Deliver through the render-notify queue, after sync effects settle.
+	 * The subscriber's own notify callback decides whether the delivery
+	 * becomes a re-render. */
 	WatchRender = 0b0000_0000_1000,
-	/** Deliver through the effect queue: validate, then run the body. */
+	/** Effect watcher: at the lane's drain site, pull its pinned compute and
+	 * run the handler when the settled value changed (see drainLane). */
 	WatchRunEffect = 0b0000_0001_0000,
 	/** Draft notifications (see worlds.ts) reach this watcher. Watchers
-	 * without this bit only hear about base-state changes; engine effects
-	 * are all base-state-only. */
+	 * without this bit only hear about base-state changes; effects are all
+	 * base-state-only. */
 	WatchDraft = 0b0000_0010_0000,
-	/** Validation asks the host to schedule the user body instead of running
-	 * it inside the graph flush. Used by React-phase signal effects. */
-	WatchSchedule = 0b100_0000_0000_0000,
 
 	// Staleness: at most one of the pair is set; writers clear the whole
 	// field before setting, so a single-bit test reads the exact state.
@@ -201,11 +198,12 @@ export interface ProducerNode extends ReactiveNode {
 /** State carried only by nodes that read dependencies: computeds and
  * watchers. Atoms produce dependency values but never consume them. */
 export interface ConsumerNode extends ReactiveNode {
-	/** Dependency list in first-read order. */
+	/** Dependency list in first-read order. A computed's list is dynamic,
+	 * rebuilt by each evaluation; a watcher's is one pinned link installed
+	 * at creation (an effect's compute, a subscription's observed node) and
+	 * never re-tracked — dynamic tracking lives only in computeds. */
 	deps: Link | undefined
 	depsTail: Link | undefined
-	/** The clock reading at this consumer's last successful validation or run. */
-	validAtGraphChange: GraphChangeClock
 	/** The last poke walk that reached this node. Equality with the
 	 * running walk's pass means the walk already visited it. */
 	pokePass: PokePass
@@ -226,10 +224,6 @@ function newEvalPass(): EvalPass {
 /** The node whose dependencies are being tracked right now: reads inside
  * an evaluation register edges against this node. */
 let activeConsumer: ConsumerNode | null = null
-/** Auxiliary watcher collecting draft-world certificate sources for the
- * scheduled effect currently running. Those edges wake comparison only;
- * the primary watcher's deps remain the values the user body read. */
-export let activeWorldSourceConsumer: WatcherNode | null = null
 /** The world an evaluation is running in; null means base state. A world
  * boundary also detaches graph collectors owned by its caller. */
 let currentWorld: World | null = null
@@ -315,6 +309,8 @@ export interface ComputedNode<T> extends ProducerNode, ConsumerNode {
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
 	equals: EqualsFn<T>
+	/** The clock reading at this computed's last successful validation. */
+	validAtGraphChange: GraphChangeClock
 }
 
 /** State needed while a scope or effect body owns nested effects. A real
@@ -326,13 +322,45 @@ interface EffectOwner {
 	children: WatcherNode[] | undefined
 }
 
-/** A node that reacts when its dependencies change: effects and
- * render-notify subscribers. */
+/** Which queue an effect watcher's signal-triggered runs drain through.
+ * Setup runs (creation) are always synchronous and unaffected. */
+export const enum Lane {
+	/** Drained by flush(), when the triggering write or batch settles. */
+	Sync = 0,
+	/** Drained by a host pump before the next paint (microtask by default;
+	 * the React entry upgrades to requestAnimationFrame with a timeout
+	 * fallback for hidden tabs). */
+	BeforePaint = 1,
+	/** Drained by a host pump after paint (setTimeout by default; the React
+	 * entry upgrades to the scheduler's NormalPriority — the band React
+	 * uses for its own passive-effect flush). */
+	AfterPaint = 2,
+}
+
+/** A node that reacts when its pinned dependency changes: effects and
+ * render-notify subscribers. Neither kind re-tracks dependencies; an
+ * effect's dynamic tracking happens inside its compute node. */
 export interface WatcherNode extends ConsumerNode, EffectOwner {
-	fn: (() => void | (() => void)) | undefined
+	/** Effect watchers: the pinned compute this watcher delivers. */
+	compute: ComputedNode<unknown> | null
+	/** Effect watchers: the untracked side effect, handed the compute's
+	 * settled value and the previously handled one; may return a cleanup.
+	 * Reads inside the handler are deliberately untracked — a value the
+	 * effect should react to belongs in the compute. */
+	handler: ((value: unknown, previous: unknown) => void | (() => void)) | null
+	/** The compute value the handler last ran with (UNINITIALIZED before
+	 * the first run). The delivery gate compares fresh settled values
+	 * against this rather than trusting the compute's own cutoff, because
+	 * validation and delivery are different moments: change stamps advance
+	 * when a pending or error span ends even on an equal value, and a
+	 * handler can be deferred a round while the graph moves on. */
+	lastHandled: unknown
+	/** Effect watchers: which drain site runs the handler. */
+	lane: Lane
 	cleanup: (() => void) | undefined
-	/** Delivery callback: render notification for WatchRender watchers, or
-	 * the React-phase scheduler for a deferred effect. */
+	/** Render subscribers: delivery callback, run after sync effects
+	 * settle. The callback decides whether the delivery becomes a
+	 * re-render. */
 	onNotify: (() => void) | undefined
 	/** Draft-wake callback: receives the id and cause of a transition draft
 	 * whose new write touches this subscriber's sources. Separate from
@@ -474,21 +502,25 @@ export function removeObserver(node: ProducerNode): void {
 // React component), and the returned cleanup runs when the last observer
 // of every kind is gone.
 //
-// Transitions are settled in a microtask rather than synchronously, so
-// subscribe/unsubscribe flaps within one tick (React StrictMode
-// double-mounts, list reorders) net out instead of tearing the resource
-// down and back up.
+// Transitions are settled in the before-paint drain rather than
+// synchronously, so subscribe/unsubscribe flaps within one task (React
+// StrictMode double-mounts, list reorders) net out instead of tearing the
+// resource down and back up.
 // ---------------------------------------------------------------------------
 
-/** Host microtask scheduler; declared here so the engine typechecks
- * without a DOM or Node lib. */
+/** Host schedulers; declared here so the engine typechecks without a DOM
+ * or Node lib. */
 declare const queueMicrotask: (fn: () => void) => void
+declare const setTimeout: (fn: () => void, ms?: number) => unknown
 
 const pendingLifetimeAtoms = new Set<AtomNode<unknown>>()
 let lifetimeFlushScheduled = false
 
 /** Called whenever an atom's observer count crosses zero in either
- * direction. */
+ * direction. Settlement keeps its own microtask rather than riding the
+ * before-paint pump: an onObserved activation feeds data (sockets,
+ * ctx.set), and delaying it to a frame boundary would show subscribers the
+ * pre-activation value for a visible beat. */
 function noteLifetimeTransition(node: ProducerNode): void {
 	if ((node.flags & Flag.KindAtom) === 0) {
 		return
@@ -606,28 +638,6 @@ function trackRead(dep: ProducerNode, sub: ConsumerNode): Link {
 	return link
 }
 
-/** Link a world-resolved read to the watcher currently collecting
- * dependencies. World evaluation itself runs untracked, so only an
- * explicit watcher run reaches this path. */
-export function trackWorldRead(node: ProducerNode): void {
-	const consumer = activeConsumer
-	if (
-		consumer !== null &&
-		(consumer.flags & (Flag.Watching | Flag.Watched)) === (Flag.Watching | Flag.Watched)
-	) {
-		trackRead(node, consumer)
-	}
-}
-
-/** Link one flattened draft-world certificate source to the auxiliary
- * wake-only watcher of the scheduled effect currently running. */
-export function trackWorldSource(node: ProducerNode): void {
-	const consumer = activeWorldSourceConsumer
-	if (consumer !== null && (consumer.flags & Flag.Watched) !== 0) {
-		trackRead(node, consumer)
-	}
-}
-
 /** Drop dependency edges the just-finished evaluation did not re-read. */
 function trimDeps(sub: ConsumerNode): void {
 	const tail = sub.depsTail
@@ -652,14 +662,90 @@ function trimDeps(sub: ConsumerNode): void {
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
 
-/** Effect watchers scheduled by the current invalidation wave. The array's
- * capacity is retained across waves: it is cleared by resetting
- * effectCount, never by `.length = 0`, because V8 trims the backing store
- * on a length reset and the queue would then re-grow from zero capacity on
- * every wave. The cost of retaining capacity is that consumed slots must
- * be nulled at drain time so they do not pin disposed watchers. */
-const effectQueue: Array<WatcherNode | undefined> = []
-let effectCount = 0
+/** One effect lane: watchers queued toward one drain site. Array capacity
+ * is retained across drains: it is cleared by resetting count, never by
+ * `.length = 0`, because V8 trims the backing store on a length reset and
+ * the queue would then re-grow from zero capacity on every wave. The cost
+ * of retaining capacity is that consumed slots must be nulled so they do
+ * not pin disposed watchers. */
+interface LaneState {
+	queue: Array<WatcherNode | undefined>
+	/** Round cursor; entries below it are consumed. An index rather than
+	 * Array#shift so wide drains stay linear. */
+	head: number
+	count: number
+	/** A host pump callback is requested and has not run yet. */
+	pumpRequested: boolean
+	/** Schedules the lane's drain; null for the sync lane, which flush()
+	 * drains directly. */
+	pump: ((drain: () => void) => void) | null
+}
+
+/** Built-in pumps are dependency-free and environment-safe; the React
+ * entry upgrades them at registration (see Lane). */
+const DEFAULT_PUMPS: ReadonlyArray<LaneState['pump']> = [
+	null,
+	(drain) => queueMicrotask(drain),
+	(drain) => setTimeout(drain, 0),
+]
+
+const lanes: readonly [LaneState, LaneState, LaneState] = [
+	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.Sync] },
+	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.BeforePaint] },
+	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.AfterPaint] },
+]
+
+/** @internal Replace a paint lane's host pump; null restores the built-in.
+ * The pump must eventually invoke the drain exactly once per request. */
+export function setLanePump(lane: Lane, pump: ((drain: () => void) => void) | null): void {
+	lanes[lane].pump = pump ?? DEFAULT_PUMPS[lane]
+}
+
+const drainBeforePaint = (): void => {
+	lanes[Lane.BeforePaint].pumpRequested = false
+	drainLane(lanes[Lane.BeforePaint])
+}
+const drainAfterPaint = (): void => {
+	lanes[Lane.AfterPaint].pumpRequested = false
+	// Lane order is total regardless of pump timing: the after-paint drain
+	// settles the before-paint lane first, because its pump (a scheduler
+	// task) can fire before a requestAnimationFrame pump gets a frame.
+	// Draining early keeps "before paint" true; the rAF then finds an empty
+	// queue.
+	drainLane(lanes[Lane.BeforePaint])
+	drainLane(lanes[Lane.AfterPaint])
+}
+
+function requestLaneDrain(lane: Lane): void {
+	const state = lanes[lane]
+	if (state.pumpRequested) {
+		return
+	}
+	state.pumpRequested = true
+	state.pump!(lane === Lane.BeforePaint ? drainBeforePaint : drainAfterPaint)
+}
+
+/** Drain the paint lanes (and pending onObserved transitions) now — the
+ * seam for tests and headless hosts, since act() and awaits do not flush
+ * scheduler tasks. */
+export function flushScheduledEffects(): void {
+	flushLifetimeTransitions()
+	drainLane(lanes[Lane.BeforePaint])
+	drainLane(lanes[Lane.AfterPaint])
+}
+
+/** @internal Drop queued lane entries without running them (test reset).
+ * Already-requested pumps fire on empty queues, which is harmless. */
+export function resetEffectLanes(): void {
+	for (const state of lanes) {
+		for (let i = 0; i < state.count; i++) {
+			state.queue[i] = undefined
+		}
+		state.head = 0
+		state.count = 0
+		state.pumpRequested = false
+	}
+}
 
 /** Render-notify subscribers scheduled by the current wave; they are
  * notified after effects settle. Double-buffered: a draining wave iterates
@@ -675,7 +761,7 @@ let renderNotifyCount = 0
  * allocates a fresh one instead. */
 let spareRenderNotify: Array<WatcherNode | undefined> | null = []
 
-/** Route a watcher into its flush queue by capability bit. */
+/** Route a watcher into its queue by capability bit and lane. */
 function scheduleWatcher(w: WatcherNode): void {
 	const flags = w.flags
 	// One masked test covering both "already queued" and "disposed"
@@ -686,7 +772,11 @@ function scheduleWatcher(w: WatcherNode): void {
 	if ((flags & Flag.WatchRender) !== 0) {
 		renderNotifyQueue[renderNotifyCount++] = w
 	} else if ((flags & Flag.WatchRunEffect) !== 0) {
-		effectQueue[effectCount++] = w
+		const state = lanes[w.lane]
+		state.queue[state.count++] = w
+		if (w.lane !== Lane.Sync) {
+			requestLaneDrain(w.lane)
+		}
 	} else {
 		return
 	}
@@ -819,17 +909,14 @@ let pokePass: PokePass = 0
  * WatchDraft bit (including ordinary engine effects) are untouched.
  *
  * Render-notify watchers get StaleCheck for consistency with the wave;
- * their bits are write-only until delivery. A host-scheduled effect gets
- * StaleDirty on a no-wake commit/discard poke so base validation cannot hide
- * a root-relative world change; a write's draft wake already schedules it.
+ * their bits are write-only until delivery.
  *
  * `wake`, when present, additionally delivers that draft id to the same
  * watchers in this one walk. Writes into a draft need both notification
  * and delivery; commit and discard call sites poke without waking.
  * `valueChanged`, when present, is a per-producer cutoff: subscribers of a
  * producer whose draft value did not change are skipped, except for
- * value-independent probes and host-scheduled effects that must refresh
- * world source edges. The walk runs in the writer's ambient context, so inside a React
+ * value-independent probes. The walk runs in the writer's ambient context, so inside a React
  * transition the wake dispatches join that transition's updates. Wake
  * delivery happens after the notify flush because the flush's effects may
  * dispose subscriptions, and a disposed subscriber must not receive the
@@ -858,17 +945,9 @@ export function pokeDraftWatchers(
 					const w = sub as WatcherNode
 					// Probes without a draft-wake callback must hear every poke,
 					// because pendingness can change while values stay equal.
-					// Host-scheduled effects also bypass the value cutoff: an
-					// equal computed may have switched world-only source branches,
-					// so its host phase must refresh those wake edges.
-					if (w.onDraftWake === undefined || changed || (flags & Flag.WatchSchedule) !== 0) {
+					if (w.onDraftWake === undefined || changed) {
 						scheduleWatcher(w)
-						if ((flags & Flag.WatchSchedule) !== 0 && wake === undefined) {
-							// A draft poke changes a root-relative world without
-							// necessarily changing base graph readings. Force the host
-							// callback so it can refresh that world's source edges.
-							w.flags = (w.flags & ~Flag.StaleMask) | Flag.StaleDirty
-						} else if ((w.flags & Flag.StaleMask) === 0) {
+						if ((w.flags & Flag.StaleMask) === 0) {
 							w.flags |= Flag.StaleCheck
 						}
 						w.causeEvent = cause
@@ -962,63 +1041,133 @@ export function batch<T>(fn: () => T): T {
 }
 
 let flushing = false
-/** Drain cursor into effectQueue. An index rather than Array#shift: the
- * queue can be large, and repeated shifts would make wide flushes
- * quadratic. */
-let queueHead = 0
 
 /** Hard iteration ceiling: converts a livelock into a thrown error. */
 const enum Limit {
-	/** Queued-effect runs per flush before declaring a non-settling cycle. */
-	FlushRuns = 100_000,
+	/** Queued-effect pulls per drain before declaring a non-settling cycle. */
+	DrainRuns = 100_000,
 }
 
-/** Run queued effects until they settle, then deliver render
- * notifications. A throwing effect aborts the flush; the effects it
+/**
+ * Drain one effect lane: the write path only marked and enqueued, so this
+ * is where an effect validates and runs. Each round is two phases over the
+ * entries queued when it starts (a handler's writes append past the round
+ * and are picked up by the next one):
+ *
+ * 1. Pull. Bring every compute fresh and keep only effects whose settled
+ *    value differs from the last-handled one. Parked computes and equal
+ *    values drop out; nothing here has side effects, so a recompute burst
+ *    never interleaves with handler work.
+ * 2. Run. All survivors' cleanups, then all handlers (React's own
+ *    destroy-all-then-create-all ordering). A survivor re-marked since its
+ *    pull is skipped before its cleanup — the re-mark re-enqueued it, and
+ *    the next round delivers the latest value or nothing. Once a cleanup
+ *    has run, its handler always runs: cleanups never run unpaired.
+ *
+ * A throwing pull, cleanup, or handler aborts the drain; the entries it
  * preempted are cleared rather than left scheduled, so an unrelated later
- * write cannot trigger them with stale marks. */
+ * write cannot trigger them with stale marks. An erroring compute counts
+ * as a throwing pull: the error surfaces from the drain site and the
+ * handler never sees it.
+ */
+function drainLane(state: LaneState): void {
+	let guard = 0
+	try {
+		while (state.head < state.count) {
+			const start = state.head
+			const end = state.count
+			state.head = end
+			// Phase 1: pull.
+			for (let i = start; i < end; i++) {
+				if (++guard > Limit.DrainRuns) {
+					const error = new Error('effect drain did not settle (cycle?)')
+					if (traceHook !== null) {
+						traceHook('flush-error', null, currentCause, { error, phase: 'cycle' })
+					}
+					throw error
+				}
+				const w = state.queue[i]!
+				const flags = w.flags
+				// Consume: clear Scheduled so later writes re-enqueue, and the
+				// staleness marks wholesale — this pull is the validation.
+				w.flags = flags & ~(Flag.Scheduled | Flag.StaleMask)
+				if ((flags & Flag.Watched) === 0) {
+					state.queue[i] = undefined
+					continue
+				}
+				const compute = w.compute!
+				ensureFresh(compute)
+				const cflags = compute.flags
+				if ((cflags & Flag.AsyncError) !== 0) {
+					state.queue[i] = undefined
+					throw (compute.throwable as ErrorBox).error
+				}
+				if ((cflags & Flag.AsyncSuspended) !== 0) {
+					// Parked: silent. Settlement invalidates the compute and the
+					// wave re-enqueues this watcher.
+					state.queue[i] = undefined
+					continue
+				}
+				if (w.lastHandled !== UNINITIALIZED && compute.equals(compute.value, w.lastHandled)) {
+					state.queue[i] = undefined
+					continue
+				}
+			}
+			// Phase 2a: cleanups.
+			for (let i = start; i < end; i++) {
+				const w = state.queue[i]
+				if (w === undefined) {
+					continue
+				}
+				if ((w.flags & (Flag.Scheduled | Flag.Watched)) !== Flag.Watched) {
+					// Re-marked since its pull (Scheduled) or disposed by a sibling
+					// cleanup: skip before the cleanup runs.
+					state.queue[i] = undefined
+					continue
+				}
+				runEffectCleanup(w)
+			}
+			// Phase 2b: handlers, reading the compute's value at run time.
+			for (let i = start; i < end; i++) {
+				const w = state.queue[i]
+				state.queue[i] = undefined
+				if (w === undefined || (w.flags & Flag.Watched) === 0) {
+					continue
+				}
+				runHandler(w)
+			}
+		}
+		state.head = 0
+		state.count = 0
+	} catch (e) {
+		// Clear the entries the throw preempted (see the function comment);
+		// unconsumed slots are nulled like consumed ones.
+		for (let i = 0; i < state.count; i++) {
+			const w = state.queue[i]
+			state.queue[i] = undefined
+			if (w !== undefined) {
+				w.flags &= ~(Flag.Scheduled | Flag.StaleMask)
+			}
+		}
+		state.head = 0
+		state.count = 0
+		throw e
+	}
+}
+
+/** Drain sync effects until they settle, then deliver render
+ * notifications. */
 export function flush(): void {
 	if (flushing) {
 		return
 	}
-	if (effectCount === 0 && renderNotifyCount === 0) {
+	const sync = lanes[Lane.Sync]
+	if (sync.count === sync.head && renderNotifyCount === 0) {
 		return
 	}
 	flushing = true
 	try {
-		let guard = 0
-		while (queueHead < effectCount) {
-			if (++guard > Limit.FlushRuns) {
-				const error = new Error('effect flush did not settle (cycle?)')
-				if (traceHook !== null) {
-					traceHook('flush-error', null, currentCause, { error, phase: 'cycle' })
-				}
-				throw error
-			}
-			const i = queueHead++
-			const w = effectQueue[i]!
-			effectQueue[i] = undefined // consumed slot must not pin the watcher
-			// Clear only Scheduled; runWatcher's validation still needs the
-			// staleness bits.
-			const flags = (w.flags &= ~Flag.Scheduled)
-			if ((flags & Flag.Watched) === 0 || (flags & Flag.StaleMask) === 0) {
-				continue
-			}
-			runWatcher(w)
-		}
-		effectCount = 0
-		queueHead = 0
-	} catch (e) {
-		// Clear the effects the throw preempted (see the function comment);
-		// their unconsumed slots are nulled like consumed ones.
-		for (let i = queueHead; i < effectCount; i++) {
-			const w = effectQueue[i]!
-			effectQueue[i] = undefined
-			w.flags &= ~(Flag.Scheduled | Flag.StaleMask)
-		}
-		effectCount = 0
-		queueHead = 0
-		throw e
+		drainLane(sync)
 	} finally {
 		flushing = false
 		if (renderNotifyCount > 0) {
@@ -1330,14 +1479,11 @@ function chainResolve(start: ComputedNode<unknown>, first: Link): void {
  * and draft-world sources belong only to an explicit outer read. */
 export function ensureFresh(node: ComputedNode<unknown>): void {
 	const prevConsumer = activeConsumer
-	const prevWorldSource = activeWorldSourceConsumer
 	activeConsumer = null
-	activeWorldSourceConsumer = null
 	try {
 		ensureFreshAt(node, 0)
 	} finally {
 		activeConsumer = prevConsumer
-		activeWorldSourceConsumer = prevWorldSource
 	}
 }
 
@@ -1412,14 +1558,11 @@ export function readComputed<T>(node: ComputedNode<T>): T {
 
 export function untracked<T>(fn: () => T): T {
 	const prev = activeConsumer
-	const prevWorldSource = activeWorldSourceConsumer
 	activeConsumer = null
-	activeWorldSourceConsumer = null
 	try {
 		return fn()
 	} finally {
 		activeConsumer = prev
-		activeWorldSourceConsumer = prevWorldSource
 	}
 }
 
@@ -1430,16 +1573,13 @@ export function getCurrentWorld(): World | null {
 export function withWorld<T>(world: World | null, fn: () => T): T {
 	const prevWorld = currentWorld
 	const prevConsumer = activeConsumer
-	const prevWorldSource = activeWorldSourceConsumer
 	currentWorld = world
 	activeConsumer = null
-	activeWorldSourceConsumer = null
 	try {
 		return fn()
 	} finally {
 		currentWorld = prevWorld
 		activeConsumer = prevConsumer
-		activeWorldSourceConsumer = prevWorldSource
 	}
 }
 
@@ -1465,21 +1605,20 @@ export { UNINITIALIZED }
 // Watchers: effects and store subscriptions
 // ---------------------------------------------------------------------------
 
-function makeWatcher(
-	fn: (() => void | (() => void)) | undefined,
-	capabilities: number,
-): WatcherNode {
+function makeWatcher(capabilities: number): WatcherNode {
 	return {
 		// Watchers are born watched: on a watcher the bit means alive, and
 		// it drops at dispose. Capability bits are fixed at creation and
 		// route scheduling for the watcher's whole life.
 		flags: Flag.Watching | Flag.Watched | capabilities,
-		validAtGraphChange: 0,
 		deps: undefined,
 		depsTail: undefined,
 		causeEvent: NO_EVENT,
 		label: undefined,
-		fn,
+		compute: null,
+		handler: null,
+		lastHandled: UNINITIALIZED,
+		lane: Lane.Sync,
 		cleanup: undefined,
 		children: undefined,
 		onNotify: undefined,
@@ -1515,53 +1654,10 @@ function disposeChildren(owner: EffectOwner): void {
 	}
 }
 
-function runWatcher(w: WatcherNode): void {
-	// Validate first: a possibly-stale watcher whose computed dependencies
-	// all recomputed to equal values must not re-run its body. Validation
-	// itself runs user code (computed bodies) that may dispose this very
-	// watcher, so aliveness is re-checked after every pull.
-	if ((w.flags & Flag.StaleCheck) !== 0) {
-		let changed = false
-		for (let l = w.deps; l !== undefined; l = l.nextDep) {
-			const dep = l.dep
-			// Skip the call for a watched clean computed — it has nothing to
-			// validate (same shortcut as readComputed).
-			const dflags = dep.flags
-			if (
-				(dflags & Flag.KindComputed) !== 0 &&
-				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
-			) {
-				ensureFreshAt(dep as ComputedNode<unknown>, 0)
-				if ((w.flags & Flag.Watched) === 0) {
-					return
-				} // disposed mid-validation
-			}
-			if (dep.changedAtGraphChange > w.validAtGraphChange) {
-				changed = true
-				break
-			}
-		}
-		if (!changed) {
-			w.flags &= ~Flag.StaleMask
-			// Stamped only after every dependency was freshened and compared,
-			// same rule as ensureFresh.
-			w.validAtGraphChange = graphChangeClock
-			return
-		}
-	}
-	const flags = (w.flags &= ~Flag.StaleMask)
-	if ((flags & Flag.WatchSchedule) !== 0) {
-		// A scheduled effect has validated a real base-state change. React owns
-		// when its user body runs; acknowledge this reading and ask React to run
-		// the next phase without replacing the body's dependency list.
-		w.validAtGraphChange = graphChangeClock
-		w.onNotify!()
-	} else {
-		executeWatcher(w)
-	}
-}
-
-function executeWatcher(w: WatcherNode): void {
+/** Release the previous run: child effects it created, then its cleanup.
+ * A throwing cleanup poisons the effect — it is disposed fully so it never
+ * half-runs again — and the error surfaces to the drain. */
+function runEffectCleanup(w: WatcherNode): void {
 	// Effects created by the previous run belong to that run.
 	if (w.children !== undefined) {
 		try {
@@ -1586,36 +1682,33 @@ function executeWatcher(w: WatcherNode): void {
 			if (traceHook !== null) {
 				traceHook('cleanup-error', w, w.causeEvent, { error: e })
 			}
-			// A throwing cleanup poisons the effect: dispose it fully so it never
-			// half-runs again, then surface the error.
 			disposeWatcher(w)
 			throw e
 		}
 	}
-	// Only live effect watchers run a body. The cleanup above may have
-	// disposed this watcher, so aliveness is checked here, after it.
-	if ((w.flags & (Flag.WatchRunEffect | Flag.Watched)) !== (Flag.WatchRunEffect | Flag.Watched)) {
-		return
-	}
+}
+
+/** Run an effect's handler with its compute's settled value. The compute
+ * is settled here by construction: a pull that parked was skipped, and a
+ * post-pull invalidation set Scheduled, which skipped the pair. */
+function runHandler(w: WatcherNode): void {
+	const compute = w.compute!
+	const value = compute.value
+	const previous = w.lastHandled === UNINITIALIZED ? undefined : w.lastHandled
+	w.lastHandled = value
 	const prevConsumer = activeConsumer
 	const prevOwner = activeEffectOwner
-	activeConsumer = w
+	// Handler reads are untracked by contract; nested effects belong to
+	// this run.
+	activeConsumer = null
 	activeEffectOwner = w
-	const myPass = newEvalPass()
-	w.depsTail = undefined
 	const trace = traceHook
 	const cause = trace !== null ? trace('effect-run', w, w.causeEvent) : NO_EVENT
-	// The validation watermark is taken before the body runs: if the body
-	// itself writes, its dependencies may change during the run, the write's
-	// wave re-schedules this watcher, and the next validation must see those
-	// dependencies as changed since this run (their stamps exceed the
-	// pre-run reading).
-	const preGraphChange = graphChangeClock
 	const prevCause = setCurrentCause(cause)
 	try {
 		let ret: void | (() => void)
 		try {
-			ret = w.fn!()
+			ret = w.handler!(value, previous)
 		} catch (error) {
 			if (traceHook !== null) {
 				traceHook('effect-error', w, cause, { error })
@@ -1627,11 +1720,8 @@ function executeWatcher(w: WatcherNode): void {
 		}
 	} finally {
 		setCurrentCause(prevCause)
-		evalPass = myPass
 		activeConsumer = prevConsumer
 		activeEffectOwner = prevOwner
-		trimDeps(w)
-		w.validAtGraphChange = preGraphChange
 	}
 }
 
@@ -1690,79 +1780,37 @@ function unlinkAllDeps(w: WatcherNode): void {
 	}
 }
 
-/** @internal A dependency-tracking effect whose user body runs in a
- * host-selected phase rather than inside the graph flush. */
-export interface ScheduledEffect {
-	run(fn: () => void | (() => void)): Link | undefined
-	/** Re-evaluate committed-world source links without running the user
-	 * effect body. Used when its visible dependencies compare equal but a
-	 * computed may have switched branches in that world. The callback receives
-	 * the primary watcher's link head so the host need not retain a copy. */
-	refresh<T>(fn: (dependencies: Link | undefined) => T): T
-	dispose(): void
-}
-
-/** @internal Create a React-phase effect tracker. Base invalidations are
- * value-validated before schedule is called; draft ids use draftWake's
- * separate delivery channel. Its host owns deterministic setup-error and
- * unmount disposal, so this internal handle needs no abandonment finalizer. */
-export function makeScheduledEffect(
-	schedule: () => void,
-	draftWake: (id: DraftId, cause: TraceEventId) => void,
-): ScheduledEffect {
-	const capabilities = Flag.WatchRunEffect | Flag.WatchDraft | Flag.WatchSchedule
-	const w = makeWatcher(undefined, capabilities)
-	const worldSources = makeWatcher(undefined, capabilities)
-	w.onNotify = schedule
-	w.onDraftWake = draftWake
-	worldSources.onNotify = schedule
-	worldSources.onDraftWake = draftWake
-	function runPrimary(): void {
-		executeWatcher(w)
-	}
-	const handle: ScheduledEffect = {
-		run(fn) {
-			if ((w.flags & Flag.Watched) === 0 || (worldSources.flags & Flag.Watched) === 0) {
-				return undefined
-			}
-			w.fn = fn
-			handle.refresh(runPrimary)
-			return w.deps
-		},
-		refresh(fn) {
-			const previous = activeWorldSourceConsumer
-			activeWorldSourceConsumer = worldSources
-			const myPass = newEvalPass()
-			worldSources.depsTail = undefined
-			const preGraphChange = graphChangeClock
-			try {
-				return fn(w.deps)
-			} finally {
-				evalPass = myPass
-				activeWorldSourceConsumer = previous
-				trimDeps(worldSources)
-				worldSources.validAtGraphChange = preGraphChange
-			}
-		},
-		dispose() {
-			// The wake-only watcher must die before the user cleanup: that
-			// cleanup may write one of its sources, and an unmounted host must
-			// not be scheduled again.
-			disposeWatcher(worldSources)
-			disposeWatcher(w)
-		},
-	}
-	return handle
-}
-
-export function makeEffect(fn: () => void | (() => void)): () => void {
-	const w = makeWatcher(fn, Flag.WatchRunEffect)
+/** Create an effect: pin a watcher to `compute` and deliver its settled
+ * value changes to `handler` at the lane's drain site. The first run is
+ * synchronous when the compute settles immediately; a parked first
+ * evaluation stays silent, and its settlement delivers through the lane. A
+ * creation-time compute error disposes the effect and rethrows. */
+export function makeEffect(
+	compute: ComputedNode<unknown>,
+	handler: (value: unknown, previous: unknown) => void | (() => void),
+	lane: Lane,
+): () => void {
+	const w = makeWatcher(Flag.WatchRunEffect)
+	w.compute = compute
+	w.handler = handler
+	w.lane = lane
+	w.label = compute.label
 	const owner = activeEffectOwner
 	if (owner !== null && (owner.flags & Flag.Watched) !== 0) {
 		;(owner.children ??= []).push(w)
 	}
 	try {
-		executeWatcher(w)
+		// The pinned dependency edge watcher → compute. The watcher is born
+		// watched, so this links into the compute's subscriber list and
+		// promotes its chain.
+		trackRead(compute, w)
+		ensureFresh(compute)
+		if ((compute.flags & Flag.AsyncError) !== 0) {
+			throw (compute.throwable as ErrorBox).error
+		}
+		if ((compute.flags & Flag.AsyncSuspended) === 0) {
+			runHandler(w)
+		}
 	} catch (error) {
 		try {
 			disposeWatcher(w)
@@ -1815,7 +1863,7 @@ export function observeNode(
 	notify: () => void,
 	draftWake?: (id: DraftId, cause: TraceEventId) => void,
 ): () => void {
-	const sub = makeWatcher(undefined, Flag.WatchRender | Flag.WatchDraft)
+	const sub = makeWatcher(Flag.WatchRender | Flag.WatchDraft)
 	sub.onNotify = notify
 	sub.onDraftWake = draftWake
 	try {

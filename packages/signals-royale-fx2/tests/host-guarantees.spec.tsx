@@ -4,7 +4,15 @@ import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { committed, createAtom, effect, nodeOf, read, type Atom } from 'signals-royale-fx2'
+import {
+	committed,
+	createAtom,
+	effect,
+	flushScheduledEffects,
+	nodeOf,
+	read,
+	type Atom,
+} from 'signals-royale-fx2'
 import { liveDraftCount, openDraft, runWithDraftWrites } from '../src/worlds.ts'
 import {
 	registerReactSignals,
@@ -66,8 +74,11 @@ describe('registration', () => {
 				handle.dispose()
 			},
 		})
-		const stop = effect(() => void observed.get())
-		await Promise.resolve()
+		const stop = effect(
+			() => observed.get(),
+			() => {},
+		)
+		flushScheduledEffects() // settle the onObserved activation now
 		stop()
 
 		resetReactSignalsForTest()

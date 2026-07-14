@@ -3,7 +3,16 @@
  * useSignalTransition, useCommitted, useAtom, useComputed,
  * useSignalEffect/useSignalLayoutEffect). */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
+import {
+	act,
+	deferred,
+	flushEffects,
+	makeHarness,
+	text,
+	tick,
+	React,
+	type Harness,
+} from './helpers.tsx'
 import {
 	attachTracer,
 	createComputed,
@@ -519,25 +528,14 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 		const { createRoot } = await import('react-dom/client')
 		const tracer = attachTracer()
 		const a = createAtom(1)
+		// useSignalEffect and useSignalLayoutEffect are absent deliberately:
+		// they observe base state, which needs no root channel, so they work
+		// without a provider.
 		const cases: Array<[string, () => React.ReactNode]> = [
 			['useValue', () => <span>{useValue(a)}</span>],
 			['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
 			['useIsPending', () => <span>{String(useIsPending(a))}</span>],
 			['useCommitted', () => <span>{useCommitted(a)}</span>],
-			[
-				'useSignalEffect',
-				() => {
-					useSignalEffect(() => {})
-					return null
-				},
-			],
-			[
-				'useSignalLayoutEffect',
-				() => {
-					useSignalLayoutEffect(() => {})
-					return null
-				},
-			],
 		]
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
@@ -792,15 +790,19 @@ describe('fx2 extras', () => {
 		expect(pendingRenders).toBe(3)
 	})
 
-	test('useAtom is component-owned; useComputed derives; useSignalEffect observes commits', async () => {
+	test('useAtom is component-owned; useComputed derives; useSignalEffect observes base', async () => {
 		const base = createAtom(2)
 		const effectSeen: number[] = []
 		function App() {
 			const own = useAtom(10)
 			const sum = useComputed(() => base.get() + own.get(), [own])
-			useSignalEffect(() => {
-				effectSeen.push(base.get())
-			})
+			useSignalEffect(
+				() => base.get(),
+				(v) => {
+					effectSeen.push(v)
+				},
+				[],
+			)
 			return (
 				<span>
 					s:{sum};o:{useValue(own)};
@@ -812,6 +814,7 @@ describe('fx2 extras', () => {
 		await act(() => {
 			base.set(3)
 		})
+		await flushEffects()
 		expect(text(container)).toBe('s:13;o:10;')
 		expect(effectSeen).toEqual([2, 3])
 	})

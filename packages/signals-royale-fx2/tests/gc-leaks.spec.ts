@@ -142,7 +142,10 @@ describe('leak audit', () => {
 
 	test('disposing an effect deterministically unlinks now (no GC needed)', () => {
 		const base = createAtom(1)
-		const dispose = effect(() => void base.get())
+		const dispose = effect(
+			() => base.get(),
+			() => {},
+		)
 		expect(subCount(base)).toBe(1)
 		dispose()
 		expect(subCount(base)).toBe(0)
@@ -158,10 +161,13 @@ describe('leak audit', () => {
 		const atom = createAtom(0)
 		const payloadRef = (() => {
 			const payload = { tag: 'effect-closure-payload' }
-			const dispose = effect(() => {
-				atom.get()
-				void payload
-			})
+			const dispose = effect(
+				() => {
+					void payload
+					return atom.get()
+				},
+				() => {},
+			)
 			atom.set(1) // flush enqueues and runs the watcher (slot consumed)
 			dispose()
 			return new WeakRef(payload)
@@ -195,7 +201,10 @@ describe('leak audit', () => {
 				top = createComputed(() => previous.get() + 1)
 				nodes.push(top)
 			}
-			const dispose = effect(() => void top.get())
+			const dispose = effect(
+				() => top.get(),
+				() => {},
+			)
 			base.set(1)
 			savedRef = new WeakRef(nodeOf(nodes[23]))
 			dispose()
@@ -223,19 +232,24 @@ describe('leak audit', () => {
 		const atom = createAtom(0)
 		let armed = false
 		const payloadRef = (() => {
-			const disposeThrowing = effect(() => {
-				atom.get()
-				if (armed) {
-					throw new Error('boom')
-				}
-			})
-			// Scheduled behind the thrower: the aborted flush clears it via the
+			const disposeThrowing = effect(
+				() => atom.get(),
+				() => {
+					if (armed) {
+						throw new Error('boom')
+					}
+				},
+			)
+			// Scheduled behind the thrower: the aborted drain clears it via the
 			// catch path, which must null its unconsumed slot too.
 			const payload = { tag: 'preempted-effect-payload' }
-			const disposePreempted = effect(() => {
-				atom.get()
-				void payload
-			})
+			const disposePreempted = effect(
+				() => {
+					void payload
+					return atom.get()
+				},
+				() => {},
+			)
 			armed = true
 			expect(() => atom.set(1)).toThrow('boom')
 			disposeThrowing()
@@ -254,10 +268,12 @@ describe('leak audit', () => {
 			// Common usage: the per-effect disposer is dropped because the scope
 			// owns the effect. Collecting that disposer is not abandonment — the
 			// effect must stay live until the scope goes.
-			void effect(() => {
-				base.get()
-				runs++
-			})
+			void effect(
+				() => base.get(),
+				() => {
+					runs++
+				},
+			)
 		})
 		expect(runs).toBe(1)
 		base.set(2)

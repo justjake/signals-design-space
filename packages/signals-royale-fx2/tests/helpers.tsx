@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import { flushScheduledEffects } from 'signals-royale-fx2'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
@@ -79,4 +80,13 @@ export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; s
 }
 
 export const tick = (ms = 0): Promise<void> => new Promise((res) => setTimeout(() => res(), ms))
+
+/** Drain both paint lanes deterministically — act() never flushes scheduler
+ * or rAF pumps, so lane-delivered handlers are asserted after this. Wrapped
+ * in act so handler writes that re-render components stay inside it. */
+export const flushEffects = (): Promise<void> =>
+	act(async () => {
+		flushScheduledEffects()
+	})
+
 export { act, React }

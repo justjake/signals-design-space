@@ -24,9 +24,11 @@ import * as React from 'react'
 import * as Scheduler from 'scheduler'
 import {
 	Flag,
+	Lane,
 	isUninitialized,
 	NO_EVENT,
 	pokeDraftWatchers,
+	setLanePump,
 	type ProducerNode,
 	type TraceEventId,
 } from '../graph.ts'
@@ -514,10 +516,45 @@ export function confirmRootCommit(
 	}
 }
 
+/** Before-paint pump upgrade: requestAnimationFrame runs at the head of
+ * the rendering steps — after every React commit in the frame, before
+ * paint — and coalesces a whole frame's writes into one drain. rAF never
+ * fires in hidden tabs, so a timeout backstop keeps effects live there;
+ * whichever fires first runs the drain and the other no-ops. */
+function beforePaintPump(drain: () => void): void {
+	if (typeof requestAnimationFrame !== 'function') {
+		queueMicrotask(drain)
+		return
+	}
+	let ran = false
+	const run = (): void => {
+		if (!ran) {
+			ran = true
+			drain()
+		}
+	}
+	requestAnimationFrame(run)
+	setTimeout(run, 34)
+}
+
+/** After-paint pump upgrade: the scheduler band React uses for its own
+ * passive-effect flush, so both flushes interleave at one priority. */
+function afterPaintPump(drain: () => void): void {
+	try {
+		Scheduler.unstable_scheduleCallback(Scheduler.unstable_NormalPriority, drain)
+	} catch (error) {
+		getActiveTracer()?.emit('scheduler-fallback', null, NO_EVENT, {
+			error,
+			phase: 'after-paint-pump',
+		})
+		setTimeout(drain, 0)
+	}
+}
+
 /**
  * Install the bindings' hooks into the engine (write classification, the
- * write-during-render guard, the render-world provider). Idempotent per
- * process.
+ * write-during-render guard, the render-world provider, the paint-lane
+ * pumps). Idempotent per process.
  */
 export function registerReactSignals(): ReactSignalsHandle {
 	if (handle !== null) {
@@ -526,6 +563,8 @@ export function registerReactSignals(): ReactSignalsHandle {
 	setAmbientClassifier(ambientClassifier)
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
+	setLanePump(Lane.BeforePaint, beforePaintPump)
+	setLanePump(Lane.AfterPaint, afterPaintPump)
 	handle = {
 		dispose() {
 			if (handle === null) {
@@ -534,6 +573,8 @@ export function registerReactSignals(): ReactSignalsHandle {
 			setAmbientClassifier(null)
 			setRenderWriteGuard(null)
 			setRenderWorldProvider(null)
+			setLanePump(Lane.BeforePaint, null)
+			setLanePump(Lane.AfterPaint, null)
 			handle = null
 		},
 	}
@@ -556,3 +597,5 @@ export function resetReactSignalsForTest(): void {
 }
 
 declare const queueMicrotask: (fn: () => void) => void
+declare const setTimeout: (fn: () => void, ms?: number) => unknown
+declare const requestAnimationFrame: ((fn: () => void) => number) | undefined

@@ -28,6 +28,9 @@ type Cell = Signal<unknown>
 
 let disposeScope: (() => void) | null = null
 
+const NEVER_EQUAL = (): boolean => false
+const NOOP_HANDLER = (): void => {}
+
 const framework: ReactiveFramework<Cell> = {
 	name: 'Royale FX2',
 	createSignal(initialValue) {
@@ -52,7 +55,10 @@ const framework: ReactiveFramework<Cell> = {
 		return (cell as Computed<unknown>).get()
 	},
 	effect(fn) {
-		effect(fn)
+		// The benchmark's effect is a single tracked body (it reads and
+		// counts, never writes signals): run it as the compute, deliver to a
+		// no-op handler on every re-run.
+		effect(fn, NOOP_HANDLER, { equals: NEVER_EQUAL })
 	},
 	withBatch(fn) {
 		batch(fn)

@@ -43,35 +43,26 @@ import {
 import {
 	createAtom,
 	createComputed,
+	effect,
 	isPendingPassive,
 	isUninitialized,
 	nodeOf,
 	type Atom,
 	type AtomOptions,
+	type EqualsFn,
 	type Signal,
+	type UseFn,
 } from '../index.ts'
 import { isErrorBox, type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
 	Flag,
 	NO_EVENT,
-	activeWorldSourceConsumer,
-	withWorld,
-	makeScheduledEffect,
 	observeNode,
 	type GraphChangeClock,
-	type Link,
 	type ProducerNode,
-	type ScheduledEffect,
 	type TraceEventId,
 } from '../graph.ts'
-import {
-	BASE_WORLD,
-	resolveState,
-	trackWorldSources,
-	worldOf,
-	type DraftId,
-	type World,
-} from '../worlds.ts'
+import { BASE_WORLD, resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
 import { getActiveTracer } from '../tracer.ts'
 import {
 	correctSubscription,
@@ -106,17 +97,6 @@ interface UseValueState {
 const NOOP = (): void => {}
 const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
-interface SignalEffectState {
-	effect: ScheduledEffect | null
-	/** The connection whose committed world the installed watcher currently uses. */
-	connection: ReactRootConnection | null
-	/** Committed values parallel to the dependency links owned by the watcher. */
-	dependencyValues: unknown[]
-	version: number
-	running: boolean
-	rerunRequested: boolean
-}
-
 const NO_IDS: readonly DraftId[] = []
 
 function forceReducer(count: number): number {
@@ -133,59 +113,6 @@ function committedSnapshot(node: ProducerNode, connection: ReactRootConnection):
 		return st.throwable
 	}
 	return isUninitialized(st.value) ? undefined : st.value
-}
-
-function signalEffectValue(node: ProducerNode, world: World): unknown {
-	const state = resolveState(node, world)
-	if (activeWorldSourceConsumer !== null && (node.flags & Flag.KindComputed) !== 0) {
-		trackWorldSources(node, world)
-	}
-	if ((state.flags & Flag.AsyncError) !== 0) {
-		return state.throwable
-	}
-	if ((state.flags & Flag.AsyncSuspended) !== 0 && isUninitialized(state.value)) {
-		return state.throwable
-	}
-	return state.value
-}
-
-function signalEffectDependenciesChanged(
-	state: SignalEffectState,
-	link: Link | undefined,
-	world: World,
-): boolean {
-	for (let i = 0; i < state.dependencyValues.length; i++) {
-		if (!Object.is(signalEffectValue(link!.dep, world), state.dependencyValues[i])) {
-			return true
-		}
-		link = link!.nextDep
-	}
-	return false
-}
-
-/** Dispose a scheduled effect and release every hook-side reference it
- * retained. Used both by React unmount and by the setup-throw path, where a
- * later cleanup hook in the same commit would never get a chance to mount. */
-function disposeSignalEffect(state: SignalEffectState): void {
-	const effect = state.effect
-	const connection = state.connection
-	try {
-		if (effect !== null) {
-			const world = connection === null ? null : committedWorld(connection)
-			if (world === null || world.drafts.length === 0) {
-				effect.dispose()
-			} else {
-				withWorld(world, () => effect.dispose())
-			}
-		}
-	} finally {
-		state.effect = null
-		state.connection = null
-		state.version = -1
-		state.running = false
-		state.rerunRequested = false
-		state.dependencyValues.length = 0
-	}
 }
 
 /** These hooks cannot work without a SignalsFrameworkProvider. The root
@@ -382,103 +309,58 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	return useValue(c)
 }
 
-function useSignalEffectImpl(
-	fn: () => void | (() => void),
+/**
+ * The component-owned effect: engine effect() with React-phase setup.
+ * Creation and deps-array changes run inside the matching React phase, so
+ * the first run lands exactly in React's phase and tree order; only
+ * signal-triggered re-runs use the effect's lane. The handler reads
+ * through a latest ref, so it sees the most recent committed render's
+ * props without re-creating the effect. Both hooks observe base state and
+ * therefore need no provider.
+ */
+function useSignalPhaseEffect<T>(
 	usePhaseEffect: typeof useEffect,
-	connection: ReactRootConnection,
+	schedule: 'before-paint' | 'after-paint',
+	compute: (use: UseFn, previous: T | undefined) => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	deps: React.DependencyList,
+	equals: EqualsFn<T> | undefined,
 ): void {
-	const [version, schedule] = useReducer(forceReducer, 0)
-	const stateRef = useRef<SignalEffectState | null>(null)
-	let state = stateRef.current
-	if (state === null) {
-		state = {
-			effect: null,
-			connection: null,
-			dependencyValues: [],
-			version: -1,
-			running: false,
-			rerunRequested: false,
-		}
-		stateRef.current = state
-	}
+	const latestHandler = useRef(handler)
+	// Declared before the keyed effect, so on a deps-change commit the ref
+	// holds this render's handler before the new effect's first run.
 	usePhaseEffect(() => {
-		const connectionChanged = state.connection !== connection
-		const signalRequested = state.version !== version
-		const rerunRequested = state.rerunRequested
-		if (!connectionChanged && !signalRequested && !rerunRequested) {
-			return
-		}
-		state.connection = connection
-		state.version = version
-		state.rerunRequested = false
-		const world = committedWorld(connection)
-		if (
-			!connectionChanged &&
-			!rerunRequested &&
-			state.effect !== null &&
-			!state.effect.refresh((dependencies) =>
-				signalEffectDependenciesChanged(state, dependencies, world),
-			)
-		) {
-			return
-		}
-		state.effect ??= makeScheduledEffect(
-			() => {
-				if (state.running) {
-					state.rerunRequested = true
-					schedule()
-					return
-				}
-				const committedConnection = state.connection
-				if (committedConnection !== null && state.effect !== null) {
-					const changed = state.effect.refresh((dependencies) =>
-						signalEffectDependenciesChanged(
-							state,
-							dependencies,
-							committedWorld(committedConnection),
-						),
-					)
-					if (changed) {
-						schedule()
-					}
-				}
-			},
-			() => schedule(),
-		)
-		try {
-			state.running = true
-			let dependencies: Link | undefined
-			try {
-				const effect = state.effect
-				dependencies =
-					world.drafts.length === 0 ? effect.run(fn) : withWorld(world, () => effect.run(fn))
-			} finally {
-				state.running = false
-			}
-			let count = 0
-			for (let link = dependencies; link !== undefined; link = link.nextDep) {
-				state.dependencyValues[count] = signalEffectValue(link.dep, world)
-				count++
-			}
-			state.dependencyValues.length = count
-		} catch (error) {
-			disposeSignalEffect(state)
-			throw error
-		}
+		latestHandler.current = handler
 	})
-	usePhaseEffect(() => {
-		return () => disposeSignalEffect(state)
-	}, [])
+	usePhaseEffect(
+		() => effect(compute, (value, previous) => latestHandler.current(value, previous), { equals, schedule }),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		deps,
+	)
 }
 
-/** Run a tracked signal effect during React's passive-effect phase. */
-export function useSignalEffect(fn: () => void | (() => void)): void {
-	useSignalEffectImpl(fn, useEffect, requireRootConnection('useSignalEffect'))
+/** A signal effect whose setup runs in React's passive phase and whose
+ * signal-triggered re-runs drain after paint, batched at React's own
+ * passive priority. See effect() for the compute/handler contract. */
+export function useSignalEffect<T>(
+	compute: (use: UseFn, previous: T | undefined) => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	deps: React.DependencyList,
+	opts?: { equals?: EqualsFn<T> },
+): void {
+	useSignalPhaseEffect(useEffect, 'after-paint', compute, handler, deps, opts?.equals)
 }
 
-/** Run a tracked signal effect during React's layout-effect phase. */
-export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
-	useSignalEffectImpl(fn, useLayoutEffect, requireRootConnection('useSignalLayoutEffect'))
+/** A signal effect whose setup runs in React's layout phase and whose
+ * signal-triggered re-runs drain before the next paint. See effect() for
+ * the compute/handler contract. */
+export function useSignalLayoutEffect<T>(
+	compute: (use: UseFn, previous: T | undefined) => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	deps: React.DependencyList,
+	opts?: { equals?: EqualsFn<T> },
+): void {
+	useSignalPhaseEffect(useLayoutEffect, 'before-paint', compute, handler, deps, opts?.equals)
 }
 
 /** True while newer data exists behind the committed value of x: a

@@ -22,14 +22,15 @@ import {
 	type TraceEventId,
 	type UseFn,
 	Flag,
+	Lane,
 	NO_EVENT,
 	UNINITIALIZED,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
-	activeWorldSourceConsumer,
 	activeEvaluation,
 	currentCause,
 	flushLifetimeTransitions,
+	flushScheduledEffects,
 	getActiveConsumer,
 	getCurrentWorld,
 	isUninitialized,
@@ -38,8 +39,8 @@ import {
 	peekAtom,
 	readAtom,
 	readComputed,
+	resetEffectLanes,
 	runUpdater,
-	trackWorldRead,
 	startBatch as graphStartBatch,
 	endBatch as graphEndBatch,
 	batch as graphBatch,
@@ -73,7 +74,6 @@ import {
 	resolveState,
 	resolveStateUntracked,
 	setAmbientClassifier,
-	trackWorldSources,
 	unwrapForEval,
 	worldOf,
 } from './worlds.ts'
@@ -147,15 +147,15 @@ const Atom = class<T> implements AtomNode<T> {
 		this.lifetimeActive = false
 		this.worldMemos = undefined
 	}
-	/** Tracked read. An active world (draft evaluation or committed-root
-	 * effect) selects that world; otherwise this reads base state. */
+	/** Tracked read. An active world (a draft evaluation) selects that
+	 * world; otherwise this reads base state. World evaluations run
+	 * untracked — their staleness evidence is the certificate, not graph
+	 * edges — so only the base branch registers a dependency. */
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
 			// Every read within a selected world resolves that same world.
-			const state = resolveState(this, world)
-			trackWorldRead(this)
-			return state.value as T
+			return resolveState(this, world).value as T
 		}
 		return readAtom(this)
 	}
@@ -224,12 +224,7 @@ function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	const world = getCurrentWorld()
 	if (world !== null) {
 		// Every read within a selected world resolves that same world.
-		const state = resolveState(this, world)
-		trackWorldRead(this)
-		if (activeWorldSourceConsumer !== null) {
-			trackWorldSources(this, world)
-		}
-		return unwrapComputedWorldState<T>(state)
+		return unwrapComputedWorldState<T>(resolveState(this, world))
 	}
 	const value = readComputed(this)
 	if ((this.flags & Flag.AsyncMask) !== 0) {
@@ -341,13 +336,11 @@ function stateValue(st: ResolvedState): unknown {
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = getCurrentWorld()
-	const trackSelectedWorld = world !== null
 	if (world === null) {
 		if (getActiveConsumer() !== null) {
-			// A base-state evaluation (computed or effect) is running. Its
-			// world is base state, and this read is a real dependency: track
-			// it so a later change to x re-runs the consumer rather than
-			// leaving it permanently stale.
+			// A base-state evaluation is running. Its world is base state, and
+			// this read is a real dependency: track it so a later change to x
+			// re-runs the consumer rather than leaving it permanently stale.
 			world = BASE_WORLD
 			if ((node.flags & Flag.KindAtom) !== 0) {
 				readAtom(node as AtomNode<unknown>)
@@ -357,20 +350,8 @@ export function latest<T>(x: Signal<T>): T {
 		} else {
 			world = renderWorld() ?? latestWorld()
 		}
-	} else {
-		// Scheduled React effects select their root's committed world before
-		// running. That world selection must not turn latest() into an
-		// untracked read; trackWorldRead is a no-op outside a watcher.
-		trackWorldRead(node)
 	}
 	const st = resolveState(node, world)
-	if (
-		trackSelectedWorld &&
-		activeWorldSourceConsumer !== null &&
-		(node.flags & Flag.KindComputed) !== 0
-	) {
-		trackWorldSources(node, world)
-	}
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		throw (st.throwable as ErrorBox).error
 	}
@@ -503,8 +484,59 @@ export function read<T>(x: Signal<T>): T {
 // Effects, batching, untracked
 // ---------------------------------------------------------------------------
 
-export const effect: (fn: () => void | (() => void)) => () => void = makeEffect
+/** When an effect's signal-triggered re-runs drain. Setup runs (creation,
+ * or a React deps change) are synchronous and unaffected. */
+export type EffectSchedule = 'sync' | 'before-paint' | 'after-paint'
+
+/** Options accepted by effect(). `equals` and `label` configure the
+ * compute exactly as on createComputed; the same `equals` also gates
+ * delivery, comparing fresh settled values against the last-handled one. */
+export interface EffectOptions<T> extends ComputedOptions<T> {
+	schedule?: EffectSchedule
+}
+
+/**
+ * An effect is two functions with different rules. `compute` is a real
+ * computed: tracked dynamically, cached, cut off by equals, async-capable
+ * through use(), handed its own previous value. `handler` runs untracked
+ * with the compute's settled (value, previous-handled) pair when that
+ * value changes, and may return a cleanup that runs before the next
+ * handler run and at disposal. Reads inside the handler are deliberately
+ * untracked — a value the effect should react to belongs in the compute.
+ *
+ * The first run is synchronous at creation when the compute settles
+ * immediately; a parked first evaluation fires its first handler at
+ * settlement, on the schedule. Parking is silent (the previous value
+ * keeps serving; isPending is the indicator), settlement fires only when
+ * the settled value differs from the last-handled one, and a compute
+ * error rethrows from the drain site without calling the handler.
+ *
+ * Effects observe base state only: a drafted write is invisible, and a
+ * transition reaches every effect exactly once, at retirement, through
+ * the normal write path. See docs/effects.md for the full contract.
+ */
+export function effect<T>(
+	compute: (use: UseFn, previous: T | undefined) => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	opts?: EffectOptions<T>,
+): () => void {
+	const node = createComputed(compute, opts)
+	const schedule = opts?.schedule
+	const lane =
+		schedule === 'before-paint'
+			? Lane.BeforePaint
+			: schedule === 'after-paint'
+				? Lane.AfterPaint
+				: Lane.Sync
+	return makeEffect(
+		node as unknown as ComputedNode<unknown>,
+		handler as (value: unknown, previous: unknown) => void | (() => void),
+		lane,
+	)
+}
+
 export const effectScope: (fn: () => void) => () => void = makeScope
+export { flushScheduledEffects }
 export const batch: <T>(fn: () => T) => T = graphBatch
 export const startBatch: () => void = graphStartBatch
 export const endBatch: () => void = graphEndBatch
@@ -622,6 +654,7 @@ function renderWorld(): World | null {
 export function resetEngineForTest(): void {
 	discardAllDrafts()
 	flushLifetimeTransitions()
+	resetEffectLanes()
 	setAmbientClassifier(null)
 	setRenderWriteGuard(null)
 	renderWorldProvider = null
