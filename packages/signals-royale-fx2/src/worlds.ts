@@ -427,9 +427,9 @@ export function discardDraft(id: DraftId): void {
 	releaseDraft(draft)
 }
 
-/** Release a dead draft's logs and, when it was the last live draft, every
- * world memo. A log whose intents are all dead is
- * deleted. Otherwise its leading run of dead intents is folded into
+/** Release a dead draft's logs and, when no live drafts remain, clear all
+ * remaining logs and world memos. A log whose intents are all dead is deleted.
+ * Otherwise its leading run of dead intents is folded into
  * valueBeforeDrafts so logs stay bounded. Folding must stop at the first
  * live intent: intents after it may be updater functions whose results
  * depend on that intent's world-specific value. */
