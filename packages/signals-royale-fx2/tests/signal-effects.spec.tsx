@@ -145,6 +145,34 @@ describe('scheduled React signal effects', () => {
 		expect(seen).toEqual([0, 1])
 	})
 
+	test('dependency snapshots shrink and expand with the watcher links', async () => {
+		for (const phase of ['layout', 'passive'] as const) {
+			const wide = createAtom(true)
+			const first = createAtom(0)
+			const second = createAtom(0)
+			const seen: string[] = []
+			function App() {
+				const usePhase = phase === 'layout' ? useSignalLayoutEffect : useSignalEffect
+				usePhase(() => {
+					const isWide = wide.get()
+					const values = `${isWide}:${first.get()}`
+					seen.push(isWide ? `${values}:${second.get()}` : values)
+				})
+				return null
+			}
+			await h.mount(<App />)
+			expect(seen, phase).toEqual(['true:0:0'])
+			await act(() => wide.set(false))
+			expect(seen, phase).toEqual(['true:0:0', 'false:0'])
+			await act(() => second.set(1))
+			expect(seen, phase).toEqual(['true:0:0', 'false:0'])
+			await act(() => wide.set(true))
+			expect(seen, phase).toEqual(['true:0:0', 'false:0', 'true:0:1'])
+			await act(() => second.set(2))
+			expect(seen, phase).toEqual(['true:0:0', 'false:0', 'true:0:1', 'true:0:2'])
+		}
+	})
+
 	test('a throwing initial body disposes its watcher in either phase', async () => {
 		for (const phase of ['layout', 'passive'] as const) {
 			const atom = createAtom(0)

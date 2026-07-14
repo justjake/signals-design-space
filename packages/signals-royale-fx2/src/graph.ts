@@ -1677,8 +1677,9 @@ export interface ScheduledEffect {
 	run(fn: () => void | (() => void)): Link | undefined
 	/** Re-evaluate committed-world source links without running the user
 	 * effect body. Used when its visible dependencies compare equal but a
-	 * computed may have switched branches in that world. */
-	refresh<T>(fn: () => T): T
+	 * computed may have switched branches in that world. The callback receives
+	 * the primary watcher's link head so the host need not retain a copy. */
+	refresh<T>(fn: (dependencies: Link | undefined) => T): T
 	dispose(): void
 }
 
@@ -1716,7 +1717,7 @@ export function makeScheduledEffect(
 			worldSources.depsTail = undefined
 			const preGraphChange = graphChangeClock
 			try {
-				return fn()
+				return fn(w.deps)
 			} finally {
 				evalPass = myPass
 				activeWorldSourceConsumer = previous

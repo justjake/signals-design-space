@@ -112,11 +112,8 @@ interface SignalEffectState {
 	effect: ScheduledEffect | null
 	/** The connection whose committed world the installed watcher currently uses. */
 	connection: ReactRootConnection | null
-	/** The watcher owns dependency identity and edges. This is only its
-	 * current link head plus parallel per-root committed values. */
-	dependencies: Link | undefined
+	/** Committed values parallel to the dependency links owned by the watcher. */
 	dependencyValues: unknown[]
-	dependencyCount: number
 	version: number
 	running: boolean
 	rerunRequested: boolean
@@ -142,9 +139,12 @@ function signalEffectValue(node: ProducerNode, world: World): unknown {
 	return state.value
 }
 
-function signalEffectDependenciesChanged(state: SignalEffectState, world: World): boolean {
-	let link = state.dependencies
-	for (let i = 0; i < state.dependencyCount; i++) {
+function signalEffectDependenciesChanged(
+	state: SignalEffectState,
+	link: Link | undefined,
+	world: World,
+): boolean {
+	for (let i = 0; i < state.dependencyValues.length; i++) {
 		if (!Object.is(signalEffectValue(link!.dep, world), state.dependencyValues[i])) {
 			return true
 		}
@@ -171,14 +171,10 @@ function disposeSignalEffect(state: SignalEffectState): void {
 	} finally {
 		state.effect = null
 		state.connection = null
-		state.dependencies = undefined
 		state.version = -1
 		state.running = false
 		state.rerunRequested = false
-		for (let i = 0; i < state.dependencyCount; i++) {
-			state.dependencyValues[i] = undefined
-		}
-		state.dependencyCount = 0
+		state.dependencyValues.length = 0
 	}
 }
 
@@ -388,9 +384,7 @@ function useSignalEffectImpl(
 		state = {
 			effect: null,
 			connection: null,
-			dependencies: undefined,
 			dependencyValues: [],
-			dependencyCount: 0,
 			version: -1,
 			running: false,
 			rerunRequested: false,
@@ -412,7 +406,9 @@ function useSignalEffectImpl(
 			!connectionChanged &&
 			!rerunRequested &&
 			state.effect !== null &&
-			!state.effect.refresh(() => signalEffectDependenciesChanged(state, world))
+			!state.effect.refresh((dependencies) =>
+				signalEffectDependenciesChanged(state, dependencies, world),
+			)
 		) {
 			return
 		}
@@ -425,8 +421,12 @@ function useSignalEffectImpl(
 				}
 				const committedConnection = state.connection
 				if (committedConnection !== null && state.effect !== null) {
-					const changed = state.effect.refresh(() =>
-						signalEffectDependenciesChanged(state, committedWorldOf(committedConnection)),
+					const changed = state.effect.refresh((dependencies) =>
+						signalEffectDependenciesChanged(
+							state,
+							dependencies,
+							committedWorldOf(committedConnection),
+						),
 					)
 					if (changed) {
 						schedule()
@@ -437,23 +437,20 @@ function useSignalEffectImpl(
 		)
 		try {
 			state.running = true
+			let dependencies: Link | undefined
 			try {
 				const effect = state.effect
-				state.dependencies =
+				dependencies =
 					world.drafts.length === 0 ? effect.run(fn) : withWorld(world, () => effect.run(fn))
 			} finally {
 				state.running = false
 			}
-			const previousCount = state.dependencyCount
 			let count = 0
-			for (let link = state.dependencies; link !== undefined; link = link.nextDep) {
+			for (let link = dependencies; link !== undefined; link = link.nextDep) {
 				state.dependencyValues[count] = signalEffectValue(link.dep, world)
 				count++
 			}
-			for (let i = count; i < previousCount; i++) {
-				state.dependencyValues[i] = undefined
-			}
-			state.dependencyCount = count
+			state.dependencyValues.length = count
 		} catch (error) {
 			disposeSignalEffect(state)
 			throw error
