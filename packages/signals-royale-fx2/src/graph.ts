@@ -1,7 +1,8 @@
 /**
  * This module implements the reactive graph at the engine's core: atoms
  * (writable values), computeds (cached values computed from other nodes),
- * and effects (callbacks that re-run when the values they read change).
+ * and effects (a tracked compute paired with an untracked handler that
+ * runs when the compute's settled value changes — see docs/effects.md).
  *
  * Change moves through the graph in two phases:
  *
@@ -748,10 +749,10 @@ export function resetEffectLanes(): void {
 }
 
 /** Render-notify subscribers scheduled by the current wave; they are
- * notified after effects settle. Double-buffered: a draining wave iterates
- * its own buffer while entries scheduled during delivery land in the
- * spare, so an iteration never sees entries added mid-delivery. Same
- * retained-capacity treatment as effectQueue. */
+ * notified after sync effects settle. Double-buffered: a draining wave
+ * iterates its own buffer while entries scheduled during delivery land in
+ * the spare, so an iteration never sees entries added mid-delivery. Same
+ * retained-capacity treatment as the effect lanes. */
 let renderNotifyQueue: Array<WatcherNode | undefined> = []
 let renderNotifyCount = 0
 /** Spare render-notify buffer; null while a draining flush has it

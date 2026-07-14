@@ -92,10 +92,12 @@ run/validation watermark.
    recomputes do not advance `changedAt`. Atom writes always retain their
    new reading, including writes later reverted in the same batch; moving
    that reading backwards is unsound after an intermediate computed read.
-3. **Freshen-then-stamp** (`ensureFresh`, `runWatcher`): a dep is freshened
-   before its reading is compared (a lazy dep recomputes mid-walk, stamping
-   with the current clock), and the subscriber's `validAt` is stamped only
-   after every dep was freshened and compared.
+3. **Freshen-then-stamp** (`ensureFresh`; at landing time also the watcher
+   validation loop, deleted when effects split into compute + handler — see
+   docs/effects.md): a dep is freshened before its reading is compared (a
+   lazy dep recomputes mid-walk, stamping with the current clock), and the
+   consumer's `validAt` is stamped only after every dep was freshened and
+   compared.
 
 ### The one place edge stamps were smarter
 

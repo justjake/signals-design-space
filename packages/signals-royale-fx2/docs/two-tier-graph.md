@@ -728,3 +728,25 @@ document's sections above describe the code at landing time. The mapping:
 - worlds.ts intents lost their write-only `seq` field (`OpSeq` died with
   it): the intent array IS dispatch order; retirement flips visibility,
   never position.
+
+## 14. Split effects (as built, later round)
+
+A later round replaced the single-body effect with a compute + handler
+pair and moved watcher validation to drain sites; sections above describe
+the code at their own landing time. The mapping (full design:
+docs/effects.md):
+
+- `runWatcher`'s per-watcher validation loop is gone. Watchers hold one
+  pinned dependency (an effect's compute node; a subscription's observed
+  node) and never re-track; "did my inputs change" is answered by pulling
+  the compute (`ensureFresh`) and comparing its settled value against the
+  last value the handler received. `validAtGraphChange` now lives on
+  computeds only.
+- `WatchSchedule` and `makeScheduledEffect` (the React re-render handshake
+  and its world-source twin watcher) are deleted. `effectQueue` became
+  three lane queues (sync / before-paint / after-paint) drained two-phase:
+  pull all computes, then cleanups, then handlers. The write path only
+  marks and enqueues.
+- Per-root committed views (`committedWorlds`, `connection.committedIds`,
+  the provider `container` prop) are gone; the committed view is base
+  state, and effects observe base state only.

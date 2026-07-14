@@ -25,13 +25,16 @@ import { createAtom, createComputed, effect, batch, untracked } from 'signals-ro
 
 const count = createAtom(1);
 const double = createComputed(() => count.get() * 2);
-const stop = effect(() => console.log(double.get())); // runs now, then on change
+const stop = effect(
+  () => double.get(),              // compute: tracked, pure
+  (value) => console.log(value),   // handler: untracked side effect
+); // the handler runs now, then when the settled value changes
 
-count.set(2);                 // effect logs 4
+count.set(2);                 // handler logs 4
 count.update((x) => x + 1);   // functional update
 batch(() => {                 // one flush for the whole callback
   count.set(10);
-  count.set(3);               // net revert: effects see only the final value
+  count.set(3);               // net revert: the handler never runs
 });
 stop();
 ```
@@ -45,11 +48,23 @@ stop();
 - **Computeds** are lazy and cached, track dependencies dynamically (a
   branch not taken this evaluation is not a dependency), and only recompute
   when an input's value generation actually advanced.
-- **Effects** re-run after accepted dependency changes; returning a function
-  registers a cleanup. A batch that changes and then restores a dependency
-  may conservatively re-run an effect once, but the effect observes only the
-  final value. `effectScope(fn)` collects every effect created inside and
+- **Effects** are two functions. The compute is a real computed — tracked,
+  cached, cut off by `equals`, async-capable through `use()`. The handler
+  runs untracked with the compute's settled `(value, previous)` pair when
+  that value changes, and may return a cleanup that runs before the next
+  handler run and at disposal. Reads the effect should react to belong in
+  the compute; handler reads are untracked. A pending compute is silent
+  (settlement fires the handler only when the settled value differs), and
+  a compute error rethrows from the drain site without calling the
+  handler. `effectScope(fn)` collects every effect created inside and
   returns one disposer.
+- **Schedules:** `effect(compute, handler, { schedule })` picks when
+  signal-triggered re-runs drain: `'sync'` (default — inside the flush
+  when the write settles), `'before-paint'`, or `'after-paint'`, both
+  coalesced per window with a net value cutoff. The first run at creation
+  is always synchronous. `flushScheduledEffects()` drains the paint lanes
+  now (tests, headless hosts). See `docs/effects.md` for the full
+  contract.
 
 ## Intents, drafts, and worlds
 
@@ -83,7 +98,7 @@ nothing extra.
 ```ts
 count.get()        // committed state plus applied urgent writes; drafts hidden
 latest(count)      // newest intent, drafts included; never suspends
-committed(count)   // what is on screen (per root with committed(x, container))
+committed(count)   // the committed view: base state; never subscribes or suspends
 isPending(count)   // true while newer data exists behind the shown value
 ```
 
@@ -252,8 +267,11 @@ stores, which escalate every store change to sync priority.
 
 A draft retires when every root that received it has committed it; the
 engine then folds it into committed state, and passes still holding the id
-resolve identical values. What is on screen per root is queryable at any
-time (`committed(x, container)`, `useCommitted`).
+resolve identical values. The committed view (`committed(x)`,
+`useCommitted`) is base state — drafts hidden, folds included. With
+multiple roots it converges at retirement, so while a transition one root
+already committed is still held by another, that root's screen momentarily
+runs ahead of the committed view.
 
 Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
 current pass's world through a validity-gated note: the note is written by
@@ -263,12 +281,14 @@ another root's render, an interleaved flush) falls back to BASE rather
 than consuming a stale world or leaking live drafts into an urgent frame.
 
 Every provider-dependent hook (`useValue`, `useComputed`, `useIsPending`,
-`useCommitted`, `useSignalEffect`, and `useSignalLayoutEffect`) requires a
-`SignalsFrameworkProvider` above it and throws without one. The root
-connection carries transition worlds, so a subscriber outside a provider has
-no channel for them. Create roots with `wrapCreateRoot(createRoot)` or wrap
-the tree in `<SignalsFrameworkProvider>`. Plain function reads (`latest`,
-`committed`, `isPending`) work anywhere.
+and `useCommitted`) requires a `SignalsFrameworkProvider` above it and
+throws without one. The root connection carries transition worlds, so a
+subscriber outside a provider has no channel for them. Create roots with
+`wrapCreateRoot(createRoot)` or wrap the tree in
+`<SignalsFrameworkProvider>`. `useSignalEffect` and
+`useSignalLayoutEffect` observe base state, which needs no root channel,
+so they work without a provider — as do the plain function reads
+(`latest`, `committed`, `isPending`).
 
 ## Out of scope: DOM-mutation attribution
 
@@ -312,11 +332,17 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   urgent render with settled history serves stale instead — no fallback
   flash).
 - `useComputed(fn, deps)` — component-owned computed.
-- `useSignalEffect(fn)` / `useSignalLayoutEffect(fn)` — tracked effects on
-  this root's committed values, run in React's passive or layout phase;
-  cleanup honored; StrictMode nets one.
+- `useSignalEffect(compute, handler, deps, opts?)` /
+  `useSignalLayoutEffect(...)` — the engine effect with React-phase setup.
+  Mount and `deps` changes create the effect (and first-run it) exactly in
+  React's passive or layout phase and tree order; signal-triggered re-runs
+  drain in the matching lane (after-paint at React's own passive priority;
+  before-paint via `requestAnimationFrame` with a hidden-tab fallback).
+  The handler sees the latest committed render's props without
+  re-creating the effect; cleanup honored; StrictMode nets one; base
+  state only — a transition reaches it once, at retirement.
 - `useIsPending(x)` / `useCommitted(x)` — the pending probe and the
-  per-root committed view.
+  committed (base-state) view, both delivered urgently.
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after
   unmount.
 - `startSignalTransition(fn)` / `useSignalTransition()` — transition
@@ -324,4 +350,4 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   inside any transition context is classified into a draft automatically.
 - Writing during render throws.
 - Multiple roots are supported; one transition can span them, and each
-  root's committed view stays internally consistent.
+  root's render passes stay internally consistent.
