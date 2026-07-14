@@ -603,10 +603,11 @@ interface ResolvedState {
   Atoms never set the async bits and omit the slot. Both still satisfy the
   state-view protocol directly, which deletes the base-world atom wrapper
   allocation. The computed slot stores the Suspension record, not its promise:
-  the engine needs `.settled` for the identity-reuse rule and `.resolve` at
-  settlement; the promise is what gets thrown. It stores the ErrorBox, not the
-  error alone. Box identity preserves the rethrow-same-reference contract, and
-  `sameError` reuse plus memo reconciliation compare through it.
+  nullable `.resolve` owns pendingness. A resolver permits identity reuse and
+  performs settlement; `null` marks the suspension settled. The promise is what
+  gets thrown. It stores the ErrorBox, not the error alone. Box identity
+  preserves the rethrow-same-reference contract, and `sameError` reuse plus memo
+  reconciliation compare through it.
 - `node.asyncState` is deleted. Park/settle/error transitions
   (`baseUse`, `finishCompute`) are flag+slot writes preserving:
   suspension identity reuse while unsettled, sameError box reuse,

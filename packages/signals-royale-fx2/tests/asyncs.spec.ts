@@ -48,7 +48,7 @@ const tick = () => new Promise<void>((r) => setTimeout(r))
 test('detached async records contain only execution state', () => {
 	const suspension = makeSuspension()
 	const box = trackThenable(new Promise<never>(() => {}))
-	expect(Object.keys(suspension)).toEqual(['promise', 'settled', 'resolve'])
+	expect(Object.keys(suspension)).toEqual(['promise', 'resolve'])
 	expect(Object.keys(box)).toEqual([
 		'status',
 		'result',
@@ -58,6 +58,22 @@ test('detached async records contain only execution state', () => {
 })
 
 describe('pending as graph state', () => {
+	test('the resolver owns pendingness and remains one-shot when captured', async () => {
+		const suspension = makeSuspension()
+		const resolve = suspension.resolve!
+		let retries = 0
+		suspension.promise.then(() => retries++)
+
+		expect(suspension.resolve).toBe(resolve)
+		resolve()
+		resolve()
+		suspension.resolve?.()
+		expect(suspension.resolve).toBeNull()
+
+		await suspension.promise
+		expect(retries).toBe(1)
+	})
+
 	test('never-settled read throws a stable thenable; settlement converges', async () => {
 		const gate = deferred<string>()
 		const c = createComputed((use) => use(gate.promise))
@@ -82,6 +98,32 @@ describe('pending as graph state', () => {
 		await tick()
 		expect(read(c)).toBe('done')
 		expect(isPending(c)).toBe(false)
+	})
+
+	test('sequential thenables share one continuous pending span', async () => {
+		const first = deferred<number>()
+		const second = deferred<number>()
+		const c = createComputed((use) => use(first.promise) + use(second.promise))
+		let firstSuspension: unknown
+		let secondSuspension: unknown
+		try {
+			read(c)
+		} catch (error) {
+			firstSuspension = error
+		}
+
+		first.resolve(1)
+		await tick()
+		try {
+			read(c)
+		} catch (error) {
+			secondSuspension = error
+		}
+		expect(secondSuspension).toBe(firstSuspension)
+
+		second.resolve(2)
+		await tick()
+		expect(read(c)).toBe(3)
 	})
 
 	test('stale value keeps serving while a refetch is pending; latest never suspends', async () => {
@@ -169,7 +211,7 @@ describe('pending as graph state', () => {
 			}
 			expect(thrown).toBe(boom)
 			expect(currentCause).toBe(123)
-			expect(suspension.settled).toBe(true)
+			expect(suspension.resolve).toBeNull()
 			expect(ownerAbsentDuringCompute).toBe(true)
 			expect(ownerAbsentDuringNotification).toBe(true)
 			expect(box.parkedNodes).toBeNull()

@@ -749,7 +749,7 @@ function memoValid(node: ProducerNode, memo: WorldMemo): boolean {
 	}
 	if (
 		(memo.state.flags & Flag.AsyncSuspended) !== 0 &&
-		(memo.state.throwable as Suspension).settled
+		(memo.state.throwable as Suspension).resolve === null
 	) {
 		return false
 	}
@@ -965,7 +965,7 @@ function draftEvaluate(
 	let suspension =
 		prev !== undefined &&
 		(prev.flags & Flag.AsyncSuspended) !== 0 &&
-		!(prev.throwable as Suspension).settled
+		(prev.throwable as Suspension).resolve !== null
 			? (prev.throwable as Suspension)
 			: null
 	const worldUse = (t: PromiseLike<unknown>): unknown => {

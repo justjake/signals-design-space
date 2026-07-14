@@ -60,8 +60,7 @@ export interface ThenableBox {
  * before. */
 export interface Suspension {
 	promise: Promise<void>
-	resolve: (cause?: TraceEventId) => void
-	settled: boolean
+	resolve: ((cause?: TraceEventId) => void) | null
 }
 
 /** A thrown error, boxed so an erroring evaluation has one stable result
@@ -112,12 +111,11 @@ export function makeSuspension(): Suspension {
 	const promise = new Promise<void>((r) => (resolveRaw = r))
 	const ep: Suspension = {
 		promise,
-		settled: false,
 		resolve: (cause = NO_EVENT) => {
-			if (ep.settled) {
+			if (ep.resolve === null) {
 				return
 			}
-			ep.settled = true
+			ep.resolve = null
 			resolveRaw()
 			if (traceHook !== null) {
 				// The suspension promise is now fulfilled. React may retry because
@@ -196,7 +194,7 @@ function settle(
 		} finally {
 			setCurrentCause(prevCause)
 			for (const ep of suspensions) {
-				ep.resolve(cause)
+				ep.resolve?.(cause)
 			}
 		}
 	}
@@ -220,7 +218,7 @@ export function baseUse(
 	// stable thenable — but never a settled one, or a suspended render
 	// would retry in a loop.
 	const suspension =
-		(flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+		(flags & Flag.AsyncSuspended) !== 0 && (consumer.throwable as Suspension).resolve !== null
 			? (consumer.throwable as Suspension)
 			: makeSuspension()
 	box.parkedSuspensions!.add(suspension)
@@ -249,7 +247,7 @@ export function finishCompute(
 	}
 	if (hasError) {
 		if ((flags & Flag.AsyncSuspended) !== 0) {
-			;(node.throwable as Suspension).resolve(currentCause)
+			;(node.throwable as Suspension).resolve?.(currentCause)
 		}
 		const sameError =
 			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
@@ -260,7 +258,7 @@ export function finishCompute(
 		return !sameError
 	}
 	if ((flags & Flag.AsyncSuspended) !== 0) {
-		;(node.throwable as Suspension).resolve(currentCause)
+		;(node.throwable as Suspension).resolve?.(currentCause)
 	}
 	node.flags = flags & ~Flag.AsyncMask
 	node.throwable = null
