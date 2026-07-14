@@ -81,9 +81,10 @@ export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; s
 
 export const tick = (ms = 0): Promise<void> => new Promise((res) => setTimeout(() => res(), ms))
 
-/** Drain both paint lanes deterministically — act() never flushes scheduler
- * or rAF pumps, so lane-delivered handlers are asserted after this. Wrapped
- * in act so handler writes that re-render components stay inside it. */
+/** Drain both paint lanes deterministically — act() never flushes the
+ * after-paint scheduler pump, so lane-delivered handlers are asserted
+ * after this. Wrapped in act so handler writes that re-render components
+ * stay inside it. */
 export const flushEffects = (): Promise<void> =>
 	act(async () => {
 		flushScheduledEffects()

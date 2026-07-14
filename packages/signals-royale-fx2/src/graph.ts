@@ -328,9 +328,8 @@ interface EffectOwner {
 export const enum Lane {
 	/** Drained by flush(), when the triggering write or batch settles. */
 	Sync = 0,
-	/** Drained by a host pump before the next paint (microtask by default;
-	 * the React entry upgrades to requestAnimationFrame with a timeout
-	 * fallback for hidden tabs). */
+	/** Drained in a microtask: end of the current task, the only host
+	 * timing guaranteed to precede the rendering steps. */
 	BeforePaint = 1,
 	/** Drained by a host pump after paint (setTimeout by default; the React
 	 * entry upgrades to the scheduler's NormalPriority — the band React

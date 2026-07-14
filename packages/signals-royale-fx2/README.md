@@ -337,10 +337,10 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   Mount and `deps` changes create the effect (and first-run it) exactly in
   React's passive or layout phase and tree order; signal-triggered re-runs
   drain in the matching lane (after-paint at React's own passive priority;
-  before-paint via `requestAnimationFrame` with a hidden-tab fallback).
-  The handler sees the latest committed render's props without
-  re-creating the effect; cleanup honored; StrictMode nets one; base
-  state only — a transition reaches it once, at retirement.
+  before-paint in a microtask — the only host timing guaranteed to precede
+  the rendering steps). The handler sees the latest committed render's
+  props without re-creating the effect; cleanup honored; StrictMode nets
+  one; base state only — a transition reaches it once, at retirement.
 - `useIsPending(x)` / `useCommitted(x)` — the pending probe and the
   committed (base-state) view, both delivered urgently.
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after

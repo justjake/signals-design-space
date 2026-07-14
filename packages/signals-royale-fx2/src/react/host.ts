@@ -502,26 +502,12 @@ export function confirmRootCommit(
 	}
 }
 
-/** Before-paint pump upgrade: requestAnimationFrame runs at the head of
- * the rendering steps — after every React commit in the frame, before
- * paint — and coalesces a whole frame's writes into one drain. rAF never
- * fires in hidden tabs, so a timeout backstop keeps effects live there;
- * whichever fires first runs the drain and the other no-ops. */
-function beforePaintPump(drain: () => void): void {
-	if (typeof requestAnimationFrame !== 'function') {
-		queueMicrotask(drain)
-		return
-	}
-	let ran = false
-	const run = (): void => {
-		if (!ran) {
-			ran = true
-			drain()
-		}
-	}
-	requestAnimationFrame(run)
-	setTimeout(run, 34)
-}
+// The before-paint lane keeps the engine's microtask pump even here: a
+// microtask is the only host timing guaranteed to precede the rendering
+// steps. A scheduler callback is a macrotask that may land after a paint
+// (which is why React runs its own layout effects synchronously in commit
+// rather than scheduling them), and requestAnimationFrame never fires in
+// hidden tabs.
 
 /** After-paint pump upgrade: the scheduler band React uses for its own
  * passive-effect flush, so both flushes interleave at one priority. */
@@ -549,7 +535,6 @@ export function registerReactSignals(): ReactSignalsHandle {
 	setAmbientClassifier(ambientClassifier)
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
-	setLanePump(Lane.BeforePaint, beforePaintPump)
 	setLanePump(Lane.AfterPaint, afterPaintPump)
 	handle = {
 		dispose() {
@@ -559,7 +544,6 @@ export function registerReactSignals(): ReactSignalsHandle {
 			setAmbientClassifier(null)
 			setRenderWriteGuard(null)
 			setRenderWorldProvider(null)
-			setLanePump(Lane.BeforePaint, null)
 			setLanePump(Lane.AfterPaint, null)
 			handle = null
 		},
@@ -584,4 +568,3 @@ export function resetReactSignalsForTest(): void {
 
 declare const queueMicrotask: (fn: () => void) => void
 declare const setTimeout: (fn: () => void, ms?: number) => unknown
-declare const requestAnimationFrame: ((fn: () => void) => number) | undefined

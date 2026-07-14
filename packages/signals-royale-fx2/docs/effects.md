@@ -66,22 +66,27 @@ call per drain, and it is the same pattern React subscribers already use
 `schedule` picks when signal-triggered re-runs drain. It changes nothing
 else — not the first run, not disposal, not the change test.
 
-| schedule                 | drain trigger                              | coalescing window       | error surface        |
-| ------------------------ | ------------------------------------------ | ----------------------- | -------------------- |
-| `'sync'` (default)       | inside the flush when the write settles    | one flush (`batch()`)   | throws at write site |
-| `'before-paint'`         | microtask; React entry upgrades to rAF     | the task (frame w/ rAF) | rethrown from pump   |
-| `'after-paint'`          | scheduler NormalPriority; timeout fallback | since last drain        | rethrown from pump   |
+| schedule                 | drain trigger                              | coalescing window     | error surface        |
+| ------------------------ | ------------------------------------------ | --------------------- | -------------------- |
+| `'sync'` (default)       | inside the flush when the write settles    | one flush (`batch()`) | throws at write site |
+| `'before-paint'`         | microtask (end of the current task)        | the task              | rethrown from pump   |
+| `'after-paint'`          | scheduler NormalPriority; timeout fallback | since last drain      | rethrown from pump   |
 
 - Ordering per write is fixed: sync effects, then render notifications,
   then before-paint, then after-paint.
 - The engine core is dependency-free: its built-in pumps are
   `queueMicrotask` (before-paint) and `setTimeout(0)` (after-paint).
-  `registerReactSignals()` upgrades before-paint to
-  `requestAnimationFrame` raced with a timeout (rAF never fires in hidden
-  tabs; the timeout keeps effects live there) and after-paint to
+  `registerReactSignals()` upgrades after-paint to
   `Scheduler.unstable_scheduleCallback(NormalPriority)` — the same band
   React uses for its own passive flush, so both flushes interleave at one
-  priority.
+  priority. Before-paint stays on the microtask even under React: a
+  microtask is the only host timing guaranteed to precede the rendering
+  steps — a scheduler callback is a macrotask that can land after a paint
+  (which is why React runs its own layout effects synchronously in
+  commit), and requestAnimationFrame never fires in hidden tabs. The
+  trade: coalescing is per task rather than per frame, and a write from an
+  async callback can drain before React commits that callback's own state
+  updates, so a handler there may read pre-commit DOM.
 - `flushScheduledEffects()` drains both paint lanes (and pending
   `onObserved` transitions) synchronously — the test seam; `act()` alone
   does not flush scheduler tasks.
