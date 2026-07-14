@@ -9,7 +9,6 @@ condition still leaves a useful direction.
 
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
-- Delete the unused `sealed` draft state and `sealDraft`; supported package paths never seal, and production otherwise treats open and sealed drafts identically.
 - Remove impossible plain-state `throwable: null` storage from atoms and world memos while preserving computed async state.
 - Let nullable suspension resolution own pendingness and delete the parallel `Suspension.settled` boolean.
 
@@ -30,6 +29,7 @@ condition still leaves a useful direction.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the exact Round 78 direct ESM binding and delete `currentDraftChange`; retry only under a separately frozen interleaved AB/BA window, keeping synchronous settlement, single-node settlement, and the unchanged suspension control.
+- Delete the unused `sealed` draft state and `sealDraft`; retry the exact Round 80 diff only under a separately frozen stable interleaved window, keeping append-retire, append-discard, rebased poke, hosted commit/prune, and base-write control.
 
 ## Completed or deliberately closed
 
