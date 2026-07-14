@@ -26,7 +26,7 @@ condition still leaves a useful direction.
 - Move Computed methods from own slots to a shared object-literal prototype; retry the exact Round 72 `__proto__` diff only after a natural compiler/runtime/layout change, keeping retained-size, no-GC construction, 1.2M pretenuring/subwindow, read, and Atom controls.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
-- Replace the mutable thenable-settlement installer with the direct ESM binding and delete `currentDraftChange`; retry the exact Round 85 semantic diff in a new predeclared interleaved round that captures before/after manifests for both baseline and candidate artifacts, keeping synchronous, single-node, world-only, and suspension controls.
+- Replace the mutable thenable-settlement installer with the direct ESM binding and delete `currentDraftChange`; retry the exact Round 86 semantic diff only after a natural layout/runtime change or separately stable suspension-control window, retaining both artifacts' pre/post manifests and all four frozen modes.
 
 ## Completed or deliberately closed
 
