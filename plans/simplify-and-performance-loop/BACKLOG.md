@@ -9,7 +9,6 @@ condition still leaves a useful direction.
 
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
-- Restore the Node 24 inlining gate without hiding `recompute` behind a larger budget: it is 503 bytecodes, above V8's 460-byte inline limit. Audit the stale `writeAtom`, `flush`, and `resolveState` pins separately because those functions remain below the limit or are deliberately over it.
 
 ## Recorded retry leads
 
@@ -27,6 +26,7 @@ condition still leaves a useful direction.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the direct ESM binding and delete `currentDraftChange`; retry the exact Round 86 semantic diff only after a natural layout/runtime change or separately stable suspension-control window, retaining both artifacts' pre/post manifests and all four frozen modes.
+- Restore `recompute` inlining with only the cold cycle-message throw extracted; retry from the unmeasured Round 88 cold-only shape, pin the exact resulting size below V8's 460-byte limit, and keep synchronous/traced recompute plus atom control. Do not retry the measured shared cycle/error/cause helpers.
 
 ## Completed or deliberately closed
 
@@ -53,6 +53,7 @@ condition still leaves a useful direction.
 - Drafts now have one live state, `open`, plus the distinct terminal `retired` and `discarded` outcomes; the unsupported `sealed` state, `sealDraft`, equivalent branches, and test-only calls are gone.
 - Nullable one-shot `Suspension.resolve` owns pendingness, identity reuse, and settlement; the parallel `settled` boolean is gone.
 - `graph.withWorld` owns the selected world and both graph collectors; draft evaluation no longer wraps it in `untracked`, and scheduled effects establish their collectors inside the world boundary.
+- Node 24 bytecode pins now match the exact accepted `writeAtom`, `flush`, and `resolveState` sizes with no headroom; `recompute` remains separately unresolved.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
 - Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
