@@ -41,7 +41,9 @@ const FX2_BYTECODE_BUDGETS: Record<string, number> = {
 	trackWorldRead: 90,
 	readComputed: 100,
 	getComputed: 110,
-	writeAtom: 120,
+	// This includes the sole-caller propagation and flush tail. Keeping that
+	// tail inline measured faster, and 123 remains far below the inline limit.
+	writeAtom: 123,
 	scheduleWatcher: 170,
 	trackRead: 260,
 	propagateWave: 280,
@@ -171,15 +173,20 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Nod
 		})
 	}
 
-	test('flush pinned at 620 (over the inline limit)', () => {
+	// Cycle-failure tracing grew the original 581-byte function to 629. This
+	// function was already deliberately over the inline limit.
+	test('flush pinned at 629 (over the inline limit)', () => {
 		const size = bytecodeLength(script, 'flush')
-		expect(size).toBeLessThanOrEqual(620)
+		expect(size).toBeLessThanOrEqual(629)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
-	test('resolveState pinned at 780 (over the inline limit)', () => {
+	// Draft-world tracing emits compute, suspension, error, and world identity
+	// events here. The untraced branch bypasses that work; this owner was
+	// already deliberately over the inline limit before tracing was added.
+	test('resolveState pinned at 1129 (over the inline limit)', () => {
 		const size = bytecodeLength(worldScript, 'resolveState')
-		expect(size).toBeLessThanOrEqual(780)
+		expect(size).toBeLessThanOrEqual(1129)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 })
