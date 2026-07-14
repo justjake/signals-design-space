@@ -26,7 +26,7 @@ condition still leaves a useful direction.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the direct ESM binding and delete `currentDraftChange`; retry the exact Round 86 semantic diff only after a natural layout/runtime change or separately stable suspension-control window, retaining both artifacts' pre/post manifests and all four frozen modes.
-- Restore `recompute` inlining with only the cold cycle-message throw extracted; retry from the unmeasured Round 88 cold-only shape, pin the exact resulting size below V8's 460-byte limit, and keep synchronous/traced recompute plus atom control. Do not retry the measured shared cycle/error/cause helpers.
+- Extract the exact three-caller computed-cycle throw only after a natural compiler/runtime/layout change puts the unchanged Round 90 shape below V8's 460-byte limit; it measured 464 without touching successful recompute execution. Do not source-shape-tune it, retry the slower returned/thrown outcome pair, or retry the Round 88 shared helpers.
 
 ## Completed or deliberately closed
 
