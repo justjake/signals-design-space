@@ -31,15 +31,15 @@ function readScheduledComputed(): void {
 	sink ^= computed.get()
 }
 function runScheduledRead(): void {
-	withWorld(world, readScheduledComputed)
+	scheduledEffect.run(readScheduledComputed)
 }
 
 for (let i = 0; i < warmIters; i++) {
-	scheduledEffect.run(runScheduledRead)
+	withWorld(world, runScheduledRead)
 }
 console.log('@@STEADY-START')
 for (let i = 0; i < steadyIters; i++) {
-	scheduledEffect.run(runScheduledRead)
+	withWorld(world, runScheduledRead)
 }
 console.log('@@STEADY-END')
 scheduledEffect.dispose()

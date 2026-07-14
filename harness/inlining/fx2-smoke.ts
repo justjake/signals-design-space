@@ -38,10 +38,10 @@ function readScheduledAtom(): void {
 	sink ^= scheduledSource.get()
 }
 function runScheduledRead(): void {
-	withWorld(BASE_WORLD, readScheduledAtom)
+	scheduledEffect.run(readScheduledAtom)
 }
 for (let i = 0; i < warmIters; i++) {
-	scheduledEffect.run(runScheduledRead)
+	withWorld(BASE_WORLD, runScheduledRead)
 }
 scheduledSource.set(1)
 
@@ -54,7 +54,7 @@ function run(start: number, count: number): void {
 run(0, warmIters)
 console.log('@@STEADY-START')
 for (let i = 0; i < steadyIters; i++) {
-	scheduledEffect.run(runScheduledRead)
+	withWorld(BASE_WORLD, runScheduledRead)
 }
 run(warmIters, steadyIters)
 console.log('@@STEADY-END')
