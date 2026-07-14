@@ -560,6 +560,23 @@ describe('computeds across worlds', () => {
 		retireDraft(id)
 	})
 
+	test('cached world membership survives unrelated draft writes', () => {
+		const included = openDraft()
+		const unrelated = openDraft()
+		const ids = [included.id]
+		const first = worldOf(ids)
+		const atom = createAtom(0)
+		try {
+			runWithDraftWrites(unrelated, () => atom.set(1))
+			expect(worldOf(ids)).toBe(first)
+			retireDraft(included.id)
+			expect(worldOf(ids).drafts).toEqual([])
+		} finally {
+			discardDraft(unrelated.id)
+			discardDraft(included.id)
+		}
+	})
+
 	test('world memo certificates ignore unrelated graph and draft activity', () => {
 		const source = createAtom(1)
 		const unrelated = createAtom(0)

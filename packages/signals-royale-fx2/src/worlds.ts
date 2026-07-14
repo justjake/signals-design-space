@@ -613,8 +613,21 @@ export function worldOf(ids: readonly DraftId[]): World {
 		return BASE_WORLD
 	}
 	const hit = worldCache.get(ids)
-	if (hit !== undefined && hit.validAtDraftChange === draftChangeClock) {
-		return hit.world
+	if (hit !== undefined) {
+		if (hit.validAtDraftChange === draftChangeClock) {
+			return hit.world
+		}
+		let live = true
+		for (const draft of hit.world.drafts) {
+			if (!liveDrafts.has(draft.id)) {
+				live = false
+				break
+			}
+		}
+		if (live) {
+			hit.validAtDraftChange = draftChangeClock
+			return hit.world
+		}
 	}
 	// Normalize the id set React handed us: dead drafts drop out, and Map
 	// iteration restores creation order regardless of dispatch arrival
