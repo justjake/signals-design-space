@@ -53,7 +53,7 @@ import {
 	type Signal,
 	type UseFn,
 } from '../index.ts'
-import { isErrorBox, type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
+import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
 	Flag,
 	NO_EVENT,

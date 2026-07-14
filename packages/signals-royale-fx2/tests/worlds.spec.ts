@@ -12,7 +12,6 @@ import {
 	reducerAtom,
 	setRenderWorldProvider,
 	createAtom,
-	untracked,
 	type Computed,
 	type Signal,
 } from '../src/index.ts'

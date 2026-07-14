@@ -9,7 +9,6 @@ import {
 	flushEffects,
 	makeHarness,
 	text,
-	tick,
 	React,
 	type Harness,
 } from './helpers.tsx'
@@ -31,7 +30,6 @@ import {
 	useComputed,
 	useIsPending,
 	useSignalEffect,
-	useSignalLayoutEffect,
 	useSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'

@@ -21,7 +21,6 @@ import {
 	type Atom,
 	type AtomOptions,
 	type Signal,
-	type UseFn,
 } from 'signals-royale-fx2'
 import {
 	registerReactSignals,

@@ -21,7 +21,6 @@ import {
 	NO_EVENT,
 	batch,
 	currentGraphChange,
-	getCurrentWorld,
 	invalidateComputed,
 	makeEffect,
 	makeScope,
@@ -29,7 +28,6 @@ import {
 	readAtom,
 	readComputed,
 	setTraceHook,
-	withWorld,
 	writeAtom,
 } from '../src/graph.ts'
 import {
@@ -41,10 +39,8 @@ import {
 } from '../src/index.ts'
 import {
 	appendDraftIntent,
-	BASE_WORLD,
 	discardDraft,
 	openDraft,
-	resolveState,
 } from '../src/worlds.ts'
 
 function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): AtomNode<T> {

@@ -67,7 +67,6 @@ import {
 	discardAllDrafts,
 	getCurrentPark,
 	latestWorld,
-	draftsAffecting,
 	peekWorldMemo,
 	pokeRebasedAtom,
 	resolveState,
