@@ -10,9 +10,20 @@ condition still leaves a useful direction.
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
+## Unmeasured broader leads
+
+- Remove `draftEvaluate`'s per-evaluation `worldUse` closure and captured suspension cell only if one saved/restored ambient suspension owner is clearer and allocation-free under nested/reentrant evaluation; keep the Round 37 synchronous, fulfilled, suspension, and error controls.
+- Reuse `Draft.world` for one-live-draft `worldOf` results instead of rebuilding an equivalent world object; first prove signature, identity, render-lane, retirement, and memo semantics against the Round 67 controls.
+- Move world-memo ownership off every producer only if a module-level weak owner preserves quiescent sweeping and collection while deleting the per-node field and global strong sweep list; keep construction, retained-heap, finalization, and GC controls.
+- Avoid allocating a computed world state that equality immediately replaces with the prior state; preserve error/suspension identity, custom equality, trace order, and world memo stability.
+- Encode dependency-link membership in an existing detached pointer sentinel only if promotion, trimming, disposal, and GC invariants remain direct; retry the Round 19 narrow/wide lifecycle and dynamic-tracking controls.
+- Specialize render-subscription and scheduled-effect watcher layouts so they do not retain impossible effect fields; require construction/retained-size wins without watcher-shape polymorphism regressions.
+- Move graph-node `causeEvent` storage into tracer-owned weak state only if detached execution loses the field/store while queued delivery and React/effect causality remain exact.
+- Unify the tracer's root and suspension object-ID allocators only if semantic numbering remains stable; this is attached-tracer-only cleanup, not a runtime-path round.
+- Replace `RenderedResolution.live` with an existing nullable state only if first render, aborted render, hydration, and late subscription repair remain distinguishable without a hidden mode.
+
 ## Recorded retry leads
 
-- Validate cached world membership against canonical `liveDrafts` after content-clock changes; retry only under the Round 46 conditions.
 - Move `draftRevisionByAtom` into `RebaseLog`; retry the exact Round 48 model only under a stable control window.
 - Replace internal ambient-state getters with ESM live bindings; retry the exact Round 50 three-getter diff under a stable control window.
 - Let React own scheduled-effect versions; retry only with the Round 42 write/rerender controls.
@@ -33,7 +44,7 @@ condition still leaves a useful direction.
 - Scope ownership and React root naming.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
 - One dynamically traversed collection for `draftsAffecting`.
-- World-cache membership candidate investigated and restored under its failed control.
+- Canonical `liveDrafts` validates cached world membership after broad content changes; unchanged membership retains identity and skips normalization/allocation, while included retirement or discard still rebuilds.
 - Direct graph/async bindings; mutable installer seams removed.
 - Direct atom propagation ownership; sole-caller `propagateFrom` removed.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
