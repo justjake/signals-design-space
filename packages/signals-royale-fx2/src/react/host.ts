@@ -416,7 +416,7 @@ export function broadcastDraft(draft: Draft): void {
 	// Prune finished drafts: an engine-side discard can finish a draft
 	// without ever visiting the host's bookkeeping.
 	for (const [id, hosted] of hostedDrafts) {
-		if (hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed') {
+		if (hosted.draft.state !== 'open') {
 			hostedDrafts.delete(id)
 		}
 	}
@@ -484,10 +484,7 @@ export function confirmRootCommit(
 		// own notification wave.
 		for (const id of ids) {
 			const hosted = hostedDrafts.get(id)
-			if (
-				hosted === undefined ||
-				(hosted.draft.state !== 'open' && hosted.draft.state !== 'sealed')
-			) {
+			if (hosted === undefined || hosted.draft.state !== 'open') {
 				continue
 			}
 			for (const atom of hosted.draft.atoms) {

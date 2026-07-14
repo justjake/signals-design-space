@@ -27,7 +27,6 @@ import {
 	resolveState,
 	retireDraft,
 	runWithDraftWrites,
-	sealDraft,
 	worldOf,
 	type DraftId,
 } from '../src/worlds.ts'
@@ -104,7 +103,6 @@ describe('leak audit', () => {
 			const draft = openDraft()
 			const payload = { n: 1 }
 			runWithDraftWrites(draft, () => a.set(payload))
-			sealDraft(draft)
 			committedReducerState.push(draft.id)
 			draftRef = new WeakRef(draft)
 			payloadRef = new WeakRef(payload)

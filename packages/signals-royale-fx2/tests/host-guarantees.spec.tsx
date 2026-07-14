@@ -5,7 +5,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { committed, createAtom, effect, nodeOf, read, type Atom } from 'signals-royale-fx2'
-import { liveDraftCount, openDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
+import { liveDraftCount, openDraft, runWithDraftWrites } from '../src/worlds.ts'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
@@ -153,7 +153,6 @@ describe('hosted draft lifetime', () => {
 		const draft = openDraft()
 		broadcastDraft(draft)
 		runWithDraftWrites(draft, () => a.set(1))
-		sealDraft(draft)
 		expect(liveDraftCount()).toBe(1)
 		await Promise.resolve()
 		expect(liveDraftCount()).toBe(0)
@@ -173,7 +172,6 @@ describe('hosted draft lifetime', () => {
 		const draft = openDraft()
 		broadcastDraft(draft)
 		runWithDraftWrites(draft, () => a.set(2))
-		sealDraft(draft)
 		expect(delivered).toEqual([draft.id])
 		expect(liveDraftCount()).toBe(1)
 		unregister()

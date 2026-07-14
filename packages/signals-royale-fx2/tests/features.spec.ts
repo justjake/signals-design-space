@@ -26,7 +26,7 @@ import {
 	SignalWriteForbidden,
 	observeNode,
 } from '../src/graph.ts'
-import { openDraft, retireDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
+import { openDraft, retireDraft, runWithDraftWrites } from '../src/worlds.ts'
 
 type Animal = { name: string }
 type Dog = Animal & { bark(): void }
@@ -455,7 +455,6 @@ describe('causality tracer', () => {
 		const a = createAtom(1, { label: 'a' })
 		const d = openDraft()
 		runWithDraftWrites(d, () => a.update((x) => x + 1))
-		sealDraft(d)
 		retireDraft(d.id)
 		const events = t.events()
 		const retire = events.find((e) => e.kind === 'draft-retire')!

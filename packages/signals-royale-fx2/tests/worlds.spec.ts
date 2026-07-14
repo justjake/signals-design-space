@@ -27,7 +27,6 @@ import {
 	resolveState,
 	retireDraft,
 	runWithDraftWrites,
-	sealDraft,
 	setCommittedWorld,
 	worldOf,
 	type DraftId,
@@ -47,7 +46,6 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve))
 function inDraft(fn: () => void): DraftId {
 	const d = openDraft()
 	runWithDraftWrites(d, fn)
-	sealDraft(d)
 	return d.id
 }
 
@@ -96,10 +94,8 @@ describe('draft visibility', () => {
 		const tracer = attachTracer()
 		const sourceDraft = openDraft()
 		runWithDraftWrites(sourceDraft, () => source.set(1))
-		sealDraft(sourceDraft)
 		const unrelatedDraft = openDraft()
 		runWithDraftWrites(unrelatedDraft, () => unrelated.set(2))
-		sealDraft(unrelatedDraft)
 
 		expect(stateIn(computed, [sourceDraft.id, unrelatedDraft.id])).toEqual(valueState(1))
 		const compute = tracer
@@ -176,7 +172,6 @@ describe('draft visibility', () => {
 			atom.set(1)
 			expect(atom.get()).toBe(0)
 		})
-		sealDraft(draft)
 		expect(stateIn(atom, [draft.id])).toEqual(valueState(1))
 		discardDraft(draft.id)
 	})
@@ -203,7 +198,6 @@ describe('draft visibility', () => {
 		// The world memo also treats peek as untracked: a later write into the
 		// same draft does not invalidate the computed's cached resolution.
 		expect(latest(peeked)).toBe(1)
-		sealDraft(draft)
 		discardDraft(draft.id)
 		atom.set(2)
 		// The base computed never subscribed through peek, so its cached base

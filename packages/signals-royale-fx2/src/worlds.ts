@@ -97,10 +97,9 @@ import {
  * long-lived React state can hold an id without retaining the Draft
  * record behind it. */
 export type DraftId = Brand<number, 'DraftId'>
-/** A draft is open while its transition scope runs, sealed once the scope
- * returns (no more writes accepted), and finally either retired
- * (committed into base state) or discarded (rolled back). */
-export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded'
+/** A draft is open until it is retired (committed into base state) or
+ * discarded (rolled back). */
+export type DraftState = 'open' | 'retired' | 'discarded'
 /** A change clock for draft activity, in the same style as
  * graphChangeClock: it ticks on draft opens, intent appends, retires,
  * discards, and thenable settlement. World memos and the world cache
@@ -163,7 +162,7 @@ export interface Draft {
 }
 
 let nextDraftId: DraftId = 1
-/** Open and sealed drafts, in creation order (Map preserves insertion). */
+/** Open drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>()
 /** Atoms with at least one live draft intent. */
 const rebaseLogs = new Map<AtomNode<unknown>, RebaseLog>()
@@ -216,12 +215,6 @@ export function openDraft(): Draft {
 	liveDrafts.set(draft.id, draft)
 	draftChangeClock++
 	return draft
-}
-
-export function sealDraft(draft: Draft): void {
-	if (draft.state === 'open') {
-		draft.state = 'sealed'
-	}
 }
 
 /** Record a drafted write. The atom's base value does not move. Draft
@@ -304,7 +297,7 @@ export function pokeRebasedAtom(atom: AtomNode<unknown>): void {
 	let woken: Set<Draft> | null = null
 	for (const intent of log.intents) {
 		const d = intent.draft
-		if (d === null || (d.state !== 'open' && d.state !== 'sealed')) {
+		if (d === null || d.state !== 'open') {
 			continue
 		}
 		if (woken === null) {
@@ -475,8 +468,8 @@ export function rebaseLogIntentCount<T>(atom: AtomNode<T>): number {
 	return rebaseLogs.get(atom as AtomNode<unknown>)?.intents.length ?? 0
 }
 
-/** True while the draft is open or sealed. Retired and discarded ids are
- * dead: their effects are already folded into base state or rolled back. */
+/** True while the draft is open. Retired and discarded ids are dead: their
+ * effects are already folded into base state or rolled back. */
 export function isLiveDraft(id: DraftId): boolean {
 	return liveDrafts.has(id)
 }

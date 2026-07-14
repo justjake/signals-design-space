@@ -25,7 +25,7 @@ import {
 	type TraceEvent,
 } from 'signals-royale-fx2'
 import { startSignalTransition, useValue } from 'signals-royale-fx2/react'
-import { openDraft, runWithDraftWrites, sealDraft, type Draft } from '../src/worlds.ts'
+import { openDraft, runWithDraftWrites, type Draft } from '../src/worlds.ts'
 import { broadcastDraft } from '../src/react/host.ts'
 
 let h: Harness
@@ -286,7 +286,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 					cells[0].set(1)
 					hold.set(true)
 				})
-				// Deliberately not sealed: the batch continues below.
+				// The draft remains live: the batch continues below.
 			})
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held, invisible
@@ -296,7 +296,6 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		// asleep.
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[1].set(2))
-			sealDraft(draft)
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
 		for (let i = 2; i < N; i++) {
@@ -510,7 +509,6 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(afterHeldPass).toBe(2)
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[0].set(2))
-			sealDraft(draft)
 		})
 		expect(renders[0]).toBe(afterHeldPass + 1) // exactly one more transition render
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
@@ -554,7 +552,6 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[0].set(2))
-			sealDraft(draft)
 		})
 		await act(async () => {
 			gate.resolve()
