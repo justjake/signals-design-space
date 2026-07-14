@@ -1397,7 +1397,19 @@ function recompute(node: ComputedNode<unknown>): void {
 		trimDeps(node)
 		node.flags &= ~Flag.Computing
 	}
-	const changed = finishCompute(node, parked, hasError, error, value)
+	// The plain-value tail of finishCompute, inlined: a settled evaluation
+	// of a node with no async history is the overwhelming steady state, and
+	// it needs none of the park/error/span folding.
+	let changed: boolean
+	if (!parked && !hasError && (node.flags & Flag.AsyncMask) === 0) {
+		const prev = node.value
+		changed = prev === UNINITIALIZED || !node.equals(prev, value)
+		if (changed) {
+			node.value = value
+		}
+	} else {
+		changed = finishCompute(node, parked, hasError, error, value)
+	}
 	// Only a real value change advances the changedAt reading; an
 	// equal-value recompute keeps the old stamp so downstream consumers
 	// validate as unchanged. Stamped with the current clock (see the

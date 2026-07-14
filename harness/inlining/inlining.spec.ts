@@ -179,13 +179,13 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Nod
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
-	// The evaluation owner (dependency re-tracking, tracing, park/error
-	// folding, the self-affecting stamp discipline). Callers pay one call
-	// per actual recomputation, so being out of line is tolerable — but the
-	// pin keeps further growth explicit.
-	test('recompute pinned at 520 (over the inline limit)', () => {
+	// The evaluation owner (dependency re-tracking, tracing, the inlined
+	// plain-value settle tail, the self-affecting stamp discipline). Callers
+	// pay one call per actual recomputation, so being out of line is
+	// tolerable — but the pin keeps further growth explicit.
+	test('recompute pinned at 590 (over the inline limit)', () => {
 		const size = bytecodeLength(script, 'recompute')
-		expect(size).toBeLessThanOrEqual(520)
+		expect(size).toBeLessThanOrEqual(590)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
