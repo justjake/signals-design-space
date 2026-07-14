@@ -9,7 +9,6 @@ condition still leaves a useful direction.
 
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
-- Let nullable suspension resolution own pendingness and delete the parallel `Suspension.settled` boolean.
 
 ## Recorded retry leads
 
@@ -29,6 +28,7 @@ condition still leaves a useful direction.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the exact Round 78 direct ESM binding and delete `currentDraftChange`; retry only under a separately frozen interleaved AB/BA window, keeping synchronous settlement, single-node settlement, and the unchanged suspension control.
 - Delete the unused `sealed` draft state and `sealDraft`; retry the exact Round 80 diff only under a separately frozen stable interleaved window, keeping append-retire, append-discard, rebased poke, hosted commit/prune, and base-write control.
+- Let nullable one-shot resolution own suspension pendingness and delete `Suspension.settled`; retry the exact Round 82 three-file diff only under a separately frozen interleaved AB/BA window, keeping construction, repeated resolution, reuse, settlement, sequential suspension, world invalidation, and unchanged graph control.
 
 ## Completed or deliberately closed
 
