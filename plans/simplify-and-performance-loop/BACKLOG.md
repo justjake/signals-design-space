@@ -10,7 +10,6 @@ condition still leaves a useful direction.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
 - Converge Atom and Computed construction only with retained-allocation and V8 pretenuring parity.
 - Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
-- Remove `pokeRebasedAtom`'s temporary Set only with dense-draft controls.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
@@ -29,6 +28,7 @@ condition still leaves a useful direction.
 - Restore `currentCause` and release suspensions after a throwing `endBatch` notification; retry the exact Round 66 nested `try/finally` only after a natural compiler/runtime/layout change, keeping the four Round 63 settlement modes and unchanged suspension control.
 - Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
 - Share the atom/watched-clean-computed pull decision between computed and watcher validation; retry the exact Round 68 two-caller helper only after a natural compiler/runtime/layout change, keeping all six frozen modes and watcher disposal at its caller.
+- Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
 
 ## Completed or deliberately closed
 
