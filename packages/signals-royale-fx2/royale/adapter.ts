@@ -91,8 +91,11 @@ const adapter = {
 	latest(x: unknown): unknown {
 		return latest(x as Signal<unknown>)
 	},
-	committed(x: unknown, container?: unknown): unknown {
-		return committed(x as Signal<unknown>, container as object | undefined)
+	committed(x: unknown, _container?: unknown): unknown {
+		// Per-root committed views were dropped: the committed view is base
+		// state (screens converge at retirement). The container argument is
+		// accepted for battery-interface compatibility and ignored.
+		return committed(x as Signal<unknown>)
 	},
 	isPending(x: unknown): boolean {
 		return isPending(x as Signal<unknown>)

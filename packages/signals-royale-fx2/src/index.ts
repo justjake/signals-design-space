@@ -63,7 +63,6 @@ import {
 	appendUrgentIntent,
 	atomHasDraftIntents,
 	classifyWrite,
-	committedWorldOf,
 	computedHasDraftIntents,
 	discardAllDrafts,
 	getCurrentPark,
@@ -358,9 +357,12 @@ export function latest<T>(x: Signal<T>): T {
 	return stateValue(st) as T
 }
 
-/** What the committed screen shows for x — per root when a container is
- * given, base state otherwise. Never subscribes, never suspends. */
-export function committed<T>(x: Signal<T>, container?: object): T {
+/** What the committed screen shows for x: base state — committed writes
+ * and retired transitions, drafts hidden. Never subscribes, never
+ * suspends. Screens converge with base at retirement; while a transition
+ * a root already committed is still held open by another root, that
+ * root's screen momentarily runs ahead of this view. */
+export function committed<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	if (activeEvaluation === node) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -370,7 +372,7 @@ export function committed<T>(x: Signal<T>, container?: object): T {
 			'committed() cannot be read inside a computed; read the dependency normally or use the previous argument for self history',
 		)
 	}
-	const st = resolveState(node, committedWorldOf(container))
+	const st = resolveState(node, BASE_WORLD)
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		throw (st.throwable as ErrorBox).error
 	}

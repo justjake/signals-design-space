@@ -40,7 +40,6 @@ import {
 	resolveState,
 	retireDraft,
 	setAmbientClassifier,
-	setCommittedWorld,
 	worldOf,
 } from '../worlds.ts'
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
@@ -54,12 +53,6 @@ export interface ReactRootConnection {
 	/** Draft ids delivered here become part of the worlds this root's
 	 * render passes carry. */
 	dispatch: (id: DraftId) => void
-	/** Draft ids in the last render this root committed. Hooks read this
-	 * directly; the stable connection record owns the root-local view. */
-	committedIds: readonly DraftId[]
-	/** Keys this root's committed world for reads outside React. Null when
-	 * the provider was mounted without a container. */
-	container: object | null
 	/** True only while the first-child commit marker confirms this root's
 	 * current render, before descendant layout effects advance hook stashes. */
 	committing: boolean
@@ -466,13 +459,6 @@ export function confirmRootCommit(
 ): void {
 	connection.committing = true
 	try {
-		// The stable connection owns the root-local view used by hooks. The
-		// optional external container remains a separate public lookup key for
-		// committed(x, container) reads outside React.
-		connection.committedIds = ids
-		if (connection.container !== null) {
-			setCommittedWorld(connection.container, ids)
-		}
 		getActiveTracer()?.emit('provider-world-commit', null, NO_EVENT, {
 			root: connection,
 			world: ids,

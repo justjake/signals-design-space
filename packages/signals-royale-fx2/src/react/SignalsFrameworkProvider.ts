@@ -71,11 +71,6 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 export const ReactRootConnectionContext = React.createContext<ReactRootConnection | null>(null)
 
 export interface SignalsFrameworkProviderProps {
-	/** Keys this root's committed world for committed(x, container) reads;
-	 * wrapCreateRoot passes the root's DOM element. Hooks read committed ids
-	 * directly from the connection, so this key is only for reads outside
-	 * React. */
-	container?: object
 	children?: React.ReactNode
 }
 
@@ -113,10 +108,9 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
 		throw error
 	}
 	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
-	const container = props.container ?? null
 	const connection = React.useMemo<ReactRootConnection>(
-		() => ({ dispatch, committedIds: EMPTY_WORLD.ids, container, committing: false }),
-		[dispatch, container],
+		() => ({ dispatch, committing: false }),
+		[dispatch],
 	)
 	// Note this pass's world in the host. Every pass that carries drafts
 	// re-renders this provider (the drafts live in its reducer state), so
@@ -141,7 +135,7 @@ export interface WrappedRoot {
 /**
  * A createRoot with the provider pre-installed: every render() is wrapped
  * in this root's SignalsFrameworkProvider, so apps get transition worlds
- * and per-root committed views without composing anything.
+ * without composing anything.
  */
 export function wrapCreateRoot(
 	createRoot: (
@@ -153,7 +147,7 @@ export function wrapCreateRoot(
 		const root = createRoot(el, opts)
 		return {
 			render(node: React.ReactNode) {
-				root.render(React.createElement(SignalsFrameworkProvider, { container: el }, node))
+				root.render(React.createElement(SignalsFrameworkProvider, null, node))
 			},
 			unmount() {
 				root.unmount()

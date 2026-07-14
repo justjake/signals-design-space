@@ -171,9 +171,6 @@ const draftRevisionByAtom = new WeakMap<AtomNode<unknown>, DraftChangeClock>()
 let draftChangeClock: DraftChangeClock = 1
 /** Nodes currently holding world memos, so quiescence can sweep them. */
 const memoNodes = new Set<ProducerNode>()
-/** Per-root committed draft sets, recorded by the React bindings at each
- * root commit. */
-const committedWorlds = new WeakMap<object, readonly DraftId[]>()
 /** Set only for the duration of the synchronous single-draft poke, so the
  * stable changedInCutoffWorld callback can see which world to compare
  * without allocating a closure per intent. */
@@ -1042,16 +1039,4 @@ export function latestWorld(): World {
 		index++
 	}
 	return { drafts, sig: ids.join(',') }
-}
-
-export function setCommittedWorld(container: object, ids: readonly DraftId[]): void {
-	committedWorlds.set(container, ids)
-}
-
-export function committedWorldOf(container: object | undefined): World {
-	if (container === undefined) {
-		return BASE_WORLD
-	}
-	const ids = committedWorlds.get(container)
-	return ids === undefined ? BASE_WORLD : worldOf(ids)
 }

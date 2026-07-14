@@ -413,15 +413,16 @@ describe('scenario 7 — one transition across two roots', () => {
 		})
 		expect(text(one.container)).toBe('s:0;') // held here
 		expect(text(two.container)).toBe('r:1;') // committed there
-		expect(committed(a, one.container)).toBe(0)
-		expect(committed(a, two.container)).toBe(1)
-		expect(read(a)).toBe(0) // base state folds only when every root commits
+		// The committed view is base state: it folds only when every root
+		// commits, so during the skew it trails the early-committing root.
+		expect(committed(a)).toBe(0)
+		expect(read(a)).toBe(0)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(one.container)).toBe('s:1;')
-		expect(committed(a, one.container)).toBe(1)
+		expect(committed(a)).toBe(1)
 		expect(read(a)).toBe(1)
 	})
 })

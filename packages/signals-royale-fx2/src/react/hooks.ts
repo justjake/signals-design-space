@@ -103,12 +103,10 @@ function forceReducer(count: number): number {
 	return count + 1
 }
 
-function committedWorld(connection: ReactRootConnection): World {
-	return worldOf(connection.committedIds)
-}
-
-function committedSnapshot(node: ProducerNode, connection: ReactRootConnection): unknown {
-	const st = resolveState(node, committedWorld(connection))
+/** The committed (base-state) snapshot: values and error boxes both have
+ * stable identity, so Object.is is the whole store comparison. */
+function committedSnapshot(node: ProducerNode): unknown {
+	const st = resolveState(node, BASE_WORLD)
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		return st.throwable
 	}
@@ -384,33 +382,23 @@ export function useIsPending(x: Signal<any>): boolean {
 	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
-/** What this root's screen shows for x (the per-root committed view). */
+/** Subscribe to what the committed screen shows for x: base state, drafts
+ * hidden. Changes deliver urgently — the committed view flips at commit
+ * and fold time, and an indicator of it must not be held hostage by a
+ * transition (same reasoning as useIsPending). */
 export function useCommitted<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	const connection = requireRootConnection('useCommitted')
 	noteHookRender(connection, null)
-	const [, force] = useReducer(forceReducer, 0)
-	const snap = committedSnapshot(node, connection)
-	const shown = useRef(snap)
-	shown.current = snap
-	// The committed snapshot has stable identity (a value, or a stable
-	// error box), so Object.is is the whole comparison.
-	const onNotify = useCallback(() => {
-		if (!Object.is(committedSnapshot(node, connection), shown.current)) {
-			force()
-		}
-	}, [node, connection])
-	useLayoutEffect(() => {
-		let notified = false
-		const off = observeNode(node, () => {
-			notified = true
-			onNotify()
-		})
-		if (!notified) {
-			onNotify()
-		}
-		return off
-	}, [node, onNotify])
+	const subscribe = useCallback(
+		(notify: () => void) =>
+			observeNode(node, () => {
+				dispatchUrgent(notify)
+			}),
+		[node],
+	)
+	const getSnapshot = useCallback(() => committedSnapshot(node), [node])
+	const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 	if (isErrorBox(snap)) {
 		getActiveTracer()?.emit('render-error', node, node.causeEvent, {
 			error: snap.error,
