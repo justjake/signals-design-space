@@ -10,8 +10,6 @@ condition still leaves a useful direction.
 - Continue scheduled-effect ownership convergence only if a real owner or version mirror disappears without mixing React policy into graph mechanism.
 - Converge Atom and Computed construction only with retained-allocation and V8 pretenuring parity.
 - Replace the shallow/deep resolver split with one resolver only if the common shallow path remains equal or better.
-- Converge pull validation between computed and watcher paths without hiding watcher disposal semantics in a helper.
-- Converge world-key construction without reintroducing deferred string flattening or extra collections.
 - Remove `pokeRebasedAtom`'s temporary Set only with dense-draft controls.
 - Normalize rebase-log lifecycle ownership without changing retirement timing or adding retained cursor state.
 - Remove unmounted scopes from historical draft audiences if no late correction still consults them.
@@ -29,6 +27,8 @@ condition still leaves a useful direction.
 - Delete the private one-caller `isErrorBox` guard; retry the exact Round 64 diff only after a natural compiler/runtime/layout change and keep its committed error/value, base error/value, and direct-brand controls.
 - Move selected-world ownership beside both graph collectors and remove the draft evaluator's `untracked(() => withWorld(...))` adapter; retry the exact Round 65 diff only after a natural compiler/runtime/layout change or separately stable base-computed control window, keeping all four frozen modes.
 - Restore `currentCause` and release suspensions after a throwing `endBatch` notification; retry the exact Round 66 nested `try/finally` only after a natural compiler/runtime/layout change, keeping the four Round 63 settlement modes and unchanged suspension control.
+- Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
+- Share the atom/watched-clean-computed pull decision between computed and watcher validation; retry the exact Round 68 two-caller helper only after a natural compiler/runtime/layout change, keeping all six frozen modes and watcher disposal at its caller.
 
 ## Completed or deliberately closed
 
