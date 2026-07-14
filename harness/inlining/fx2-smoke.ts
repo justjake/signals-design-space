@@ -5,8 +5,10 @@ import {
 	effect,
 	type Computed,
 } from '../../packages/signals-royale-fx2/src/index.ts'
-import { makeScheduledEffect } from '../../packages/signals-royale-fx2/src/graph.ts'
-import { withWorld } from '../../packages/signals-royale-fx2/src/worlds.ts'
+import {
+	makeScheduledEffect,
+	withWorld,
+} from '../../packages/signals-royale-fx2/src/graph.ts'
 
 const depth = Number(process.env.SMOKE_DEPTH)
 const warmIters = Number(process.env.SMOKE_WARM ?? 50_000)

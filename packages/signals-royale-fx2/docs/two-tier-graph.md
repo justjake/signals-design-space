@@ -419,8 +419,8 @@ promote is behavioral → covered by falsify-first probes A/B]
 
 - **Worlds overlay**: drafts, rebase logs, replay, world memos and the
   quiescence sweep (worlds.ts throughout); `resolveEnvelope`/`draftEvaluate`
-  render-time evaluation stays untracked under `withWorld` (worlds.ts
-  475-549) — it creates no links and never touches the tiers.
+  render-time evaluation stays untracked under `graph.withWorld` — it creates
+  no links and never touches the tiers.
 - **`pokeAndWakeLeafObservers` / `pokeLeafObservers`** (467-526): code and
   call sites (worlds.ts 171, 237, 262; index.ts 496-500) untouched; their
   reachability semantics survive because the watched subs closure is

@@ -71,6 +71,7 @@ import {
 	currentCause,
 	currentGraphChange,
 	ensureFresh,
+	withWorld,
 	isUninitialized,
 	peekAtom,
 	pokeDraftWatchers,
@@ -81,7 +82,6 @@ import {
 	endBatch,
 	traceHook,
 	trackWorldSource,
-	untracked,
 	writeAtom,
 } from './graph.ts'
 import {
@@ -600,23 +600,6 @@ export function classifyWrite(): Draft | null {
 // World resolution: computing a node's value as seen by a world.
 // ---------------------------------------------------------------------------
 
-/** The world an evaluation is running in; null means base state. */
-let currentWorld: World | null = null
-
-export function getCurrentWorld(): World | null {
-	return currentWorld
-}
-
-export function withWorld<T>(world: World | null, fn: () => T): T {
-	const prev = currentWorld
-	currentWorld = world
-	try {
-		return fn()
-	} finally {
-		currentWorld = prev
-	}
-}
-
 /** World objects keyed by id-array identity. React state arrays are
  * stable across renders, so repeated resolves of the same pass hit the
  * cache and allocate nothing. */
@@ -990,7 +973,7 @@ function draftEvaluate(
 	const prevEvaluation = setActiveEvaluation(node)
 	try {
 		const previous = isUninitialized(node.value) ? undefined : node.value
-		const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
+		const value = withWorld(world, () => node.fn(worldUse as never, previous))
 		return { flags: 0, value }
 	} catch (e) {
 		if (e === WORLD_PARKED) {

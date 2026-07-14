@@ -20,6 +20,7 @@ import {
 	NO_EVENT,
 	batch,
 	currentGraphChange,
+	getCurrentWorld,
 	invalidateComputed,
 	makeEffect,
 	makeScheduledEffect,
@@ -30,6 +31,7 @@ import {
 	setTraceHook,
 	trackWorldRead,
 	trackWorldSource,
+	withWorld,
 	writeAtom,
 } from '../src/graph.ts'
 import {
@@ -45,7 +47,6 @@ import {
 	discardDraft,
 	openDraft,
 	resolveState,
-	withWorld,
 } from '../src/worlds.ts'
 
 function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): AtomNode<T> {
@@ -672,6 +673,55 @@ describe('watcher ownership', () => {
 })
 
 describe('scheduled effect tracking', () => {
+	test('[falsify-first] nested throwing world boundary restores both collectors', () => {
+		const primaryBefore = atom(0)
+		const primaryInside = atom(0)
+		const primaryAfter = atom(0)
+		const wakeBefore = atom(0)
+		const wakeInside = atom(0)
+		const wakeAfter = atom(0)
+		const outer = openDraft()
+		const inner = openDraft()
+		const boom = new Error('world')
+		const effect = makeScheduledEffect(
+			() => {},
+			() => {},
+		)
+
+		effect.run(() => {
+			readAtom(primaryBefore)
+			trackWorldSource(wakeBefore)
+			expect(getCurrentWorld()).toBe(null)
+			expect(() =>
+				withWorld(outer.world, () => {
+					expect(getCurrentWorld()).toBe(outer.world)
+					withWorld(inner.world, () => {
+						expect(getCurrentWorld()).toBe(inner.world)
+						readAtom(primaryInside)
+						trackWorldSource(wakeInside)
+					})
+					expect(getCurrentWorld()).toBe(outer.world)
+					throw boom
+				}),
+			).toThrow(boom)
+			expect(getCurrentWorld()).toBe(null)
+			readAtom(primaryAfter)
+			trackWorldSource(wakeAfter)
+		})
+
+		expect([
+			primaryBefore.observerCount,
+			primaryInside.observerCount,
+			primaryAfter.observerCount,
+			wakeBefore.observerCount,
+			wakeInside.observerCount,
+			wakeAfter.observerCount,
+		]).toEqual([1, 0, 1, 1, 0, 1])
+		effect.dispose()
+		discardDraft(inner.id)
+		discardDraft(outer.id)
+	})
+
 	test('[falsify-first] throwing detached refresh restores the world-source collector', () => {
 		const hiddenSource = atom(0)
 		const throwingTrigger = atom(0)

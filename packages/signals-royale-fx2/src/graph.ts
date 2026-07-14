@@ -44,7 +44,7 @@
  */
 
 import { type ErrorBox, type Suspension, baseUse, finishCompute } from './asyncs.ts'
-import type { DraftId } from './worlds.ts'
+import type { DraftId, World } from './worlds.ts'
 
 /** Value equality for the cutoff: when a write or recompute produces an
  * equal value, consumers are not notified and do not recompute. */
@@ -230,6 +230,9 @@ let activeConsumer: ConsumerNode | null = null
  * scheduled effect currently running. Those edges wake comparison only;
  * the primary watcher's deps remain the values the user body read. */
 export let activeWorldSourceConsumer: WatcherNode | null = null
+/** The world an evaluation is running in; null means base state. A world
+ * boundary also detaches graph collectors owned by its caller. */
+let currentWorld: World | null = null
 /** The computed body executing right now, tracked separately from
  * activeConsumer: untracked() clears activeConsumer but must not disable
  * per-computed policies (like the no-writes-inside-computeds rule). */
@@ -1416,6 +1419,26 @@ export function untracked<T>(fn: () => T): T {
 		return fn()
 	} finally {
 		activeConsumer = prev
+		activeWorldSourceConsumer = prevWorldSource
+	}
+}
+
+export function getCurrentWorld(): World | null {
+	return currentWorld
+}
+
+export function withWorld<T>(world: World | null, fn: () => T): T {
+	const prevWorld = currentWorld
+	const prevConsumer = activeConsumer
+	const prevWorldSource = activeWorldSourceConsumer
+	currentWorld = world
+	activeConsumer = null
+	activeWorldSourceConsumer = null
+	try {
+		return fn()
+	} finally {
+		currentWorld = prevWorld
+		activeConsumer = prevConsumer
 		activeWorldSourceConsumer = prevWorldSource
 	}
 }

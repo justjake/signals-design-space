@@ -1,10 +1,12 @@
 import { createAtom, createComputed } from '../../packages/signals-royale-fx2/src/index.ts'
-import { makeScheduledEffect } from '../../packages/signals-royale-fx2/src/graph.ts'
+import {
+	makeScheduledEffect,
+	withWorld,
+} from '../../packages/signals-royale-fx2/src/graph.ts'
 import {
 	discardDraft,
 	openDraft,
 	runWithDraftWrites,
-	withWorld,
 	worldOf,
 } from '../../packages/signals-royale-fx2/src/worlds.ts'
 
