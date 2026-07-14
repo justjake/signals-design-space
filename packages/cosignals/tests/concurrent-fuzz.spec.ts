@@ -73,7 +73,9 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		}
 	})
 
-	it(`${CI_SEEDS} seeds × ${CI_STEPS} steps diff clean`, () => {
+	// ~1.8s on an M-series laptop; a shared CI runner lands right on vitest's
+	// 5s default, so the corpus gets an explicit ceiling.
+	it(`${CI_SEEDS} seeds × ${CI_STEPS} steps diff clean`, { timeout: 30_000 }, () => {
 		for (let seed = 1; seed <= CI_SEEDS; seed++) {
 			expectSeedDiffClean(seed, CI_STEPS)
 		}

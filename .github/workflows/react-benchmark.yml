@@ -36,6 +36,7 @@ on:
       - 'packages/cosignals/**'
       - 'packages/cosignals-react/**'
       - 'packages/react-seam-bench/**'
+      - 'packages/signals-royale-fx2/**'
       - 'packages/dalien-signals'
       - 'daishi-concurrent-benchmark'
       - '.github/workflows/react-benchmark.yml'
@@ -44,7 +45,7 @@ on:
       contenders:
         description: 'Contender names (quoted, space-separated)'
         required: false
-        default: '"cosignals-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
+        default: '"cosignals-react" "fx2-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
       rounds:
         description: 'Interleaved rounds per contender'
         required: false
@@ -55,7 +56,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CONTENDERS: ${{ inputs.contenders || '"cosignals-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
+  CONTENDERS: ${{ inputs.contenders || '"cosignals-react" "fx2-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
@@ -117,6 +118,9 @@ jobs:
         working-directory: upstream-alien-signals
         run: |
           npm install
+          # A fresh install resolves a TS 7 without
+          # getParsedCommandLineOfConfigFile, which the build script needs.
+          npm install --no-save typescript@5.8
           npm run build
 
       - name: Build dalien-signals
@@ -241,6 +245,9 @@ jobs:
         working-directory: upstream-alien-signals
         run: |
           npm install
+          # A fresh install resolves a TS 7 without
+          # getParsedCommandLineOfConfigFile, which the build script needs.
+          npm install --no-save typescript@5.8
           npm run build
 
       - name: Build dalien-signals

@@ -1,9 +1,14 @@
-# Signals Royale authoritative core benchmark: all 12 tournament entries vs
-# alien-signals and the cosignals incumbents on one runner. Manual dispatch
-# only. Same harness + methodology as benchmark.yml (milomg isolated runner,
-# median of interleaved rounds); royale registrations applied to the milomg
-# submodule from royale/ci/milomg-royale.patch. sx1 runs separately with the
-# cellx suite excluded (known non-terminating) under a 30-minute guard.
+# Signals Royale core benchmark: the royale-lineage entries that live on
+# main (fx2 and fx2-dalien, registered directly on the milomg fork branch)
+# against alien-signals and the cosignals incumbents, on one runner. Manual
+# dispatch only. Same harness + methodology as benchmark.yml (milomg
+# isolated runner, median of interleaved rounds).
+#
+# History: this workflow originally ran all 12 tournament entries by
+# applying royale/ci/milomg-royale.patch to the submodule. That patch was
+# never committed to main (the other entries' adapters live only on the
+# royale/<slug> branches), so the 12-entry field is unrunnable from here;
+# resurrecting it means regenerating the patch from those branches.
 name: royale-benchmark
 
 on:
@@ -20,7 +25,7 @@ concurrency:
 
 env:
   ROUNDS: ${{ inputs.rounds || '3' }}
-  FIELD: '"Alien Signals" "Cosignal" "Cosignal Alt A" "Cosignal Alt B" "Royale FM1" "Royale FM2" "Royale FH1" "Royale FH2" "Royale FX1" "Royale FX2" "Royale SH1" "Royale SH2" "Royale SX2" "Royale SM1" "Royale SM2"'
+  FIELD: '"Alien Signals" "Dalien Signals" "Cosignal" "Cosignal Alt A" "Cosignal Alt B" "Royale FX2" "Royale FX2 Dalien"'
 
 jobs:
   bench:
@@ -29,14 +34,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Init benchmark submodules + apply royale registrations
+      - name: Init benchmark submodules
         run: |
           git submodule update --init \
             packages/dalien-signals \
             milomg-reactivity-benchmark \
             upstream-alien-signals
-          git -C milomg-reactivity-benchmark apply --binary \
-            "$GITHUB_WORKSPACE/royale/ci/milomg-royale.patch"
 
       - uses: actions/setup-node@v4
         with:
@@ -48,6 +51,9 @@ jobs:
         working-directory: upstream-alien-signals
         run: |
           npm install
+          # A fresh install resolves a TS 7 without
+          # getParsedCommandLineOfConfigFile, which the build script needs.
+          npm install --no-save typescript@5.8
           npm run build
 
       - name: Build dalien-signals (bundled by frameworksList even when not run)
@@ -80,14 +86,6 @@ jobs:
             > "$GITHUB_WORKSPACE/results-field.csv"
           cat "$GITHUB_WORKSPACE/results-field.csv"
 
-      - name: Run SX1 (cellx excluded, 30m guard)
-        working-directory: milomg-reactivity-benchmark/packages/node
-        run: |
-          SUITES=sbench,kairo,dynamic timeout 1800 \
-            node dist/isolated.js --rounds "$ROUNDS" "Royale SX1" \
-            > "$GITHUB_WORKSPACE/results-sx1.csv" || echo "::warning::SX1 run hit the guard"
-          cat "$GITHUB_WORKSPACE/results-sx1.csv"
-
       - name: Verify every field framework produced results
         run: |
           missing=0
@@ -109,16 +107,10 @@ jobs:
             echo '| --- | ---: |'
             awk -F',' 'NR>1 && $3+0>0 {gsub(/^ +| +$/,"",$1); t[$1]+=$3} END {for (f in t) printf "| %s | %d |\n", f, t[f]}' \
               results-field.csv | sort -t'|' -k3 -n
-            echo ""
-            echo "SX1 (cellx excluded):"
-            awk -F',' 'NR>1 && $3+0>0 {gsub(/^ +| +$/,"",$1); t[$1]+=$3} END {for (f in t) printf "| %s | %d |\n", f, t[f]}' \
-              results-sx1.csv
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
           name: royale-benchmark
-          path: |
-            results-field.csv
-            results-sx1.csv
+          path: results-field.csv
           if-no-files-found: error

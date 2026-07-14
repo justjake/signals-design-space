@@ -43,7 +43,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal"' }}
+  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal" "Royale FX2"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:

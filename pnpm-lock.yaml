@@ -124,6 +124,9 @@ importers:
 
   packages/cosignals:
     devDependencies:
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2
