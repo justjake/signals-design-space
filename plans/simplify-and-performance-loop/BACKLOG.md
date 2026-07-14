@@ -9,7 +9,6 @@ condition still leaves a useful direction.
 
 - Remove the now-unused internal `draftsAffecting` import from `index.ts` with the next source change touching that import block; do not spend a standalone performance round on emit-elided cleanup.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
-- Remove impossible plain-state `throwable: null` storage from atoms and world memos while preserving computed async state.
 - Let nullable suspension resolution own pendingness and delete the parallel `Suspension.settled` boolean.
 
 ## Recorded retry leads
@@ -52,6 +51,7 @@ condition still leaves a useful direction.
 - Scheduled effects use the graph watcher's links as their sole dependency-identity owner and the committed-value array length as its sole count; React's parallel link-head and count fields are gone while React retains comparison and scheduling policy.
 - `releaseDraft` owns dead-prefix folding and the zero-live log/world-memo sweep; retirement and discard no longer coordinate a repeated two-call teardown protocol.
 - React root connections own their committed draft IDs directly; the committed-world WeakMap now serves only external container keys, and the test-only root `committedSnapshot` export is gone.
+- Atoms and plain world memo records omit the impossible async payload; computed nodes retain their stable nullable slot, and async world records retain their ErrorBox or Suspension.
 - React owns `useIsPending`'s external boolean snapshot; specialized `useCommitted` retains its faster root-local identity check and repairs writes around layout attachment exactly once.
 - Shared graph-traversal scratch was rejected as slower and harder to follow; retain invocation-local `WaveFrame` and `PokeFrame` chains.
 - Lifetime-context convergence into Atom was rejected before editing: its retained `get`/`set` capability is deliberately base-only and untracked, unlike public world-aware/policy-bearing Atom methods.
