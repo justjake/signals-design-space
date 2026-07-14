@@ -160,6 +160,12 @@ as parity for core benchmarks and within 5% for React or memory. With no
 baseline worktree, noisy or load-skewed evidence is inconclusive; never add
 samples until the result becomes favorable.
 
+An unchanged control outside its threshold makes the performance evidence
+inconclusive; it does not attribute that movement to the candidate. Do not let
+that control alone reject a supported-surface correctness fix with a focused
+falsifier. Land the fix without a performance claim when its changed paths stay
+within their thresholds and the full correctness gate passes.
+
 Reject stale or reused output, live-TypeScript runtime imports, implicit
 transforms, compiler/config/probe drift, linked or changed runtime dependencies,
 shifted timing boundaries, skipped observable work, benchmark detection, or
