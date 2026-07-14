@@ -98,9 +98,14 @@ nothing extra.
 ```ts
 count.get()        // committed state plus applied urgent writes; drafts hidden
 latest(count)      // newest intent, drafts included; never suspends
-committed(count)   // the committed view: base state; never subscribes or suspends
 isPending(count)   // true while newer data exists behind the shown value
 ```
+
+There is deliberately no `committed()` query: the committed view is
+implicit, exactly as in React and Solid. Ordinary reads outside a render
+pass are base state — committed writes and retired transitions, drafts
+hidden — so "what is on screen" is what everything that did not opt into
+a draft already sees.
 
 Inside a computed evaluation (or a render pass, through the React bindings)
 `latest` and `get` resolve that context's own world — reading ahead of your
@@ -267,11 +272,10 @@ stores, which escalate every store change to sync priority.
 
 A draft retires when every root that received it has committed it; the
 engine then folds it into committed state, and passes still holding the id
-resolve identical values. The committed view (`committed(x)`,
-`useCommitted`) is base state — drafts hidden, folds included. With
-multiple roots it converges at retirement, so while a transition one root
-already committed is still held by another, that root's screen momentarily
-runs ahead of the committed view.
+resolve identical values. Base state is therefore the committed view —
+drafts hidden, folds included. With multiple roots it converges at
+retirement, so while a transition one root already committed is still held
+by another, that root's screen momentarily runs ahead of base state.
 
 Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
 current pass's world through a validity-gated note: the note is written by
@@ -280,15 +284,15 @@ a pass that did not refresh it (an urgent pass over an untouched subtree,
 another root's render, an interleaved flush) falls back to BASE rather
 than consuming a stale world or leaking live drafts into an urgent frame.
 
-Every provider-dependent hook (`useValue`, `useComputed`, `useIsPending`,
-and `useCommitted`) requires a `SignalsFrameworkProvider` above it and
-throws without one. The root connection carries transition worlds, so a
+Every provider-dependent hook (`useValue`, `useComputed`, and
+`useIsPending`) requires a `SignalsFrameworkProvider` above it and throws
+without one. The root connection carries transition worlds, so a
 subscriber outside a provider has no channel for them. Create roots with
 `wrapCreateRoot(createRoot)` or wrap the tree in
 `<SignalsFrameworkProvider>`. `useSignalEffect` and
 `useSignalLayoutEffect` observe base state, which needs no root channel,
 so they work without a provider — as do the plain function reads
-(`latest`, `committed`, `isPending`).
+(`latest`, `isPending`).
 
 ## Out of scope: DOM-mutation attribution
 
@@ -308,7 +312,7 @@ import { createRoot } from 'react-dom/client';
 import {
   registerReactSignals, wrapCreateRoot,
   useValue, useComputed, useSignalEffect, useSignalLayoutEffect,
-  useIsPending, useCommitted, useAtom,
+  useIsPending, useAtom,
   startSignalTransition, useSignalTransition,
 } from 'signals-royale-fx2/react';
 import { createAtom } from 'signals-royale-fx2';
@@ -341,8 +345,8 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   the rendering steps). The handler sees the latest committed render's
   props without re-creating the effect; cleanup honored; StrictMode nets
   one; base state only — a transition reaches it once, at retirement.
-- `useIsPending(x)` / `useCommitted(x)` — the pending probe and the
-  committed (base-state) view, both delivered urgently.
+- `useIsPending(x)` — the pending probe, delivered urgently (an indicator
+  must not be held hostage by the transition it indicates).
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after
   unmount.
 - `startSignalTransition(fn)` / `useSignalTransition()` — transition

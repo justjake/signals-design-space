@@ -357,28 +357,6 @@ export function latest<T>(x: Signal<T>): T {
 	return stateValue(st) as T
 }
 
-/** What the committed screen shows for x: base state — committed writes
- * and retired transitions, drafts hidden. Never subscribes, never
- * suspends. Screens converge with base at retirement; while a transition
- * a root already committed is still held open by another root, that
- * root's screen momentarily runs ahead of this view. */
-export function committed<T>(x: Signal<T>): T {
-	const node = nodeOf(x)
-	if (activeEvaluation === node) {
-		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
-	}
-	if (activeEvaluation !== null) {
-		throw new Error(
-			'committed() cannot be read inside a computed; read the dependency normally or use the previous argument for self history',
-		)
-	}
-	const st = resolveState(node, BASE_WORLD)
-	if ((st.flags & Flag.AsyncError) !== 0) {
-		throw (st.throwable as ErrorBox).error
-	}
-	return stateValue(st) as T
-}
-
 /** True while newer data exists behind what is on screen — a pending
  * transition draft on this atom, or an async refetch loading behind a
  * stale value. Passive by contract: never evaluates, never refetches,

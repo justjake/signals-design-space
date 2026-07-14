@@ -15,7 +15,6 @@ export {
 	useSignalEffect,
 	useSignalLayoutEffect,
 	useIsPending,
-	useCommitted,
 	useAtom,
 } from './hooks.ts'
 export { startSignalTransition, useSignalTransition } from './transitions.ts'

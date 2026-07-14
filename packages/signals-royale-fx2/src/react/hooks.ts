@@ -99,20 +99,6 @@ const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
 const NO_IDS: readonly DraftId[] = []
 
-function forceReducer(count: number): number {
-	return count + 1
-}
-
-/** The committed (base-state) snapshot: values and error boxes both have
- * stable identity, so Object.is is the whole store comparison. */
-function committedSnapshot(node: ProducerNode): unknown {
-	const st = resolveState(node, BASE_WORLD)
-	if ((st.flags & Flag.AsyncError) !== 0) {
-		return st.throwable
-	}
-	return isUninitialized(st.value) ? undefined : st.value
-}
-
 /** These hooks cannot work without a SignalsFrameworkProvider. The root
  * connection carries transition worlds, and a subscriber without one has
  * no channel for them. Fail at the hook and name both supported fixes. */
@@ -380,33 +366,6 @@ export function useIsPending(x: Signal<any>): boolean {
 	)
 	const getSnapshot = useCallback(() => isPendingPassive(node, null), [node])
 	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-}
-
-/** Subscribe to what the committed screen shows for x: base state, drafts
- * hidden. Changes deliver urgently — the committed view flips at commit
- * and fold time, and an indicator of it must not be held hostage by a
- * transition (same reasoning as useIsPending). */
-export function useCommitted<T>(x: Signal<T>): T {
-	const node = nodeOf(x)
-	const connection = requireRootConnection('useCommitted')
-	noteHookRender(connection, null)
-	const subscribe = useCallback(
-		(notify: () => void) =>
-			observeNode(node, () => {
-				dispatchUrgent(notify)
-			}),
-		[node],
-	)
-	const getSnapshot = useCallback(() => committedSnapshot(node), [node])
-	const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-	if (isErrorBox(snap)) {
-		getActiveTracer()?.emit('render-error', node, node.causeEvent, {
-			error: snap.error,
-			root: connection,
-		})
-		throw snap.error
-	}
-	return snap as T
 }
 
 /** A component-owned atom: created once on mount, garbage-collected after

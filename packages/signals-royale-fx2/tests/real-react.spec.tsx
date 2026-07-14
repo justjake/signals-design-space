@@ -10,7 +10,6 @@ import {
 	createComputed,
 	isPending as enginePending,
 	latest,
-	committed,
 	read,
 	createAtom,
 	update,
@@ -105,7 +104,6 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		})
 		expect(text(container)).toBe('P;v:0;') // held: no leak, no fallback, probe flipped
 		expect(read(a)).toBe(0)
-		expect(committed(a)).toBe(0)
 		expect(latest(a)).toBe(1)
 		expect(enginePending(a)).toBe(true)
 		await act(async () => {
@@ -392,7 +390,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 })
 
 describe('scenario 7 — one transition across two roots', () => {
-	test('per-root committed views diverge while one root holds, then join', async () => {
+	test('screens diverge while one root holds; base state joins at retirement', async () => {
 		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
@@ -413,16 +411,14 @@ describe('scenario 7 — one transition across two roots', () => {
 		})
 		expect(text(one.container)).toBe('s:0;') // held here
 		expect(text(two.container)).toBe('r:1;') // committed there
-		// The committed view is base state: it folds only when every root
-		// commits, so during the skew it trails the early-committing root.
-		expect(committed(a)).toBe(0)
+		// Base state folds only when every root commits, so during the skew
+		// it trails the early-committing root.
 		expect(read(a)).toBe(0)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(one.container)).toBe('s:1;')
-		expect(committed(a)).toBe(1)
 		expect(read(a)).toBe(1)
 	})
 })

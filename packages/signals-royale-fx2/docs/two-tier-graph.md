@@ -748,5 +748,7 @@ docs/effects.md):
   pull all computes, then cleanups, then handlers. The write path only
   marks and enqueues.
 - Per-root committed views (`committedWorlds`, `connection.committedIds`,
-  the provider `container` prop) are gone; the committed view is base
-  state, and effects observe base state only.
+  the provider `container` prop) are gone, and `committed()`/`useCommitted`
+  with them: the committed view is implicit — base state — and effects
+  observe base state only. (`committedSnapshot` and its ErrorBox identity
+  discussion in section 12 died with the hook.)

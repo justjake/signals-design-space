@@ -175,16 +175,20 @@ useSignalLayoutEffect(compute, handler, deps, opts?) // before-paint lane
   version/rerun bookkeeping, and the scheduled-effect handshake
   (`WatchSchedule`) that asked React to re-render a component purely to
   reach its phase effect.
-- Committed-world effects and per-root committed views (`committed(x,
-  container)`, `useCommitted`, the twin world-source watcher and its
-  certificate-edge refresh). Those existed to observe the window where a
-  transition has committed on one React root but not yet on another; on a
-  single root that window is unobservable — the commit marker retires the
-  draft before any descendant layout effect runs, so the committed world
-  is always base state. Render soundness across multiple roots is
-  unaffected (per-root render worlds and retirement-waits-for-all-roots
-  remain); during multi-root commit skew, effects and committed reads now
-  observe values at retirement rather than per root.
+- Committed-world effects and committed views (`committed(x, container)`,
+  then `committed(x)` and `useCommitted` entirely, the twin world-source
+  watcher and its certificate-edge refresh). The per-root machinery
+  existed to observe the window where a transition has committed on one
+  React root but not yet on another; on a single root that window is
+  unobservable — the commit marker retires the draft before any
+  descendant layout effect runs, so the committed world is always base
+  state. What remained after that cut was a shell over base reads with no
+  ecosystem precedent (React and Solid keep the committed view implicit),
+  so the query was removed outright. Render soundness across multiple
+  roots is unaffected (per-root render worlds and
+  retirement-waits-for-all-roots remain); during multi-root commit skew,
+  effects and ambient reads observe values at retirement rather than per
+  root.
 
 ## Migration sketch (for posterity)
 
@@ -196,8 +200,9 @@ committed state:
    (benchmark-harness `effect(fn)` becomes compute-with-side-effects plus
    a no-op handler and `equals: () => false` — sound because harness
    bodies read but never write signals).
-2. Committed-view removal: `committed()`/`useCommitted`, the per-root
-   committed bookkeeping, and the provider `container` plumbing.
+2. Committed-view removal: first the per-root bookkeeping and the
+   provider `container` plumbing, then `committed()`/`useCommitted`
+   outright.
 
 Tests pin the new contract rather than porting old pins: value cutoff
 instead of conservative re-runs, lane timing, drain-sourced errors, and

@@ -7,7 +7,6 @@ import {
 	effect,
 	isPending,
 	latest,
-	committed,
 	nodeOf,
 	read,
 	reducerAtom,
@@ -480,39 +479,6 @@ describe('computeds across worlds', () => {
 		discardDraft(id)
 	})
 
-	test('committed() cannot be read from inside a computed', () => {
-		const source = createAtom(1)
-		const reader = createComputed(() => committed(source))
-		expect(() => reader.get()).toThrow(/committed\(\).*inside a computed/)
-		const untrackedReader = createComputed(() => untracked(() => committed(source)))
-		expect(() => untrackedReader.get()).toThrow(/committed\(\).*inside a computed/)
-	})
-
-	test('committed() cannot be read during a draft evaluation', () => {
-		const branch = createAtom(false)
-		const source = createAtom(1)
-		const reader = createComputed(() => (branch.get() ? committed(source) : source.get()))
-		expect(reader.get()).toBe(1)
-		const id = inDraft(() => branch.set(true))
-		expect(() => latest(reader)).toThrow(/committed\(\).*inside a computed/)
-		discardDraft(id)
-	})
-
-	test('committed() self-read is a cycle', () => {
-		let self!: Computed<number>
-		self = createComputed(() => committed(self))
-		expect(() => self.get()).toThrow(/cycle detected in computed/)
-	})
-
-	test('a computed cannot read its cached value from another world', () => {
-		const branch = createAtom(false)
-		let self!: Computed<number>
-		self = createComputed(() => (branch.get() ? committed(self) : 1))
-		expect(self.get()).toBe(1)
-		const id = inDraft(() => branch.set(true))
-		expect(() => latest(self)).toThrow(/cycle detected in computed/)
-		discardDraft(id)
-	})
 
 	test('writes are also forbidden during draft-world computed evaluation', () => {
 		const source = createAtom(0)
@@ -839,14 +805,14 @@ describe('computeds across worlds', () => {
 	})
 })
 
-describe('the committed view', () => {
-	test('committed(x) hides drafts and converges at retirement', () => {
+describe('the committed view is base state', () => {
+	test('ambient reads hide drafts and converge at retirement', () => {
 		const a = createAtom(0)
 		const id = inDraft(() => a.set(1))
-		expect(committed(a)).toBe(0) // the draft is invisible
+		expect(read(a)).toBe(0) // the draft is invisible
 		expect(latest(a)).toBe(1)
 		retireDraft(id)
-		expect(committed(a)).toBe(1) // the fold landed in base state
+		expect(read(a)).toBe(1) // the fold landed in base state
 	})
 })
 

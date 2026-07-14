@@ -5,7 +5,6 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-	committed,
 	createAtom,
 	effect,
 	flushScheduledEffects,
@@ -123,7 +122,7 @@ describe('registration', () => {
 		function Child() {
 			const value = useValue(atom)
 			React.useLayoutEffect(() => {
-				seen.push([value, committed(atom), liveDraftCount()])
+				seen.push([value, read(atom), liveDraftCount()])
 			})
 			return null
 		}

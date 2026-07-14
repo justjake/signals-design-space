@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
- * useSignalTransition, useCommitted, useAtom, useComputed,
+ * useSignalTransition, useAtom, useComputed,
  * useSignalEffect/useSignalLayoutEffect). */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
@@ -28,7 +28,6 @@ import {
 	SignalsFrameworkProvider,
 	startSignalTransition,
 	useAtom,
-	useCommitted,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
@@ -535,7 +534,6 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 			['useValue', () => <span>{useValue(a)}</span>],
 			['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
 			['useIsPending', () => <span>{String(useIsPending(a))}</span>],
-			['useCommitted', () => <span>{useCommitted(a)}</span>],
 		]
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
@@ -686,72 +684,11 @@ describe('fx2 extras', () => {
 		expect(pendingSeen).toContain(true)
 	})
 
-	test('useCommitted tracks this root screen, urgent and transitional', async () => {
-		const a = createAtom(0)
-		let renders = 0
-		function App() {
-			renders++
-			const now = useValue(a)
-			const shown = useCommitted(a)
-			return (
-				<span>
-					n:{now};c:{shown};
-				</span>
-			)
-		}
-		const { container } = await h.mount(<App />)
-		expect(text(container)).toBe('n:0;c:0;')
-		expect(renders).toBe(1)
-		await act(() => {
-			a.set(1)
-		})
-		expect(text(container)).toBe('n:1;c:1;')
-		expect(renders).toBe(2)
-		await act(() => {
-			startSignalTransition(() => a.set(2))
-		})
-		await act(async () => {})
-		expect(text(container)).toBe('n:2;c:2;')
-		// The transition renders the draft, then confirmRootCommit advances the
-		// root-local committed screen for useCommitted.
-		expect(renders).toBe(4)
-	})
-
-	test('[falsify-first] useCommitted repairs a write between render and subscription', async () => {
-		const a = createAtom(0)
-		const c = createComputed(() => a.get())
-		read(c)
-		let renders = 0
-		function Reader() {
-			renders++
-			return <span>c:{useCommitted(c)};</span>
-		}
-		function LayoutWriter() {
-			React.useLayoutEffect(() => {
-				a.set(1)
-			}, [])
-			return null
-		}
-		const { container } = await h.mount(
-			<>
-				<LayoutWriter />
-				<Reader />
-			</>,
-		)
-		expect(text(container)).toBe('c:1;')
-		expect(renders).toBe(2)
-	})
-
-	test('[falsify-first] committed and pending snapshots bail out when a draft is held', async () => {
+	test('[falsify-first] the pending snapshot flips while a draft is held, without extra renders', async () => {
 		const a = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
-		let committedRenders = 0
 		let pendingRenders = 0
-		function CommittedProbe() {
-			committedRenders++
-			return <i>c:{useCommitted(a)};</i>
-		}
 		function PendingProbe() {
 			pendingRenders++
 			return <i>p:{useIsPending(hold) ? 1 : 0};</i>
@@ -764,29 +701,26 @@ describe('fx2 extras', () => {
 		}
 		const { container } = await h.mount(
 			<>
-				<CommittedProbe />
 				<PendingProbe />
 				<React.Suspense fallback={null}>
 					<Suspender />
 				</React.Suspense>
 			</>,
 		)
-		expect(text(container)).toBe('c:0;p:0;')
+		expect(text(container)).toBe('p:0;')
 		await act(() => {
 			startSignalTransition(() => {
 				a.set(1)
 				hold.set(true)
 			})
 		})
-		expect(text(container)).toBe('c:0;p:1;')
-		expect(committedRenders).toBe(1)
+		expect(text(container)).toBe('p:1;')
 		expect(pendingRenders).toBe(2)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
-		expect(text(container)).toBe('c:1;p:0;')
-		expect(committedRenders).toBe(2)
+		expect(text(container)).toBe('p:0;')
 		expect(pendingRenders).toBe(3)
 	})
 

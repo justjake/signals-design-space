@@ -6,7 +6,6 @@ import { flushSync } from 'react-dom'
 import {
 	attachTracer,
 	batch,
-	committed,
 	createComputed,
 	effect,
 	initializeAtomState,
@@ -28,7 +27,6 @@ import {
 	registerReactSignals,
 	resetReactSignalsForTest,
 	startSignalTransition,
-	useCommitted,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
@@ -91,12 +89,10 @@ const adapter = {
 	latest(x: unknown): unknown {
 		return latest(x as Signal<unknown>)
 	},
-	committed(x: unknown, _container?: unknown): unknown {
-		// Per-root committed views were dropped: the committed view is base
-		// state (screens converge at retirement). The container argument is
-		// accepted for battery-interface compatibility and ignored.
-		return committed(x as Signal<unknown>)
-	},
+	// committed()/useCommitted are intentionally absent: the committed view
+	// is implicit (base state; screens converge at retirement), matching how
+	// Solid and React expose no committed-view query either. Battery cases
+	// that require the capability skip against this adapter.
 	isPending(x: unknown): boolean {
 		return isPending(x as Signal<unknown>)
 	},
@@ -135,9 +131,6 @@ const adapter = {
 	},
 	useIsPending(x: unknown): boolean {
 		return useIsPending(x as Signal<unknown>)
-	},
-	useCommitted(x: unknown): unknown {
-		return useCommitted(x as Signal<unknown>)
 	},
 	startTransitionWrite(scope: () => void): void {
 		startSignalTransition(scope)
