@@ -95,13 +95,22 @@ export interface ComputedOptions<T> {
 	label?: string
 }
 
-/** A writable reactive value. get() inside a computed, effect, or
- * subscribed component registers a dependency; peek() reads without
- * registering. */
+/** A writable reactive value. */
 export type Atom<in out T> = {
+	/** Tracked read: inside a computed, an effect source, or a subscribed
+	 * component this registers a dependency. Returns base state — committed
+	 * values plus urgent writes, drafts hidden — or, inside a render pass
+	 * or draft evaluation, that context's own world. */
 	get(): T
+	/** Write through the equality cutoff (equal writes are dropped). Inside
+	 * a React transition the write is recorded into the transition's draft
+	 * and stays invisible to base readers until it commits. */
 	set(value: T): void
+	/** Functional update. Inside a transition the function itself is
+	 * recorded and replays against each world's starting value, the way
+	 * React replays queued useState updaters — keep it pure. */
 	update(fn: (prev: T) => T): void
+	/** Read the current value without registering a dependency. */
 	peek(): T
 }
 
@@ -140,10 +149,9 @@ const Atom = class<T> implements AtomNode<T> {
 		this.lifetimeActive = false
 		this.worldMemos = undefined
 	}
-	/** Tracked read. An active world (a draft evaluation) selects that
-	 * world; otherwise this reads base state. World evaluations run
-	 * untracked — their staleness evidence is the certificate, not graph
-	 * edges — so only the base branch registers a dependency. */
+	// World evaluations run untracked — their staleness evidence is the
+	// certificate, not graph edges — so only the base branch registers a
+	// dependency. (User-facing contracts live on the public Atom type.)
 	get(): T {
 		const world = currentWorld
 		if (world !== null) {
@@ -173,6 +181,8 @@ const Atom = class<T> implements AtomNode<T> {
 
 /** An atom whose dispatches replay through one reducer fixed at creation. */
 export type ReducerAtom<S, A> = Atom<S> & {
+	/** Apply `action` through the reducer — recorded and replayed per
+	 * world like update(), so keep the reducer pure. */
 	dispatch: (action: A) => void
 }
 
@@ -190,7 +200,14 @@ function dispatchReducer<S, A>(this: ReducerAtomNode<S, A>, action: A): void {
 /** A cached value derived from atoms and other computeds; recomputes
  * only when read after a dependency changed. */
 export type Computed<out T> = {
+	/** Tracked, cached read: registers a dependency and recomputes only if
+	 * one changed. An async computed returns its settled value, serves the
+	 * previous settled value while a refetch is pending (isPending is the
+	 * indicator), throws its stable pending promise when nothing has
+	 * settled yet (React Suspense catches it), and rethrows errors. */
 	get(): T
+	/** get() without registering a dependency — same world selection and
+	 * async behavior. */
 	peek(): T
 }
 
@@ -451,6 +468,9 @@ export type EffectSchedule = 'sync' | 'useLayoutEffect' | 'useEffect'
  * compute exactly as on createComputed; the same `equals` also gates
  * delivery, comparing fresh settled values against the last-handled one. */
 export interface EffectOptions<T> extends ComputedOptions<T> {
+	/** Which React phase runs signal-triggered re-runs ('useLayoutEffect'
+	 * or 'useEffect'); 'sync' (default) runs them inside the settling
+	 * flush. */
 	schedule?: EffectSchedule
 }
 

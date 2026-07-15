@@ -318,9 +318,18 @@ export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
  * settled (value, previous) pair, may return a cleanup. `equals` and
  * `label` pass through to effect(); the schedule is the hook's phase. */
 export interface SignalEffectSpec<S extends WatchSource> {
+	/** What the effect reacts to: a compute function (tracked, dynamic
+	 * dependencies), a signal, a tuple of signals, or a record of signals
+	 * — effect()'s source union. */
 	watch: S
+	/** The handler: untracked, handed the settled (value, previous) pair
+	 * when the watched value changes; may return a cleanup that runs
+	 * before the next run and at disposal. */
 	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
+	/** Delivery cutoff; defaults to Object.is, or shallowEquals for tuple
+	 * and record watches. */
 	equals?: EqualsFn<WatchValue<S>>
+	/** Debug name shown in trace output. */
 	label?: string
 }
 
