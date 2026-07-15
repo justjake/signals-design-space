@@ -14,10 +14,8 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Replace the internal ambient-state getter wrappers with ESM live bindings while retaining the public `getActiveTracer()` function. Retry the exact Round 50 three-binding model with atom-get, latest/world-computed, and write controls.
-2. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
-3. Replace `RenderedResolution.live` with the private `NO_IDS` identity. Retry the exact Round 98 design with direct hydration, first mount, held render, empty-world, repair, and resolved-runtime coverage.
-4. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
+1. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
+2. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
 
 ## Other unmeasured broader leads
 
@@ -41,6 +39,7 @@ condition still leaves a useful direction.
 - Remove `Flag.Watching` only after a natural compiler/runtime/graph-layout change; retry the exact Round 110 three-file diff with its tier falsifier, seven modes, retained-byte checks, provenance, and bytecode pins.
 - Move `draftRevisionByAtom` into `RebaseLog` only after a natural runtime/world-layout change; retry the exact Round 111 source plus complete-lifetime ABA falsifier and all five modes, without tombstones, retained empty logs, or an atom field.
 - Converge effect-run release only after a broader effect-lifetime change removes first-error aggregation from successful child-release reruns; retain Round 112's six modes and thrown-`undefined`, sibling, ordering, poisoning, tracing, and unlink falsifiers without options/callbacks/results.
+- Delete `RenderedResolution.live` only after a natural React/runtime layout change; retry the exact Round 114 three-file diff with direct hydration, first mount, held render, empty-world, repair, resolved-runtime coverage, and all four frozen modes. Do not vary the sentinel representation or resample the stable rerender regression.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
 - Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
@@ -72,6 +71,7 @@ condition still leaves a useful direction.
 - Direct atom propagation ownership; sole-caller `propagateFrom` removed.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
+- Internal `activeConsumer`, `currentWorld`, and `currentPark` consumers now read their canonical ESM live bindings directly; the three zero-policy getter wrappers and ten calls are gone while public `getActiveTracer()` remains a function.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
