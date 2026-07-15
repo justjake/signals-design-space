@@ -14,14 +14,12 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Remove the last internal `untracked(() => ...)` adapter from `Computed.peek()`. Retry the direct base refresh and unwrap after the one-clock/layout change; retain clean, dirty, stale-suspended, tracked-get, and atom controls, and add no mode/helper/state.
-2. Delete the redundant `Flag.Watching` kind bit now that `WatchRender` and `WatchRunEffect` exhaust watcher identity. Retry the exact Round 103 model with its focused tier falsifier, seven modes, and current bytecode pins.
-3. Move `draftRevisionByAtom` into canonical `RebaseLog`, with an absent log meaning revision zero. The one-clock rewrite is the natural retry point for Round 48; retain log deletion/recreation, ABA, and world-certificate coverage.
-4. Converge effect rerun cleanup and final-disposal release only if one non-allocating two-caller mechanism deletes repeated child/cleanup work while preserving child-before-parent order, complete sibling disposal, self-disposal, poisoning, tracing, dependency unlink timing, and the first thrown object.
-5. Replace the internal ambient-state getter wrappers with ESM live bindings while retaining the public `getActiveTracer()` function. Retry the exact Round 50 three-binding model with atom-get, latest/world-computed, and write controls.
-6. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
-7. Replace `RenderedResolution.live` with the private `NO_IDS` identity. Retry the exact Round 98 design with direct hydration, first mount, held render, empty-world, repair, and resolved-runtime coverage.
-8. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
+1. Move `draftRevisionByAtom` into canonical `RebaseLog`, with an absent log meaning revision zero. The one-clock rewrite is the natural retry point for Round 48; retain log deletion/recreation, ABA, and world-certificate coverage.
+2. Converge effect rerun cleanup and final-disposal release only if one non-allocating two-caller mechanism deletes repeated child/cleanup work while preserving child-before-parent order, complete sibling disposal, self-disposal, poisoning, tracing, dependency unlink timing, and the first thrown object.
+3. Replace the internal ambient-state getter wrappers with ESM live bindings while retaining the public `getActiveTracer()` function. Retry the exact Round 50 three-binding model with atom-get, latest/world-computed, and write controls.
+4. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
+5. Replace `RenderedResolution.live` with the private `NO_IDS` identity. Retry the exact Round 98 design with direct hydration, first mount, held render, empty-world, repair, and resolved-runtime coverage.
+6. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
 
 ## Other unmeasured broader leads
 
@@ -41,6 +39,8 @@ condition still leaves a useful direction.
 
 ## Recorded retry leads
 
+- Remove the last internal `Computed.peek()` untracked adapter only after a natural compiler/runtime/layout change; retry the exact Round 109 source plus pending/collector falsifiers with all five frozen modes, and do not resample or tune source shape.
+- Remove `Flag.Watching` only after a natural compiler/runtime/graph-layout change; retry the exact Round 110 three-file diff with its tier falsifier, seven modes, retained-byte checks, provenance, and bytecode pins.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
 - Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
