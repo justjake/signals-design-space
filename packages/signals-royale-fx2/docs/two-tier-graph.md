@@ -752,3 +752,14 @@ docs/effects.md):
   with them: the committed view is implicit — base state — and effects
   observe base state only. (`committedSnapshot` and its ErrorBox identity
   discussion in section 12 died with the hook.)
+- One clock (a further round): `draftChangeClock` merged into
+  `graphChangeClock` — draft opens/appends/retires/discards and thenable
+  settlement tick the same counter base writes do, so world memos and the
+  world cache key their fast paths on one comparison. A
+  `baseChangedAtGraphChange` watermark reading preserves the narrower
+  "did base state change" question for the single-draft write cutoff;
+  `draftRevisionByAtom` stamps became readings of the one clock; the
+  `setOnSettlement` seam died (settlement ticks directly). The unwrap
+  protocol described in section 12 lives in one place now:
+  `unwrapResolved(state, park)` in asyncs.ts, with `unwrapForEval` and
+  the read-site copies deleted; `isErrorBox` left with its last consumer.

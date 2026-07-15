@@ -35,6 +35,7 @@ import {
 	setCurrentCause,
 	startBatch,
 	endBatch,
+	tickGraphChange,
 	traceHook,
 } from './graph.ts'
 
@@ -68,10 +69,6 @@ export interface Suspension {
  * identity distinguishes engine errors from error-shaped user values. */
 export class ErrorBox {
 	constructor(public error: unknown) {}
-}
-
-export function isErrorBox(v: unknown): v is ErrorBox {
-	return v instanceof ErrorBox
 }
 
 /**
@@ -130,12 +127,6 @@ export function unwrapResolved(
 }
 
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()
-
-/** Installed by worlds.ts so settlement also invalidates its world memos. */
-let onSettlement: (() => void) | null = null
-export function setOnSettlement(fn: () => void): void {
-	onSettlement = fn
-}
 
 export function makeSuspension(): Suspension {
 	let resolveRaw!: () => void
@@ -201,7 +192,12 @@ function settle(
 					error: box.status === 'rejected' ? box.result : undefined,
 				})
 			: NO_EVENT
-	onSettlement?.()
+	// Settlement ticks the one change clock even when nothing base-visible
+	// parked here: world memos whose suspensions this settlement resolves
+	// key their fast path on the clock, and a memo serving a suspended
+	// state with a resolved suspension would suspend renders on an
+	// already-fulfilled promise.
+	tickGraphChange()
 	const nodes = box.parkedNodes!
 	box.parkedNodes = null
 	const suspensions = box.parkedSuspensions!

@@ -115,9 +115,13 @@ constructor inits + wave/write bump sites, `storeVersionSuppressed`,
 `withSuppressedStoreVersion`, `bumpStoreVersionLoud`, `retireDraft`'s
 `silent` option, `confirmRootCommit`'s `foldReachedEveryScope` loudness
 decision, `NodeVersion` + `node.version` + `link.version` and every
-compare/stamp site. The counter taxonomy is now: two clocks
+compare/stamp site. The counter taxonomy at landing time: two clocks
 (`graphChangeClock`, `draftChangeClock`), readings (`changedAt<Clock>`,
-`validAt<Clock>`), two pass identities (`evalPass`, `pokePass`).
+`validAt<Clock>`), two pass identities (`evalPass`, `pokePass`). A later
+round merged the clocks: one `graphChangeClock` ticks for base writes,
+settlement, and draft activity alike, with a `baseChangedAtGraphChange`
+watermark reading distinguishing base changes where a consumer needs the
+narrower question (the single-draft write cutoff).
 
 ## Probes and falsification
 

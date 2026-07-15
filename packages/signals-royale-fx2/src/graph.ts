@@ -204,6 +204,12 @@ export interface ConsumerNode extends ReactiveNode {
 }
 
 let graphChangeClock: GraphChangeClock = 1
+/** The clock reading at the last BASE change — an atom write or a
+ * settlement invalidation. Draft activity ticks the clock (world memos
+ * and caches key their fast paths on it) without moving this watermark,
+ * so "did base state change since X" stays answerable: compare X against
+ * this reading, not against the clock. */
+let baseChangedAtGraphChange: GraphChangeClock = 1
 /** Identity of the evaluation pass in progress. */
 let evalPass: EvalPass = 1
 /** Backing counter for evaluation passes — monotonic, never reused. If a
@@ -229,6 +235,20 @@ let batchDepth = 0
 
 export function currentGraphChange(): GraphChangeClock {
 	return graphChangeClock
+}
+
+/** Advance the one change clock. Draft activity (opens, intent appends,
+ * retires, discards) and thenable settlement tick through here so every
+ * clock-keyed fast path — world memos, the world cache, unwatched
+ * validation short-circuits — revalidates; base writes tick inline and
+ * additionally move the base watermark. */
+export function tickGraphChange(): GraphChangeClock {
+	return ++graphChangeClock
+}
+
+/** The clock reading at the last base change (write or settlement). */
+export function currentBaseChange(): GraphChangeClock {
+	return baseChangedAtGraphChange
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1036,7 @@ export function pokeDraftWatchers(
  */
 export function invalidateComputed(node: EvaluatedNode<unknown>, cause: TraceEventId): void {
 	graphChangeClock++
+	baseChangedAtGraphChange = graphChangeClock
 	node.flags = (node.flags & ~Flag.StaleMask) | Flag.StaleDirty
 	node.causeEvent = cause
 	// Tick first, then stamp with the new reading (see writeAtom).
@@ -1340,6 +1361,7 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T): boolean {
 	// change stamped with a pre-tick reading could compare equal to a
 	// subscriber that validated before this write, hiding the change.
 	graphChangeClock++
+	baseChangedAtGraphChange = graphChangeClock
 	atom.changedAtGraphChange = graphChangeClock
 	const cause = traceHook !== null ? traceHook('write', atom, currentCause) : NO_EVENT
 	propagateWave(atom.subs, cause)

@@ -9,7 +9,7 @@ import {
 	nodeOf,
 	read,
 } from '../src/index.ts'
-import { isErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
+import { ErrorBox, makeSuspension, trackThenable } from '../src/asyncs.ts'
 import { currentCause, observeNode, setCurrentCause } from '../src/graph.ts'
 import { BASE_WORLD, resolveState } from '../src/worlds.ts'
 
@@ -310,7 +310,7 @@ describe('errors are reference-stable boxes', () => {
 			read(failure)
 		} catch {}
 		const first = resolveState(nodeOf(failure), BASE_WORLD).throwable
-		expect(isErrorBox(first)).toBe(true)
+		expect(first instanceof ErrorBox).toBe(true)
 
 		source.set(1)
 		try {
@@ -321,7 +321,7 @@ describe('errors are reference-stable boxes', () => {
 		const value = createComputed(() => ({ error: boom }))
 		const spoof = resolveState(nodeOf(value), BASE_WORLD).value
 		expect(spoof).toEqual({ error: boom })
-		expect(isErrorBox(spoof)).toBe(false)
+		expect(spoof instanceof ErrorBox).toBe(false)
 	})
 
 	test('a rejected thenable rethrows the same reason at every read site', async () => {

@@ -68,6 +68,7 @@ import {
 	Flag,
 	NO_EVENT,
 	assertSignalReadAllowed,
+	currentBaseChange,
 	currentCause,
 	currentGraphChange,
 	ensureFresh,
@@ -80,6 +81,7 @@ import {
 	setCurrentCause,
 	startBatch,
 	endBatch,
+	tickGraphChange,
 	traceHook,
 	writeAtom,
 } from './graph.ts'
@@ -88,7 +90,6 @@ import {
 	ErrorBox,
 	type Suspension,
 	makeSuspension,
-	setOnSettlement,
 	trackThenable,
 } from './asyncs.ts'
 
@@ -99,11 +100,6 @@ export type DraftId = Brand<number, 'DraftId'>
 /** A draft is open until it is retired (committed into base state) or
  * discarded (rolled back). */
 export type DraftState = 'open' | 'retired' | 'discarded'
-/** A change clock for draft activity, in the same style as
- * graphChangeClock: it ticks on draft opens, intent appends, retires,
- * discards, and thenable settlement. World memos and the world cache
- * store readings of it to detect staleness. */
-export type DraftChangeClock = Brand<number, 'DraftChangeClock'>
 
 /** How an intent writes: 'set' replaces the atom's value, 'update'
  * applies an updater function to the previous value. */
@@ -165,24 +161,18 @@ let nextDraftId: DraftId = 1
 const liveDrafts = new Map<DraftId, Draft>()
 /** Atoms with at least one live draft intent. */
 const rebaseLogs = new Map<AtomNode<unknown>, RebaseLog>()
-/** Per-atom draft revision: the draft clock reading at the atom's last
- * draft-related change. Weak so a deleted log's atom retains nothing. */
-const draftRevisionByAtom = new WeakMap<AtomNode<unknown>, DraftChangeClock>()
-let draftChangeClock: DraftChangeClock = 1
+/** Per-atom draft revision: the clock reading at the atom's last
+ * draft-related change (drafted or urgent intent append, retire,
+ * discard). The base-value plane has changedAtGraphChange; this is the
+ * overlay plane's stamp of the same clock. Weak so a deleted log's atom
+ * retains nothing. */
+const draftRevisionByAtom = new WeakMap<AtomNode<unknown>, GraphChangeClock>()
 /** Nodes currently holding world memos, so quiescence can sweep them. */
 const memoNodes = new Set<ProducerNode>()
 /** Set only for the duration of the synchronous single-draft poke, so the
  * stable changedInCutoffWorld callback can see which world to compare
  * without allocating a closure per intent. */
 let cutoffWorld: World | null = null
-
-setOnSettlement(() => {
-	draftChangeClock++
-})
-
-export function currentDraftChange(): DraftChangeClock {
-	return draftChangeClock
-}
 
 export function liveDraftCount(): number {
 	return liveDrafts.size
@@ -209,7 +199,7 @@ export function openDraft(): Draft {
 	}
 	drafts.push(draft)
 	liveDrafts.set(draft.id, draft)
-	draftChangeClock++
+	tickGraphChange()
 	return draft
 }
 
@@ -236,8 +226,7 @@ export function appendDraftIntent(
 	}
 	log.intents.push({ kind, payload, draft })
 	draft.atoms.add(atom)
-	draftChangeClock++
-	draftRevisionByAtom.set(atom, draftChangeClock)
+	draftRevisionByAtom.set(atom, tickGraphChange())
 	let cause: TraceEventId = NO_EVENT
 	if (traceHook !== null) {
 		cause = draft.lastWriteEvent = traceHook('write', atom, draft.openEvent, {
@@ -245,7 +234,7 @@ export function appendDraftIntent(
 		})
 		atom.causeEvent = cause
 	}
-	if (draft.cutoffAtGraphChange === currentGraphChange()) {
+	if (draft.cutoffAtGraphChange !== 0 && draft.cutoffAtGraphChange >= currentBaseChange()) {
 		cutoffWorld = draft.world
 		try {
 			pokeDraftWatchers(atom, cause, draft.id, changedInCutoffWorld)
@@ -270,8 +259,7 @@ export function appendUrgentIntent(
 		return false
 	}
 	log.intents.push({ kind, payload, draft: null })
-	draftChangeClock++
-	draftRevisionByAtom.set(atom, draftChangeClock)
+	draftRevisionByAtom.set(atom, tickGraphChange())
 	return true
 }
 
@@ -363,7 +351,7 @@ export function retireDraft(id: DraftId): void {
 	}
 	liveDrafts.delete(id)
 	draft.state = 'retired'
-	draftChangeClock++
+	tickGraphChange()
 	const evt =
 		traceHook !== null
 			? traceHook(
@@ -378,7 +366,7 @@ export function retireDraft(id: DraftId): void {
 		startBatch()
 		try {
 			for (const atom of draft.atoms) {
-				draftRevisionByAtom.set(atom, draftChangeClock)
+				draftRevisionByAtom.set(atom, currentGraphChange())
 				// The draft is already marked retired, so this base-state
 				// replay includes its intents, interleaved with urgent ones in
 				// dispatch order.
@@ -404,13 +392,13 @@ export function discardDraft(id: DraftId): void {
 	}
 	liveDrafts.delete(id)
 	draft.state = 'discarded'
-	draftChangeClock++
+	tickGraphChange()
 	const evt =
 		traceHook !== null
 			? traceHook('draft-discard', null, draft.openEvent, { draftId: id })
 			: NO_EVENT
 	for (const atom of draft.atoms) {
-		draftRevisionByAtom.set(atom, draftChangeClock)
+		draftRevisionByAtom.set(atom, currentGraphChange())
 		pokeDraftWatchers(atom, evt)
 	}
 	releaseDraft(draft)
@@ -574,7 +562,7 @@ export function classifyWrite(): Draft | null {
  * cache and allocate nothing. */
 const worldCache = new WeakMap<
 	readonly DraftId[],
-	{ validAtDraftChange: DraftChangeClock; world: World }
+	{ validAtGraphChange: GraphChangeClock; world: World }
 >()
 
 export function worldOf(ids: readonly DraftId[]): World {
@@ -583,7 +571,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 	}
 	const hit = worldCache.get(ids)
 	if (hit !== undefined) {
-		if (hit.validAtDraftChange === draftChangeClock) {
+		if (hit.validAtGraphChange === currentGraphChange()) {
 			return hit.world
 		}
 		let live = true
@@ -594,7 +582,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 			}
 		}
 		if (live) {
-			hit.validAtDraftChange = draftChangeClock
+			hit.validAtGraphChange = currentGraphChange()
 			return hit.world
 		}
 	}
@@ -610,7 +598,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 		}
 	}
 	const world = drafts.length === 0 ? BASE_WORLD : { drafts, sig }
-	worldCache.set(ids, { validAtDraftChange: draftChangeClock, world })
+	worldCache.set(ids, { validAtGraphChange: currentGraphChange(), world })
 	return world
 }
 
@@ -623,7 +611,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 interface CertificateEntry {
 	node: ProducerNode | null
 	changedAtGraphChange: GraphChangeClock
-	draftRevision: DraftChangeClock
+	draftRevision: GraphChangeClock
 }
 
 interface Certificate {
@@ -633,10 +621,11 @@ interface Certificate {
 
 /** One memoized resolution of a node under one world signature. */
 interface WorldMemo {
-	/** Clock readings at the last validation; when both still match the
-	 * current clocks, the memo is fresh with no further checking. */
+	/** The clock reading at the last validation; while it still matches the
+	 * current clock, the memo is fresh with no further checking. Draft
+	 * activity and settlement tick the same clock as base writes, so one
+	 * comparison covers every invalidation source. */
 	validAtGraphChange: GraphChangeClock
-	validAtDraftChange: DraftChangeClock
 	/** The node's own changedAt reading when the memo was made; a base-state
 	 * change to the node invalidates the memo outright. */
 	nodeChangedAtGraphChange: GraphChangeClock
@@ -651,7 +640,7 @@ let activeCertificate: Certificate | null = null
 function appendCertificate(
 	node: ProducerNode,
 	changedAtGraphChange: GraphChangeClock,
-	draftRevision: DraftChangeClock,
+	draftRevision: GraphChangeClock,
 ): void {
 	const certificate = activeCertificate
 	if (certificate === null) {
@@ -706,7 +695,7 @@ export function peekWorldMemo(node: ProducerNode, sig: string): ResolvedState | 
 
 function memoValid(node: ProducerNode, memo: WorldMemo): boolean {
 	const graphChange = currentGraphChange()
-	if (memo.validAtGraphChange === graphChange && memo.validAtDraftChange === draftChangeClock) {
+	if (memo.validAtGraphChange === graphChange) {
 		return true
 	}
 	if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) {
@@ -732,7 +721,6 @@ function memoValid(node: ProducerNode, memo: WorldMemo): boolean {
 		}
 	}
 	memo.validAtGraphChange = graphChange
-	memo.validAtDraftChange = draftChangeClock
 	return true
 }
 
@@ -863,7 +851,6 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 	if (memo === undefined) {
 		memo = {
 			validAtGraphChange: currentGraphChange(),
-			validAtDraftChange: draftChangeClock,
 			nodeChangedAtGraphChange: node.changedAtGraphChange,
 			certificate,
 			state,
@@ -875,7 +862,6 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		node.worldMemos.set(world.sig, memo)
 	} else {
 		memo.validAtGraphChange = currentGraphChange()
-		memo.validAtDraftChange = draftChangeClock
 		memo.nodeChangedAtGraphChange = node.changedAtGraphChange
 		memo.state = state
 	}

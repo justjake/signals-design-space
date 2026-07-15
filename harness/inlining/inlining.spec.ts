@@ -40,9 +40,10 @@ const FX2_BYTECODE_BUDGETS: Record<string, number> = {
 	readAtom: 50,
 	getComputed: 100,
 	readComputed: 100,
-	// This includes the sole-caller propagation and flush tail. Keeping that
-	// tail inline measured faster, and 130 remains far below the inline limit.
-	writeAtom: 130,
+	// This includes the sole-caller propagation and flush tail (keeping the
+	// tail inline measured faster) plus the base-change watermark store the
+	// one-clock merge added; 140 remains far below the inline limit.
+	writeAtom: 140,
 	runEffectCleanup: 160,
 	scheduleWatcher: 210,
 	runHandler: 240,
