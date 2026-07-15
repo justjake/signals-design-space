@@ -223,10 +223,10 @@ function newEvalPass(): EvalPass {
 }
 /** The node whose dependencies are being tracked right now: reads inside
  * an evaluation register edges against this node. */
-let activeConsumer: EvaluatedNode<unknown> | null = null
+export let activeConsumer: EvaluatedNode<unknown> | null = null
 /** The world an evaluation is running in; null means base state. A world
  * boundary also detaches graph collectors owned by its caller. */
-let currentWorld: World | null = null
+export let currentWorld: World | null = null
 /** The computed body executing right now, tracked separately from
  * activeConsumer: untracked() clears activeConsumer but must not disable
  * per-computed policies (like the no-writes-inside-computeds rule). */
@@ -1614,10 +1614,6 @@ export function untracked<T>(fn: () => T): T {
 	}
 }
 
-export function getCurrentWorld(): World | null {
-	return currentWorld
-}
-
 export function withWorld<T>(world: World | null, fn: () => T): T {
 	const prevWorld = currentWorld
 	const prevConsumer = activeConsumer
@@ -1629,10 +1625,6 @@ export function withWorld<T>(world: World | null, fn: () => T): T {
 		currentWorld = prevWorld
 		activeConsumer = prevConsumer
 	}
-}
-
-export function getActiveConsumer(): EvaluatedNode<unknown> | null {
-	return activeConsumer
 }
 
 export function setActiveEvaluation(

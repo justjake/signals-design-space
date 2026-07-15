@@ -952,11 +952,7 @@ const WORLD_PARKED = Symbol('world-parked')
 
 /** The park function of the draft evaluation in progress, if any. Reads
  * of pending values inside that evaluation forward through it. */
-let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
-
-export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null {
-	return currentPark
-}
+export let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
 
 // ---------------------------------------------------------------------------
 // Ambient views: worlds for reads happening outside any render pass.

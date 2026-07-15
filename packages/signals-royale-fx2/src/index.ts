@@ -27,12 +27,12 @@ import {
 	UNINITIALIZED,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
+	activeConsumer,
 	activeEvaluation,
 	currentCause,
+	currentWorld,
 	flushLifetimeTransitions,
 	flushScheduledEffects,
-	getActiveConsumer,
-	getCurrentWorld,
 	isUninitialized,
 	makeEffect,
 	makeScope,
@@ -64,9 +64,9 @@ import {
 	appendUrgentIntent,
 	atomHasDraftIntents,
 	classifyWrite,
+	currentPark,
 	draftsAffecting,
 	discardAllDrafts,
-	getCurrentPark,
 	latestWorld,
 	peekWorldMemo,
 	pokeRebasedAtom,
@@ -150,7 +150,7 @@ const Atom = class<T> implements AtomNode<T> {
 	 * untracked — their staleness evidence is the certificate, not graph
 	 * edges — so only the base branch registers a dependency. */
 	get(): T {
-		const world = getCurrentWorld()
+		const world = currentWorld
 		if (world !== null) {
 			// Every read within a selected world resolves that same world.
 			return resolveState(this, world).value as T
@@ -168,7 +168,7 @@ const Atom = class<T> implements AtomNode<T> {
 	}
 	/** Read the current world without registering a graph dependency. */
 	peek(): T {
-		const world = getCurrentWorld()
+		const world = currentWorld
 		if (world !== null) {
 			return resolveStateUntracked(this, world).value as T
 		}
@@ -207,10 +207,10 @@ export type Computed<out T> = {
  * the same rule for tracked get() and untracked peek(), so the two cannot
  * drift on async behavior. */
 function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
-	const world = getCurrentWorld()
+	const world = currentWorld
 	if (world !== null) {
 		// Every read within a selected world resolves that same world.
-		return unwrapResolved(resolveState(this, world), getCurrentPark()) as T
+		return unwrapResolved(resolveState(this, world), currentPark) as T
 	}
 	const value = readComputed(this)
 	if ((this.flags & Flag.AsyncMask) !== 0) {
@@ -222,9 +222,9 @@ function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 /** Shared untracked counterpart to getComputed, likewise stored directly
  * on every computed record. */
 function peekComputed<T>(this: Computed<T> & ComputedNode<T>): T {
-	const world = getCurrentWorld()
+	const world = currentWorld
 	if (world !== null) {
-		return unwrapResolved(resolveStateUntracked(this, world), getCurrentPark()) as T
+		return unwrapResolved(resolveStateUntracked(this, world), currentPark) as T
 	}
 	return graphUntracked(() => this.get())
 }
@@ -293,7 +293,7 @@ export function nodeOf(x: Signal<any>): ProducerNode {
  * exists, otherwise suspend (first load). */
 function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
 	if ((node.flags & Flag.AsyncSuspended) !== 0) {
-		const consumer = getActiveConsumer()
+		const consumer = activeConsumer
 		if (consumer !== null) {
 			// baseUse parks the consumer and throws; it never returns here.
 			baseUse((node.throwable as Suspension).promise, consumer)
@@ -317,9 +317,9 @@ function stateValue(st: ResolvedState): unknown {
  * render pass sees the pass's world. */
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
-	let world = getCurrentWorld()
+	let world = currentWorld
 	if (world === null) {
-		if (getActiveConsumer() !== null) {
+		if (activeConsumer !== null) {
 			// A base-state evaluation is running. Its world is base state, and
 			// this read is a real dependency: track it so a later change to x
 			// re-runs the consumer rather than leaving it permanently stale.
@@ -345,7 +345,7 @@ export function latest<T>(x: Signal<T>): T {
  * stale value. Passive by contract: never evaluates, never refetches,
  * never suspends. */
 export function isPending(x: Signal<any>): boolean {
-	return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld())
+	return isPendingPassive(nodeOf(x), currentWorld ?? renderWorld())
 }
 
 /** Node-level pendingness probe, also used by the React bindings'
