@@ -56,6 +56,7 @@ condition still leaves a useful direction.
 - Use React's stable reducer dispatch as the root identity only after the commit handshake disappears or a broader commit-layout change already owns its active-root marker; retry the exact Round 100 design with the frozen host-transition mode as a hard gate, not by tuning the rejected ESM-binding shape.
 - Remove the redundant `Flag.Watching` kind bit only after a naturally stable core-control window; retry the exact Round 103 source, focused tier test, docs, seven modes, and provenance-bearing runner without source-shape variants.
 - Let `useValue`'s pending-draft Set also own the zero repair sentinel only after a natural representation/runtime change; retry the exact Round 104 design with mount and 100-write burst modes as hard gates, retaining the scalar boolean until then.
+- Restore the React transition slot directly to null only after a naturally stable React-control window; retry the exact Round 105 one-file diff with all three modes, callback mutation/throw invariants, sampler provenance, and an independent controller emission.
 - Keep the computed-cycle throw extraction parked: after the latest plain-value fast path `recompute` is pinned at 590 bytes, farther above V8's 460-byte limit than Round 90's 464-byte shape. Reconsider only after a natural change moves the whole function near the limit; do not source-shape-tune it or retry the slower shared helpers.
 
 ## Completed or deliberately closed
