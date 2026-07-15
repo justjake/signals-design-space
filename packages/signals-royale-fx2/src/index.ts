@@ -35,15 +35,11 @@ import {
 	flushScheduledEffects,
 	isUninitialized,
 	makeEffect,
-	makeScope,
 	peekAtom,
 	readAtom,
 	readComputed,
 	resetEffectLanes,
 	runUpdater,
-	startBatch as graphStartBatch,
-	endBatch as graphEndBatch,
-	batch as graphBatch,
 	untracked as graphUntracked,
 	traceHook,
 	writeAtom,
@@ -504,12 +500,14 @@ export function effect<T>(
 	)
 }
 
-export const effectScope: (fn: () => void) => () => void = makeScope
+export {
+	makeScope as effectScope,
+	batch,
+	startBatch,
+	endBatch,
+	untracked,
+} from './graph.ts'
 export { flushScheduledEffects }
-export const batch: <T>(fn: () => T) => T = graphBatch
-export const startBatch: () => void = graphStartBatch
-export const endBatch: () => void = graphEndBatch
-export const untracked: <T>(fn: () => T) => T = graphUntracked
 
 // ---------------------------------------------------------------------------
 // SSR

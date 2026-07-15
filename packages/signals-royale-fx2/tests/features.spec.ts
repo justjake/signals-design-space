@@ -24,7 +24,12 @@ import {
 	FORBID_WRITE_FROM_COMPUTED,
 	SignalReadForbidden,
 	SignalWriteForbidden,
+	batch as graphBatch,
+	endBatch as graphEndBatch,
+	makeScope,
 	observeNode,
+	startBatch as graphStartBatch,
+	untracked as graphUntracked,
 } from '../src/graph.ts'
 import { openDraft, retireDraft, runWithDraftWrites } from '../src/worlds.ts'
 
@@ -88,6 +93,14 @@ describe('lifetime effects', () => {
 test('forbidden-operation errors name themselves', () => {
 	expect(new SignalReadForbidden().name).toBe('SignalReadForbidden')
 	expect(new SignalWriteForbidden().name).toBe('SignalWriteForbidden')
+})
+
+test('public execution controls are the graph functions', () => {
+	expect(fx2.effectScope).toBe(makeScope)
+	expect(fx2.batch).toBe(graphBatch)
+	expect(fx2.startBatch).toBe(graphStartBatch)
+	expect(fx2.endBatch).toBe(graphEndBatch)
+	expect(fx2.untracked).toBe(graphUntracked)
 })
 
 describe('lazy initializers', () => {
