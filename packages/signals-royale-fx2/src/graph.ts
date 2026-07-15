@@ -1371,7 +1371,7 @@ export function readAtom<T>(atom: AtomNode<T>): T {
 	return atom.value as T
 }
 
-export function writeAtom<T>(atom: AtomNode<T>, next: T): boolean {
+export function writeAtom<T>(atom: AtomNode<T>, next: T, intent: 'set' | 'update' = 'set'): boolean {
 	assertSignalWriteAllowed()
 	// The equality check compares against the current base value, so a
 	// write that arrives before the first read still runs the initializer.
@@ -1386,7 +1386,7 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T): boolean {
 	graphChangeClock++
 	baseChangedAtGraphChange = graphChangeClock
 	atom.changedAtGraphChange = graphChangeClock
-	const cause = traceHook !== null ? traceHook('write', atom, currentCause) : NO_EVENT
+	const cause = traceHook !== null ? traceHook(intent, atom, currentCause) : NO_EVENT
 	propagateWave(atom.subs, cause)
 	if (batchDepth === 0) {
 		flush()
@@ -1743,7 +1743,7 @@ function runHandler(w: EffectNode): void {
 	activeConsumer = null
 	activeEffectOwner = w
 	const trace = traceHook
-	const cause = trace !== null ? trace('effect-run', w, w.causeEvent) : NO_EVENT
+	const cause = trace !== null ? trace('effect', w, w.causeEvent) : NO_EVENT
 	const prevCause = setCurrentCause(cause)
 	try {
 		let ret: void | (() => void)

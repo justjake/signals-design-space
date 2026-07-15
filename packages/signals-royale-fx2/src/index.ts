@@ -428,7 +428,7 @@ export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 		throw error
 	}
 	const rebased = appendUrgentIntent(atom, 'update', fn)
-	const changed = writeAtom(atom, next)
+	const changed = writeAtom(atom, next, 'update')
 	if (rebased && !changed) {
 		pokeRebasedAtom(atom)
 	}

@@ -143,7 +143,7 @@ export function makeSuspension(): Suspension {
 				// The suspension promise is now fulfilled. React may retry because
 				// of that fact, but the engine does not observe when it schedules or
 				// which later render is that retry.
-				traceHook('retry-ready', null, cause, { suspension: ep })
+				traceHook('retry', null, cause, { suspension: ep })
 			}
 		},
 	}

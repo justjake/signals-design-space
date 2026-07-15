@@ -194,7 +194,7 @@ export function openDraft(): Draft {
 		world: { drafts, sig: String(id) },
 		atoms: new Set(),
 		openEvent:
-			traceHook !== null ? traceHook('draft-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
+			traceHook !== null ? traceHook('transition-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)
@@ -229,7 +229,7 @@ export function appendDraftIntent(
 	draftRevisionByAtom.set(atom, tickGraphChange())
 	let cause: TraceEventId = NO_EVENT
 	if (traceHook !== null) {
-		cause = draft.lastWriteEvent = traceHook('write', atom, draft.openEvent, {
+		cause = draft.lastWriteEvent = traceHook(kind, atom, draft.openEvent, {
 			draftId: draft.id,
 		})
 		atom.causeEvent = cause
@@ -355,7 +355,7 @@ export function retireDraft(id: DraftId): void {
 	const evt =
 		traceHook !== null
 			? traceHook(
-					'draft-retire',
+					'transition-retire',
 					null,
 					draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
 					{ draftId: id },
@@ -395,7 +395,7 @@ export function discardDraft(id: DraftId): void {
 	tickGraphChange()
 	const evt =
 		traceHook !== null
-			? traceHook('draft-discard', null, draft.openEvent, { draftId: id })
+			? traceHook('transition-discard', null, draft.openEvent, { draftId: id })
 			: NO_EVENT
 	for (const atom of draft.atoms) {
 		draftRevisionByAtom.set(atom, currentGraphChange())

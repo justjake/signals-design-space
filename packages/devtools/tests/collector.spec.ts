@@ -26,12 +26,12 @@ describe('fx2 → collector pipeline', () => {
 			const events = collector.events({}, 200)
 			expect(events.length).toBeGreaterThan(0)
 			const kinds = new Set(events.map((e) => e.kind))
-			expect(kinds.has('write')).toBe(true)
+			expect(kinds.has('set')).toBe(true)
 			expect(kinds.has('compute')).toBe(true)
-			expect(kinds.has('effect-run')).toBe(true)
+			expect(kinds.has('effect')).toBe(true)
 
 			// Cause chain: the set-triggered effect run walks back to a root.
-			const effectRun = [...events].reverse().find((e) => e.kind === 'effect-run')!
+			const effectRun = [...events].reverse().find((e) => e.kind === 'effect')!
 			const chain = collector.causeChain(effectRun.id)
 			expect(chain[chain.length - 1].id).toBe(effectRun.id)
 			expect(chain[0].cause).toBe(0)

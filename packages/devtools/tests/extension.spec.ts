@@ -26,7 +26,7 @@ describe('extension bridge: snapshot round-trip', () => {
 
 			// The SAME view-model the inline panel uses works over the bridge.
 			const rows = logRows(backend, {}, 100)
-			expect(rows.some((r) => r.kind === 'write' && r.name === 'count')).toBe(true)
+			expect(rows.some((r) => r.kind === 'set' && r.name === 'count')).toBe(true)
 			expect(rows.some((r) => r.kind === 'compute' && r.name === 'doubled')).toBe(true)
 
 			const nrows = nodeRows(backend, '', 100)

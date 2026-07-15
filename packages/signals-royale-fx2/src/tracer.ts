@@ -122,7 +122,7 @@ export class Tracer {
 			this.size++
 		}
 		this.ring[(this.head + this.size - 1) % this.ring.length] = evt
-		if (kind === 'deliver' || kind === 'effect-run') {
+		if (kind === 'notify' || kind === 'effect') {
 			if (node !== null) {
 				this.lastDelivery.set(node, id)
 			}

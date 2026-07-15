@@ -31,8 +31,10 @@ export type { TraceFn, TraceFields, TraceEventId } from '../graph.ts'
  * layer. Until then this reflects reality so nothing lies.
  */
 export type TraceKind =
-	// Atom write (graph.ts / worlds.ts draft path).
-	| 'write'
+	// Atom write, by the API verb the caller used (graph.ts / worlds.ts draft
+	// path); the intent is threaded from set()/update().
+	| 'set'
+	| 'update'
 	// Computed lifecycle. `compute` fires just before node.fn() runs, only on
 	// real evaluation (never a cache hit); -error/-suspend when it throws or
 	// parks on a thenable.
@@ -40,22 +42,24 @@ export type TraceKind =
 	| 'compute-error'
 	| 'compute-suspend'
 	// Effects (graph.ts).
-	| 'effect-run'
+	| 'effect'
 	| 'effect-error'
 	// Async resolution (asyncs.ts).
 	| 'settle'
-	| 'retry-ready'
-	// World/draft — the speculative worlds behind React transitions
-	// (worlds.ts / react host).
-	| 'draft-open'
-	| 'draft-discard'
-	| 'draft-wake'
-	// React binding (react/hooks.ts, react/host.ts).
-	| 'deliver' // delivery to a component subscription (a re-render is scheduled)
-	| 'render-value' // a render produced a committed value
+	| 'retry'
+	// React binding: base-world per-component delivery + render (react/hooks.ts).
+	| 'notify' // a component was told its inputs changed (re-render scheduled)
+	| 'render' // a component rendered a committed value
 	| 'render-suspend' // a render parked on a thenable
 	| 'render-error' // a render threw
-	| 'provider-world-commit' // a transition's world committed
+	// Transitions — the speculative worlds behind React transitions
+	// (worlds.ts / react host). notify/commit are the transition-world
+	// counterparts of the base-world notify/render.
+	| 'transition-open' // a transition began
+	| 'transition-notify' // a component woken to render in the transition
+	| 'transition-commit' // a root committed the transition's world
+	| 'transition-retire' // a committed transition folded into base state
+	| 'transition-discard' // the transition was abandoned
 	| 'scheduler-fallback' // scheduler degraded to a fallback path
 	// Errors carrying a `phase` in TraceFields.
 	| 'callback-error'
@@ -92,20 +96,21 @@ export function kindClass(kind: TraceKind | string): TraceKindClass {
 			return 'write'
 		case 'compute':
 			return 'compute'
-		case 'deliver':
+		case 'notify':
+		case 'transition-notify':
 			return 'notify'
-		case 'render-value':
+		case 'render':
 		case 'render-suspend':
-		case 'provider-world-commit':
+		case 'transition-commit':
 			return 'render'
-		case 'effect-run':
+		case 'effect':
 			return 'effect'
-		case 'draft-open':
-		case 'draft-discard':
-		case 'draft-wake':
+		case 'transition-open':
+		case 'transition-retire':
+		case 'transition-discard':
 			return 'batch'
 		case 'settle':
-		case 'retry-ready':
+		case 'retry':
 		case 'compute-suspend':
 			return 'async'
 		case 'compute-error':

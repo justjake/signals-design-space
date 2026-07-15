@@ -459,7 +459,7 @@ export function confirmRootCommit(
 ): void {
 	connection.committing = true
 	try {
-		getActiveTracer()?.emit('provider-world-commit', null, NO_EVENT, {
+		getActiveTracer()?.emit('transition-commit', null, NO_EVENT, {
 			root: connection,
 			world: ids,
 		})

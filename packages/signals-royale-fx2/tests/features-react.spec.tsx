@@ -175,7 +175,7 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(container)).toBe('zero')
 		let events = tracer.events()
-		const write = events.find((event) => event.kind === 'write' && event.label === 'key')!
+		const write = events.find((event) => event.kind === 'set' && event.label === 'key')!
 		const compute = events.find((event) => event.kind === 'compute' && event.label === 'data')!
 		expect(compute.cause).toBe(0)
 		expect(compute.draftId).toBeUndefined()
@@ -199,13 +199,13 @@ describe('scenario 15 — causality traces', () => {
 		events = tracer.events()
 		const settled = events.find((event) => event.kind === 'settle')!
 		const ready = events.find(
-			(event) => event.kind === 'retry-ready' && event.cause === settled.id,
+			(event) => event.kind === 'retry' && event.cause === settled.id,
 		)!
-		const rendered = events.find((event) => event.kind === 'render-value')!
+		const rendered = events.find((event) => event.kind === 'render')!
 		const delivery = events.find(
-			(event) => event.kind === 'deliver' && event.cause === rendered.id,
+			(event) => event.kind === 'notify' && event.cause === rendered.id,
 		)!
-		const commit = events.find((event) => event.kind === 'provider-world-commit')!
+		const commit = events.find((event) => event.kind === 'transition-commit')!
 		expect(settled.status).toBe('fulfilled')
 		expect(ready.suspensionId).toBe(suspended.suspensionId)
 		expect(delivery.rootId).toBe(encountered.rootId)
@@ -249,14 +249,14 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(container)).toBe('v:2')
 		const urgentChain = t.whyLastDelivery(nodeOf(a))
-		expect(urgentChain.join(' ')).toMatch(/write/i)
+		expect(urgentChain.join(' ')).toMatch(/set|update/i)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(container)).toBe('v:4')
 		const retiredChain = t.whyLastDelivery(nodeOf(a))
-		expect(retiredChain.join(' ')).toMatch(/retire|write/i)
+		expect(retiredChain.join(' ')).toMatch(/retire|set|update/i)
 		// Structure: causes always reference earlier events.
 		for (const e of t.events()) {
 			if (e.cause !== 0) {
@@ -308,13 +308,13 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(container)).toBe('first-pendingsecond-ready')
 		const secondReady = tracer.events().find(
-			(event) => event.kind === 'retry-ready' && event.suspensionId === secondEvent.suspensionId,
+			(event) => event.kind === 'retry' && event.suspensionId === secondEvent.suspensionId,
 		)
 		expect(secondReady).toBeDefined()
 		expect(
 			tracer.events().some(
 				(event) =>
-					event.kind === 'retry-ready' && event.suspensionId === firstEvent.suspensionId,
+					event.kind === 'retry' && event.suspensionId === firstEvent.suspensionId,
 			),
 		).toBe(false)
 
@@ -326,7 +326,7 @@ describe('scenario 15 — causality traces', () => {
 		expect(
 			tracer.events().some(
 				(event) =>
-					event.kind === 'retry-ready' && event.suspensionId === firstEvent.suspensionId,
+					event.kind === 'retry' && event.suspensionId === firstEvent.suspensionId,
 			),
 		).toBe(true)
 		tracer.stop()
@@ -371,14 +371,14 @@ describe('scenario 15 — causality traces', () => {
 		expect(text(second.container)).toBe('ready')
 		const deliveredRoots = new Set<number>()
 		for (const event of tracer.events()) {
-			if (event.kind === 'deliver' && event.label === 'shared') {
+			if (event.kind === 'notify' && event.label === 'shared') {
 				deliveredRoots.add(event.rootId!)
 			}
 		}
 		expect(deliveredRoots).toEqual(rootIds)
 		expect(
 			tracer.events().some(
-				(event) => event.kind === 'retry-ready' && event.suspensionId === suspensionId,
+				(event) => event.kind === 'retry' && event.suspensionId === suspensionId,
 			),
 		).toBe(true)
 		tracer.stop()
@@ -406,7 +406,7 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(mounted.container)).toBe('ready')
 		const settled = second.events().find((event) => event.kind === 'settle')!
-		const ready = second.events().find((event) => event.kind === 'retry-ready')!
+		const ready = second.events().find((event) => event.kind === 'retry')!
 		expect(settled.cause).toBe(0)
 		expect(ready.cause).toBe(settled.id)
 		for (const event of second.events()) {
@@ -431,13 +431,13 @@ describe('scenario 15 — causality traces', () => {
 		}
 		const mounted = await h.mount(<App />)
 		expect(text(mounted.container)).toBe('1')
-		expect(first.events().some((event) => event.kind === 'render-value')).toBe(true)
+		expect(first.events().some((event) => event.kind === 'render')).toBe(true)
 		expect(first.whyLastDelivery(nodeOf(value))).toEqual([
 			'(no delivery recorded for this node)',
 		])
-		const delivery = second!.events().find((event) => event.kind === 'deliver')!
+		const delivery = second!.events().find((event) => event.kind === 'notify')!
 		expect(delivery.cause).toBe(0)
-		expect(second!.whyLastDelivery(nodeOf(value))[0]).toMatch(/deliver/)
+		expect(second!.whyLastDelivery(nodeOf(value))[0]).toMatch(/notify/)
 		second!.stop()
 	})
 })

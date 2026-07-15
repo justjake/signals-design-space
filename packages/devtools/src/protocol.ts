@@ -110,25 +110,22 @@ export function kindClass(kind: string): KindClass {
 			return 'write'
 		case 'compute':
 			return 'compute'
-		case 'deliver':
 		case 'notify':
+		case 'transition-notify':
 			return 'notify'
-		case 'render-value':
-		case 'render-suspend':
-		case 'provider-world-commit':
 		case 'render':
-		case 'commit':
+		case 'render-suspend':
+		case 'transition-commit':
 			return 'render'
-		case 'effect-run':
 		case 'effect':
 			return 'effect'
-		case 'draft-open':
-		case 'draft-discard':
-		case 'draft-wake':
+		case 'transition-open':
+		case 'transition-retire':
+		case 'transition-discard':
 		case 'batch':
 			return 'batch'
 		case 'settle':
-		case 'retry-ready':
+		case 'retry':
 		case 'compute-suspend':
 			return 'async'
 		case 'compute-error':

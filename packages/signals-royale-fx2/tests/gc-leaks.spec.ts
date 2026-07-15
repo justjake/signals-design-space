@@ -218,8 +218,8 @@ describe('leak audit', () => {
 		const tracer = attachTracer()
 		const nodeRef = (() => {
 			const node = nodeOf(createAtom(0, { label: 'temporary' }))
-			tracer.emit('deliver', node, 0)
-			expect(tracer.whyLastDelivery(node)[0]).toMatch(/deliver/)
+			tracer.emit('notify', node, 0)
+			expect(tracer.whyLastDelivery(node)[0]).toMatch(/notify/)
 			return new WeakRef(node)
 		})()
 		await collect(10)

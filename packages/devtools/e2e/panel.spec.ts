@@ -6,9 +6,9 @@ test('inline panel shows the live fx2 graph + log and updates on interaction', a
 
 	// Log is the default tab: real entries with fx2's verbatim kind strings
 	// and the node that produced them.
-	await expect(panel).toContainText('write')
+	await expect(panel).toContainText('set')
 	await expect(panel).toContainText('compute')
-	await expect(panel).toContainText('effect-run')
+	await expect(panel).toContainText('effect')
 	await expect(panel).toContainText('count')
 
 	// Graph tab: the nodes are discovered and inspectable.

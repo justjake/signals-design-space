@@ -30,9 +30,9 @@ describe('inline host renders and live-updates from fx2', () => {
 
 			// The log shows real entries with fx2's verbatim kind strings.
 			expect(el.innerHTML).toContain('count')
-			expect(el.innerHTML).toContain('write')
+			expect(el.innerHTML).toContain('set')
 			expect(el.innerHTML).toContain('compute')
-			expect(el.innerHTML).toContain('effect-run')
+			expect(el.innerHTML).toContain('effect')
 			expect(el.innerHTML).toContain('--base00') // base16 theme inlined
 
 			const before = (el.textContent ?? '').match(/#\d+/g)?.length ?? 0

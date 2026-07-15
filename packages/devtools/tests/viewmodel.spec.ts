@@ -24,7 +24,7 @@ describe('panel view-model', () => {
 			// Log rows carry the verbatim kind, a color class, and the node name.
 			const rows = logRows(collector, {}, 50)
 			expect(rows.length).toBeGreaterThan(0)
-			const write = rows.find((r) => r.kind === 'write')!
+			const write = rows.find((r) => r.kind === 'set')!
 			expect(write.cls).toBe('write')
 			expect(write.name).toBe('count')
 			const compute = rows.find((r) => r.kind === 'compute' && r.name === 'doubled')!

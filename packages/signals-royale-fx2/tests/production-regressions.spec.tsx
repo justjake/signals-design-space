@@ -389,7 +389,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 				// Sampled synchronously after the writes, before React renders the
 				// transition pass: what the burst itself cost in reducer dispatches.
 				for (const event of tracer.events()) {
-					if (event.kind === 'draft-wake') {
+					if (event.kind === 'transition-notify') {
 						wakesBeforeRender.push(event)
 					}
 				}
@@ -405,7 +405,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		for (const wake of wakesBeforeRender) {
 			expect(wake).toMatchObject({ label: 'burst-computed', draftId, rootId })
 			expect(tracer.find(wake.cause)).toMatchObject({
-				kind: 'write',
+				kind: 'set',
 				label: 'burst',
 				draftId,
 			})
@@ -454,13 +454,13 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(text(container)).toBe('s:0;r:0;')
 		const wakes: TraceEvent[] = []
 		for (const event of tracer.events()) {
-			if (event.kind === 'draft-wake' && event.label === 'late-computed') {
+			if (event.kind === 'transition-notify' && event.label === 'late-computed') {
 				wakes.push(event)
 			}
 		}
 		expect(wakes).toHaveLength(1)
 		expect(tracer.find(wakes[0]!.cause)).toMatchObject({
-			kind: 'write',
+			kind: 'set',
 			label: 'late-source',
 			draftId: wakes[0]!.draftId,
 		})

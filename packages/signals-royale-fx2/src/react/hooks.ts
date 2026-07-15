@@ -218,7 +218,7 @@ export function useValue<T>(x: Signal<T>): T {
 				return
 			}
 			state.delivered.add(id)
-			getActiveTracer()?.emit('draft-wake', node, cause, {
+			getActiveTracer()?.emit('transition-notify', node, cause, {
 				draftId: id,
 				root: connection,
 			})
@@ -267,7 +267,7 @@ export function useValue<T>(x: Signal<T>): T {
 	stash.value = value
 	stash.live = true
 	const renderEvent =
-		getActiveTracer()?.emit('render-value', node, node.causeEvent, {
+		getActiveTracer()?.emit('render', node, node.causeEvent, {
 			root: connection,
 		}) ?? NO_EVENT
 	// Advance the committed stash at commit time. No dependency array: the
@@ -278,7 +278,7 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
-		getActiveTracer()?.emit('deliver', node, renderEvent, { root: connection })
+		getActiveTracer()?.emit('notify', node, renderEvent, { root: connection })
 	})
 	return value as T
 }

@@ -521,7 +521,7 @@ describe('causality tracer', () => {
 				},
 			),
 		).toThrow(replacementError)
-		expect(first.events().some((event) => event.kind === 'effect-run')).toBe(true)
+		expect(first.events().some((event) => event.kind === 'effect')).toBe(true)
 		expect(first.events().some((event) => event.kind === 'effect-error')).toBe(false)
 		const replacementEvent = replacement
 			.events()
@@ -542,21 +542,21 @@ describe('causality tracer', () => {
 		a.set(1)
 		const events = t.events()
 		const kinds = events.map((e) => e.kind)
-		expect(kinds).toContain('write')
-		expect(kinds).toContain('effect-run')
+		expect(kinds).toContain('set')
+		expect(kinds).toContain('effect')
 		// The write to b is caused by the effect run, which is caused by the
 		// write to a.
-		const writeB = [...events].reverse().find((e) => e.kind === 'write' && e.label === 'b')!
+		const writeB = [...events].reverse().find((e) => e.kind === 'set' && e.label === 'b')!
 		const effectRun = events.find((e) => e.id === writeB.cause)!
-		expect(effectRun.kind).toBe('effect-run')
+		expect(effectRun.kind).toBe('effect')
 		expect(effectRun.label).toBe('copy a to b')
 		const writeA = events.find((e) => e.id === effectRun.cause)!
-		expect(writeA.kind).toBe('write')
+		expect(writeA.kind).toBe('set')
 		expect(writeA.label).toBe('a')
 		// Unrelated operations never chain.
 		const unrelated = createAtom(0, { label: 'u' })
 		unrelated.set(1)
-		const writeU = t.events().find((e) => e.kind === 'write' && e.label === 'u')!
+		const writeU = t.events().find((e) => e.kind === 'set' && e.label === 'u')!
 		expect(writeU.cause).toBe(0)
 		// Overflow is counted, never silent.
 		for (let i = 0; i < 100; i++) {
@@ -574,10 +574,10 @@ describe('causality tracer', () => {
 		runWithDraftWrites(d, () => a.update((x) => x + 1))
 		retireDraft(d.id)
 		const events = t.events()
-		const retire = events.find((e) => e.kind === 'draft-retire')!
+		const retire = events.find((e) => e.kind === 'transition-retire')!
 		const draftWrite = events.find((e) => e.id === retire.cause)!
-		expect(draftWrite.kind).toBe('write')
-		const foldWrite = [...events].reverse().find((e) => e.kind === 'write' && e.label === 'a')!
+		expect(draftWrite.kind).toBe('update')
+		const foldWrite = [...events].reverse().find((e) => e.kind === 'set' && e.label === 'a')!
 		expect(foldWrite.cause).toBe(retire.id)
 		t.stop()
 	})
