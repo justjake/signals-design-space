@@ -87,7 +87,7 @@ export const enum Flag {
 	// Sink capabilities: fixed at creation, present on Watching nodes
 	// only. Scheduling dispatches on these bits, never on whether a callback
 	// happens to be installed. A component subscription is
-	// Watching|WatchRender|WatchDraft; an effect is Watching|WatchRunEffect.
+	// Watching|WatchRender; an effect is Watching|WatchRunEffect.
 	/** Deliver through the render-notify queue, after sync effects settle.
 	 * The subscriber's own notify callback decides whether the delivery
 	 * becomes a re-render. */
@@ -95,11 +95,6 @@ export const enum Flag {
 	/** Effect: at the lane's drain site, refresh its tracked computation and
 	 * run the handler when the settled value changed (see drainLane). */
 	WatchRunEffect = 0b0000_0001_0000,
-	/** Draft notifications (see worlds.ts) reach this watcher. Watchers
-	 * without this bit only hear about base-state changes; effects are all
-	 * base-state-only. */
-	WatchDraft = 0b0000_0010_0000,
-
 	// Staleness: at most one of the pair is set; writers clear the whole
 	// field before setting, so a single-bit test reads the exact state.
 	/** Possibly stale: confirm dependency changedAt readings before
@@ -916,7 +911,7 @@ let pokePass: PokePass = 0
  * that far because subscribers subscribe to the node they read (usually a
  * computed), not to the drafted atom underneath it; stopping at the atom
  * would leave every downstream subscriber unaware. Watchers without the
- * WatchDraft bit (including ordinary engine effects) are untouched.
+ * WatchRender bit (ordinary engine effects) are untouched.
  *
  * Render-notify watchers get StaleCheck for consistency with the wave;
  * their bits are write-only until delivery.
@@ -951,7 +946,7 @@ export function pokeDraftWatchers(
 			if (sub.pokePass !== pass) {
 				sub.pokePass = pass
 				const flags = sub.flags
-				if ((flags & Flag.WatchDraft) !== 0) {
+				if ((flags & Flag.WatchRender) !== 0) {
 					const w = sub as RenderWatcherNode
 					// Probes without a draft-wake callback must hear every poke,
 					// because pendingness can change while values stay equal.
@@ -1878,9 +1873,9 @@ export function makeScope(fn: () => void): () => void {
  * without evaluating the node. This is how the React bindings observe the
  * graph. The callback runs after the wave and its effects settle, so
  * subscribers re-read a consistent graph. Every subscription is both
- * render-notified and draft-aware (WatchRender|WatchDraft) even when no
- * draft-wake callback is given, because draft pokes must reach probes
- * (isPending, committed views) that install none.
+ * render-notified and draft-aware even when no draft-wake callback is
+ * given, because draft pokes must reach probes (such as isPending) that
+ * install none.
  */
 export function observeNode(
 	node: ProducerNode,
@@ -1888,7 +1883,7 @@ export function observeNode(
 	draftWake?: (id: DraftId, cause: TraceEventId) => void,
 ): () => void {
 	const sub: RenderWatcherNode = {
-		flags: Flag.Watching | Flag.WatchRender | Flag.WatchDraft | Flag.Watched,
+		flags: Flag.Watching | Flag.WatchRender | Flag.Watched,
 		deps: undefined,
 		causeEvent: NO_EVENT,
 		onNotify: notify,

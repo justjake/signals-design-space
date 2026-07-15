@@ -17,7 +17,6 @@ condition still leaves a useful direction.
 
 3. Give each lane one reentrancy owner. First add a same-lane nested-drain falsifier for `flushScheduledEffects()` inside a cleanup/handler; only then replace the sync-only `flushing` owner if cursor and tail ownership remain exact.
 4. Let the before-paint microtask also settle lifetime transitions, deleting `lifetimeFlushScheduled` and its separate microtask only if activation ordering, StrictMode flaps, and `onObserved` writes remain exact.
-5. Merge `WatchDraft` into `WatchRender` if the current invariant remains true that every render subscriber is draft-aware and every effect is base-only; keep draft cutoff and pendingness coverage.
 10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
 
 ## Other unmeasured broader leads
@@ -64,6 +63,7 @@ condition still leaves a useful direction.
 - Commit-handshake collapse is closed until React exposes different ordering: making the committed stash canonical during root confirmation requires a second marker or insertion-effect phase to keep the root registered before descendant layout effects.
 - The sole-caller `expiryFor` helper remains: its exact TypeScript 7 inline regressed expiry arming 6.58% and the pre-reviewed paired arm/control ratio 13.63% in Round 102. Reopen only after a natural toolchain change, not with callback syntax variants.
 - `worldsReducer` always returns a fresh React state wrapper but reuses the canonical draft-ID array while live membership is unchanged; only adding or pruning materializes a replacement array.
+- `WatchRender` alone identifies render subscribers for both base delivery and draft awareness; the duplicate `WatchDraft` capability is gone, while `WatchRunEffect` remains base-only.
 - Render subscriptions alone own one permanent pinned `Link`; their dedicated watcher shape has six fields and no effect-only state.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
 - One dynamically traversed collection for `draftsAffecting`.

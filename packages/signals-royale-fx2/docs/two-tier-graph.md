@@ -690,11 +690,10 @@ document's sections above describe the code at landing time. The mapping:
   `Watcher`→`Watching` (alien's name), `Check`→`StaleCheck`,
   `Dirty`→`StaleDirty`, `DerivedError`→`AsyncError`,
   `DerivedSuspended`→`AsyncSuspended`.
-- New capability bits route dispatch (never callback presence):
-  `WatchRender` (render-notify queue), `WatchRunEffect` (validated effect
-  queue), `WatchDraft` (draft pings/wakes), and `WatchSchedule` (defer a
-  validated effect body to its host phase). Component subscription =
-  `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`.
+- Capability bits route dispatch (never callback presence): `WatchRender`
+  owns render notifications and draft pings/wakes; `WatchRunEffect` owns
+  validated effect delivery. Component subscription =
+  `Watching|WatchRender`; engine effect = `Watching|WatchRunEffect`.
   The `scheduled`/`computing` bools became the `Scheduled`/`Computing` bits;
   the `disposed` bool is gone — watcher disposal is `Watching` set with
   `Watched` clear.

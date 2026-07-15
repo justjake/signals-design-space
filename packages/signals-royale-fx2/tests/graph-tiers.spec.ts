@@ -25,9 +25,11 @@ import {
 	makeEffect,
 	makeScope,
 	observeNode,
+	pokeDraftWatchers,
 	readAtom,
 	readComputed,
 	writeAtom,
+	type TraceEventId,
 } from '../src/graph.ts'
 import {
 	createAtom,
@@ -496,6 +498,45 @@ describe('two-tier graph: tracking and waves', () => {
 			disposers[i]()
 		}
 		expect(subEdgeCount(nodeOf(base))).toBe(0)
+	})
+
+	test('render subscribers own draft pokes while effects remain base-only', () => {
+		const source = atom(0)
+		let probeNotifies = 0
+		let renderNotifies = 0
+		let effectRuns = 0
+		const wakes: Array<[number, TraceEventId]> = []
+		const stopProbe = observeNode(source, () => probeNotifies++)
+		const stopRender = observeNode(
+			source,
+			() => renderNotifies++,
+			(id, cause) => wakes.push([id, cause]),
+		)
+		const stopEffect = syncEffect(
+			() => readAtom(source),
+			() => {
+				effectRuns++
+			},
+		)
+		const cause = 123 as TraceEventId
+		const draft = openDraft()
+		try {
+			pokeDraftWatchers(source, cause, undefined, () => false)
+			expect(probeNotifies).toBe(1)
+			expect(renderNotifies).toBe(0)
+			expect(effectRuns).toBe(1)
+
+			pokeDraftWatchers(source, cause, draft.id)
+			expect(probeNotifies).toBe(2)
+			expect(renderNotifies).toBe(1)
+			expect(wakes).toEqual([[draft.id, cause]])
+			expect(effectRuns).toBe(1)
+		} finally {
+			stopEffect()
+			stopRender()
+			stopProbe()
+			discardDraft(draft.id)
+		}
 	})
 
 	test('T11 [falsify-first] a write through a deep watched chain completes', () => {
