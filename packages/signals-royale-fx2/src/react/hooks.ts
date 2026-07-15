@@ -304,7 +304,7 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
  */
 function useSignalPhaseEffect<T>(
 	usePhaseEffect: typeof useEffect,
-	schedule: 'before-paint' | 'after-paint',
+	schedule: 'useLayoutEffect' | 'useEffect',
 	compute: (use: UseFn, previous: T | undefined) => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps: React.DependencyList,
@@ -324,27 +324,28 @@ function useSignalPhaseEffect<T>(
 }
 
 /** A signal effect whose setup runs in React's passive phase and whose
- * signal-triggered re-runs drain after paint, batched at React's own
- * passive priority. See effect() for the compute/handler contract. */
+ * signal-triggered re-runs drain in the passive phase of the pass the
+ * write produced. See effect() for the compute/handler contract. */
 export function useSignalEffect<T>(
 	compute: (use: UseFn, previous: T | undefined) => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps: React.DependencyList,
 	opts?: { equals?: EqualsFn<T> },
 ): void {
-	useSignalPhaseEffect(useEffect, 'after-paint', compute, handler, deps, opts?.equals)
+	useSignalPhaseEffect(useEffect, 'useEffect', compute, handler, deps, opts?.equals)
 }
 
 /** A signal effect whose setup runs in React's layout phase and whose
- * signal-triggered re-runs drain before the next paint. See effect() for
- * the compute/handler contract. */
+ * signal-triggered re-runs drain in the layout phase of the pass the
+ * write produced — after its DOM mutations, before it paints. See
+ * effect() for the compute/handler contract. */
 export function useSignalLayoutEffect<T>(
 	compute: (use: UseFn, previous: T | undefined) => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps: React.DependencyList,
 	opts?: { equals?: EqualsFn<T> },
 ): void {
-	useSignalPhaseEffect(useLayoutEffect, 'before-paint', compute, handler, deps, opts?.equals)
+	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', compute, handler, deps, opts?.equals)
 }
 
 /** True while newer data exists behind the committed value of x: a

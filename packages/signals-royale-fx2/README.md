@@ -63,11 +63,14 @@ stop();
   and returns one disposer.
 - **Schedules:** `effect(compute, handler, { schedule })` picks when
   signal-triggered re-runs drain: `'sync'` (default — inside the flush
-  when the write settles), `'before-paint'`, or `'after-paint'`, both
-  coalesced per window with a net value cutoff. The first run at creation
-  is always synchronous. `flushScheduledEffects()` drains the paint lanes
-  now (tests, headless hosts). See `docs/effects.md` for the full
-  contract.
+  when the write settles), `'useLayoutEffect'`, or `'useEffect'` — named
+  for the React phases that run them. With a provider mounted, the
+  handler runs in the same commit as the components the write re-rendered
+  (layout or passive phase); headless, a microtask or `setTimeout(0)`
+  approximates. Both are coalesced per window with a net value cutoff,
+  and the first run at creation is always synchronous.
+  `flushScheduledEffects()` drains the deferred lanes now (tests,
+  headless hosts). See `docs/effects.md` for the full contract.
 
 ## Intents, drafts, and worlds
 
@@ -343,9 +346,8 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   `useSignalLayoutEffect(...)` — the engine effect with React-phase setup.
   Mount and `deps` changes create the effect (and first-run it) exactly in
   React's passive or layout phase and tree order; signal-triggered re-runs
-  drain in the matching lane (after-paint at React's own passive priority;
-  before-paint in a microtask — the only host timing guaranteed to precede
-  the rendering steps). The handler sees the latest committed render's
+  drain in the matching phase of the pass the write produced, after its
+  DOM mutations. The handler sees the latest committed render's
   props without re-creating the effect; cleanup honored; StrictMode nets
   one; base state only — a transition reaches it once, at retirement.
 - `useIsPending(x)` — the pending probe, delivered urgently (an indicator

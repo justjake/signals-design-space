@@ -540,7 +540,7 @@ export function registerEffectHost(wake: () => void): () => void {
 
 /**
  * Install the bindings' hooks into the engine (write classification, the
- * write-during-render guard, the render-world provider, the paint-lane
+ * write-during-render guard, the render-world provider, the deferred-lane
  * pumps). Idempotent per process.
  */
 export function registerReactSignals(): ReactSignalsHandle {

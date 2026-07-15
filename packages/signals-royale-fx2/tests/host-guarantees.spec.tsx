@@ -109,31 +109,31 @@ describe('registration', () => {
 		resetReactSignalsForTest()
 		const handle = registerReactSignals()
 		const source = createAtom(0)
-		const beforePaint: number[] = []
-		const afterPaint: number[] = []
+		const layoutSeen: number[] = []
+		const passiveSeen: number[] = []
 		const stopA = effect(
 			() => source.get(),
 			(value) => {
-				beforePaint.push(value)
+				layoutSeen.push(value)
 			},
-			{ schedule: 'before-paint' },
+			{ schedule: 'useLayoutEffect' },
 		)
 		const stopB = effect(
 			() => source.get(),
 			(value) => {
-				afterPaint.push(value)
+				passiveSeen.push(value)
 			},
-			{ schedule: 'after-paint' },
+			{ schedule: 'useEffect' },
 		)
 		try {
 			source.set(1)
-			expect(beforePaint).toEqual([0])
-			expect(afterPaint).toEqual([0])
+			expect(layoutSeen).toEqual([0])
+			expect(passiveSeen).toEqual([0])
 			await Promise.resolve()
-			expect(beforePaint).toEqual([0, 1]) // microtask fallback
-			expect(afterPaint).toEqual([0])
+			expect(layoutSeen).toEqual([0, 1]) // microtask fallback
+			expect(passiveSeen).toEqual([0])
 			await tick()
-			expect(afterPaint).toEqual([0, 1]) // task fallback
+			expect(passiveSeen).toEqual([0, 1]) // task fallback
 		} finally {
 			stopA()
 			stopB()
@@ -154,7 +154,7 @@ describe('registration', () => {
 			(value) => {
 				seen.push(value)
 			},
-			{ schedule: 'before-paint' },
+			{ schedule: 'useLayoutEffect' },
 		)
 		try {
 			source.set(1)
@@ -170,7 +170,7 @@ describe('registration', () => {
 		}
 	})
 
-	test('a before-paint handler observes the same pass\'s committed DOM', async () => {
+	test('a useLayoutEffect handler observes the same pass\'s committed DOM', async () => {
 		const h = makeHarness()
 		const a = createAtom(0)
 		function App() {
@@ -183,7 +183,7 @@ describe('registration', () => {
 			(value) => {
 				seen.push([value, text(container)])
 			},
-			{ schedule: 'before-paint' },
+			{ schedule: 'useLayoutEffect' },
 		)
 		// Outside act, so nothing flushes React early: the write must reach
 		// the DOM through React's own microtask pass, the discriminating

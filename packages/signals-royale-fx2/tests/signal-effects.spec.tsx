@@ -63,7 +63,7 @@ describe('scheduled React signal effects', () => {
 			expect(events).toEqual(['write:start', 'write:end'])
 		})
 		await flushEffects()
-		// The before-paint lane drains ahead of the after-paint lane.
+		// The useLayoutEffect lane drains ahead of the useEffect lane.
 		expect(events).toEqual(['write:start', 'write:end', 'layout:1', 'passive:1'])
 		events.length = 0
 		await act(() => {

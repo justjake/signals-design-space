@@ -66,23 +66,23 @@ call per drain, and it is the same pattern React subscribers already use
 `schedule` picks when signal-triggered re-runs drain. It changes nothing
 else — not the first run, not disposal, not the change test.
 
-| schedule                 | drain trigger                                        | coalescing window     | error surface        |
-| ------------------------ | ---------------------------------------------------- | --------------------- | -------------------- |
-| `'sync'` (default)       | inside the flush when the write settles              | one flush (`batch()`) | throws at write site |
-| `'before-paint'`         | hosted: the pass's commit, layout phase; else microtask | the render pass / task | rethrown from drain |
-| `'after-paint'`          | hosted: the pass's passive phase; else `setTimeout(0)` | since last drain      | rethrown from drain  |
+| schedule            | drain trigger                                           | coalescing window      | error surface        |
+| ------------------- | ------------------------------------------------------- | ---------------------- | -------------------- |
+| `'sync'` (default)  | inside the flush when the write settles                 | one flush (`batch()`)  | throws at write site |
+| `'useLayoutEffect'` | hosted: the pass's commit, layout phase; else microtask | the render pass / task | rethrown from drain  |
+| `'useEffect'`       | hosted: the pass's passive phase; else `setTimeout(0)`  | since last drain       | rethrown from drain  |
 
 - Ordering per write is fixed: sync effects, then render notifications,
-  then before-paint, then after-paint.
+  then useLayoutEffect, then useEffect.
 - The engine core is dependency-free: its built-in pumps are
-  `queueMicrotask` (before-paint) and `setTimeout(0)` (after-paint).
+  `queueMicrotask` (useLayoutEffect) and `setTimeout(0)` (useEffect).
 - With React mounted, each `SignalsFrameworkProvider` hosts the drains
   instead: a lane request re-renders a null last-child sentinel by reducer
   dispatch, at the same ambient priority as the subscriber wakes from the
   same write, so React batches both into one render pass. The sentinel's
-  layout effect drains before-paint — after that pass's DOM mutations and
+  layout effect drains useLayoutEffect — after that pass's DOM mutations and
   every app layout effect, before the frame paints — and its passive
-  effect drains after-paint in the same flush as the pass's `useEffect`s.
+  effect drains useEffect in the same flush as the pass's `useEffect`s.
   The guarantee this buys is frame coherence: a handler's DOM writes land
   in the same frame as the component updates for the same signal write. A
   free-running microtask pump instead drains before React renders, so a
@@ -96,7 +96,7 @@ else — not the first run, not disposal, not the change test.
   with accepted-but-undrained requests re-arms the built-in pumps
   (`repumpDeferredLanes`), and with no provider mounted the built-ins
   serve directly.
-- `flushScheduledEffects()` drains both paint lanes (and pending
+- `flushScheduledEffects()` drains both deferred lanes (and pending
   `onObserved` transitions) synchronously — the test seam for headless
   code and for writes whose requests fell back to the built-in timers.
   Hosted drains need no seam: they are ordinary commit effects, so `act()`
@@ -109,7 +109,7 @@ else — not the first run, not disposal, not the change test.
   inside the flush with subscriber semantics, which nothing needs.
 
 The `onObserved` atom lifetime flush keeps its own microtask instead of
-riding the before-paint pump: an activation feeds data (sockets,
+riding the useLayoutEffect pump: an activation feeds data (sockets,
 `ctx.set`), and delaying it to a frame boundary would show subscribers the
 pre-activation value for a visible beat.
 
@@ -136,7 +136,7 @@ non-settling cycle throws instead of livelocking):
 Errors follow the flush's documented policy: a throwing pull, cleanup, or
 handler aborts the drain, the preempted entries' marks are cleared so an
 unrelated later write cannot fire them stale, and the error surfaces from
-the drain site (the write for `'sync'`; for the paint lanes, the hosting
+the drain site (the write for `'sync'`; for the deferred lanes, the hosting
 commit effect or the fallback pump task). A throwing cleanup additionally
 poisons its own effect, as before.
 
@@ -158,8 +158,8 @@ concurrent React without any coupling to render worlds.
 ## React hooks
 
 ```ts
-useSignalEffect(compute, handler, deps, opts?)       // after-paint lane
-useSignalLayoutEffect(compute, handler, deps, opts?) // before-paint lane
+useSignalEffect(compute, handler, deps, opts?)       // useEffect lane
+useSignalLayoutEffect(compute, handler, deps, opts?) // useLayoutEffect lane
 ```
 
 - The effect is created inside the matching React phase effect, keyed on

@@ -604,7 +604,7 @@ describe('two-tier graph: tracking and waves', () => {
 
 describe.each([
 	['sync', Lane.Sync, () => {}],
-	['before-paint', Lane.BeforePaint, flushScheduledEffects],
+	['useLayoutEffect', Lane.UseLayoutEffect, flushScheduledEffects],
 ] as const)('%s lane drain re-entrancy', (_name, lane, nestedFlush) => {
 	test('a handler write waits until that handler returns', () => {
 		const source = atom(0)
@@ -691,7 +691,7 @@ test('a public engine reset cannot erase an active sync drain', () => {
 	stop()
 })
 
-test('a nested before-paint flush cannot let after-paint work overtake its next round', () => {
+test('a nested useLayoutEffect flush cannot let useEffect work overtake its next round', () => {
 	const beforeSource = atom(0)
 	const afterSource = atom(0)
 	const events: string[] = []
@@ -706,14 +706,14 @@ test('a nested before-paint flush cannot let after-paint work overtake its next 
 			}
 			events.push(`before:${value}:end`)
 		},
-		Lane.BeforePaint,
+		Lane.UseLayoutEffect,
 	)
 	const stopAfter = makeEffect(
 		() => readAtom(afterSource),
 		(value) => {
 			events.push(`after:${value}`)
 		},
-		Lane.AfterPaint,
+		Lane.UseEffect,
 	)
 	events.length = 0
 	writeAtom(beforeSource, 1)

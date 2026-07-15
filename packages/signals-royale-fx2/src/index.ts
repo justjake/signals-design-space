@@ -445,7 +445,7 @@ export function read<T>(x: Signal<T>): T {
 
 /** When an effect's signal-triggered re-runs drain. Setup runs (creation,
  * or a React deps change) are synchronous and unaffected. */
-export type EffectSchedule = 'sync' | 'before-paint' | 'after-paint'
+export type EffectSchedule = 'sync' | 'useLayoutEffect' | 'useEffect'
 
 /** Options accepted by effect(). `equals` and `label` configure the
  * compute exactly as on createComputed; the same `equals` also gates
@@ -485,10 +485,10 @@ export function effect<T>(
 ): () => void {
 	const schedule = opts?.schedule
 	const lane =
-		schedule === 'before-paint'
-			? Lane.BeforePaint
-			: schedule === 'after-paint'
-				? Lane.AfterPaint
+		schedule === 'useLayoutEffect'
+			? Lane.UseLayoutEffect
+			: schedule === 'useEffect'
+				? Lane.UseEffect
 				: Lane.Sync
 	return makeEffect(
 		compute as (use: UseFn, previous: unknown) => unknown,

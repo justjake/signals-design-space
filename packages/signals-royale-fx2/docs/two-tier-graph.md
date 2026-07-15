@@ -744,7 +744,7 @@ docs/effects.md):
   they observe. They never re-track.
 - `WatchSchedule` and `makeScheduledEffect` (the React re-render handshake
   and its world-source twin watcher) are deleted. `effectQueue` became
-  three lane queues (sync / before-paint / after-paint) drained two-phase:
+  three lane queues (sync / useLayoutEffect / useEffect) drained two-phase:
   pull all computes, then cleanups, then handlers. The write path only
   marks and enqueues.
 - Per-root committed views (`committedWorlds`, `connection.committedIds`,

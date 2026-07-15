@@ -353,10 +353,10 @@ export const enum Lane {
 	 * commit — after the same write's DOM mutations and app layout effects,
 	 * before that frame paints. Headless: a microtask, the only host timing
 	 * guaranteed to precede the rendering steps. */
-	BeforePaint = 1,
+	UseLayoutEffect = 1,
 	/** With a React host: drained in the hosting root's passive phase, the
 	 * same flush as useEffect. Headless: setTimeout. */
-	AfterPaint = 2,
+	UseEffect = 2,
 }
 
 /** A dynamically evaluated effect and its untracked delivery state. */
@@ -540,7 +540,7 @@ let lifetimeFlushScheduled = false
 
 /** Called whenever an atom's observer count crosses zero in either
  * direction. Settlement keeps its own microtask rather than riding the
- * before-paint pump: an onObserved activation feeds data (sockets,
+ * useLayoutEffect pump: an onObserved activation feeds data (sockets,
  * ctx.set), and delaying it to a frame boundary would show subscribers the
  * pre-activation value for a visible beat. */
 function noteLifetimeTransition(node: ProducerNode): void {
@@ -713,7 +713,7 @@ const lanes: readonly [LaneState, LaneState, LaneState] = [
  * means the host owns this request and will eventually reach the drain
  * entry points (the React bindings re-render a per-root sentinel whose
  * commit-phase effects drain); false falls back to the built-in pumps. */
-export type LanePump = (lane: Lane.BeforePaint | Lane.AfterPaint) => boolean
+export type LanePump = (lane: Lane.UseLayoutEffect | Lane.UseEffect) => boolean
 let lanePump: LanePump | null = null
 
 /** @internal Install or clear the host lane pump. */
@@ -721,29 +721,25 @@ export function setLanePump(pump: LanePump | null): void {
 	lanePump = pump
 }
 
-/** @internal Drain the before-paint lane now. Hosted drains call this from
+/** @internal Drain the useLayoutEffect lane now. Hosted drains call this from
  * the commit's layout phase, after the pass's DOM mutations. */
-export function drainBeforePaintEffects(): void {
-	lanes[Lane.BeforePaint].pumpRequested = false
-	drainLane(lanes[Lane.BeforePaint])
+export function drainUseLayoutEffectLane(): void {
+	lanes[Lane.UseLayoutEffect].pumpRequested = false
+	drainLane(lanes[Lane.UseLayoutEffect])
 }
 
 /** @internal Drain both deferred lanes now. Lane order is total regardless
- * of pump timing: the before-paint lane settles first, so its entries can
- * never run after same-wave after-paint entries even when this site's pump
- * (a task) fires before a pending before-paint drain. Hosted drains call
+ * of pump timing: the useLayoutEffect lane settles first, so its entries can
+ * never run after same-wave useEffect entries even when this site's pump
+ * (a task) fires before a pending useLayoutEffect drain. Hosted drains call
  * this from the commit's passive phase. */
 export function drainDeferredEffects(): void {
-	lanes[Lane.AfterPaint].pumpRequested = false
-	drainLane(lanes[Lane.BeforePaint])
-	drainLane(lanes[Lane.AfterPaint])
+	lanes[Lane.UseEffect].pumpRequested = false
+	drainLane(lanes[Lane.UseLayoutEffect])
+	drainLane(lanes[Lane.UseEffect])
 }
 
-const drainAfterPaintTask = (): void => {
-	drainDeferredEffects()
-}
-
-function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
+function requestLaneDrain(lane: Lane.UseLayoutEffect | Lane.UseEffect): void {
 	const state = lanes[lane]
 	if (state.pumpRequested) {
 		return
@@ -752,10 +748,10 @@ function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
 	if (lanePump !== null && lanePump(lane)) {
 		return
 	}
-	if (lane === Lane.BeforePaint) {
-		queueMicrotask(drainBeforePaintEffects)
+	if (lane === Lane.UseLayoutEffect) {
+		queueMicrotask(drainUseLayoutEffectLane)
 	} else {
-		setTimeout(drainAfterPaintTask, 0)
+		setTimeout(drainDeferredEffects, 0)
 	}
 }
 
@@ -763,7 +759,7 @@ function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
  * queued. Called when a host pump accepted requests whose drains will now
  * never arrive (the last hosting root unmounted, or the host uninstalled). */
 export function repumpDeferredLanes(): void {
-	for (const lane of [Lane.BeforePaint, Lane.AfterPaint] as const) {
+	for (const lane of [Lane.UseLayoutEffect, Lane.UseEffect] as const) {
 		const state = lanes[lane]
 		if (state.count > state.head) {
 			state.pumpRequested = false
@@ -772,17 +768,17 @@ export function repumpDeferredLanes(): void {
 	}
 }
 
-/** Drain the paint lanes (and pending onObserved transitions) now — the
+/** Drain the deferred lanes (and pending onObserved transitions) now — the
  * seam for tests and headless hosts, since act() and awaits do not flush
  * scheduler tasks. */
 export function flushScheduledEffects(): void {
 	flushLifetimeTransitions()
-	const beforePaint = lanes[Lane.BeforePaint]
+	const beforePaint = lanes[Lane.UseLayoutEffect]
 	if (beforePaint.head !== 0) {
 		return
 	}
 	drainLane(beforePaint)
-	drainLane(lanes[Lane.AfterPaint])
+	drainLane(lanes[Lane.UseEffect])
 }
 
 /** @internal Drop queued lane entries without running them (test reset).

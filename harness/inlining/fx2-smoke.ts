@@ -28,7 +28,7 @@ const dispose = effect(
 	},
 )
 
-// Warm the paint-lane enqueue/drain and the world-selected read path
+// Warm the deferred-lane enqueue/drain and the world-selected read path
 // separately from the steady propagation source. Named callbacks keep this
 // probe allocation-free.
 const scheduledSource = createAtom(0)
@@ -37,7 +37,7 @@ const disposeScheduled = effect(
 	(v) => {
 		sink ^= v
 	},
-	{ schedule: 'before-paint' },
+	{ schedule: 'useLayoutEffect' },
 )
 function readBaseWorld(): void {
 	sink ^= tail.get()

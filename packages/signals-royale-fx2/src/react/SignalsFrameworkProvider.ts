@@ -27,7 +27,7 @@
  * batch.
  */
 import * as React from 'react'
-import { drainBeforePaintEffects, drainDeferredEffects, NO_EVENT } from '../graph.ts'
+import { drainUseLayoutEffectLane, drainDeferredEffects, NO_EVENT } from '../graph.ts'
 import { getActiveTracer } from '../tracer.ts'
 import { isLiveDraft, type DraftId } from '../worlds.ts'
 import {
@@ -126,7 +126,7 @@ function bumpWake(n: number): number {
 function DeferredEffectHost(): null {
 	const [, wake] = React.useReducer(bumpWake, 0)
 	React.useLayoutEffect(() => registerEffectHost(wake), [wake])
-	React.useLayoutEffect(drainBeforePaintEffects)
+	React.useLayoutEffect(drainUseLayoutEffectLane)
 	React.useEffect(drainDeferredEffects)
 	return null
 }
