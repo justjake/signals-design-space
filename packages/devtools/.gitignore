@@ -1,0 +1,8 @@
+# bundled extension outputs (produced by `pnpm build:extension`)
+extension/*.js
+extension/*.js.map
+
+# playwright e2e artifacts
+e2e/test-results/
+test-results/
+playwright-report/

@@ -1,0 +1,38 @@
+{
+	"name": "signals-devtools",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./protocol": "./src/protocol.ts",
+		"./collector": "./src/collector.ts",
+		"./fx2": "./src/fx2.ts",
+		"./panel": "./src/panel/mount.tsx"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"e2e": "playwright test -c e2e",
+		"dev": "vite",
+		"build:extension": "node scripts/build-extension.mjs"
+	},
+	"dependencies": {
+		"signals-royale-fx2": "workspace:*"
+	},
+	"devDependencies": {
+		"@playwright/test": "1.61.1",
+		"@types/chrome": "^0.0.270",
+		"@types/react": "^19.1.0",
+		"@types/react-dom": "^19.1.0",
+		"@vitejs/plugin-react": "6.0.2",
+		"esbuild": "^0.28.0",
+		"jsdom": "^26.0.0",
+		"typescript": "7.0.2",
+		"vite": "8.1.0",
+		"vitest": "^3.0.0"
+	},
+	"peerDependencies": {
+		"react": ">=19.0.0",
+		"react-dom": ">=19.0.0"
+	}
+}
