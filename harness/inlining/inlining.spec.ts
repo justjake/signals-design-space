@@ -57,7 +57,7 @@ const FX2_WORLD_BYTECODE_BUDGETS: Record<string, number> = {
 	memoFor: 30,
 	inheritCertificate: 70,
 	recordSource: 85,
-	unwrapComputedWorldState: 130,
+	unwrapResolved: 110,
 	memoValid: 260,
 }
 
@@ -209,7 +209,7 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 committed-world inlining (tsc-emitted, N
 
 	test('inlines draft-world read helpers', () => {
 		const inlined = new Set(trace.inlined.map((edge) => edge.callee))
-		const required = ['getComputed', 'unwrapComputedWorldState', 'memoValid']
+		const required = ['getComputed', 'unwrapResolved', 'memoValid']
 		expect(
 			required.filter((name) => !inlined.has(name)),
 			`not inlined; inlined callees: ${[...inlined].sort().join(', ')}`,

@@ -972,24 +972,6 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
 	return currentPark
 }
 
-/** Unwrap a resolved state from inside another evaluation: values flow
- * through, errors rethrow their stable reason, and a suspended state parks
- * the reader. No stale value is served here — a world evaluation must not
- * fold a stale base value into a draft-world result. */
-export function unwrapForEval(
-	st: ResolvedState,
-	park: (t: PromiseLike<unknown>) => unknown,
-): unknown {
-	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === 0) {
-		return st.value
-	}
-	if (asyncBits === Flag.AsyncError) {
-		throw (st.throwable as ErrorBox).error
-	}
-	return park((st.throwable as Suspension).promise)
-}
-
 // ---------------------------------------------------------------------------
 // Ambient views: worlds for reads happening outside any render pass.
 // ---------------------------------------------------------------------------

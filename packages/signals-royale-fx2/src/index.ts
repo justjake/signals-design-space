@@ -53,6 +53,7 @@ import {
 	type ResolvedState,
 	type Suspension,
 	baseUse,
+	unwrapResolved,
 } from './asyncs.ts'
 import {
 	type Draft,
@@ -72,7 +73,6 @@ import {
 	resolveState,
 	resolveStateUntracked,
 	setAmbientClassifier,
-	unwrapForEval,
 	worldOf,
 } from './worlds.ts'
 import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer.ts'
@@ -199,30 +199,18 @@ export type Computed<out T> = {
 	peek(): T
 }
 
-/** Apply computed read semantics to one world resolution. Kept separate so
- * tracked get() and untracked peek() cannot drift on async behavior. */
-function unwrapComputedWorldState<T>(state: ResolvedState): T {
-	const park = getCurrentPark()
-	if (park !== null) {
-		return unwrapForEval(state, park) as T
-	}
-	if ((state.flags & Flag.AsyncError) !== 0) {
-		throw (state.throwable as ErrorBox).error
-	}
-	if ((state.flags & Flag.AsyncSuspended) !== 0 && isUninitialized(state.value)) {
-		throw (state.throwable as Suspension).promise
-	}
-	return state.value as T
-}
-
 /** Computeds are plain node records. Every record points at this shared
  * function instead of allocating a get closure; TypeScript erases the
- * fake `this` parameter and normal method-call syntax supplies the node. */
+ * fake `this` parameter and normal method-call syntax supplies the node.
+ * World resolutions unwrap under the ambient park (an enclosing draft
+ * evaluation forwards pendingness; a render serves stale or suspends) —
+ * the same rule for tracked get() and untracked peek(), so the two cannot
+ * drift on async behavior. */
 function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	const world = getCurrentWorld()
 	if (world !== null) {
 		// Every read within a selected world resolves that same world.
-		return unwrapComputedWorldState<T>(resolveState(this, world))
+		return unwrapResolved(resolveState(this, world), getCurrentPark()) as T
 	}
 	const value = readComputed(this)
 	if ((this.flags & Flag.AsyncMask) !== 0) {
@@ -236,7 +224,7 @@ function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 function peekComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	const world = getCurrentWorld()
 	if (world !== null) {
-		return unwrapComputedWorldState<T>(resolveStateUntracked(this, world))
+		return unwrapResolved(resolveStateUntracked(this, world), getCurrentPark()) as T
 	}
 	return graphUntracked(() => this.get())
 }
@@ -299,23 +287,19 @@ export function nodeOf(x: Signal<any>): ProducerNode {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** Finish a computed read that found the node in an async state: rethrow
- * errors, park an evaluating consumer on the suspension, serve stale data
- * when a settled value exists, otherwise suspend (first load). */
+/** Finish a computed read that found the node in an async state: park an
+ * evaluating consumer on the suspension (pending forwards), then apply the
+ * shared unwrap — rethrow errors, serve stale data when a settled value
+ * exists, otherwise suspend (first load). */
 function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
-	if ((node.flags & Flag.AsyncError) !== 0) {
-		throw (node.throwable as ErrorBox).error
+	if ((node.flags & Flag.AsyncSuspended) !== 0) {
+		const consumer = getActiveConsumer()
+		if (consumer !== null) {
+			// baseUse parks the consumer and throws; it never returns here.
+			baseUse((node.throwable as Suspension).promise, consumer)
+		}
 	}
-	const suspension = node.throwable as Suspension
-	const consumer = getActiveConsumer()
-	if (consumer !== null) {
-		// Pending forwards: park the evaluating computed on this suspension.
-		baseUse(suspension.promise, consumer)
-	}
-	if (!isUninitialized(node.value)) {
-		return node.value as T
-	} // stale serves
-	throw suspension.promise // never settled: suspend
+	return unwrapResolved(node, null) as T
 }
 
 /** The value slot of a state view, with the uninitialized sentinel

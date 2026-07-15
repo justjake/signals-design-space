@@ -98,6 +98,37 @@ export interface ResolvedState {
 	throwable?: ErrorBox | Suspension | null
 }
 
+/**
+ * Read one ResolvedState under a park policy — the shared tail of every
+ * unwrap site:
+ * - a plain value flows through;
+ * - an error rethrows its stable reason;
+ * - a pending state parks through `park` when one is supplied (evaluation
+ *   contexts forward pendingness; no stale value may leak into their
+ *   result), and otherwise serves settled history ("stale"), suspending
+ *   on the promise only when none exists yet.
+ */
+export function unwrapResolved(
+	st: ResolvedState,
+	park: ((t: PromiseLike<unknown>) => unknown) | null,
+): unknown {
+	const asyncBits = st.flags & Flag.AsyncMask
+	if (asyncBits === 0) {
+		return st.value
+	}
+	if (asyncBits === Flag.AsyncError) {
+		throw (st.throwable as ErrorBox).error
+	}
+	const suspension = st.throwable as Suspension
+	if (park !== null) {
+		return park(suspension.promise)
+	}
+	if (!isUninitialized(st.value)) {
+		return st.value // stale serves
+	}
+	throw suspension.promise // never settled: suspend
+}
+
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()
 
 /** Installed by worlds.ts so settlement also invalidates its world memos. */
