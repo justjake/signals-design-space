@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>fx2 devtools — inline demo</title>
+		<style>
+			body {
+				margin: 0;
+				height: 100vh;
+				display: flex;
+				font-family: system-ui, sans-serif;
+			}
+			#app {
+				width: 260px;
+				padding: 16px;
+				border-right: 1px solid #ccc;
+			}
+			#panel {
+				flex: 1;
+				position: relative;
+			}
+			button {
+				font: inherit;
+				padding: 6px 10px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="app">
+			<h3>fx2 demo app</h3>
+			<button id="inc" data-testid="inc">increment</button>
+			<p>
+				doubled = <b data-testid="out" id="out">0</b>
+			</p>
+		</div>
+		<div id="panel" data-testid="panel"></div>
+		<script type="module" src="./main.tsx"></script>
+	</body>
+</html>
