@@ -15,7 +15,6 @@ condition still leaves a useful direction.
 
 ## Current priority after the fused-effect rewrite
 
-3. Give each lane one reentrancy owner. First add a same-lane nested-drain falsifier for `flushScheduledEffects()` inside a cleanup/handler; only then replace the sync-only `flushing` owner if cursor and tail ownership remain exact.
 10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
 
 ## Other unmeasured broader leads
@@ -84,6 +83,7 @@ condition still leaves a useful direction.
 - Thenable membership sets exist only while pending; settlement detaches and traverses them directly, terminal boxes retain no collections, and the first terminal callback wins.
 - Throwing settlement notifications still restore `currentCause` and release detached suspensions before the original notification error escapes; an unchanged noisy control cannot veto this supported-surface correctness fix.
 - One dynamically tracked `EffectNode` owns evaluation, dependencies, cleanup, delivery state, and children while sharing the computed evaluator; lane state owns delivery scheduling. The private computed, effect watcher, pinned link, observer tier, and propagation hop are gone.
+- Each lane's active cursor owns same-lane drain reentrancy; the sync-only `flushing` flag is gone, test reset preserves an active cursor, and a nested before-paint flush cannot let after-paint work overtake the next before-paint round.
 - `releaseDraft` owns dead-prefix folding and the zero-live log/world-memo sweep; retirement and discard no longer coordinate a repeated two-call teardown protocol.
 - Per-root committed worlds, container keys, `committed()`, and `useCommitted` are gone; base state is the only committed view while React connections carry pending render worlds.
 - Atoms and plain world memo records omit the impossible async payload; computed nodes retain their stable nullable slot, and async world records retain their ErrorBox or Suspension.
