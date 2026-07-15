@@ -163,16 +163,17 @@ function unwrapState(
  * Read x and subscribe: the component re-renders whenever the value it
  * would show changes.
  *
- * The hook renders in a world chosen from React state: the pass's valid
- * note when the hook's connection wrote one (covering components that mount
- * inside a transition pass, whose reducers never received the write-time
- * dispatch), and otherwise the hook's own reducer state. Both come from
- * React state for this very pass, so neither can run ahead of it.
- *
+ * Implementation notes. The hook picks which snapshot to render from
+ * React state, so it can never run ahead of the pass:
+ * - when this root's provider noted a snapshot for the current pass, the
+ *   hook uses that — it covers components that mount in the middle of a
+ *   transition pass, whose own reducers never received the write-time
+ *   dispatch;
+ * - otherwise the hook uses its own reducer state.
  * A committed transition costs no extra renders by construction:
- * resolutionDiffers resolves in the world this hook rendered, and a
- * fold whose values were already delivered through render-pass worlds
- * compares equal. The gap for subscribers that attached late is closed by
+ * resolutionDiffers compares against what this hook rendered, and a fold
+ * whose values were already delivered through render passes compares
+ * equal. The gap for subscribers that attached late is closed by
  * correctSubscription at subscribe time.
  */
 export function useValue<T>(x: Signal<T>): T {
@@ -294,9 +295,9 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	return useValue(c)
 }
 
-/** Everything a spec's `watch` can be: effect()'s source union — a
- * compute function, a signal, a tuple of signals, or a record of
- * signals. */
+/** Everything a spec's `watch` can be: a compute function, a signal, a
+ * tuple of signals, or a record of signals — the same shapes
+ * {@link effect} accepts as its first argument. */
 export type WatchSource =
 	| ((use: UseFn, previous: any) => unknown)
 	| Signal<any>
@@ -312,22 +313,25 @@ export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
 			? SignalValues<S>
 			: never
 
-/** One component-owned signal effect, described by a factory: `watch` is
- * the effect's source (a compute in engine terms, or the signal / tuple /
- * record shorthands) and `run` is its handler — untracked, handed the
- * settled (value, previous) pair, may return a cleanup. `equals` and
- * `label` pass through to effect(); the schedule is the hook's phase. */
+/** One component-owned signal effect, as built by the factory passed to
+ * useSignalEffect or useSignalLayoutEffect. Which hook runs the factory
+ * decides the schedule; everything else is described per field. */
 export interface SignalEffectSpec<S extends WatchSource> {
-	/** What the effect reacts to: a compute function (tracked, dynamic
-	 * dependencies), a signal, a tuple of signals, or a record of signals
-	 * — effect()'s source union. */
+	/** What the effect reacts to. One of:
+	 * - a compute function: tracked while it runs, so the signals it read
+	 *   — and only those — become dependencies, branch by branch;
+	 * - a signal: shorthand for a compute that reads it;
+	 * - a tuple or record of signals: shorthand for a compute that reads
+	 *   each one into a same-shaped tuple or record of values.
+	 * These are the same shapes {@link effect} accepts as its first
+	 * argument. */
 	watch: S
-	/** The handler: untracked, handed the settled (value, previous) pair
-	 * when the watched value changes; may return a cleanup that runs
-	 * before the next run and at disposal. */
+	/** What the effect does: runs untracked with the settled
+	 * (value, previous) pair when the watched value changes, and may
+	 * return a cleanup that runs before the next run and at disposal. */
 	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
-	/** Delivery cutoff; defaults to Object.is, or shallowEquals for tuple
-	 * and record watches. */
+	/** Delivery cutoff; defaults to Object.is, or the package's
+	 * `shallowEquals` for tuple and record watches. */
 	equals?: EqualsFn<WatchValue<S>>
 	/** Debug name shown in trace output. */
 	label?: string
@@ -355,9 +359,11 @@ function useSignalPhaseEffect(
 	}, deps)
 }
 
-/** A signal effect whose setup runs in React's passive phase and whose
- * signal-triggered re-runs drain in the passive phase of the pass the
- * write produced. See SignalEffectSpec for the factory contract. */
+/** A signal effect owned by this component: the factory builds a
+ * {@link SignalEffectSpec} on mount and again on every `deps` change,
+ * disposing the previous effect first, in React's passive phase.
+ * Signal-triggered re-runs drain in the passive phase of the pass the
+ * write produced. */
 export function useSignalEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
@@ -365,10 +371,11 @@ export function useSignalEffect<const S extends WatchSource>(
 	useSignalPhaseEffect(useEffect, 'useEffect', create, deps)
 }
 
-/** A signal effect whose setup runs in React's layout phase and whose
- * signal-triggered re-runs drain in the layout phase of the pass the
- * write produced — after its DOM mutations, before it paints. See
- * SignalEffectSpec for the factory contract. */
+/** A signal effect owned by this component: the factory builds a
+ * {@link SignalEffectSpec} on mount and again on every `deps` change,
+ * disposing the previous effect first, in React's layout phase.
+ * Signal-triggered re-runs drain in the layout phase of the pass the
+ * write produced — after its DOM mutations, before it paints. */
 export function useSignalLayoutEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
@@ -376,9 +383,10 @@ export function useSignalLayoutEffect<const S extends WatchSource>(
 	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', create, deps)
 }
 
-/** True while newer data exists behind the committed value of x: a
- * pending transition draft on it, or an async refetch loading behind a
- * stale value. */
+/** True while newer data exists behind the committed value of x:
+ * - a transition draft with writes over x is still pending, or
+ * - an async computed is loading again while its previous settled value
+ *   keeps serving. */
 export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireRootConnection('useIsPending'), null)

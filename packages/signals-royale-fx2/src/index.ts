@@ -98,9 +98,12 @@ export interface ComputedOptions<T> {
 /** A writable reactive value. */
 export type Atom<in out T> = {
 	/** Tracked read: inside a computed, an effect source, or a subscribed
-	 * component this registers a dependency. Returns base state — committed
-	 * values plus urgent writes, drafts hidden — or, inside a render pass
-	 * or draft evaluation, that context's own world. */
+	 * component, this registers a dependency, so the reader re-runs when
+	 * the value changes. What it returns depends on where it runs:
+	 * - ordinarily: base state, meaning committed values plus urgent
+	 *   writes, with transition drafts hidden;
+	 * - inside a React render pass or a transition-draft evaluation: the
+	 *   snapshot that context was given, its drafts included. */
 	get(): T
 	/** Write through the equality cutoff (equal writes are dropped). Inside
 	 * a React transition the write is recorded into the transition's draft
@@ -181,8 +184,10 @@ const Atom = class<T> implements AtomNode<T> {
 
 /** An atom whose dispatches replay through one reducer fixed at creation. */
 export type ReducerAtom<S, A> = Atom<S> & {
-	/** Apply `action` through the reducer — recorded and replayed per
-	 * world like update(), so keep the reducer pure. */
+	/** Apply `action` through the reducer fixed at creation. Inside a
+	 * React transition the dispatch is recorded and replayed against each
+	 * pending snapshot, the same way {@link Atom.update} records its
+	 * function — so keep the reducer pure. */
 	dispatch: (action: A) => void
 }
 
@@ -201,13 +206,18 @@ function dispatchReducer<S, A>(this: ReducerAtomNode<S, A>, action: A): void {
  * only when read after a dependency changed. */
 export type Computed<out T> = {
 	/** Tracked, cached read: registers a dependency and recomputes only if
-	 * one changed. An async computed returns its settled value, serves the
-	 * previous settled value while a refetch is pending (isPending is the
-	 * indicator), throws its stable pending promise when nothing has
-	 * settled yet (React Suspense catches it), and rethrows errors. */
+	 * a dependency changed. When the computed is async (its function reads
+	 * a promise through `use`), the result depends on that promise:
+	 * - settled: returns the settled value;
+	 * - pending behind an earlier settled value (a refetch): keeps
+	 *   returning that earlier value, and {@link isPending} reports true;
+	 * - pending with nothing settled yet (a first load): throws the
+	 *   computed's stable pending promise, which React Suspense catches;
+	 * - failed: rethrows the same error object at every read site. */
 	get(): T
-	/** get() without registering a dependency — same world selection and
-	 * async behavior. */
+	/** get() without the dependency: returns the same value in every
+	 * situation described above, but the reader never re-runs when this
+	 * computed changes. */
 	peek(): T
 }
 
@@ -321,12 +331,14 @@ function stateValue(st: ResolvedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
-/** Read the newest view of x: base state plus every live draft. Never
- * suspends. That meaning only applies outside any evaluation or render —
- * inside one, latest() resolves that context's own world instead, because
- * reading ahead of your world would tear: a draft evaluation sees its
- * draft's world, a base-state computed or effect sees base state, and a
- * render pass sees the pass's world. */
+/** Read the newest view of x: base state plus every live transition
+ * draft. Never suspends. That meaning only applies outside any
+ * evaluation or render. Inside one, latest() resolves the caller's own
+ * context instead, because reading ahead of your context would show a
+ * torn mix of snapshots:
+ * - a transition-draft evaluation reads its own draft's view;
+ * - a base-state computed or effect reads base state;
+ * - a React render pass reads that pass's view. */
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = currentWorld
@@ -352,10 +364,12 @@ export function latest<T>(x: Signal<T>): T {
 	return stateValue(st) as T
 }
 
-/** True while newer data exists behind what is on screen — a pending
- * transition draft on this atom, or an async refetch loading behind a
- * stale value. Passive by contract: never evaluates, never refetches,
- * never suspends. */
+/** True while newer data exists behind what is on screen:
+ * - a transition draft with writes over x is still pending, or
+ * - an async computed is loading again while its previous settled value
+ *   keeps serving.
+ * Passive by contract: never evaluates, never refetches, never
+ * suspends. */
 export function isPending(x: Signal<any>): boolean {
 	return isPendingPassive(nodeOf(x), currentWorld ?? renderWorld())
 }
@@ -474,9 +488,12 @@ export interface EffectOptions<T> extends ComputedOptions<T> {
 	schedule?: EffectSchedule
 }
 
-/** Element-wise (arrays) or own-key-wise (plain objects) Object.is, one
- * level deep. The default cutoff for tuple and record effect sources,
- * whose computes rebuild their container on every run. */
+/** One-level-deep equality:
+ * - arrays: same length and element-wise Object.is;
+ * - plain objects: same own keys and key-wise Object.is;
+ * - everything else: Object.is.
+ * The default cutoff for tuple and record effect sources, whose computes
+ * rebuild their container on every run. */
 export function shallowEquals(a: unknown, b: unknown): boolean {
 	if (Object.is(a, b)) {
 		return true
