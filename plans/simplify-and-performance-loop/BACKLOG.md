@@ -14,8 +14,7 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Collapse the two ambient access-prohibition strings and their setter into one scalar policy owner while preserving exact errors, nested restoration, initializer retry, updater replay, and `FORBID_WRITE_FROM_COMPUTED`.
-2. Make tracer ring occupancy canonical in `head` plus `size`: narrow the private storage to `TraceEvent[]` and delete impossible undefined branches without changing empty, partial, wrapped, overflow, lookup, or causal-walk behavior.
+1. Make tracer ring occupancy canonical in `head` plus `size`: narrow the private storage to `TraceEvent[]` and delete impossible undefined branches without changing empty, partial, wrapped, overflow, lookup, or causal-walk behavior.
 
 ## Other unmeasured broader leads
 
@@ -41,6 +40,7 @@ condition still leaves a useful direction.
 - Delete `RenderedResolution.live` only after a natural React/runtime layout change; retry the exact Round 114 three-file diff with direct hydration, first mount, held render, empty-world, repair, resolved-runtime coverage, and all four frozen modes. Do not vary the sentinel representation or resample the stable rerender regression.
 - Have `materializeAtom` return the installed/current value only after a natural compiler/runtime/layout change; retry the exact Round 115 source and custom-equality falsifier with all seven frozen modes. Do not tune the return expression or resample the eager-first-read regression.
 - Move world-memo ownership off every producer only after a natural runtime/lookup-layout change; retry the exact Round 117 replaceable module `WeakMap` design with its property-shape and live-draft GC falsifiers plus all ten frozen modes. Do not add a cache, hybrid owner, or resample the stable lookup regressions.
+- Collapse read/write prohibition into one scalar policy only after a natural compiler/runtime/guard-layout change; retry the exact Round 119 three-state model with its error/restoration falsifiers and all eight frozen modes. Do not tune the tag values or guard expressions around the stable hot-path regressions.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
 - Build both multi-draft world keys from canonical `Draft[]`, reuse `Draft.world` for singleton `worldOf`, and delete `latestWorld`'s parallel ID array only after a natural compiler/runtime/layout change; retry the exact Round 116 diff with all 13 frozen modes. Do not vary signature materialization or resample the stable multi-draft regressions.
 - Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
