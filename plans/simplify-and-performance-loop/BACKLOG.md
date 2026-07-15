@@ -7,21 +7,27 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Delete the zero-production-caller `currentDraftChange` and `isErrorBox` exports with the next related source change. The runtime call site that made the Round 64 brand deletion measurable disappeared with `useCommitted`; do not retain test-only production APIs.
-- Correct comments that still describe deleted `committed()` / per-root committed views or the removed requestAnimationFrame pump; do not spend a performance round on comment-only residue.
+- Correct comments and docs that still describe deleted `committed()` / per-root committed views, the removed requestAnimationFrame pump, two clocks, or multiple unwrap owners; remove implementation-history lore instead of documenting successive designs. Do not spend a performance round on comment-only residue.
 - Correct `ThenableBox.parkedNodes`' comment to cover computeds and effects with the next related `asyncs.ts` source change; do not spend a performance round on comment-only residue.
 - Rename private `invalidateComputed` only with the next related `graph.ts` source change; it now invalidates computeds and schedules effects, so its name no longer covers the full mechanism.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
-## Current priority after the fused-effect rewrite
+## Current priority by concept convergence
 
-10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
+1. Remove the last internal `untracked(() => ...)` adapter from `Computed.peek()`. Retry the direct base refresh and unwrap after the one-clock/layout change; retain clean, dirty, stale-suspended, tracked-get, and atom controls, and add no mode/helper/state.
+2. Delete the redundant `Flag.Watching` kind bit now that `WatchRender` and `WatchRunEffect` exhaust watcher identity. Retry the exact Round 103 model with its focused tier falsifier, seven modes, and current bytecode pins.
+3. Move `draftRevisionByAtom` into canonical `RebaseLog`, with an absent log meaning revision zero. The one-clock rewrite is the natural retry point for Round 48; retain log deletion/recreation, ABA, and world-certificate coverage.
+4. Converge effect rerun cleanup and final-disposal release only if one non-allocating two-caller mechanism deletes repeated child/cleanup work while preserving child-before-parent order, complete sibling disposal, self-disposal, poisoning, tracing, dependency unlink timing, and the first thrown object.
+5. Replace the internal ambient-state getter wrappers with ESM live bindings while retaining the public `getActiveTracer()` function. Retry the exact Round 50 three-binding model with atom-get, latest/world-computed, and write controls.
+6. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
+7. Replace `RenderedResolution.live` with the private `NO_IDS` identity. Retry the exact Round 98 design with direct hydration, first mount, held render, empty-world, repair, and resolved-runtime coverage.
+8. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
 
 ## Other unmeasured broader leads
 
 - Remove `draftEvaluate`'s per-evaluation `worldUse` closure and captured suspension cell only if one saved/restored ambient suspension owner is clearer and allocation-free under nested/reentrant evaluation; keep the Round 37 synchronous, fulfilled, suspension, and error controls.
-- Reuse `Draft.world` for one-live-draft `worldOf` results instead of rebuilding an equivalent world object; first prove signature, identity, render-lane, retirement, and memo semantics against the Round 67 controls.
 - Move world-memo ownership off every producer only if a module-level weak owner preserves quiescent sweeping and collection while deleting the per-node field and global strong sweep list; keep construction, retained-heap, finalization, and GC controls.
+- Specialize atom world memos only if direct revision/value fields reduce net types, branches, and code while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior; do not add a parallel memo representation for speed alone.
 - Avoid allocating a computed world state that equality immediately replaces with the prior state; preserve error/suspension identity, custom equality, trace order, and world memo stability.
 - Encode dependency-link membership in an existing detached pointer sentinel only if promotion, trimming, disposal, and GC invariants remain direct; retry the Round 19 narrow/wide lifecycle and dynamic-tracking controls.
 - Specialize the lane-pump protocol now that only after-paint is host-configurable; delete sync/before-paint impossible pump fields and the stale defensive before-paint pre-drain only if nested drains, hidden/headless hosts, and total lane order remain exact.
@@ -29,30 +35,22 @@ condition still leaves a useful direction.
 - Lazily allocate a thenable's parked-node and parked-suspension Sets on first membership; preserve invalidate-before-resolve ordering, mixed base/world consumers, throwing settlement, and collection.
 - Move node and draft causal storage into tracer-owned weak state only if detached execution loses `causeEvent`, `openEvent`, and `lastWriteEvent` fields/stores while queued delivery, late wakes, session replacement, and GC remain exact.
 - Unify the tracer's root and suspension object-ID allocators only if semantic numbering remains stable; this is attached-tracer-only cleanup, not a runtime-path round.
-- Beyond Round 86's direct settlement binding, let settled world memos invalidate from their own `Suspension` state only if the global settlement clock and installer both disappear while sequential and nested suspension chains still invalidate before the clock fast path.
 - Cache `latestWorld()` by live-draft membership only if open, retire, and discard remain its sole invalidators, creation order stays exact, and dead `Draft` records are released immediately.
-- Converge effect rerun cleanup and final-disposal release only if one non-allocating mechanism preserves child-before-parent order, complete sibling disposal, self-disposal, poisoning, tracing, and the first thrown object.
-- Give the three Royale adapters one shared autorun shim and the four playground bridges one shared legacy split-effect composer; both utilities have multiple callers, but keep conformance and measurement surfaces frozen while extracting them.
+- Give `alt-a.ts`, `alt-b.ts`, and `cosignals.ts` one shared legacy split-effect composer; `solid-react.ts` has a distinct root/effect owner, and the Royale adapters do not currently share more than one genuine autorun composition. Extract a utility only while it has multiple real callers.
 - Converge the render-notify double buffer with lane queue state only if nested delivery still cannot overwrite a buffer under iteration; this is a high-risk follow-up to per-lane reentrancy, not an independent first round.
 
 ## Recorded retry leads
 
-- Move `draftRevisionByAtom` into `RebaseLog`; retry the exact Round 48 model only under a stable control window.
-- Replace internal ambient-state getters with ESM live bindings; retry the exact Round 50 three-getter diff under a stable control window.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
-- Have `materializeAtom` return the materialized value; retry the exact Round 52 model only after a natural compiler/runtime change and with both eager and lazy controls.
 - Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
 - Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
 - Move Computed methods from own slots to a shared object-literal prototype; retry the exact Round 72 `__proto__` diff only after a natural compiler/runtime/layout change, keeping retained-size, no-GC construction, 1.2M pretenuring/subwindow, read, and Atom controls.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
-- Replace the mutable thenable-settlement installer with the direct ESM binding; retry the exact Round 86 semantic diff only after a natural layout/runtime change or separately stable suspension-control window, retaining both artifacts' pre/post manifests and all four frozen modes.
 - Remove render-watcher staleness and let `Scheduled` plus queue membership own pending notification; retry the exact Round 95 model only after a natural propagation-layout change, keeping first-cause base waves, latest-cause draft pokes, the 280-byte `propagateWave` pin, and both notification controls.
 - Direct-index tracer events from the private oldest-retained ID; retry the exact revised Round 97 diff only after a naturally stable core-control window, retaining the empty, wrapped, stopped, replacement-session, exposed-event-mutation, malformed-ID, and causal-chain falsifiers.
-- Replace `RenderedResolution.live` with the private `NO_IDS` identity; retry the exact Round 98 source plus direct hydration falsifier only after a natural runtime/layout change or a separately stable control protocol, retaining the resolved-runtime client probe and all first-mount, held-render, empty-world, hydration, and repair coverage.
 - Lazily allocate only `ThenableBox.parkedNodes` while keeping `parkedSuspensions` eager; start a fresh round rather than varying Round 99, and keep synchronous fulfillment/rejection, world-only pending, base pending/settlement, and suspension construction frozen as hard gates.
 - Use React's stable reducer dispatch as the root identity only after the commit handshake disappears or a broader commit-layout change already owns its active-root marker; retry the exact Round 100 design with the frozen host-transition mode as a hard gate, not by tuning the rejected ESM-binding shape.
-- Remove the redundant `Flag.Watching` kind bit only after a naturally stable core-control window; retry the exact Round 103 source, focused tier test, docs, seven modes, and provenance-bearing runner without source-shape variants.
 - Let `useValue`'s pending-draft Set also own the zero repair sentinel only after a natural representation/runtime change; retry the exact Round 104 design with mount and 100-write burst modes as hard gates, retaining the scalar boolean until then.
 - Restore the React transition slot directly to null only after a naturally stable React-control window; retry the exact Round 105 one-file diff with all three modes, callback mutation/throw invariants, sampler provenance, and an independent controller emission.
 - Let the before-paint lane request also own lifetime settlement only after a natural runtime/scheduling change; retry the exact Round 107 source, docs, focused suite, and five modes without adding another token, callback, or ordering representation.
@@ -79,7 +77,10 @@ condition still leaves a useful direction.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
 - Package and root-harness conformance adapters share one test-only handle and computed-write policy owner; the root adapter only overrides its result slug.
 - Private `ErrorBox` class identity owns error branding; the duplicate `WeakSet`, factory, and accidental public type/guard exports are gone.
-- Computed pendingness traverses current dependencies and early-exits through canonical atom rebase logs; it no longer constructs an exact draft-id list for a boolean answer, while atoms retain their direct fast path.
+- Computed pendingness and late-subscription repair share the one exact `draftsAffecting` closure walk; the former consumes only whether its returned ID list is empty, while atoms retain their direct fast path.
+- One `graphChangeClock` now owns base writes, draft activity, and thenable settlement; a base-change watermark preserves the narrower single-draft cutoff question, and the parallel draft clock plus settlement installer are gone.
+- `unwrapResolved` is the one resolved-state reader for values, errors, and suspension policy; the duplicate evaluation and read-site unwraps are gone, along with the zero-production-caller `currentDraftChange` and `isErrorBox` exports.
+- Settlement's graph-clock tick remains necessary: user code can catch the internal parked sentinel and publish a plain/error world memo that retains no `Suspension`, so suspension-owned invalidation would require another hidden dependency representation.
 - Thenable membership sets exist only while pending; settlement detaches and traverses them directly, terminal boxes retain no collections, and the first terminal callback wins.
 - Throwing settlement notifications still restore `currentCause` and release detached suspensions before the original notification error escapes; an unchanged noisy control cannot veto this supported-surface correctness fix.
 - One dynamically tracked `EffectNode` owns evaluation, dependencies, cleanup, delivery state, and children while sharing the computed evaluator; lane state owns delivery scheduling. The private computed, effect watcher, pinned link, observer tier, and propagation hop are gone.
