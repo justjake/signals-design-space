@@ -92,7 +92,7 @@ firing order (EF4).
 | META-HOLDSTYLE | page's declared holdStyle matches battery entry table | ?test=1 | all pass | `__store.holdStyle` | implemented |
 | META-ISOLATION | only the selected implementation's shim chunk is requested (session pin: chunk isolation) | all 5 pages, request log | all pass | request URL capture | implemented |
 | META-REGISTER | clean boot: register() succeeded, root rendered, zero pageerrors/console errors (session pin: registration exclusivity) | — | all pass | error budget | implemented |
-| META-CLOCK | 100ms clock ticks at rest; renders-committed advances | — | all pass | clock tile | implemented |
+| META-CLOCK | test-mode clock ticks at rest, pauses, and resumes; renders-committed advances | — | all pass | clock tile | implemented |
 
 ## B. Reads and tearing — RCC §3.1 (16 rows)
 

@@ -124,6 +124,23 @@ header p {
 #stat-consistency .now {
 	min-width: 10ch;
 }
+#stat-clock > span {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+#stat-clock .clock-toggle {
+	background: #161a24;
+	color: #9aa1b2;
+	border: 1px solid #2a3040;
+	padding: 2px 7px;
+	border-radius: 4px;
+	font: 11px ui-sans-serif, system-ui, sans-serif;
+	cursor: pointer;
+}
+#stat-clock .clock-toggle:hover {
+	color: #e8eaf0;
+}
 .now.is-pending {
 	color: #ffd479;
 }

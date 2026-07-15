@@ -64,7 +64,7 @@ export function storeWrite(page: Page, label: string, value: unknown): Promise<v
 
 // ---- clocks and liveness --------------------------------------------------------------
 
-/** True when the 100ms clock tile advances within `withinMs` — the cheapest liveness probe. */
+/** True when the 100 ms test-mode clock advances within `withinMs`. */
 export async function clockTicks(page: Page, withinMs = 2000): Promise<boolean> {
 	const before = await testidText(page, 'clock')
 	return page

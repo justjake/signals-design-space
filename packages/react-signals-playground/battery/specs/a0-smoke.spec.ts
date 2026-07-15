@@ -71,8 +71,16 @@ test('META-CLOCK: the urgent clock ticks at rest and committed renders advance',
 }) => {
 	await gotoApp(page, entry)
 	expect(await clockTicks(page), 'clock frozen at rest').toBe(true)
+	const toggle = page.locator('#stat-clock button')
+	await toggle.click()
+	const pausedAt = await testidText(page, 'clock')
+	await page.waitForTimeout(250)
+	expect(await testidText(page, 'clock'), 'clock advanced while paused').toBe(pausedAt)
+	await expect(toggle).toHaveText('resume')
+	await toggle.click()
+	expect(await clockTicks(page), 'clock did not resume').toBe(true)
 	// The clock deliberately never feeds the committed-render tally (app
-	// design: 10 commits/s would drown the interaction signal), so drive a
+	// design: the test cadence would drown the interaction signal), so drive a
 	// tallied component — the controls strip — to see the tally move.
 	const before = Number(await testidText(page, 'renders-committed'))
 	await page.getByTestId('increment').click()

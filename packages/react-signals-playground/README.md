@@ -24,7 +24,7 @@ A transitions lab shaped like a tiny browser, shared verbatim by every entry. Ev
 
 - The mini-browser: back/forward over an inner history stack, a virtual address bar that shows the target route with a loading shimmer while the navigation is pending, bookmarks for the three pages (dashboard / table / detail), and a page area that keeps the previous view — dimmed — until the new one commits.
 - The lab panel: a navigation-latency knob (instant / 250 ms / 1 s / 3 s / hold) controlling when each navigation's data resolves — "hold" parks it until the RELEASE button — and a separate row-work knob for sync render weight (hash rounds per derived table row).
-- An urgent controls strip — counter, evens toggle, live table filter, add/remove rows — plus a 100 ms clock tile; all must keep committing while a navigation is held open.
+- An urgent controls strip — counter, evens toggle, live table filter, add/remove rows — plus a pausable 10 s clock tile; all must keep committing while a navigation is held open. The browser battery speeds the clock up to 100 ms in test mode so it remains a practical liveness probe.
 - A transition timeline: the live navigation grows a bar in real time, urgent commits that land inside the pending window drop amber ticks onto it, and the last five navigations keep their duration + interleave count.
 - A HUD of stat tiles: implementation name, committed route, transition pending, last navigation duration, committed-render tally, and a consistency verdict that compares independently subscribed signal reads within one render (`TORN` means a committed frame mixed two write generations).
 - A red error strip (≤5 lines) for page errors and torn commits; empty means healthy.

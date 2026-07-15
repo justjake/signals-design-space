@@ -39,9 +39,12 @@ const parity = createComputed(() => (count.state % 2 === 0 ? 'even' : 'odd'), 'p
 // The urgent clock: an interval-driven signal. Its continued ticking while a
 // transition is held open is direct visual proof the committed tree stays
 // live and keeps committing urgent updates.
-const CLOCK_TICK_MS = 100
-const clockMs = createAtom(0, 'clockMs')
-window.setInterval(() => clockMs.set(Math.round(performance.now())), CLOCK_TICK_MS)
+const CLOCK_TICK_MS = TEST_MODE ? 100 : 10_000
+const clockMs = createAtom(Math.round(performance.now()), 'clockMs')
+let clockTimer = window.setInterval(
+	() => clockMs.set(Math.round(performance.now())),
+	CLOCK_TICK_MS,
+)
 
 // ---- inner navigation (the mini-browser) -------------------------------------------
 // Every navigation gets a fresh epoch. The target pair is written urgently
@@ -400,8 +403,8 @@ window.addEventListener('unhandledrejection', (event) =>
 // effect in each section component counts committed renders and never counts
 // discarded speculative passes. The tile updates imperatively: routing the
 // tally through a signal would re-render the tree the tally measures. The
-// clock deliberately does not tally — 10 commits/s would drown the
-// interaction signal this tile exists to show.
+// clock deliberately does not tally — its faster test-mode cadence would
+// drown the interaction signal this tile exists to show.
 
 let committedRenders = 0
 let committedRendersEl: HTMLElement | null = null
@@ -479,14 +482,33 @@ function Stat(props: { id: string; label: string; children: React.ReactNode }): 
 	)
 }
 
-/** Its own component so the 10 Hz clock re-renders this tile alone, not the panel. */
+/** Its own component so clock ticks re-render this tile alone, not the panel. */
 function ClockTile(): React.ReactElement {
 	const now = useSignal(clockMs)
+	const [paused, setPaused] = React.useState(false)
 	return (
 		<Stat id="stat-clock" label="urgent clock">
 			<span className="now" data-testid="clock">
 				{(now / 1000).toFixed(1)}s
 			</span>
+			<button
+				type="button"
+				className="clock-toggle"
+				onClick={() => {
+					if (paused) {
+						clockMs.set(Math.round(performance.now()))
+						clockTimer = window.setInterval(
+							() => clockMs.set(Math.round(performance.now())),
+							CLOCK_TICK_MS,
+						)
+					} else {
+						window.clearInterval(clockTimer)
+					}
+					setPaused(!paused)
+				}}
+			>
+				{paused ? 'resume' : 'pause'}
+			</button>
 		</Stat>
 	)
 }
@@ -1010,7 +1032,7 @@ function TimelineBar(props: {
 	)
 }
 
-/** Its own component: the 10 Hz clock grows only the live bar, not the history. */
+/** Its own component: clock ticks grow only the live bar, not the history. */
 function TimelineLiveBar(): React.ReactElement | null {
 	const record = useSignal(activeNav)
 	const now = useSignal(clockMs)

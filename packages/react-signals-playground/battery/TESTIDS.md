@@ -14,7 +14,7 @@ Everything in the "testkit" sections exists only when the page URL carries
 | --- | --- | --- |
 | impl-name | span | shim `name` — page identity |
 | impl-tab-`<label>` | a | implementation tab links |
-| clock | span | 100ms urgent clock (liveness probe) |
+| clock | span | urgent clock (100 ms in test mode, 10 s otherwise) |
 | view-name / view-target | span | committed route / pending target |
 | pending | span | `yes`/`no` — app-derived transition-pending flag |
 | last-nav-ms | span | last settled navigation duration (effect-written; may lag one commit) |
