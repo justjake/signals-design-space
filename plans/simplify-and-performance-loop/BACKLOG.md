@@ -14,8 +14,7 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Make `flushScheduledEffects` a direct graph re-export, deleting its import-only local binding while preserving identity, declaration output, and the exact public export list.
-2. Specialize lane pump state now that only after-paint is host-configurable; delete impossible sync/before-paint pump ownership and generic selection only if nested drains, reset, total lane order, and hidden/headless hosts remain exact.
+1. Specialize lane pump state now that only after-paint is host-configurable; delete impossible sync/before-paint pump ownership and generic selection only if nested drains, reset, total lane order, and hidden/headless hosts remain exact.
 
 ## Other unmeasured broader leads
 
@@ -76,6 +75,7 @@ condition still leaves a useful direction.
 - Tracer ring `head` plus `size` own occupancy; private slots are non-optional and `events()`/`find()` no longer defend against impossible holes.
 - Root and suspension trace IDs share one two-caller allocation mechanism while retaining two weak owners and separate fixed per-session numbering.
 - Public effect-scope, batch, start/end-batch, and untracked controls are direct graph re-exports; their five local runtime alias bindings are gone.
+- Public `flushScheduledEffects` is a direct graph re-export; its import-only local binding and separate export are gone.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
