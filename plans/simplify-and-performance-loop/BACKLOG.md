@@ -14,8 +14,9 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Have `materializeAtom` return the installed/current value so `peekAtom`, `readAtom`, and `writeAtom` stop rereading it. Retry the exact Round 52 model with eager and lazy first-read controls and no source-shape variants.
-2. Converge internal world construction around canonical `Draft[]`: reuse `Draft.world` for a single live draft and derive multi-draft signatures from the records. Keep React's `DraftId[]` boundary distinct and retain all twelve Round 67 constructor/consumer/control modes.
+No exact retry is currently unblocked. Select the next round from the broader
+leads only when one coherent owner or representation can disappear without an
+additional adapter or policy branch.
 
 ## Other unmeasured broader leads
 
@@ -40,8 +41,9 @@ condition still leaves a useful direction.
 - Move `draftRevisionByAtom` into `RebaseLog` only after a natural runtime/world-layout change; retry the exact Round 111 source plus complete-lifetime ABA falsifier and all five modes, without tombstones, retained empty logs, or an atom field.
 - Converge effect-run release only after a broader effect-lifetime change removes first-error aggregation from successful child-release reruns; retain Round 112's six modes and thrown-`undefined`, sibling, ordering, poisoning, tracing, and unlink falsifiers without options/callbacks/results.
 - Delete `RenderedResolution.live` only after a natural React/runtime layout change; retry the exact Round 114 three-file diff with direct hydration, first mount, held render, empty-world, repair, resolved-runtime coverage, and all four frozen modes. Do not vary the sentinel representation or resample the stable rerender regression.
+- Have `materializeAtom` return the installed/current value only after a natural compiler/runtime/layout change; retry the exact Round 115 source and custom-equality falsifier with all seven frozen modes. Do not tune the return expression or resample the eager-first-read regression.
 - Remove the world equality fallback only after a natural compiler/runtime/layout change; do not source-shape-tune the Round 43 deletion.
-- Build both multi-draft world keys from canonical `Draft[]` and delete `latestWorld`'s parallel ID array; retry the exact Round 67 `worldFromDrafts` plus materialized-signature diff only after a natural compiler/runtime/layout change, keeping all 12 frozen modes.
+- Build both multi-draft world keys from canonical `Draft[]`, reuse `Draft.world` for singleton `worldOf`, and delete `latestWorld`'s parallel ID array only after a natural compiler/runtime/layout change; retry the exact Round 116 diff with all 13 frozen modes. Do not vary signature materialization or resample the stable multi-draft regressions.
 - Select rebased draft audiences from canonical `liveDrafts` plus `Draft.atoms`, deleting the intent scan and temporary Set; retry the exact Round 69 diff only after a natural compiler/runtime/layout change, keeping the sparse unrelated-draft mode as a hard gate.
 - Move Computed methods from own slots to a shared object-literal prototype; retry the exact Round 72 `__proto__` diff only after a natural compiler/runtime/layout change, keeping retained-size, no-GC construction, 1.2M pretenuring/subwindow, read, and Atom controls.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
