@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
-import { causeRows, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
+import { causeRows, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
 
 const LIMIT = 1000
@@ -261,7 +261,7 @@ export function LogView({
 											</td>
 											<NameCell row={r} guides={null} onName={() => r.node !== null && inspect(r.node)} onCause={() => setSelected(r.cause)} />
 											<td className="data">{r.summary}</td>
-											<td className="took" />
+											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
 									))
 								: treeRows!.map((t) => (
@@ -285,7 +285,7 @@ export function LogView({
 												onCause={() => setSelected(t.row.cause)}
 											/>
 											<td className="data">{t.row.summary}</td>
-											<td className="took" />
+											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>
 									))}
 							{rows.length === 0 ? (

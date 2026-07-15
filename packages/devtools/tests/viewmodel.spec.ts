@@ -30,6 +30,11 @@ describe('panel view-model', () => {
 			const compute = rows.find((r) => r.kind === 'compute' && r.name === 'doubled')!
 			expect(compute).toBeDefined()
 			expect(compute.cls).toBe('compute')
+			// A compute is a span: it closes with a duration the collector timed.
+			expect(compute.took).not.toBeNull()
+			expect(compute.took!).toBeGreaterThanOrEqual(0)
+			// A write is instantaneous — no span, no duration.
+			expect(write.took).toBeNull()
 
 			// Node rows for the graph view.
 			const nrows = nodeRows(collector, '', 50)

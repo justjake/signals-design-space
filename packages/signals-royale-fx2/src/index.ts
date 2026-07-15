@@ -40,7 +40,7 @@ import {
 	resetEffectLanes,
 	runUpdater,
 	untracked as graphUntracked,
-	traceHook,
+	emitEvent,
 	writeAtom,
 } from './graph.ts'
 import {
@@ -439,8 +439,8 @@ export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 	try {
 		next = runUpdater(fn, previous)
 	} catch (error) {
-		if (traceHook !== null) {
-			traceHook('callback-error', activeEvaluation, currentCause, { error, phase: 'updater' })
+		if (emitEvent !== null) {
+			emitEvent('callback-error', activeEvaluation, currentCause, { error, phase: 'updater' })
 		}
 		throw error
 	}

@@ -36,7 +36,7 @@ import {
 	startBatch,
 	endBatch,
 	tickGraphChange,
-	traceHook,
+	emitEvent,
 } from './graph.ts'
 
 /** Settlement state recorded for a tracked thenable. */
@@ -139,11 +139,11 @@ export function makeSuspension(): Suspension {
 			}
 			ep.resolve = null
 			resolveRaw()
-			if (traceHook !== null) {
+			if (emitEvent !== null) {
 				// The suspension promise is now fulfilled. React may retry because
 				// of that fact, but the engine does not observe when it schedules or
 				// which later render is that retry.
-				traceHook('retry', null, cause, { suspension: ep })
+				emitEvent('retry', null, cause, { suspension: ep })
 			}
 		},
 	}
@@ -186,8 +186,8 @@ function settle(
 	box.status = status
 	box.result = result
 	const cause =
-		traceHook !== null
-			? traceHook('settle', null, NO_EVENT, {
+		emitEvent !== null
+			? emitEvent('settle', null, NO_EVENT, {
 					status: box.status,
 					error: box.status === 'rejected' ? box.result : undefined,
 				})
@@ -249,8 +249,8 @@ export function baseUse(
 			? (consumer.throwable as Suspension)
 			: makeSuspension()
 	box.parkedSuspensions!.add(suspension)
-	if (traceHook !== null) {
-		traceHook('compute-suspend', consumer, currentCause, { suspension })
+	if (emitEvent !== null) {
+		emitEvent('compute-suspend', consumer, currentCause, { suspension })
 	}
 	consumer.throwable = suspension
 	consumer.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended

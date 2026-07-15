@@ -16,8 +16,8 @@
 // them so consumers import only `signals-royale-fx2/debug`, never core.
 export { Tracer, attachTracer, getActiveTracer } from '../tracer.ts'
 export type { TraceEvent, TracerOptions } from '../tracer.ts'
-export { setTraceHook, NO_EVENT } from '../graph.ts'
-export type { TraceFn, TraceFields, TraceEventId } from '../graph.ts'
+export { setTracer, NO_EVENT } from '../graph.ts'
+export type { TraceSink, EmitFn, EndSpanFn, TraceFields, SpanEndAttrs, TraceEventId } from '../graph.ts'
 
 /**
  * The canonical trace vocabulary: every string fx2 actually emits today,

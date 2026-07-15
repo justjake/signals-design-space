@@ -82,7 +82,9 @@ import {
 	startBatch,
 	endBatch,
 	tickGraphChange,
-	traceHook,
+	emitEvent,
+	startSpan,
+	endSpan,
 	writeAtom,
 } from './graph.ts'
 import {
@@ -194,7 +196,7 @@ export function openDraft(): Draft {
 		world: { drafts, sig: String(id) },
 		atoms: new Set(),
 		openEvent:
-			traceHook !== null ? traceHook('transition-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
+			emitEvent !== null ? emitEvent('transition-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)
@@ -228,8 +230,8 @@ export function appendDraftIntent(
 	draft.atoms.add(atom)
 	draftRevisionByAtom.set(atom, tickGraphChange())
 	let cause: TraceEventId = NO_EVENT
-	if (traceHook !== null) {
-		cause = draft.lastWriteEvent = traceHook(kind, atom, draft.openEvent, {
+	if (emitEvent !== null) {
+		cause = draft.lastWriteEvent = emitEvent(kind, atom, draft.openEvent, {
 			draftId: draft.id,
 		})
 		atom.causeEvent = cause
@@ -326,8 +328,8 @@ function applyIntent(atom: AtomNode<unknown>, value: unknown, intent: Intent): u
 			// A single-draft cutoff is advisory and swallows this replay below.
 			// Ordinary reads and retirement propagate it, so only those observed
 			// callback failures enter the trace.
-			if (cutoffWorld === null && traceHook !== null) {
-				traceHook('callback-error', atom, currentCause, { error, phase: 'updater' })
+			if (cutoffWorld === null && emitEvent !== null) {
+				emitEvent('callback-error', atom, currentCause, { error, phase: 'updater' })
 			}
 			throw error
 		}
@@ -353,8 +355,8 @@ export function retireDraft(id: DraftId): void {
 	draft.state = 'retired'
 	tickGraphChange()
 	const evt =
-		traceHook !== null
-			? traceHook(
+		emitEvent !== null
+			? emitEvent(
 					'transition-retire',
 					null,
 					draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
@@ -394,8 +396,8 @@ export function discardDraft(id: DraftId): void {
 	draft.state = 'discarded'
 	tickGraphChange()
 	const evt =
-		traceHook !== null
-			? traceHook('transition-discard', null, draft.openEvent, { draftId: id })
+		emitEvent !== null
+			? emitEvent('transition-discard', null, draft.openEvent, { draftId: id })
 			: NO_EVENT
 	for (const atom of draft.atoms) {
 		draftRevisionByAtom.set(atom, currentGraphChange())
@@ -806,7 +808,7 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		certificate.count = 1
 		clearInactiveCertificateEntries(certificate, previousCount)
 		fresh = { flags: 0, value: replayLog(atom, world) }
-	} else if (traceHook === null) {
+	} else if (startSpan === null) {
 		fresh = draftEvaluate(node as ComputedNode<unknown>, world, memo?.state, certificate)
 	} else {
 		const previousState = memo?.state
@@ -814,7 +816,7 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 		for (const draft of world.drafts) {
 			computeWorld.push(draft.id)
 		}
-		const compute = traceHook('compute', node, node.causeEvent, { world: computeWorld })
+		const compute = startSpan('compute', node, node.causeEvent, { world: computeWorld })
 		const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 		try {
 			fresh = draftEvaluate(
@@ -828,18 +830,21 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
 				setCurrentCause(prevCause)
 			}
 		}
-		if (traceHook !== null) {
+		if (emitEvent !== null) {
 			if ((fresh.flags & Flag.AsyncSuspended) !== 0) {
-				traceHook('compute-suspend', node, compute, {
+				emitEvent('compute-suspend', node, compute, {
 					suspension: fresh.throwable as Suspension,
 					world: computeWorld,
 				})
 			} else if ((fresh.flags & Flag.AsyncError) !== 0 && fresh !== previousState) {
-				traceHook('compute-error', node, compute, {
+				emitEvent('compute-error', node, compute, {
 					error: (fresh.throwable as ErrorBox).error,
 					world: computeWorld,
 				})
 			}
+		}
+		if (compute !== NO_EVENT && endSpan !== null) {
+			endSpan(compute)
 		}
 	}
 	// Keep the previous state record when the fresh resolution is

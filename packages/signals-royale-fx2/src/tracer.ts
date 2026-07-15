@@ -14,7 +14,7 @@ import {
 	type TraceEventId,
 	type TraceFields,
 	NO_EVENT,
-	setTraceHook,
+	setTracer,
 } from './graph.ts'
 
 /** One entry in the tracer's ring. */
@@ -192,7 +192,7 @@ export class Tracer {
 		this.stopped = true
 		if (activeTracer === this) {
 			activeTracer = null
-			setTraceHook(null)
+			setTracer(null)
 		}
 	}
 }
@@ -207,7 +207,11 @@ export function attachTracer(opts?: TracerOptions): Tracer {
 	activeTracer?.stop()
 	const tracer = new Tracer(opts)
 	activeTracer = tracer
-	setTraceHook((kind, node, cause, data) => tracer.emit(kind, node, cause, data))
+	// The built-in tracer records every entry the same way; a span open is just
+	// another recorded event, and it doesn't time spans, so it needs no endSpan.
+	const emit = (kind: string, node: ReactiveNode | null, cause: TraceEventId, data?: TraceFields) =>
+		tracer.emit(kind, node, cause, data)
+	setTracer({ emitEvent: emit, startSpan: emit })
 	return tracer
 }
 

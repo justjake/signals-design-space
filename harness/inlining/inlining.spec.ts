@@ -48,7 +48,10 @@ const FX2_BYTECODE_BUDGETS: Record<string, number> = {
 	writeAtom: 160,
 	runEffectCleanup: 160,
 	scheduleWatcher: 210,
-	runHandler: 240,
+	// +10 for the endSpan close that brackets the effect run (startSpan on
+	// open, endSpan in finally) so a consumer can time the span; 260 stays far
+	// below the inline limit.
+	runHandler: 260,
 	trackRead: 260,
 	propagateWave: 280,
 	flush: 330,
@@ -185,19 +188,22 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Nod
 	// The evaluation owner (dependency re-tracking, tracing, the inlined
 	// plain-value settle tail, the self-affecting stamp discipline). Callers
 	// pay one call per actual recomputation, so being out of line is
-	// tolerable — but the pin keeps further growth explicit.
-	test('recompute pinned at 590 (over the inline limit)', () => {
+	// tolerable — but the pin keeps further growth explicit. +31 for the
+	// endSpan close that brackets the compute (startSpan on open, endSpan with
+	// the changed outcome after) so a consumer can time it and show new/same.
+	test('recompute pinned at 640 (over the inline limit)', () => {
 		const size = bytecodeLength(script, 'recompute')
-		expect(size).toBeLessThanOrEqual(590)
+		expect(size).toBeLessThanOrEqual(640)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
 	// Draft-world tracing emits compute, suspension, error, and world identity
 	// events here. The untraced branch bypasses that work; this owner was
 	// already deliberately over the inline limit before tracing was added.
-	test('resolveState pinned at 1129 (over the inline limit)', () => {
+	// +11 for the endSpan close that brackets the draft compute.
+	test('resolveState pinned at 1150 (over the inline limit)', () => {
 		const size = bytecodeLength(worldScript, 'resolveState')
-		expect(size).toBeLessThanOrEqual(1129)
+		expect(size).toBeLessThanOrEqual(1150)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 })

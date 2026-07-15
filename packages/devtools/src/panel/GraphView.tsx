@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
-import { inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 
@@ -252,6 +252,7 @@ export function GraphView({
 												<span className={`chip ${r.cls}`}>{r.kind}</span>
 											</td>
 											<td className="data">{r.summary || (r.cause > 0 ? `cause #${r.cause}` : '')}</td>
+											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
 									))}
 									{drawer.length === 0 ? (
@@ -303,7 +304,10 @@ export function GraphView({
 							<h3>Evaluation</h3>
 							<div className="kv">
 								<span className="k">last event</span>
-								<span className="v">{model.last ? `#${model.last.id} ${model.last.kind}` : '—'}</span>
+								<span className="v">
+									{model.last ? `#${model.last.id} ${model.last.kind}` : '—'}
+									{model.last && model.last.took !== null ? ` · ${fmtTook(model.last.took)}` : ''}
+								</span>
 								<span className="k">recomputes</span>
 								<span className="v">{model.node.recomputes}</span>
 								<span className="k">status</span>

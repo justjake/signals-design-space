@@ -18,7 +18,7 @@ import {
 	NO_EVENT,
 	type ReactiveNode,
 	type ProducerNode,
-	setTraceHook,
+	setTracer,
 	subs as fx2Subs,
 	type TraceEventId,
 	type TraceFields,
@@ -142,7 +142,9 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 
 	const collector = new Collector(provider, opts)
 
-	setTraceHook((kind, node, cause, fields?: TraceFields): TraceEventId => {
+	// emitEvent (points) and startSpan (compute/effect opens) both record an
+	// entry the same way; endSpan closes a span so the collector can time it.
+	const emit = (kind: string, node: ReactiveNode | null, cause: TraceEventId, fields?: TraceFields): TraceEventId => {
 		const nodeIdNum = node !== null ? register(node) : null
 		const nodeKind = node !== null ? kindOf(node) : undefined
 		const data = fields !== undefined ? fieldsToData(fields) : {}
@@ -159,8 +161,12 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 				lastValue.set(nodeIdNum, next)
 			}
 		}
-		const id = collector.record(kind, nodeIdNum, cause as unknown as number, nodeKind, data)
-		return id as unknown as TraceEventId
+		return collector.record(kind, nodeIdNum, cause as unknown as number, nodeKind, data) as unknown as TraceEventId
+	}
+	setTracer({
+		emitEvent: emit,
+		startSpan: emit,
+		endSpan: (id, attrs) => collector.endSpan(id as unknown as number, attrs?.changed),
 	})
 
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
@@ -169,7 +175,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 	return {
 		collector,
 		detach() {
-			setTraceHook(null)
+			setTracer(null)
 			if (g.__SIGNALS_DEVTOOLS__ === collector) g.__SIGNALS_DEVTOOLS__ = undefined
 		},
 	}

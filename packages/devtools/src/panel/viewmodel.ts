@@ -31,6 +31,8 @@ export interface LogRow {
 	/** µs since attach. */
 	t: number
 	cause: number
+	/** Duration in µs, where the entry is a closed span (compute/effect). */
+	took: number | null
 }
 
 function nodeName(backend: Backend, id: number | null): string | null {
@@ -45,6 +47,8 @@ function summarize(e: DevtoolsEvent): string {
 	if (typeof d.error === 'string') return d.error
 	// A write carries a value diff (previewed strings from the adapter).
 	if (typeof d.next === 'string') return typeof d.prev === 'string' ? `${d.prev} → ${d.next}` : `→ ${d.next}`
+	// A closed compute reports whether its result changed.
+	if (typeof d.changed === 'boolean') return d.changed ? 'new result' : 'same result'
 	const parts: string[] = []
 	if (typeof d.phase === 'string') parts.push(d.phase)
 	if (typeof d.status === 'string') parts.push(d.status)
@@ -62,6 +66,7 @@ function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
 		summary: summarize(e),
 		t: e.t,
 		cause: e.cause,
+		took: typeof e.data.took === 'number' ? e.data.took : null,
 	}
 }
 
@@ -72,6 +77,13 @@ export function logRows(backend: Backend, filter: EventFilter, limit: number): L
 /** The cause chain leading to `eventId`, resolved to rows, root first. */
 export function causeRows(backend: Backend, eventId: number): LogRow[] {
 	return backend.causeChain(eventId).map((e) => toRow(backend, e))
+}
+
+/** Compact µs/ms duration, or empty when no duration was recorded. */
+export function fmtTook(us: number | null): string {
+	if (us === null) return ''
+	if (us < 1000) return `${us}µs`
+	return `${(us / 1000).toFixed(us < 10000 ? 1 : 0)}ms`
 }
 
 /** A row in the causal tree: a log row plus its nesting depth and the guide

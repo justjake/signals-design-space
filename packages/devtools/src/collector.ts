@@ -119,6 +119,20 @@ export class Collector implements Backend {
 		return id
 	}
 
+	/**
+	 * Close a span opened by `record()`: stamp its duration (end − start, in µs)
+	 * from the collector's own clock, and record a compute's changed/unchanged
+	 * outcome. The engine emits the entry before the work runs and closes it
+	 * after; timing lives here, where the clock is. No-op if evicted.
+	 */
+	endSpan(id: number, changed?: boolean): void {
+		const e = this.byId.get(id)
+		if (e === undefined) return
+		e.data.took = Math.max(0, Math.round(this.now() - this.t0) - e.t)
+		if (changed !== undefined) e.data.changed = changed
+		this.scheduleFlush()
+	}
+
 	/** Drop a node's retained state when the adapter observes it was GC'd. */
 	forget(id: number): void {
 		const st = this.nodes.get(id)

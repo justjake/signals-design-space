@@ -258,18 +258,18 @@ export function currentBaseChange(): GraphChangeClock {
 // tracer.
 // ---------------------------------------------------------------------------
 
-/** Record one trace event and return its id, so the caller can pass it
- * on as the cause of downstream events. */
-export type TraceFn = (
+/** Emit one entry (or open a span) and return its id, so the caller can pass
+ * it on as the cause/parent of downstream entries. */
+export type EmitFn = (
 	kind: string,
 	node: ReactiveNode | null,
-	cause: TraceEventId,
-	fields?: TraceFields,
+	parent: TraceEventId,
+	attrs?: TraceFields,
 ) => TraceEventId
 
-/** Optional semantic identities and outcomes attached to a trace event.
- * The tracer converts object identities to stable numeric ids before it
- * stores the event. */
+/** Optional semantic identities and outcomes attached when an entry is emitted
+ * or a span is opened. The consumer converts object identities to stable
+ * numeric ids before it stores the entry. */
 export interface TraceFields {
 	root?: object
 	suspension?: object
@@ -280,9 +280,36 @@ export interface TraceFields {
 	world?: readonly DraftId[]
 }
 
-export let traceHook: TraceFn | null = null
-export function setTraceHook(fn: TraceFn | null): void {
-	traceHook = fn
+/** Outcome known only when a span closes. A compute reports whether its result
+ * changed; effects carry nothing. Duration is deliberately NOT here — the
+ * consumer owns the clock and times a span from its start/end calls. */
+export interface SpanEndAttrs {
+	changed?: boolean
+}
+export type EndSpanFn = (id: TraceEventId, attrs?: SpanEndAttrs) => void
+
+/**
+ * The engine's trace sink, shaped like a real tracing API:
+ *  - `emitEvent` records an instantaneous entry (a write, a notify, an error).
+ *  - `startSpan`/`endSpan` bracket durationful work (a compute, an effect);
+ *    every `startSpan` is matched by an `endSpan`, so there are no dangling
+ *    opens for a reader to chase.
+ * The engine does no timing — the consumer stamps start and end from its own
+ * clock. Installed as three module bindings so each emit site stays a direct
+ * null-checked call (no per-emit property load) on the hot path.
+ */
+export interface TraceSink {
+	emitEvent: EmitFn
+	startSpan: EmitFn
+	endSpan?: EndSpanFn
+}
+export let emitEvent: EmitFn | null = null
+export let startSpan: EmitFn | null = null
+export let endSpan: EndSpanFn | null = null
+export function setTracer(sink: TraceSink | null): void {
+	emitEvent = sink?.emitEvent ?? null
+	startSpan = sink?.startSpan ?? null
+	endSpan = sink?.endSpan ?? null
 }
 
 /** The id recorded when an operation has no known cause. */
@@ -580,8 +607,8 @@ export function flushLifetimeTransitions(): void {
 			try {
 				cleanup = atom.lifetime!(ctx)
 			} catch (error) {
-				if (traceHook !== null) {
-					traceHook('callback-error', atom, atom.causeEvent, {
+				if (emitEvent !== null) {
+					emitEvent('callback-error', atom, atom.causeEvent, {
 						error,
 						phase: 'on-observed',
 					})
@@ -596,8 +623,8 @@ export function flushLifetimeTransitions(): void {
 				try {
 					untracked(cleanup)
 				} catch (error) {
-					if (traceHook !== null) {
-						traceHook('cleanup-error', atom, atom.causeEvent, {
+					if (emitEvent !== null) {
+						emitEvent('cleanup-error', atom, atom.causeEvent, {
 							error,
 							phase: 'on-observed',
 						})
@@ -1139,8 +1166,8 @@ function drainLane(state: LaneState): void {
 			for (let i = start; i < end; i++) {
 				if (++guard > Limit.DrainRuns) {
 					const error = new Error('effect drain did not settle (cycle?)')
-					if (traceHook !== null) {
-						traceHook('flush-error', null, currentCause, { error, phase: 'cycle' })
+					if (emitEvent !== null) {
+						emitEvent('flush-error', null, currentCause, { error, phase: 'cycle' })
 					}
 					throw error
 				}
@@ -1285,8 +1312,8 @@ let writesForbidden: string | null = null
 function throwSignalAccessForbidden(kind: 'read' | 'write', reason: string): never {
 	const error =
 		kind === 'read' ? new SignalReadForbidden(reason) : new SignalWriteForbidden(reason)
-	if (traceHook !== null) {
-		traceHook('policy-error', activeEvaluation, currentCause, { error, phase: kind })
+	if (emitEvent !== null) {
+		emitEvent('policy-error', activeEvaluation, currentCause, { error, phase: kind })
 	}
 	throw error
 }
@@ -1341,8 +1368,8 @@ function materializeAtom<T>(atom: AtomNode<T>): void {
 		atom.value = init()
 	} catch (error) {
 		atom.initializer = init
-		if (traceHook !== null) {
-			traceHook('callback-error', atom, currentCause, { error, phase: 'initializer' })
+		if (emitEvent !== null) {
+			emitEvent('callback-error', atom, currentCause, { error, phase: 'initializer' })
 		}
 		throw error
 	} finally {
@@ -1382,7 +1409,7 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T, intent: 'set' | 'update
 	graphChangeClock++
 	baseChangedAtGraphChange = graphChangeClock
 	atom.changedAtGraphChange = graphChangeClock
-	const cause = traceHook !== null ? traceHook(intent, atom, currentCause) : NO_EVENT
+	const cause = emitEvent !== null ? emitEvent(intent, atom, currentCause) : NO_EVENT
 	propagateWave(atom.subs, cause)
 	if (batchDepth === 0) {
 		flush()
@@ -1426,7 +1453,7 @@ function recompute(node: EvaluatedNode<unknown>): void {
 	let hasError = false
 	let error: unknown
 	let value: unknown
-	const compute = traceHook !== null ? traceHook('compute', node, node.causeEvent) : NO_EVENT
+	const compute = startSpan !== null ? startSpan('compute', node, node.causeEvent) : NO_EVENT
 	const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 	try {
 		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
@@ -1436,8 +1463,8 @@ function recompute(node: EvaluatedNode<unknown>): void {
 		} else {
 			hasError = true
 			error = e
-			if (traceHook !== null) {
-				traceHook('compute-error', node, compute, { error: e })
+			if (emitEvent !== null) {
+				emitEvent('compute-error', node, compute, { error: e })
 			}
 		}
 	} finally {
@@ -1478,6 +1505,9 @@ function recompute(node: EvaluatedNode<unknown>): void {
 	node.flags =
 		(node.flags & ~Flag.StaleMask) | (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
 	node.validAtGraphChange = preGraphChange
+	if (compute !== NO_EVENT && endSpan !== null) {
+		endSpan(compute, { changed })
+	}
 }
 
 const chainNodes: Array<ComputedNode<unknown> | undefined> = []
@@ -1716,8 +1746,8 @@ function runEffectCleanup(w: EffectNode): void {
 		try {
 			untracked(c)
 		} catch (e) {
-			if (traceHook !== null) {
-				traceHook('cleanup-error', w, w.causeEvent, { error: e })
+			if (emitEvent !== null) {
+				emitEvent('cleanup-error', w, w.causeEvent, { error: e })
 			}
 			disposeEffect(w)
 			throw e
@@ -1738,16 +1768,16 @@ function runHandler(w: EffectNode): void {
 	// this run.
 	activeConsumer = null
 	activeEffectOwner = w
-	const trace = traceHook
-	const cause = trace !== null ? trace('effect', w, w.causeEvent) : NO_EVENT
+	const open = startSpan
+	const cause = open !== null ? open('effect', w, w.causeEvent) : NO_EVENT
 	const prevCause = setCurrentCause(cause)
 	try {
 		let ret: void | (() => void)
 		try {
 			ret = w.handler(value, previous)
 		} catch (error) {
-			if (traceHook !== null) {
-				traceHook('effect-error', w, cause, { error })
+			if (emitEvent !== null) {
+				emitEvent('effect-error', w, cause, { error })
 			}
 			throw error
 		}
@@ -1758,6 +1788,9 @@ function runHandler(w: EffectNode): void {
 		setCurrentCause(prevCause)
 		activeConsumer = prevConsumer
 		activeEffectOwner = prevOwner
+		if (cause !== NO_EVENT && endSpan !== null) {
+			endSpan(cause)
+		}
 	}
 }
 
@@ -1783,8 +1816,8 @@ function disposeEffect(w: EffectNode): void {
 			try {
 				untracked(c)
 			} catch (error) {
-				if (traceHook !== null) {
-					traceHook('cleanup-error', w, w.causeEvent, { error })
+				if (emitEvent !== null) {
+					emitEvent('cleanup-error', w, w.causeEvent, { error })
 				}
 				if (!failed) {
 					failed = true
@@ -1895,8 +1928,8 @@ export function makeScope(fn: () => void): () => void {
 			activeConsumer = prevConsumer
 		}
 	} catch (error) {
-		if (traceHook !== null) {
-			traceHook('callback-error', null, currentCause, { error, phase: 'scope' })
+		if (emitEvent !== null) {
+			emitEvent('callback-error', null, currentCause, { error, phase: 'scope' })
 		}
 		try {
 			disposeChildren(owner)
