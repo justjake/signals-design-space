@@ -7,14 +7,16 @@ condition still leaves a useful direction.
 
 ## Open leads
 
-- Correct comments and docs that still describe deleted `committed()` / per-root committed views, the removed requestAnimationFrame pump, two clocks, or multiple unwrap owners; remove implementation-history lore instead of documenting successive designs. Do not spend a performance round on comment-only residue.
+- Correct comments and docs that still describe deleted `committed()` / per-root committed views, the removed requestAnimationFrame pump, two clocks, multiple unwrap owners, or React installing plural paint-lane pumps; remove implementation-history lore instead of documenting successive designs. Do not spend a performance round on comment-only residue.
 - Correct `ThenableBox.parkedNodes`' comment to cover computeds and effects with the next related `asyncs.ts` source change; do not spend a performance round on comment-only residue.
 - Rename private `invalidateComputed` only with the next related `graph.ts` source change; it now invalidates computeds and schedules effects, so its name no longer covers the full mechanism.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
 ## Current priority by concept convergence
 
-1. Specialize lane pump state now that only after-paint is host-configurable; delete impossible sync/before-paint pump ownership and generic selection only if nested drains, reset, total lane order, and hidden/headless hosts remain exact.
+No exact new simplification is selected. Resurvey the accepted post-Round-124
+layout before promoting another broader lead; do not force a performance-only
+representation or reopen a recorded retry without its stated natural change.
 
 ## Other unmeasured broader leads
 
@@ -22,7 +24,6 @@ condition still leaves a useful direction.
 - Specialize atom world memos only if direct revision/value fields reduce net types, branches, and code while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior; do not add a parallel memo representation for speed alone.
 - Avoid allocating a computed world state that equality immediately replaces with the prior state; preserve error/suspension identity, custom equality, trace order, and world memo stability.
 - Encode dependency-link membership in an existing detached pointer sentinel only if promotion, trimming, disposal, and GC invariants remain direct; retry the Round 19 narrow/wide lifecycle and dynamic-tracking controls.
-- Specialize the lane-pump protocol now that only after-paint is host-configurable; delete sync/before-paint impossible pump fields and the stale defensive before-paint pre-drain only if nested drains, hidden/headless hosts, and total lane order remain exact.
 - Remove the per-render `RenderWorldNote` object only if scalar ambient owners plus a generation token preserve same-stack root handoff, suspended renders, and stale scheduled expiry.
 - Lazily allocate a thenable's parked-node and parked-suspension Sets on first membership; preserve invalidate-before-resolve ordering, mixed base/world consumers, throwing settlement, and collection.
 - Move node and draft causal storage into tracer-owned weak state only if detached execution loses `causeEvent`, `openEvent`, and `lastWriteEvent` fields/stores while queued delivery, late wakes, session replacement, and GC remain exact.
@@ -76,6 +77,7 @@ condition still leaves a useful direction.
 - Root and suspension trace IDs share one two-caller allocation mechanism while retaining two weak owners and separate fixed per-session numbering.
 - Public effect-scope, batch, start/end-batch, and untracked controls are direct graph re-exports; their five local runtime alias bindings are gone.
 - Public `flushScheduledEffects` is a direct graph re-export; its import-only local binding and separate export are gone.
+- Lane state owns only queue, cursor, and request state; before-paint schedules directly, and one scalar after-paint pump is the sole host-configurable scheduler owner.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
