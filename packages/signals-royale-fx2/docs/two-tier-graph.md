@@ -736,12 +736,13 @@ pair and moved watcher validation to drain sites; sections above describe
 the code at their own landing time. The mapping (full design:
 docs/effects.md):
 
-- `runWatcher`'s per-watcher validation loop is gone. Watchers hold one
-  pinned dependency (an effect's compute node; a subscription's observed
-  node) and never re-track; "did my inputs change" is answered by pulling
-  the compute (`ensureFresh`) and comparing its settled value against the
-  last value the handler received. `validAtGraphChange` now lives on
-  computeds only.
+- `runWatcher`'s per-watcher validation loop is gone. One dynamically
+  tracked `EffectNode` owns both its dependencies and delivery state while
+  sharing the computed evaluator. `ensureFresh` validates that node, then
+  the drain compares its settled value against the last value the handler
+  received. `validAtGraphChange` lives on both computeds and effects.
+- Only render-subscription watchers retain a pinned dependency: the node
+  they observe. They never re-track.
 - `WatchSchedule` and `makeScheduledEffect` (the React re-render handshake
   and its world-source twin watcher) are deleted. `effectQueue` became
   three lane queues (sync / before-paint / after-paint) drained two-phase:

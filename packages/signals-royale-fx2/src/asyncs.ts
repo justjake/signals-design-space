@@ -22,7 +22,7 @@
  */
 
 import {
-	type ComputedNode,
+	type EvaluatedNode,
 	type Flags,
 	type TraceEventId,
 	Flag,
@@ -49,7 +49,7 @@ export interface ThenableBox {
 	result: unknown
 	/** Computeds whose latest base-state evaluation parked on this thenable,
 	 * or null after settlement releases the membership owner. */
-	parkedNodes: Set<ComputedNode<unknown>> | null
+	parkedNodes: Set<EvaluatedNode<unknown>> | null
 	/** Suspensions (base-state or per-world) waiting on this thenable, or
 	 * null after settlement releases the membership owner. */
 	parkedSuspensions: Set<Suspension> | null
@@ -203,7 +203,7 @@ function settle(
 /** Handles use(t) inside a base-state evaluation. */
 export function baseUse(
 	t: PromiseLike<unknown>,
-	consumer: ComputedNode<unknown>,
+	consumer: EvaluatedNode<unknown>,
 ): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
@@ -232,7 +232,7 @@ export function baseUse(
 
 /** Fold a recompute's value, park, or throw into the node's async state. */
 export function finishCompute(
-	node: ComputedNode<unknown>,
+	node: EvaluatedNode<unknown>,
 	parked: boolean,
 	hasError: boolean,
 	error: unknown,

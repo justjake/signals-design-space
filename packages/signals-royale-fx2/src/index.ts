@@ -308,9 +308,9 @@ function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
 	}
 	const suspension = node.throwable as Suspension
 	const consumer = getActiveConsumer()
-	if (consumer !== null && (consumer.flags & Flag.KindComputed) !== 0) {
+	if (consumer !== null) {
 		// Pending forwards: park the evaluating computed on this suspension.
-		baseUse(suspension.promise, consumer as ComputedNode<unknown>)
+		baseUse(suspension.promise, consumer)
 	}
 	if (!isUninitialized(node.value)) {
 		return node.value as T
@@ -475,13 +475,17 @@ export interface EffectOptions<T> extends ComputedOptions<T> {
 }
 
 /**
- * An effect is two functions with different rules. `compute` is a real
- * computed: tracked dynamically, cached, cut off by equals, async-capable
- * through use(), handed its own previous value. `handler` runs untracked
- * with the compute's settled (value, previous-handled) pair when that
- * value changes, and may return a cleanup that runs before the next
- * handler run and at disposal. Reads inside the handler are deliberately
- * untracked — a value the effect should react to belongs in the compute.
+ * An effect is two functions with different rules. `compute` uses the same
+ * evaluator and semantics as a computed: it is tracked dynamically, cached,
+ * cut off by equals, async-capable through use(), and receives its previous
+ * value. Its evaluation state lives on the effect node, not a separate
+ * computed node.
+ *
+ * `handler` runs untracked with the compute's settled (value,
+ * previous-handled) pair when that value changes. It may return a cleanup
+ * that runs before the next handler run and at disposal. Reads inside the
+ * handler are deliberately untracked — a value the effect should react to
+ * belongs in the compute.
  *
  * The first run is synchronous at creation when the compute settles
  * immediately; a parked first evaluation fires its first handler at
@@ -499,7 +503,6 @@ export function effect<T>(
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	opts?: EffectOptions<T>,
 ): () => void {
-	const node = createComputed(compute, opts)
 	const schedule = opts?.schedule
 	const lane =
 		schedule === 'before-paint'
@@ -508,9 +511,11 @@ export function effect<T>(
 				? Lane.AfterPaint
 				: Lane.Sync
 	return makeEffect(
-		node as unknown as ComputedNode<unknown>,
+		compute as (use: UseFn, previous: unknown) => unknown,
 		handler as (value: unknown, previous: unknown) => void | (() => void),
 		lane,
+		opts?.equals as EqualsFn<unknown> | undefined,
+		opts?.label,
 	)
 }
 

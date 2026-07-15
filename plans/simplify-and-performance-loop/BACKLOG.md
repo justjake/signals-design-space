@@ -9,17 +9,17 @@ condition still leaves a useful direction.
 
 - Delete the zero-production-caller `currentDraftChange` and `isErrorBox` exports with the next related source change. The runtime call site that made the Round 64 brand deletion measurable disappeared with `useCommitted`; do not retain test-only production APIs.
 - Correct comments that still describe deleted `committed()` / per-root committed views or the removed requestAnimationFrame pump; do not spend a performance round on comment-only residue.
-- Delete `unwrapAsyncRead`'s now-vestigial `KindComputed` guard with the next `index.ts` source change; `getActiveConsumer()` now returns only `ComputedNode | null`.
+- Correct `ThenableBox.parkedNodes`' comment to cover computeds and effects with the next related `asyncs.ts` source change; do not spend a performance round on comment-only residue.
+- Rename private `invalidateComputed` only with the next related `graph.ts` source change; it now invalidates computeds and schedules effects, so its name no longer covers the full mechanism.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
-## Current priority after the split-effect rewrite
+## Current priority after the fused-effect rewrite
 
-2. Delete watcher staleness marks if falsification confirms `Scheduled` plus queue membership fully owns pending work. Current effect drains and render delivery clear watcher stale bits without reading them; keep computed visited-set behavior byte-for-byte.
+2. Delete render-watcher staleness marks if falsification confirms `Scheduled` plus render-queue membership fully owns pending notifications. Effects now consume staleness through the shared evaluator, so keep effect and computed staleness behavior byte-for-byte.
 3. Give each lane one reentrancy owner. First add a same-lane nested-drain falsifier for `flushScheduledEffects()` inside a cleanup/handler; only then replace the sync-only `flushing` owner if cursor and tail ownership remain exact.
 4. Let the before-paint microtask also settle lifetime transitions, deleting `lifetimeFlushScheduled` and its separate microtask only if activation ordering, StrictMode flaps, and `onObserved` writes remain exact.
 5. Merge `WatchDraft` into `WatchRender` if the current invariant remains true that every render subscriber is draft-aware and every effect is base-only; keep draft cutoff and pendingness coverage.
 6. Collapse the React commit-marker/rendered/committed handshake only if descendant layout ordering can make the committed stash canonical while preserving held transitions, aborted renders, hydration, silent folds, and late-subscription repair.
-7. Compare a smaller two-shape watcher design with fusing the private effect compute and watcher. The latter can delete one node, one pinned link, and one propagation hop, but must preserve async settlement, deferred equality, nested ownership, and lane ordering.
 8. After the commit handshake no longer needs mutable connection state, test using React's stable reducer dispatch as the root identity so the connection wrapper and provider `useMemo` can disappear without changing multi-root audience or tracer identity.
 9. Make `worldsReducer` allocate its draft-id array only when membership changes while still returning a fresh wrapper for a repeated live id, which deliberately restarts a transition render after later writes.
 10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
@@ -57,7 +57,7 @@ condition still leaves a useful direction.
 ## Completed or deliberately closed
 
 - Scope ownership and React root naming.
-- Each watcher now owns one permanent pinned `Link`; duplicate `compute`, copied `label`, watcher `depsTail`, and watcher-side dynamic tracking are gone. Watcher shape fell from 14 to 11 fields while cleanup self-disposal retains exact error and trace identity.
+- Render subscriptions alone own one permanent pinned `Link`; their dedicated watcher shape has six fields and no effect-only state.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
 - One dynamically traversed collection for `draftsAffecting`.
 - The stale `draftsAffecting` import in `index.ts` was removed; `react/host.ts` remains its real production consumer for late-subscription repair.
@@ -74,7 +74,7 @@ condition still leaves a useful direction.
 - Computed pendingness traverses current dependencies and early-exits through canonical atom rebase logs; it no longer constructs an exact draft-id list for a boolean answer, while atoms retain their direct fast path.
 - Thenable membership sets exist only while pending; settlement detaches and traverses them directly, terminal boxes retain no collections, and the first terminal callback wins.
 - Throwing settlement notifications still restore `currentCause` and release detached suspensions before the original notification error escapes; an unchanged noisy control cannot veto this supported-surface correctness fix.
-- Effects are a tracked private compute plus an untracked handler delivered by one lane watcher; the old React-owned scheduled-effect versions, dependency arrays, world-source watcher, and rerender handshake are gone.
+- One dynamically tracked `EffectNode` owns evaluation, dependencies, cleanup, delivery state, and children while sharing the computed evaluator; lane state owns delivery scheduling. The private computed, effect watcher, pinned link, observer tier, and propagation hop are gone.
 - `releaseDraft` owns dead-prefix folding and the zero-live log/world-memo sweep; retirement and discard no longer coordinate a repeated two-call teardown protocol.
 - Per-root committed worlds, container keys, `committed()`, and `useCommitted` are gone; base state is the only committed view while React connections carry pending render worlds.
 - Atoms and plain world memo records omit the impossible async payload; computed nodes retain their stable nullable slot, and async world records retain their ErrorBox or Suspension.

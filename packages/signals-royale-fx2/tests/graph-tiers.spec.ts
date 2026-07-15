@@ -13,6 +13,7 @@ import {
 	type AtomNode,
 	type ComputedNode,
 	type ConsumerNode,
+	type EffectNode,
 	type Link,
 	type ProducerNode,
 	Flag,
@@ -55,7 +56,7 @@ function syncEffect<T>(
 	handler: (value: T, previous: T | undefined) => void | (() => void) = () => {},
 ): () => void {
 	return makeEffect(
-		makeGraphComputed(read) as unknown as ComputedNode<unknown>,
+		read,
 		handler as (value: unknown, previous: unknown) => void | (() => void),
 		Lane.Sync,
 	)
@@ -150,46 +151,83 @@ describe('two-tier graph: promote validation', () => {
 })
 
 describe('two-tier graph: promote/demote structure', () => {
-	test('watchers retain only their one pinned dependency link', () => {
-		const computed = makeGraphComputed(() => 1)
+	test('an effect is the evaluated subscriber; a render watcher retains one pinned link', () => {
+		const effectSource = atom(1)
 		const stopEffect = makeEffect(
-			computed as unknown as ComputedNode<unknown>,
+			() => readAtom(effectSource),
 			() => {},
 			Lane.Sync,
 		)
-		const effectLink = computed.subs!
-		const effectWatcher = effectLink.sub
+		const effectLink = effectSource.subs!
+		const effectNode = effectLink.sub as EffectNode
 		const source = atom(1)
 		const stopSubscription = observeNode(source, () => {})
 		const subscriptionLink = source.subs!
 		const subscriptionWatcher = subscriptionLink.sub
 		try {
-			for (const [watcher, link] of [
-				[effectWatcher, effectLink],
-				[subscriptionWatcher, subscriptionLink],
-			] as const) {
-				expect(watcher.deps).toBe(link)
-				expect(Object.hasOwn(watcher, 'compute')).toBe(false)
-				expect(Object.hasOwn(watcher, 'depsTail')).toBe(false)
-				expect(Object.hasOwn(watcher, 'label')).toBe(false)
-				expect(Object.hasOwn(watcher, 'changedAtGraphChange')).toBe(false)
-				expect(Object.hasOwn(watcher, 'throwable')).toBe(false)
-				expect(Object.hasOwn(watcher, 'subs')).toBe(false)
-				expect(Object.hasOwn(watcher, 'subsTail')).toBe(false)
-				expect(Object.hasOwn(watcher, 'observerCount')).toBe(false)
-				expect(Object.hasOwn(watcher, 'worldMemos')).toBe(false)
-				expect(Object.hasOwn(watcher, 'validAtGraphChange')).toBe(false)
-			}
-			expect(Object.hasOwn(computed, 'changedAtGraphChange')).toBe(true)
-			expect(Object.hasOwn(computed, 'throwable')).toBe(true)
-			expect(Object.hasOwn(computed, 'subs')).toBe(true)
-			expect(Object.hasOwn(computed, 'subsTail')).toBe(true)
-			expect(Object.hasOwn(computed, 'observerCount')).toBe(true)
-			expect(Object.hasOwn(computed, 'worldMemos')).toBe(true)
+			expect(effectNode.deps).toBe(effectLink)
+			expect(effectLink.dep).toBe(effectSource)
+			expect(effectLink.nextSub).toBeUndefined()
+			expect(effectLink.nextDep).toBeUndefined()
+			expect(effectNode.flags & Flag.WatchRunEffect).toBe(Flag.WatchRunEffect)
+			expect(Object.hasOwn(effectNode, 'handler')).toBe(true)
+			expect(Object.hasOwn(effectNode, 'depsTail')).toBe(true)
+			expect(Object.hasOwn(effectNode, 'throwable')).toBe(true)
+			expect(Object.hasOwn(effectNode, 'subs')).toBe(false)
+			expect(Object.hasOwn(effectNode, 'subsTail')).toBe(false)
+			expect(Object.hasOwn(effectNode, 'observerCount')).toBe(false)
+			expect(Object.hasOwn(effectNode, 'worldMemos')).toBe(false)
+			expect(Object.hasOwn(effectNode, 'get')).toBe(false)
+			expect(Object.hasOwn(effectNode, 'peek')).toBe(false)
+
+			expect(subscriptionWatcher.deps).toBe(subscriptionLink)
+			expect(Object.hasOwn(subscriptionWatcher, 'handler')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'depsTail')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'label')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'changedAtGraphChange')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'throwable')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'subs')).toBe(false)
+			expect(Object.hasOwn(subscriptionWatcher, 'observerCount')).toBe(false)
 		} finally {
 			stopSubscription()
 			stopEffect()
 		}
+		expect(effectNode.deps).toBeUndefined()
+		expect(effectNode.depsTail).toBeUndefined()
+	})
+
+	test('a rerunning effect releases dependencies read after disposing itself', () => {
+		const beforeDispose = atom(0)
+		const afterDispose = atom(0)
+		let stop = () => {}
+		let runs = 0
+		stop = makeEffect(
+			() => {
+				runs++
+				const value = readAtom(beforeDispose)
+				if (value === 1) {
+					stop()
+					return value + readAtom(afterDispose)
+				}
+				return value
+			},
+			() => {},
+			Lane.Sync,
+		)
+		const effectNode = beforeDispose.subs!.sub as EffectNode
+
+		writeAtom(beforeDispose, 1)
+
+		expect(runs).toBe(2)
+		expect(effectNode.deps).toBeUndefined()
+		expect(effectNode.depsTail).toBeUndefined()
+		expect(beforeDispose.subs).toBeUndefined()
+		expect(afterDispose.subs).toBeUndefined()
+		expect(beforeDispose.observerCount).toBe(0)
+		expect(afterDispose.observerCount).toBe(0)
+
+		writeAtom(afterDispose, 1)
+		expect(runs).toBe(2)
 	})
 
 	test('atoms do not carry consumer-only graph state', () => {

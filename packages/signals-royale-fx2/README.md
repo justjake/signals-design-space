@@ -48,16 +48,19 @@ stop();
 - **Computeds** are lazy and cached, track dependencies dynamically (a
   branch not taken this evaluation is not a dependency), and only recompute
   when an input's value generation actually advanced.
-- **Effects** are two functions. The compute is a real computed — tracked,
-  cached, cut off by `equals`, async-capable through `use()`. The handler
-  runs untracked with the compute's settled `(value, previous)` pair when
-  that value changes, and may return a cleanup that runs before the next
-  handler run and at disposal. Reads the effect should react to belong in
-  the compute; handler reads are untracked. A pending compute is silent
-  (settlement fires the handler only when the settled value differs), and
-  a compute error rethrows from the drain site without calling the
-  handler. `effectScope(fn)` collects every effect created inside and
-  returns one disposer.
+- **Effects** are two functions. The compute uses the same evaluator and
+  semantics as a computed — tracked, cached, cut off by `equals`, and
+  async-capable through `use()` — but its state lives on the effect itself.
+
+  The handler runs untracked with the compute's settled `(value, previous)`
+  pair when that value changes, and may return a cleanup that runs before
+  the next handler run and at disposal. Reads the effect should react to
+  belong in the compute; handler reads are untracked.
+
+  A pending compute is silent: settlement fires the handler only when the
+  settled value differs. A compute error rethrows from the drain site without
+  calling the handler. `effectScope(fn)` collects every effect created inside
+  and returns one disposer.
 - **Schedules:** `effect(compute, handler, { schedule })` picks when
   signal-triggered re-runs drain: `'sync'` (default — inside the flush
   when the write settles), `'before-paint'`, or `'after-paint'`, both

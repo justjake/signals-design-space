@@ -16,10 +16,10 @@ const stop = effect(
 
 An effect is two functions with different rules:
 
-- **compute** is a real computed node: tracked dynamically, cached,
-  cut off by `equals`, async-capable through `use()`, handed its own
-  previous value. Everything true of `createComputed` is true of it,
-  including the no-writes rule.
+- **compute** uses the same evaluator and semantics as a computed: tracked
+  dynamically, cached, cut off by `equals`, async-capable through `use()`,
+  and handed its own previous value. Its state lives on the effect node
+  instead of a separate computed node. The no-writes rule still applies.
 - **handler** runs untracked with the compute's `(value, previous)` and
   may return a cleanup, which runs before the next handler run and at
   disposal. Reads inside the handler are deliberately untracked — a value
@@ -167,10 +167,10 @@ useSignalLayoutEffect(compute, handler, deps, opts?) // before-paint lane
 - `effect(fn)`, the tracked-and-side-effecting single body, and with it
   the entire second validation path: watcher dependency lists, the
   watcher's validation watermark and its pre-run stamping discipline, and
-  the flush's per-watcher dependency confirmation loop. Watchers now hold
-  exactly one pinned dependency (an effect's compute; a subscriber's
-  observed node) and never re-track; dynamic dependency tracking lives
-  only in computeds.
+  the flush's per-watcher dependency confirmation loop. One `EffectNode`
+  now stores the effect's dynamic dependencies and shares the computed
+  evaluator. Pinned watchers are only used by render subscriptions; each
+  holds its observed node and never re-tracks.
 - `useSignalEffect`'s re-render channel: the force reducer, the
   version/rerun bookkeeping, and the scheduled-effect handshake
   (`WatchSchedule`) that asked React to re-render a component purely to

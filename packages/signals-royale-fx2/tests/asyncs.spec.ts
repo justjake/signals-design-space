@@ -182,6 +182,25 @@ describe('pending as graph state', () => {
 		expect(seen).toEqual([42])
 	})
 
+	test('disposing a parked effect unlinks its dynamic sources and settlement stays silent', () => {
+		const source = createAtom(1)
+		const gate = controlledThenable<number>()
+		const seen: number[] = []
+		const stop = effect(
+			(use) => source.get() + use(gate.thenable),
+			(value) => {
+				seen.push(value)
+			},
+		)
+		expect(nodeOf(source).observerCount).toBe(1)
+		expect(seen).toEqual([])
+
+		stop()
+		expect(nodeOf(source).observerCount).toBe(0)
+		gate.fulfill(2)
+		expect(seen).toEqual([])
+	})
+
 	test('throwing settlement notification restores cause and releases suspension', () => {
 		const gate = controlledThenable<number>()
 		const box = trackThenable(gate.thenable)
