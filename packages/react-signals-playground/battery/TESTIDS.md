@@ -70,7 +70,7 @@ Key surfaces: `read`/`write`/`transitionWrite`/`transitionWriteMany`/
 `setForeignThenable`, `setLatticeWork`, `startAutoIncrement`/`stopAutoIncrement`,
 `mountSecondRoot`/`unmountSecondRoot`, `armUseProbe`/`settleUseProbe`, and the
 logs: `effectLog`, `fetchLog`, `lattice`, `pairTorn`, `mirrorFrames`,
-`mountProbeLog`, `renderCounts`.
+`mountProbeLog`, `splitEffectLog`, `renderCounts`.
 
 Registered signal labels: the App atoms (`count`, `doubled`, `parity`,
 `clockMs`, `targetRoute`, `targetEpoch`, `currentRoute`, `routeEpoch`,
@@ -78,7 +78,8 @@ Registered signal labels: the App atoms (`count`, `doubled`, `parity`,
 `filterText`, `selectedRow`, `markEvens`, `cpuRounds`, `visibleCount`,
 `consistency`, `tornCommits`) plus the testkit atoms (`storeOnly`, `pairA`,
 `pairB`, `mirrorSig`, `actionSync`, `actionPost`, `actionRejoin`,
-`latticeMode`, `renderWriteVictim`).
+`latticeMode`, `renderWriteVictim`, `splitEffectValue`, `splitEffectDep`,
+`splitEffectRender`, `splitEffectMounted`).
 
 ## Rules the instrumentation keeps
 

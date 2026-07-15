@@ -20,8 +20,8 @@ import {
 	useSignal as bridgeUseSignal,
 	useSignalEffect as bridgeUseSignalEffect,
 } from 'cosignals-alt-b/react'
-import { useRef } from 'react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
+import { useSplitEffectFromAutorun } from './split-effect'
 
 export { createRoot } from 'react-dom/client'
 
@@ -60,16 +60,7 @@ export function useSignalEffect<T>(
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps?: readonly unknown[],
 ): void {
-	// The interface's split shape, composed on the bridge's autorun effect:
-	// the handler runs inside the tracked body, so this shim's reads track
-	// exactly as the fused one-body form did.
-	const previous = useRef<T | undefined>(undefined)
-	bridgeUseSignalEffect(() => {
-		const value = compute()
-		const cleanup = handler(value, previous.current)
-		previous.current = value
-		return cleanup
-	}, deps)
+	useSplitEffectFromAutorun(bridgeUseSignalEffect, compute, handler, deps)
 }
 
 export function startSignalTransition(scope: () => void): void {

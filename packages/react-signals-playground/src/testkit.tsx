@@ -86,6 +86,13 @@ export interface ScopeProbeResult {
 	readonly ambient: unknown
 }
 
+export interface SplitEffectLogEntry {
+	readonly event: 'run' | 'cleanup'
+	readonly dep: number
+	readonly value: number
+	readonly previous?: number
+}
+
 export interface HoldHandle {
 	readonly epoch: number
 	/** Reads taken inside the transition scope after its writes. */
@@ -162,6 +169,7 @@ export interface TestStore {
 	readonly pairTorn: readonly PairVerdict[]
 	readonly mirrorFrames: readonly MirrorFrame[]
 	readonly mountProbeLog: readonly MountProbeEntry[]
+	readonly splitEffectLog: readonly SplitEffectLogEntry[]
 	/** Render-invocation tallies per probe name (includes speculative passes). */
 	readonly renderCounts: Readonly<Record<string, number>>
 }
@@ -219,6 +227,7 @@ const lattice: {
 const pairTorn: PairVerdict[] = []
 const mirrorFrames: MirrorFrame[] = []
 const mountProbeLog: MountProbeEntry[] = []
+const splitEffectLog: SplitEffectLogEntry[] = []
 const renderCounts: Record<string, number> = {}
 
 function countRender(probe: string): number {
@@ -289,6 +298,10 @@ const actionRejoin = createAtom(0, 'tkActionRejoin')
 const useProbeEpoch = createAtom(0, 'tkUseProbeEpoch')
 const latticeMode = createAtom<'off' | 'plain' | 'deferred'>('off', 'tkLatticeMode')
 const renderWriteVictim = createAtom(0, 'tkRenderWriteVictim')
+const splitEffectValue = createAtom(0, 'tkSplitEffectValue')
+const splitEffectDep = createAtom(0, 'tkSplitEffectDep')
+const splitEffectRender = createAtom(0, 'tkSplitEffectRender')
+const splitEffectMounted = createAtom(false, 'tkSplitEffectMounted')
 
 registerSignals({
 	storeOnly,
@@ -300,6 +313,10 @@ registerSignals({
 	actionRejoin,
 	latticeMode,
 	renderWriteVictim,
+	splitEffectValue,
+	splitEffectDep,
+	splitEffectRender,
+	splitEffectMounted,
 })
 
 // ---- hold gates -----------------------------------------------------------------------------
@@ -614,6 +631,26 @@ function EffectProbes(): null {
 	return null
 }
 
+function SplitEffectProbe(): null {
+	const dep = useSignal(splitEffectDep)
+	useSignal(splitEffectRender)
+	useSignalEffect(
+		() => splitEffectValue.state,
+		(value, previous) => {
+			splitEffectLog.push({ event: 'run', dep, value, previous })
+			return () => {
+				splitEffectLog.push({ event: 'cleanup', dep, value })
+			}
+		},
+		[dep],
+	)
+	return null
+}
+
+function SplitEffectHarness(): React.ReactElement | null {
+	return useSignal(splitEffectMounted) ? <SplitEffectProbe /> : null
+}
+
 /** Signal + useState mirror written in the same handler must agree in every frame (SP3 parity). */
 function MirrorProbe(): React.ReactElement {
 	const signal = useSignal(mirrorSig)
@@ -791,6 +828,7 @@ function installStore(): void {
 		pairTorn,
 		mirrorFrames,
 		mountProbeLog,
+		splitEffectLog,
 		renderCounts,
 	}
 	window.__store = store
@@ -908,6 +946,7 @@ export function TestPanel(): React.ReactElement {
 
 			<Lattice />
 			<EffectProbes />
+			<SplitEffectHarness />
 			<ol
 				data-testid="effect-log"
 				ref={(el) => {
