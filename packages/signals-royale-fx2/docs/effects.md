@@ -66,30 +66,41 @@ call per drain, and it is the same pattern React subscribers already use
 `schedule` picks when signal-triggered re-runs drain. It changes nothing
 else — not the first run, not disposal, not the change test.
 
-| schedule                 | drain trigger                              | coalescing window     | error surface        |
-| ------------------------ | ------------------------------------------ | --------------------- | -------------------- |
-| `'sync'` (default)       | inside the flush when the write settles    | one flush (`batch()`) | throws at write site |
-| `'before-paint'`         | microtask (end of the current task)        | the task              | rethrown from pump   |
-| `'after-paint'`          | scheduler NormalPriority; timeout fallback | since last drain      | rethrown from pump   |
+| schedule                 | drain trigger                                        | coalescing window     | error surface        |
+| ------------------------ | ---------------------------------------------------- | --------------------- | -------------------- |
+| `'sync'` (default)       | inside the flush when the write settles              | one flush (`batch()`) | throws at write site |
+| `'before-paint'`         | hosted: the pass's commit, layout phase; else microtask | the render pass / task | rethrown from drain |
+| `'after-paint'`          | hosted: the pass's passive phase; else `setTimeout(0)` | since last drain      | rethrown from drain  |
 
 - Ordering per write is fixed: sync effects, then render notifications,
   then before-paint, then after-paint.
 - The engine core is dependency-free: its built-in pumps are
   `queueMicrotask` (before-paint) and `setTimeout(0)` (after-paint).
-  `registerReactSignals()` upgrades after-paint to
-  `Scheduler.unstable_scheduleCallback(NormalPriority)` — the same band
-  React uses for its own passive flush, so both flushes interleave at one
-  priority. Before-paint stays on the microtask even under React: a
-  microtask is the only host timing guaranteed to precede the rendering
-  steps — a scheduler callback is a macrotask that can land after a paint
-  (which is why React runs its own layout effects synchronously in
-  commit), and requestAnimationFrame never fires in hidden tabs. The
-  trade: coalescing is per task rather than per frame, and a write from an
-  async callback can drain before React commits that callback's own state
-  updates, so a handler there may read pre-commit DOM.
+- With React mounted, each `SignalsFrameworkProvider` hosts the drains
+  instead: a lane request re-renders a null last-child sentinel by reducer
+  dispatch, at the same ambient priority as the subscriber wakes from the
+  same write, so React batches both into one render pass. The sentinel's
+  layout effect drains before-paint — after that pass's DOM mutations and
+  every app layout effect, before the frame paints — and its passive
+  effect drains after-paint in the same flush as the pass's `useEffect`s.
+  The guarantee this buys is frame coherence: a handler's DOM writes land
+  in the same frame as the component updates for the same signal write. A
+  free-running microtask pump instead drains before React renders, so a
+  handler there reads pre-commit DOM and its output paints a frame ahead
+  of the components (the flaw this design replaced). The residual trade:
+  an effect whose write wakes no component inherits the write's React
+  urgency — end-of-event for discrete events, the DefaultLane pass for
+  timers and network, which can land after a (consistent, pre-write)
+  paint.
+- Liveness never depends on a commit arriving: a sentinel unregistering
+  with accepted-but-undrained requests re-arms the built-in pumps
+  (`repumpDeferredLanes`), and with no provider mounted the built-ins
+  serve directly.
 - `flushScheduledEffects()` drains both paint lanes (and pending
-  `onObserved` transitions) synchronously — the test seam; `act()` alone
-  does not flush scheduler tasks.
+  `onObserved` transitions) synchronously — the test seam for headless
+  code and for writes whose requests fell back to the built-in timers.
+  Hosted drains need no seam: they are ordinary commit effects, so `act()`
+  flushes them.
 - There is a fourth, internal lane: render-subscriber notification. It is
   not selectable. Its watchers hold one pinned dependency, skip
   validation entirely (their change test is world-aware and value-level,
@@ -125,9 +136,9 @@ non-settling cycle throws instead of livelocking):
 Errors follow the flush's documented policy: a throwing pull, cleanup, or
 handler aborts the drain, the preempted entries' marks are cleared so an
 unrelated later write cannot fire them stale, and the error surfaces from
-the drain site (the write for `'sync'`, the pump task for the paint
-lanes). A throwing cleanup additionally poisons its own effect, as
-before.
+the drain site (the write for `'sync'`; for the paint lanes, the hosting
+commit effect or the fallback pump task). A throwing cleanup additionally
+poisons its own effect, as before.
 
 Net effect of drain-time validation: the cutoff is measured against the
 window, not the write. A value that changes and reverts between drains

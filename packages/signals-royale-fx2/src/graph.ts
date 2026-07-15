@@ -349,12 +349,13 @@ interface EffectOwner {
 export const enum Lane {
 	/** Drained by flush(), when the triggering write or batch settles. */
 	Sync = 0,
-	/** Drained in a microtask: end of the current task, the only host
-	 * timing guaranteed to precede the rendering steps. */
+	/** With a React host: drained in the layout phase of the hosting root's
+	 * commit — after the same write's DOM mutations and app layout effects,
+	 * before that frame paints. Headless: a microtask, the only host timing
+	 * guaranteed to precede the rendering steps. */
 	BeforePaint = 1,
-	/** Drained by a host pump after paint (setTimeout by default; the React
-	 * entry upgrades to the scheduler's NormalPriority — the band React
-	 * uses for its own passive-effect flush). */
+	/** With a React host: drained in the hosting root's passive phase, the
+	 * same flush as useEffect. Headless: setTimeout. */
 	AfterPaint = 2,
 }
 
@@ -523,10 +524,10 @@ export function removeObserver(node: ProducerNode): void {
 // React component), and the returned cleanup runs when the last observer
 // of every kind is gone.
 //
-// Transitions are settled in the before-paint drain rather than
-// synchronously, so subscribe/unsubscribe flaps within one task (React
-// StrictMode double-mounts, list reorders) net out instead of tearing the
-// resource down and back up.
+// Transitions are settled in a microtask rather than synchronously, so
+// subscribe/unsubscribe flaps within one task (React StrictMode
+// double-mounts, list reorders) net out instead of tearing the resource
+// down and back up.
 // ---------------------------------------------------------------------------
 
 /** Host schedulers; declared here so the engine typechecks without a DOM
@@ -708,30 +709,38 @@ const lanes: readonly [LaneState, LaneState, LaneState] = [
 	{ queue: [], head: 0, count: 0, pumpRequested: false },
 ]
 
-function defaultAfterPaintPump(drain: () => void): void {
-	setTimeout(drain, 0)
-}
-let afterPaintPump = defaultAfterPaintPump
+/** @internal A host-installed pump for the deferred lanes. Returning true
+ * means the host owns this request and will eventually reach the drain
+ * entry points (the React bindings re-render a per-root sentinel whose
+ * commit-phase effects drain); false falls back to the built-in pumps. */
+export type LanePump = (lane: Lane.BeforePaint | Lane.AfterPaint) => boolean
+let lanePump: LanePump | null = null
 
-/** @internal Replace the after-paint host pump; null restores the built-in.
- * The pump must eventually invoke the drain exactly once per request. */
-export function setAfterPaintPump(pump: typeof defaultAfterPaintPump | null): void {
-	afterPaintPump = pump ?? defaultAfterPaintPump
+/** @internal Install or clear the host lane pump. */
+export function setLanePump(pump: LanePump | null): void {
+	lanePump = pump
 }
 
-const drainBeforePaint = (): void => {
+/** @internal Drain the before-paint lane now. Hosted drains call this from
+ * the commit's layout phase, after the pass's DOM mutations. */
+export function drainBeforePaintEffects(): void {
 	lanes[Lane.BeforePaint].pumpRequested = false
 	drainLane(lanes[Lane.BeforePaint])
 }
-const drainAfterPaint = (): void => {
+
+/** @internal Drain both deferred lanes now. Lane order is total regardless
+ * of pump timing: the before-paint lane settles first, so its entries can
+ * never run after same-wave after-paint entries even when this site's pump
+ * (a task) fires before a pending before-paint drain. Hosted drains call
+ * this from the commit's passive phase. */
+export function drainDeferredEffects(): void {
 	lanes[Lane.AfterPaint].pumpRequested = false
-	// Lane order is total regardless of pump timing: the after-paint drain
-	// settles the before-paint lane first, because its pump (a scheduler
-	// task) can fire before a requestAnimationFrame pump gets a frame.
-	// Draining early keeps "before paint" true; the rAF then finds an empty
-	// queue.
 	drainLane(lanes[Lane.BeforePaint])
 	drainLane(lanes[Lane.AfterPaint])
+}
+
+const drainAfterPaintTask = (): void => {
+	drainDeferredEffects()
 }
 
 function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
@@ -740,10 +749,26 @@ function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
 		return
 	}
 	state.pumpRequested = true
+	if (lanePump !== null && lanePump(lane)) {
+		return
+	}
 	if (lane === Lane.BeforePaint) {
-		queueMicrotask(drainBeforePaint)
+		queueMicrotask(drainBeforePaintEffects)
 	} else {
-		afterPaintPump(drainAfterPaint)
+		setTimeout(drainAfterPaintTask, 0)
+	}
+}
+
+/** @internal Re-arm the built-in pumps for any deferred entries still
+ * queued. Called when a host pump accepted requests whose drains will now
+ * never arrive (the last hosting root unmounted, or the host uninstalled). */
+export function repumpDeferredLanes(): void {
+	for (const lane of [Lane.BeforePaint, Lane.AfterPaint] as const) {
+		const state = lanes[lane]
+		if (state.count > state.head) {
+			state.pumpRequested = false
+			requestLaneDrain(lane)
+		}
 	}
 }
 

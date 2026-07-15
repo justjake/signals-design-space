@@ -1,12 +1,10 @@
 // @vitest-environment jsdom
 /** Host guarantees: loud registration, unmount reclamation, quiescence. */
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import * as Scheduler from 'scheduler'
 import {
-	attachTracer,
 	createAtom,
 	effect,
 	flushScheduledEffects,
@@ -29,6 +27,7 @@ import {
 } from 'signals-royale-fx2/react'
 import {
 	broadcastDraft,
+	registerEffectHost,
 	registerRootConnection,
 	REPAIR_WAKE,
 } from '../src/react/host.ts'
@@ -106,16 +105,48 @@ describe('registration', () => {
 		expect('errors' in h1).toBe(false)
 	})
 
-	test('the React after-paint pump traces scheduler fallback and disposal restores timeout', async () => {
+	test('deferred lanes fall back to built-in pumps with no provider mounted', async () => {
 		resetReactSignalsForTest()
-		const boom = new Error('scheduler unavailable')
-		const schedule = vi
-			.spyOn(Scheduler, 'unstable_scheduleCallback')
-			.mockImplementation(() => {
-				throw boom
-			})
-		const tracer = attachTracer()
 		const handle = registerReactSignals()
+		const source = createAtom(0)
+		const beforePaint: number[] = []
+		const afterPaint: number[] = []
+		const stopA = effect(
+			() => source.get(),
+			(value) => {
+				beforePaint.push(value)
+			},
+			{ schedule: 'before-paint' },
+		)
+		const stopB = effect(
+			() => source.get(),
+			(value) => {
+				afterPaint.push(value)
+			},
+			{ schedule: 'after-paint' },
+		)
+		try {
+			source.set(1)
+			expect(beforePaint).toEqual([0])
+			expect(afterPaint).toEqual([0])
+			await Promise.resolve()
+			expect(beforePaint).toEqual([0, 1]) // microtask fallback
+			expect(afterPaint).toEqual([0])
+			await tick()
+			expect(afterPaint).toEqual([0, 1]) // task fallback
+		} finally {
+			stopA()
+			stopB()
+			handle.dispose()
+			resetReactSignalsForTest()
+		}
+	})
+
+	test('unregistering an effect host re-arms the built-in pumps', async () => {
+		resetReactSignalsForTest()
+		const handle = registerReactSignals()
+		// A host that accepts wake requests but whose commit never comes.
+		const unregister = registerEffectHost(() => {})
 		const source = createAtom(0)
 		const seen: number[] = []
 		const stop = effect(
@@ -123,33 +154,56 @@ describe('registration', () => {
 			(value) => {
 				seen.push(value)
 			},
-			{ schedule: 'after-paint' },
+			{ schedule: 'before-paint' },
 		)
 		try {
 			source.set(1)
-			expect(seen).toEqual([0])
+			await tick()
+			expect(seen).toEqual([0]) // the host swallowed the request
+			unregister()
 			await tick()
 			expect(seen).toEqual([0, 1])
-			expect(
-				tracer.events().some(
-					(event) =>
-						event.kind === 'scheduler-fallback' &&
-						event.error === boom &&
-						event.phase === 'after-paint-pump',
-				),
-			).toBe(true)
-
-			handle.dispose()
-			schedule.mockRestore()
-			source.set(2)
-			await tick()
-			expect(seen).toEqual([0, 1, 2])
 		} finally {
 			stop()
 			handle.dispose()
-			tracer.stop()
-			schedule.mockRestore()
 			resetReactSignalsForTest()
+		}
+	})
+
+	test('a before-paint handler observes the same pass\'s committed DOM', async () => {
+		const h = makeHarness()
+		const a = createAtom(0)
+		function App() {
+			return <span>{useValue(a)}</span>
+		}
+		const { container } = await h.mount(<App />)
+		const seen: Array<[value: number, dom: string]> = []
+		const stop = effect(
+			() => a.get(),
+			(value) => {
+				seen.push([value, text(container)])
+			},
+			{ schedule: 'before-paint' },
+		)
+		// Outside act, so nothing flushes React early: the write must reach
+		// the DOM through React's own microtask pass, the discriminating
+		// setting for drain anchoring.
+		const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+		g.IS_REACT_ACT_ENVIRONMENT = false
+		try {
+			a.set(1)
+			await tick()
+			// The handler ran in the commit's layout phase: the DOM already
+			// shows the value the same write rendered. A free-running microtask
+			// pump would log [1, '0'] — the effect a frame ahead of React.
+			expect(seen).toEqual([
+				[0, '0'],
+				[1, '1'],
+			])
+		} finally {
+			g.IS_REACT_ACT_ENVIRONMENT = true
+			stop()
+			await h.cleanup()
 		}
 	})
 

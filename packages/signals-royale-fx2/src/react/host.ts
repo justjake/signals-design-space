@@ -27,7 +27,8 @@ import {
 	isUninitialized,
 	NO_EVENT,
 	pokeDraftWatchers,
-	setAfterPaintPump,
+	repumpDeferredLanes,
+	setLanePump,
 	type ProducerNode,
 	type TraceEventId,
 } from '../graph.ts'
@@ -501,24 +502,39 @@ export function confirmRootCommit(
 	}
 }
 
-// The before-paint lane keeps the engine's microtask pump even here: a
-// microtask is the only host timing guaranteed to precede the rendering
-// steps. A scheduler callback is a macrotask that may land after a paint
-// (which is why React runs its own layout effects synchronously in commit
-// rather than scheduling them), and requestAnimationFrame never fires in
-// hidden tabs.
+// ---------------------------------------------------------------------------
+// Deferred-effect hosting: each provider renders a last-child sentinel whose
+// commit-phase effects drain the engine's deferred lanes (see
+// DeferredEffectHost). A lane request becomes a reducer dispatch on every
+// sentinel, at the same ambient priority as the subscriber wakes from the
+// same write — so React batches them into one pass, and the drain runs in
+// that pass's commit: the effect's DOM writes land in the same frame as the
+// components' updates, never a frame ahead of them (the flaw of a raw
+// microtask pump) and never a frame behind.
+// ---------------------------------------------------------------------------
 
-/** After-paint pump upgrade: the scheduler band React uses for its own
- * passive-effect flush, so both flushes interleave at one priority. */
-function afterPaintPump(drain: () => void): void {
-	try {
-		Scheduler.unstable_scheduleCallback(Scheduler.unstable_NormalPriority, drain)
-	} catch (error) {
-		getActiveTracer()?.emit('scheduler-fallback', null, NO_EVENT, {
-			error,
-			phase: 'after-paint-pump',
-		})
-		setTimeout(drain, 0)
+const effectHostWakes = new Set<() => void>()
+
+function laneWakePump(): boolean {
+	if (effectHostWakes.size === 0) {
+		return false
+	}
+	for (const wake of effectHostWakes) {
+		// Outside any ambient transition: a drain must not be held hostage by
+		// the pending transition whose scope the triggering write ran in.
+		dispatchUrgent(wake)
+	}
+	return true
+}
+
+/** Register a sentinel's wake; the returned cleanup unregisters it and
+ * re-arms the built-in pumps for requests this sentinel accepted but will
+ * never commit. */
+export function registerEffectHost(wake: () => void): () => void {
+	effectHostWakes.add(wake)
+	return () => {
+		effectHostWakes.delete(wake)
+		repumpDeferredLanes()
 	}
 }
 
@@ -534,7 +550,7 @@ export function registerReactSignals(): ReactSignalsHandle {
 	setAmbientClassifier(ambientClassifier)
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
-	setAfterPaintPump(afterPaintPump)
+	setLanePump(laneWakePump)
 	handle = {
 		dispose() {
 			if (handle === null) {
@@ -543,7 +559,8 @@ export function registerReactSignals(): ReactSignalsHandle {
 			setAmbientClassifier(null)
 			setRenderWriteGuard(null)
 			setRenderWorldProvider(null)
-			setAfterPaintPump(null)
+			setLanePump(null)
+			repumpDeferredLanes()
 			handle = null
 		},
 	}
@@ -555,6 +572,7 @@ export function resetReactSignalsForTest(): void {
 	resetEngineForTest()
 	rootConnections.clear()
 	hostedDrafts.clear()
+	effectHostWakes.clear()
 	note = null
 	rejectedRenderWrite = false
 	if (handle !== null) {
@@ -566,4 +584,3 @@ export function resetReactSignalsForTest(): void {
 }
 
 declare const queueMicrotask: (fn: () => void) => void
-declare const setTimeout: (fn: () => void, ms?: number) => unknown

@@ -27,12 +27,13 @@
  * batch.
  */
 import * as React from 'react'
-import { NO_EVENT } from '../graph.ts'
+import { drainBeforePaintEffects, drainDeferredEffects, NO_EVENT } from '../graph.ts'
 import { getActiveTracer } from '../tracer.ts'
 import { isLiveDraft, type DraftId } from '../worlds.ts'
 import {
 	confirmRootCommit,
 	noteRenderWorld,
+	registerEffectHost,
 	registerRootConnection,
 	type ReactRootConnection,
 } from './host.ts'
@@ -106,6 +107,30 @@ function ReactRootCommit({
 	return null
 }
 
+/** Any dispatch re-renders the sentinel; the counter itself is never read. */
+function bumpWake(n: number): number {
+	return (n + 1) | 0
+}
+
+/** Null-rendering last child of the provider: hosts the engine's deferred
+ * effect drains in this root's own commit phases. A lane pump request
+ * re-renders this component (registerEffectHost), at the same ambient
+ * priority as the subscriber wakes from the same write, so React batches
+ * both into one pass: the layout drain runs after that pass's DOM
+ * mutations and app layout effects (before the frame paints), and the
+ * passive drain rides the same flush as the pass's useEffects. As the last
+ * child it also renders in every pass the provider renders, so effects
+ * queued by a retirement fold (the first-child marker's layout effect)
+ * drain in that very commit. Not memoized: a spurious re-render costs two
+ * empty drain calls. */
+function DeferredEffectHost(): null {
+	const [, wake] = React.useReducer(bumpWake, 0)
+	React.useLayoutEffect(() => registerEffectHost(wake), [wake])
+	React.useLayoutEffect(drainBeforePaintEffects)
+	React.useEffect(drainDeferredEffects)
+	return null
+}
+
 /** Connect a React subtree to the signals runtime. A descendant provider
  * would replace this connection for part of the subtree, so nesting throws. */
 export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
@@ -136,6 +161,7 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
 		{ value: connection },
 		React.createElement(ReactRootCommit, { connection, world }),
 		props.children,
+		React.createElement(DeferredEffectHost, null),
 	)
 }
 
