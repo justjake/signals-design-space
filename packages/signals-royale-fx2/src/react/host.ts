@@ -24,11 +24,10 @@ import * as React from 'react'
 import * as Scheduler from 'scheduler'
 import {
 	Flag,
-	Lane,
 	isUninitialized,
 	NO_EVENT,
 	pokeDraftWatchers,
-	setLanePump,
+	setAfterPaintPump,
 	type ProducerNode,
 	type TraceEventId,
 } from '../graph.ts'
@@ -535,7 +534,7 @@ export function registerReactSignals(): ReactSignalsHandle {
 	setAmbientClassifier(ambientClassifier)
 	setRenderWriteGuard(renderWriteGuard)
 	setRenderWorldProvider(renderWorldProvider)
-	setLanePump(Lane.AfterPaint, afterPaintPump)
+	setAfterPaintPump(afterPaintPump)
 	handle = {
 		dispose() {
 			if (handle === null) {
@@ -544,7 +543,7 @@ export function registerReactSignals(): ReactSignalsHandle {
 			setAmbientClassifier(null)
 			setRenderWriteGuard(null)
 			setRenderWorldProvider(null)
-			setLanePump(Lane.AfterPaint, null)
+			setAfterPaintPump(null)
 			handle = null
 		},
 	}

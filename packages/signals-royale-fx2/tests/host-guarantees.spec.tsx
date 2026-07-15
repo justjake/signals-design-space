@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 /** Host guarantees: loud registration, unmount reclamation, quiescence. */
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as Scheduler from 'scheduler'
 import {
+	attachTracer,
 	createAtom,
 	effect,
 	flushScheduledEffects,
@@ -35,7 +37,7 @@ import {
 	ReactRootConnectionContext,
 	worldsReducer,
 } from '../src/react/SignalsFrameworkProvider.ts'
-import { makeHarness, text } from './helpers.tsx'
+import { makeHarness, text, tick } from './helpers.tsx'
 
 function subCount(x: Atom<number>): number {
 	let n = 0
@@ -102,6 +104,53 @@ describe('registration', () => {
 		const h2 = registerReactSignals()
 		expect(h1).toBe(h2)
 		expect('errors' in h1).toBe(false)
+	})
+
+	test('the React after-paint pump traces scheduler fallback and disposal restores timeout', async () => {
+		resetReactSignalsForTest()
+		const boom = new Error('scheduler unavailable')
+		const schedule = vi
+			.spyOn(Scheduler, 'unstable_scheduleCallback')
+			.mockImplementation(() => {
+				throw boom
+			})
+		const tracer = attachTracer()
+		const handle = registerReactSignals()
+		const source = createAtom(0)
+		const seen: number[] = []
+		const stop = effect(
+			() => source.get(),
+			(value) => {
+				seen.push(value)
+			},
+			{ schedule: 'after-paint' },
+		)
+		try {
+			source.set(1)
+			expect(seen).toEqual([0])
+			await tick()
+			expect(seen).toEqual([0, 1])
+			expect(
+				tracer.events().some(
+					(event) =>
+						event.kind === 'scheduler-fallback' &&
+						event.error === boom &&
+						event.phase === 'after-paint-pump',
+				),
+			).toBe(true)
+
+			handle.dispose()
+			schedule.mockRestore()
+			source.set(2)
+			await tick()
+			expect(seen).toEqual([0, 1, 2])
+		} finally {
+			stop()
+			handle.dispose()
+			tracer.stop()
+			schedule.mockRestore()
+			resetReactSignalsForTest()
+		}
 	})
 
 	test('[falsify-first] reset preserves registration until the handle is disposed', async () => {

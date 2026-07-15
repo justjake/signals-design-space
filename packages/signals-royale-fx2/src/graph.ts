@@ -698,31 +698,25 @@ interface LaneState {
 	 * Array#shift so wide drains stay linear. */
 	head: number
 	count: number
-	/** A host pump callback is requested and has not run yet. */
+	/** The lane's pump is requested and has not run yet. */
 	pumpRequested: boolean
-	/** Schedules the lane's drain; null for the sync lane, which flush()
-	 * drains directly. */
-	pump: ((drain: () => void) => void) | null
 }
 
-/** Built-in pumps are dependency-free and environment-safe; the React
- * entry upgrades them at registration (see Lane). */
-const DEFAULT_PUMPS: ReadonlyArray<LaneState['pump']> = [
-	null,
-	(drain) => queueMicrotask(drain),
-	(drain) => setTimeout(drain, 0),
-]
-
 const lanes: readonly [LaneState, LaneState, LaneState] = [
-	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.Sync] },
-	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.BeforePaint] },
-	{ queue: [], head: 0, count: 0, pumpRequested: false, pump: DEFAULT_PUMPS[Lane.AfterPaint] },
+	{ queue: [], head: 0, count: 0, pumpRequested: false },
+	{ queue: [], head: 0, count: 0, pumpRequested: false },
+	{ queue: [], head: 0, count: 0, pumpRequested: false },
 ]
 
-/** @internal Replace a paint lane's host pump; null restores the built-in.
+function defaultAfterPaintPump(drain: () => void): void {
+	setTimeout(drain, 0)
+}
+let afterPaintPump = defaultAfterPaintPump
+
+/** @internal Replace the after-paint host pump; null restores the built-in.
  * The pump must eventually invoke the drain exactly once per request. */
-export function setLanePump(lane: Lane, pump: ((drain: () => void) => void) | null): void {
-	lanes[lane].pump = pump ?? DEFAULT_PUMPS[lane]
+export function setAfterPaintPump(pump: typeof defaultAfterPaintPump | null): void {
+	afterPaintPump = pump ?? defaultAfterPaintPump
 }
 
 const drainBeforePaint = (): void => {
@@ -740,13 +734,17 @@ const drainAfterPaint = (): void => {
 	drainLane(lanes[Lane.AfterPaint])
 }
 
-function requestLaneDrain(lane: Lane): void {
+function requestLaneDrain(lane: Lane.BeforePaint | Lane.AfterPaint): void {
 	const state = lanes[lane]
 	if (state.pumpRequested) {
 		return
 	}
 	state.pumpRequested = true
-	state.pump!(lane === Lane.BeforePaint ? drainBeforePaint : drainAfterPaint)
+	if (lane === Lane.BeforePaint) {
+		queueMicrotask(drainBeforePaint)
+	} else {
+		afterPaintPump(drainAfterPaint)
+	}
 }
 
 /** Drain the paint lanes (and pending onObserved transitions) now — the
