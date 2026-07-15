@@ -49,16 +49,27 @@ const enum Limit {
 	MaxChainWalk = 1000,
 }
 
+class ObjectIds extends WeakMap<object, number> {
+	private next = 1
+
+	idFor(value: object): number {
+		let id = this.get(value)
+		if (id === undefined) {
+			id = this.next++
+			this.set(value, id)
+		}
+		return id
+	}
+}
+
 export class Tracer {
 	private ring: TraceEvent[]
 	private head = 0
 	private size = 0
 	private stopped = false
 	private firstEventId: TraceEventId
-	private nextRootId = 1
-	private nextSuspensionId = 1
-	private rootIds = new WeakMap<object, number>()
-	private suspensionIds = new WeakMap<object, number>()
+	private rootIds = new ObjectIds()
+	private suspensionIds = new ObjectIds()
 	/** Events evicted by ring overflow. */
 	dropped = 0
 	/** Most recent delivery event per node (component re-render / effect run). */
@@ -86,24 +97,11 @@ export class Tracer {
 		// this tracer are meaningful in its ring; older sessions are unrelated,
 		// not "evicted" ancestors of the new event.
 		const ownCause = cause >= this.firstEventId && cause < id ? cause : NO_EVENT
-		let rootId: number | undefined
 		const root = fields?.root
-		if (root !== undefined) {
-			rootId = this.rootIds.get(root)
-			if (rootId === undefined) {
-				rootId = this.nextRootId++
-				this.rootIds.set(root, rootId)
-			}
-		}
-		let suspensionId: number | undefined
+		const rootId = root === undefined ? undefined : this.rootIds.idFor(root)
 		const suspension = fields?.suspension
-		if (suspension !== undefined) {
-			suspensionId = this.suspensionIds.get(suspension)
-			if (suspensionId === undefined) {
-				suspensionId = this.nextSuspensionId++
-				this.suspensionIds.set(suspension, suspensionId)
-			}
-		}
+		const suspensionId =
+			suspension === undefined ? undefined : this.suspensionIds.idFor(suspension)
 		const evt: TraceEvent = {
 			id,
 			kind,

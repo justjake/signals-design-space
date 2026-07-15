@@ -332,6 +332,29 @@ describe('causality tracer', () => {
 		tracer.stop()
 	})
 
+	test('root and suspension ids use independent per-session namespaces', () => {
+		const shared = {}
+		const otherRoot = {}
+		const otherSuspension = {}
+		const first = attachTracer()
+		first.emit('mixed', null, 0, { root: shared, suspension: shared })
+		first.emit('mixed', null, 0, { root: otherRoot, suspension: otherSuspension })
+		first.emit('mixed', null, 0, { root: shared, suspension: otherSuspension })
+		const events = first.events()
+		expect(events.map(({ rootId, suspensionId }) => [rootId, suspensionId])).toEqual([
+			[1, 1],
+			[2, 2],
+			[1, 2],
+		])
+		expect(first.format(events[0]!)).toContain('root=1 suspension=1')
+
+		const replacement = attachTracer()
+		replacement.emit('mixed', null, 0, { root: otherRoot, suspension: otherSuspension })
+		expect(replacement.events()[0]).toMatchObject({ rootId: 1, suspensionId: 1 })
+		expect(first.emit('stopped', null, 0, { root: shared, suspension: shared })).toBe(0)
+		replacement.stop()
+	})
+
 	test('a lazy initializer failure during update is not mislabeled as an updater failure', () => {
 		const tracer = attachTracer()
 		const boom = new Error('initializer')
