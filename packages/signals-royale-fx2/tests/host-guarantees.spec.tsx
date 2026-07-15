@@ -12,7 +12,12 @@ import {
 	read,
 	type Atom,
 } from 'signals-royale-fx2'
-import { liveDraftCount, openDraft, runWithDraftWrites } from '../src/worlds.ts'
+import {
+	discardDraft,
+	liveDraftCount,
+	openDraft,
+	runWithDraftWrites,
+} from '../src/worlds.ts'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
@@ -20,8 +25,16 @@ import {
 	startSignalTransition,
 	useValue,
 } from 'signals-royale-fx2/react'
-import { broadcastDraft, registerRootConnection } from '../src/react/host.ts'
-import { ReactRootConnectionContext } from '../src/react/SignalsFrameworkProvider.ts'
+import {
+	broadcastDraft,
+	registerRootConnection,
+	REPAIR_WAKE,
+} from '../src/react/host.ts'
+import {
+	EMPTY_WORLD,
+	ReactRootConnectionContext,
+	worldsReducer,
+} from '../src/react/SignalsFrameworkProvider.ts'
 import { makeHarness, text } from './helpers.tsx'
 
 function subCount(x: Atom<number>): number {
@@ -33,6 +46,52 @@ function subCount(x: Atom<number>): number {
 }
 
 describe('registration', () => {
+	test('world ids change only when live membership changes', () => {
+		resetReactSignalsForTest()
+		const first = openDraft()
+		const second = openDraft()
+
+		const one = worldsReducer(EMPTY_WORLD, first.id)
+		const two = worldsReducer(one, second.id)
+		expect(two.ids).toEqual([first.id, second.id])
+		expect(two.ids).not.toBe(one.ids)
+
+		const repeated = worldsReducer(two, second.id)
+		expect(repeated).not.toBe(two)
+		expect(repeated.ids).toBe(two.ids)
+
+		const repaired = worldsReducer(repeated, REPAIR_WAKE)
+		expect(repaired).not.toBe(repeated)
+		expect(repaired.ids).toBe(repeated.ids)
+
+		discardDraft(first.id)
+		const pruned = worldsReducer(repaired, REPAIR_WAKE)
+		expect(pruned.ids).toEqual([second.id])
+		expect(pruned.ids).not.toBe(repaired.ids)
+		discardDraft(second.id)
+
+		const prefixFirst = openDraft()
+		const middle = openDraft()
+		const prefixThird = openDraft()
+		const added = openDraft()
+		let three = worldsReducer(EMPTY_WORLD, prefixFirst.id)
+		three = worldsReducer(three, middle.id)
+		three = worldsReducer(three, prefixThird.id)
+		const priorIds = three.ids
+
+		discardDraft(middle.id)
+		const prunedAndAdded = worldsReducer(three, added.id)
+		expect(three.ids).toBe(priorIds)
+		expect(three.ids).toEqual([prefixFirst.id, middle.id, prefixThird.id])
+		expect(prunedAndAdded).not.toBe(three)
+		expect(prunedAndAdded.ids).not.toBe(three.ids)
+		expect(prunedAndAdded.ids).toEqual([prefixFirst.id, prefixThird.id, added.id])
+
+		discardDraft(prefixFirst.id)
+		discardDraft(prefixThird.id)
+		discardDraft(added.id)
+	})
+
 	test('registers on stock React (no build marker) and is idempotent', () => {
 		// This suite runs against an unpatched React build; registration must
 		// succeed with no global handshake of any kind.

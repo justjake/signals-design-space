@@ -21,7 +21,6 @@ condition still leaves a useful direction.
 5. Merge `WatchDraft` into `WatchRender` if the current invariant remains true that every render subscriber is draft-aware and every effect is base-only; keep draft cutoff and pendingness coverage.
 6. Collapse the React commit-marker/rendered/committed handshake only if descendant layout ordering can make the committed stash canonical while preserving held transitions, aborted renders, hydration, silent folds, and late-subscription repair.
 8. After the commit handshake no longer needs mutable connection state, test using React's stable reducer dispatch as the root identity so the connection wrapper and provider `useMemo` can disappear without changing multi-root audience or tracer identity.
-9. Make `worldsReducer` allocate its draft-id array only when membership changes while still returning a fresh wrapper for a repeated live id, which deliberately restarts a transition render after later writes.
 10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
 
 ## Other unmeasured broader leads
@@ -57,6 +56,7 @@ condition still leaves a useful direction.
 ## Completed or deliberately closed
 
 - Scope ownership and React root naming.
+- `worldsReducer` always returns a fresh React state wrapper but reuses the canonical draft-ID array while live membership is unchanged; only adding or pruning materializes a replacement array.
 - Render subscriptions alone own one permanent pinned `Link`; their dedicated watcher shape has six fields and no effect-only state.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
 - One dynamically traversed collection for `draftsAffecting`.

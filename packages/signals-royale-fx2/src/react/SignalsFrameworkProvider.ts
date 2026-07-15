@@ -48,22 +48,36 @@ export const EMPTY_WORLD: WorldState = { ids: [] }
 /** Shared by the connection and every useValue hook: accumulate live draft
  * ids and prune dead ones — retired and discarded drafts resolve to base
  * state anyway, and a long-lived subscriber must not grow history
- * forever. Always returns a fresh object so a re-dispatched id still
- * restarts the pass (see the header). */
+ * forever. The ids array changes only with membership, but the wrapper is
+ * always fresh so a re-dispatched id still restarts the pass (see the
+ * header). */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-	const live: DraftId[] = []
+	let live: DraftId[] | undefined
 	let add = isLiveDraft(id)
-	for (const draft of prev.ids) {
+	for (let i = 0; i < prev.ids.length; i++) {
+		const draft = prev.ids[i]!
 		if (isLiveDraft(draft)) {
-			live.push(draft)
+			if (live !== undefined) {
+				live.push(draft)
+			}
 			add = add && draft !== id
+		} else if (live === undefined) {
+			live = []
+			for (let j = 0; j < i; j++) {
+				live.push(prev.ids[j]!)
+			}
 		}
 	}
 	if (add) {
+		if (live === undefined) {
+			live = []
+			for (const draft of prev.ids) {
+				live.push(draft)
+			}
+		}
 		live.push(id)
 	}
-	const ids = !add && live.length === prev.ids.length ? prev.ids : live
-	return { ids }
+	return { ids: live ?? prev.ids }
 }
 
 /** The nearest root connection, or null outside a provider. Hooks consume
