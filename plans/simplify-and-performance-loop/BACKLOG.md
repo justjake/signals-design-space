@@ -18,7 +18,6 @@ condition still leaves a useful direction.
 3. Give each lane one reentrancy owner. First add a same-lane nested-drain falsifier for `flushScheduledEffects()` inside a cleanup/handler; only then replace the sync-only `flushing` owner if cursor and tail ownership remain exact.
 4. Let the before-paint microtask also settle lifetime transitions, deleting `lifetimeFlushScheduled` and its separate microtask only if activation ordering, StrictMode flaps, and `onObserved` writes remain exact.
 5. Merge `WatchDraft` into `WatchRender` if the current invariant remains true that every render subscriber is draft-aware and every effect is base-only; keep draft cutoff and pendingness coverage.
-8. After the commit handshake no longer needs mutable connection state, test using React's stable reducer dispatch as the root identity so the connection wrapper and provider `useMemo` can disappear without changing multi-root audience or tracer identity.
 10. Specialize atom world memos only if their one-entry certificate can collapse into direct revision/value fields while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior.
 
 ## Other unmeasured broader leads
@@ -55,6 +54,7 @@ condition still leaves a useful direction.
 - Remove render-watcher staleness and let `Scheduled` plus queue membership own pending notification; retry the exact Round 95 model only after a natural propagation-layout change, keeping first-cause base waves, latest-cause draft pokes, the 280-byte `propagateWave` pin, and both notification controls.
 - Direct-index tracer events from the private oldest-retained ID; retry the exact revised Round 97 diff only after a naturally stable core-control window, retaining the empty, wrapped, stopped, replacement-session, exposed-event-mutation, malformed-ID, and causal-chain falsifiers.
 - Replace `RenderedResolution.live` with the private `NO_IDS` identity; retry the exact Round 98 source plus direct hydration falsifier only after a natural runtime/layout change or a separately stable control protocol, retaining the resolved-runtime client probe and all first-mount, held-render, empty-world, hydration, and repair coverage.
+- Use React's stable reducer dispatch as the root identity only after the commit handshake disappears or a broader commit-layout change already owns its active-root marker; retry the exact Round 100 design with the frozen host-transition mode as a hard gate, not by tuning the rejected ESM-binding shape.
 - Keep the computed-cycle throw extraction parked: after the latest plain-value fast path `recompute` is pinned at 590 bytes, farther above V8's 460-byte limit than Round 90's 464-byte shape. Reconsider only after a natural change moves the whole function near the limit; do not source-shape-tune it or retry the slower shared helpers.
 
 ## Completed or deliberately closed
