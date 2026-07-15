@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signals devtools — Graph explorer (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* ── base16 core palette — the only 16 values a theme sets. ──
+       Everything below derives from these via color-mix(). Swap them
+       (Theme button) and the whole UI re-tints. Default: a graphite dark set. */
+    --base00: #191919;  /* background */
+    --base01: #202020;  /* panels, chrome */
+    --base02: #383836;  /* lines, node strokes */
+    --base03: #7d7a75;  /* faint text */
+    --base04: #a19e99;  /* muted text */
+    --base05: #d4d3cf;  /* text */
+    --base06: #f0efed;  /* bright text */
+    --base07: #f9f8f7;  /* brightest */
+    --base08: #e97366;  /* red   — errors */
+    --base09: #de9255;  /* orange */
+    --base0A: #eac26b;  /* yellow — you (set/update) */
+    --base0B: #72bc8f;  /* green  — effects */
+    --base0C: #4fb9c9;  /* cyan   — computing */
+    --base0D: #5e9fe8;  /* blue   — awaiting async */
+    --base0E: #bf8eda;  /* purple — rendering */
+    --base0F: #df84a8;  /* pink */
+
+    /* ── surfaces & ink, derived from the base16 grays ── */
+    --bg: var(--base00);
+    --surface: var(--base01);
+    --surface-2: color-mix(in srgb, var(--base02) 45%, var(--base01));
+    --elevated: color-mix(in srgb, var(--base02) 70%, var(--base01));
+    --border: color-mix(in srgb, var(--base02) 60%, var(--base00));
+    --border-strong: var(--base02);
+    --row-line: color-mix(in srgb, var(--base01) 70%, var(--base00));
+    --text: var(--base05);
+    --muted: var(--base04);
+    --faint: var(--base03);
+
+    /* ── roles: who acted (mapped onto base16 accent slots) ── */
+    --atom: var(--base0A);
+    --computed: var(--base0C);
+    --watcher: var(--base0E);
+    --effect: var(--base0B);
+    --danger: var(--base08);
+    --suspended: var(--base0D);
+    --system: var(--base04);
+    --thread: color-mix(in srgb, var(--base0A) 72%, var(--base07));
+
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 12px/1.45 var(--sans);
+    display: flex; flex-direction: column;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--thread); outline-offset: 1px; border-radius: 3px; }
+
+  /* ── panel chrome ─────────────────────────────── */
+  .chrome {
+    display: flex; align-items: stretch; gap: 0;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 10px; flex: none;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 7px;
+    padding: 8px 12px 8px 2px; margin-right: 4px;
+    font-weight: 600; letter-spacing: .02em;
+  }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--thread); box-shadow: 0 0 8px var(--thread); }
+  .tabs { display: flex; align-items: stretch; }
+  .tab {
+    display: flex; align-items: center; padding: 0 14px;
+    color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent;
+    font-weight: 500;
+  }
+  .tab[aria-current="page"] { color: var(--text); border-bottom-color: var(--thread); }
+  .tab:hover { color: var(--text); }
+  .chrome .spacer { flex: 1; }
+  .rec {
+    display: flex; align-items: center; gap: 6px; color: var(--muted);
+    font-family: var(--mono); font-size: 11px;
+  }
+  .rec .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+
+  /* ── toolbar ──────────────────────────────────── */
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); flex: none;
+    background: var(--bg);
+  }
+  .select, .search {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font: 11px var(--mono); padding: 4px 8px;
+  }
+  .search { width: 210px; }
+  .search::placeholder { color: var(--faint); }
+  .kind-filters { display: flex; gap: 4px; margin-left: 4px; }
+  .kchip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font: 11px var(--mono); padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  }
+  .kchip .sw { width: 8px; height: 8px; border-radius: 2px; }
+  .kchip.on { color: var(--text); border-color: var(--border-strong); }
+  .toolbar .spacer { flex: 1; }
+  .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; background: var(--surface); }
+  .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
+  /* node list strip: fills the view until a node is selected */
+  .nodelist { flex: none; max-height: 168px; overflow-y: auto; border-bottom: 1px solid var(--border); }
+  .nodelist table { border-collapse: collapse; width: 100%; font: 11px var(--mono); }
+  .nodelist th {
+    position: sticky; top: 0; background: var(--surface); z-index: 1;
+    font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); text-align: left; padding: 5px 10px;
+    border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .nodelist th.sorted { color: var(--text); }
+  .nodelist td { padding: 3px 10px; border-bottom: 1px solid var(--row-line); white-space: nowrap; }
+  .nodelist tr:hover td { background: var(--surface); }
+  .nodelist tr.selected td { background: color-mix(in srgb, var(--computed) 9%, var(--bg)); }
+  .nodelist tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--computed); }
+  .nodelist .dot { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 7px; }
+  .nodelist .num { text-align: right; color: var(--muted); }
+  .nodelist .own { color: var(--watcher); }
+  .nodelist .dimtxt { color: var(--faint); }
+  .nodelist tfoot td { color: var(--faint); font-style: italic; border-bottom: none; }
+
+  /* tooltips: styled, instant, on every defined term. Dotted underline marks them. */
+  [data-tip] { cursor: help; }
+  th[data-tip], .insp-section h3[data-tip], .kv .k[data-tip], .crumbs span[data-tip] {
+    text-decoration: underline dotted var(--faint); text-underline-offset: 3px;
+  }
+
+  .srclink2 { padding: 0; margin-top: 6px; font: 11px var(--mono); color: var(--computed); border-bottom: 1px dotted var(--computed); }
+  /* value diffs: neutral old → new, matching the log (no red/green — those mean error/effect here) */
+  .diff-old { color: var(--faint); }
+  .diff-new { color: var(--text); }
+
+  .svgtip {
+    display: none; position: fixed; z-index: 20; width: 250px;
+    background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 6px;
+    padding: 8px 10px; font: 400 11px/1.5 var(--sans); color: var(--text);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5); pointer-events: none; white-space: normal;
+  }
+
+  /* breadcrumbs of the focus walk */
+  .crumbs { display: flex; align-items: center; gap: 4px; font: 11px var(--mono); color: var(--faint);
+    padding: 4px 10px; border-bottom: 1px solid var(--border); flex: none; }
+  .crumbs button { color: var(--muted); padding: 0 2px; }
+  .crumbs button:hover { color: var(--text); }
+  .crumbs .here { color: var(--computed); }
+
+  /* ── main split ───────────────────────────────── */
+  .main { flex: 1; display: flex; min-height: 0; }
+  .canvas-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .canvas-wrap { flex: 1; position: relative; overflow: auto; min-height: 0; }
+  .canvas-wrap svg { display: block; min-width: 880px; width: 100%; height: 100%; min-height: 280px; }
+
+  .layer-label {
+    font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase;
+    fill: var(--faint);
+  }
+
+  /* nodes */
+  .node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; rx: 5; }
+  .node text { font: 500 10.5px var(--mono); fill: var(--text); }
+  .node .glyph { font: 600 10px var(--mono); }
+  .node .sub { font: 400 9.5px var(--mono); fill: var(--muted); }
+  .node .status { font: 500 9.5px var(--mono); }
+  .node.suspended .status, .node.suspended .sub { fill: var(--suspended); }
+  .node.error .status, .node.error .sub { fill: var(--danger); }
+  .node.atom rect     { stroke: color-mix(in srgb, var(--atom) 55%, var(--border)); }
+  .node.computed rect { stroke: color-mix(in srgb, var(--computed) 55%, var(--border)); }
+  .node.watcher rect  { stroke: color-mix(in srgb, var(--watcher) 55%, var(--border)); }
+  .node.effect rect   { stroke: color-mix(in srgb, var(--effect) 55%, var(--border)); }
+  .node.atom .glyph { fill: var(--atom); }
+  .node.computed .glyph { fill: var(--computed); }
+  .node.watcher .glyph { fill: var(--watcher); }
+  .node.effect .glyph { fill: var(--effect); }
+  .node.selected rect { stroke: var(--computed); stroke-width: 1.5; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--computed) 45%, transparent)); }
+
+  /* suspended / errored status: overrides kind coloring, never just a tint */
+  .node.suspended rect { stroke: var(--suspended); stroke-dasharray: 5 3; }
+  .node.suspended .glyph, .node.suspended .sub { fill: var(--suspended); }
+  .node.error rect { stroke: var(--danger); stroke-width: 1.5; }
+  .node.error .sub { fill: var(--danger); }
+  .badge circle { r: 7; stroke-width: 1.5; }
+  .badge text { font: 700 10px var(--mono); text-anchor: middle; }
+  .badge.err circle { fill: color-mix(in srgb, var(--danger) 20%, var(--bg)); stroke: var(--danger); }
+  .badge.err text { fill: var(--danger); }
+  .badge.sus circle { fill: color-mix(in srgb, var(--suspended) 20%, var(--bg)); stroke: var(--suspended); }
+  .badge.sus text { fill: var(--suspended); }
+
+  /* frontier stubs & clusters: the 100k-scale affordance */
+  .stub rect { fill: transparent; stroke: var(--border-strong); stroke-dasharray: 4 3; rx: 6; }
+  .stub text { font: 500 11px var(--mono); fill: var(--muted); }
+  .stub .count { fill: var(--text); font-weight: 600; }
+  .stub:hover rect { stroke: var(--muted); }
+  .cluster rect { fill: color-mix(in srgb, var(--atom) 4%, var(--surface)); stroke: color-mix(in srgb, var(--atom) 45%, var(--border)); stroke-dasharray: 4 3; rx: 6; }
+  .cluster text { font: 500 11px var(--mono); fill: var(--text); }
+  .cluster .sub { font: 400 10px var(--mono); fill: var(--muted); }
+  .cluster .glyph { fill: var(--atom); font: 600 11px var(--mono); }
+
+  /* edges */
+  .edge { stroke: var(--border-strong); stroke-width: 1.2; fill: none; marker-end: url(#arr); }
+  .edge.dim { opacity: .55; }
+
+  /* the causal thread: last propagation path */
+  .thread { stroke: var(--thread); stroke-width: 1.8; fill: none; marker-end: url(#arr-hot);
+    filter: drop-shadow(0 0 4px color-mix(in srgb, var(--thread) 55%, transparent)); }
+  .thread-anim { stroke: color-mix(in srgb, var(--thread) 45%, var(--base07)); stroke-width: 2; fill: none;
+    stroke-dasharray: 10 130; animation: travel 2.4s linear infinite; opacity: .9; }
+  @keyframes travel { to { stroke-dashoffset: -140; } }
+  .node.hot .ring { animation: nodepulse 2.4s ease-out infinite; }
+  @keyframes nodepulse { 0%, 60% { opacity: 0; } 70% { opacity: .8; } 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .thread-anim, .rec .pulse, .node.hot .ring { animation: none; }
+    .thread-anim { opacity: 0; }
+  }
+
+  .canvas-status {
+    position: absolute; left: 10px; bottom: 8px;
+    font: 10.5px var(--mono); color: var(--faint);
+  }
+  .canvas-status b { color: var(--muted); font-weight: 500; }
+
+  /* ── node event drawer ────────────────────────── */
+  .drawer { flex: none; border-top: 1px solid var(--border); background: var(--bg); }
+  .drawer-head {
+    display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  .drawer-head .name { color: var(--computed); font: 600 11px var(--mono); text-transform: none; letter-spacing: 0; }
+  .drawer-head .spacer { flex: 1; }
+  .drawer-head button { font: 11px var(--mono); color: var(--muted); text-transform: none; letter-spacing: 0; }
+  .drawer-head button:hover { color: var(--text); }
+  .drawer table { border-collapse: collapse; width: 100%; font: 11.5px var(--mono); }
+  .drawer td { padding: 3px 10px; border-bottom: 1px solid var(--row-line); white-space: nowrap; }
+  .drawer .id { color: var(--faint); width: 48px; }
+  .drawer .t { color: var(--muted); width: 84px; }
+  .drawer .took { color: var(--muted); width: 56px; text-align: right; }
+  .drawer .data { color: var(--muted); }
+  .chip {
+    display: inline-block; font: 500 10.5px var(--mono); padding: 1px 7px;
+    border-radius: 3px; border: 1px solid;
+  }
+  .chip.eval  { color: var(--computed); border-color: color-mix(in srgb, var(--computed) 45%, transparent); background: color-mix(in srgb, var(--computed) 9%, transparent); }
+  .chip.write { color: var(--atom); border-color: color-mix(in srgb, var(--atom) 45%, transparent); background: color-mix(in srgb, var(--atom) 9%, transparent); }
+
+  /* ── inspector ────────────────────────────────── */
+  .inspector {
+    width: 312px; flex: none; border-left: 1px solid var(--border);
+    background: var(--surface); overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .insp-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }
+  .insp-kind {
+    font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--computed); display: flex; align-items: center; gap: 6px;
+  }
+  .insp-kind .sw { width: 8px; height: 8px; border-radius: 2px; background: var(--computed); }
+  .insp-name { font: 600 15px var(--mono); margin-top: 4px; }
+  .insp-id { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
+  .insp-section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .insp-section h3 {
+    margin: 0 0 6px; font: 600 10px var(--sans); letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .insp-section h3 .win { float: right; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+  .kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 4px; font: 11px var(--mono); }
+  .kv .k { color: var(--muted); }
+  .kv .v { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .value-preview {
+    font: 11px var(--mono); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 8px 10px; color: var(--text); white-space: pre; overflow-x: auto;
+  }
+  .value-preview .key { color: var(--watcher); }
+  .value-preview .str { color: var(--effect); }
+  .value-preview .num { color: var(--atom); }
+
+  /* memo effectiveness bar */
+  .memo-bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 6px 0 6px; }
+  .memo-bar span { display: block; }
+  .memo-legend { font: 10.5px var(--mono); color: var(--muted); display: grid; row-gap: 2px; }
+  .memo-legend .sw { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 6px; }
+  .memo-legend b { color: var(--text); font-weight: 500; }
+
+  /* mini cause-chain spine (shared motif with event log) */
+  .spine { list-style: none; margin: 0; padding: 0; position: relative; }
+  .spine::before {
+    content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 2px;
+    background: linear-gradient(var(--thread), color-mix(in srgb, var(--thread) 35%, transparent));
+    box-shadow: 0 0 6px color-mix(in srgb, var(--thread) 40%, transparent); border-radius: 1px;
+  }
+  .spine li { position: relative; padding: 0 0 10px 22px; }
+  .spine li:last-child { padding-bottom: 0; }
+  .spine .knot {
+    position: absolute; left: 2px; top: 3px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--bg); border: 2px solid var(--thread);
+  }
+  .spine li.terminus .knot { background: var(--thread); box-shadow: 0 0 8px var(--thread); }
+  .spine .ev { font: 11px var(--mono); display: flex; gap: 7px; align-items: baseline; }
+  .spine .ev .id { color: var(--faint); }
+  .spine .ev button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
+  .spine .ev button:hover { color: var(--thread); border-bottom-color: var(--thread); }
+  .spine .because { font: 10px var(--mono); color: var(--muted); margin-top: 1px; }
+  .spine .because b { color: var(--text); font-weight: 500; }
+
+  /* ranked stat lists (upstream causes / downstream cost) */
+  .ranked { list-style: none; margin: 0; padding: 0; font: 11px var(--mono); }
+  .ranked li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .ranked .sw { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+  .ranked button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
+  .ranked button:hover { color: var(--computed); border-bottom-color: var(--computed); }
+  .ranked .bar { flex: 1; height: 5px; border-radius: 2px; background: var(--surface-2); position: relative; min-width: 30px; }
+  .ranked .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--border-strong); }
+  .ranked .stat { color: var(--muted); flex: none; }
+
+  .linklist { list-style: none; margin: 0; padding: 0; }
+  .linklist li { display: flex; align-items: center; gap: 7px; padding: 3px 0; white-space: nowrap; }
+  .linklist .meta { flex: none; }
+  .linklist .sw { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+  .linklist button { font: 11px var(--mono); color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
+  .linklist button:hover { color: var(--computed); border-bottom-color: var(--computed); }
+  .linklist .meta { font: 10px var(--mono); color: var(--faint); margin-left: auto; }
+  .sumline { font: 10.5px var(--mono); color: var(--muted); margin: 6px 0 4px; }
+  .sumline b { color: var(--text); font-weight: 500; }
+
+  /* ── theme button + dialog ── */
+  .theme-btn { align-self: center; margin-right: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font: 11px var(--mono); background: var(--surface); }
+  .theme-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .theme-dialog { width: 440px; max-width: 92vw; padding: 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .theme-dialog::backdrop { background: rgba(0,0,0,.5); }
+  .td-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .td-head strong { font: 600 13px var(--sans); }
+  .td-sub { font: 11px var(--mono); color: var(--faint); flex: 1; }
+  .td-x { color: var(--muted); font-size: 14px; cursor: pointer; }
+  .td-body { padding: 14px 16px; max-height: 62vh; overflow-y: auto; }
+  .td-swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 16px; }
+  .td-row { display: flex; align-items: center; gap: 8px; }
+  .td-row input[type=color] { width: 22px; height: 22px; flex: none; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; }
+  .td-key { font: 600 11px var(--mono); color: var(--text); width: 48px; flex: none; }
+  .td-role { font: 10px var(--mono); color: var(--faint); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .td-hex { width: 76px; flex: none; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: 11px var(--mono); padding: 3px 6px; }
+  .td-json-label { display: block; margin: 16px 0 5px; font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .td-json { width: 100%; height: 80px; resize: vertical; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: 11px var(--mono); padding: 8px; }
+  .td-note { font: 11px var(--mono); margin-top: 6px; min-height: 15px; color: var(--faint); }
+  .td-note.ok { color: var(--effect); }
+  .td-note.err { color: var(--danger); }
+  .td-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .td-foot .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 5px 12px; font: 11px var(--mono); background: var(--surface); cursor: pointer; }
+  .td-foot .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
+  .td-foot .td-apply { color: var(--bg); background: var(--thread); border-color: var(--thread); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- panel chrome: shared between views -->
+<header class="chrome">
+  <div class="brand"><span class="dot"></span>Signals</div>
+  <nav class="tabs">
+    <a class="tab" aria-current="page" href="graph-explorer.html">Graph</a>
+    <a class="tab" href="event-log.html">Log</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="theme-open" data-tip="Recolor the whole UI from 16 base colors. Paste a base16 theme as JSON or edit the hex codes.">Theme</button>
+  <div class="rec"><span class="pulse"></span>recording · ring 4096 · 0 dropped</div>
+</header>
+
+<!-- toolbar: search-first — the canvas only ever draws a focus set -->
+<div class="toolbar">
+  <select class="select" aria-label="Engine">
+    <option>cosignals · notion-web (103,412 nodes)</option>
+    <option>fx2 · bench harness (312 nodes)</option>
+  </select>
+  <input class="search" type="search" value="visibleTodos" placeholder="find a node… label or kind" aria-label="Find a node">
+  <div class="kind-filters" role="group" aria-label="Node kinds">
+    <button class="kchip on" data-tip="Atom: holds a value you set directly."><span class="sw" style="background:var(--atom)"></span>atom</button>
+    <button class="kchip on" data-tip="Computed: derives its value from other nodes; recomputes when they change."><span class="sw" style="background:var(--computed)"></span>computed</button>
+    <button class="kchip on" data-tip="Watcher: a UI subscription — usually a component that re-renders when its inputs change."><span class="sw" style="background:var(--watcher)"></span>watcher</button>
+    <button class="kchip on" data-tip="Effect: code that runs after changes commit (persistence, document.title, …)."><span class="sw" style="background:var(--effect)"></span>effect</button>
+    <button class="kchip on" data-tip="Errored nodes: the last recompute threw. Click to show only these."><span class="sw" style="background:var(--danger)"></span>error · 1</button>
+    <button class="kchip on" data-tip="Suspended nodes: a recompute is awaiting async. Click to show only these."><span class="sw" style="background:var(--suspended)"></span>suspended · 1</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="tbtn">Depth: 2</button>
+  <button class="tbtn" data-tip="Reposition visible nodes into a fresh layered layout. Nothing else ever moves a node: selection changes stroke only, and moving focus only hides or reveals nodes in place.">Tidy</button>
+  <button class="tbtn">Fit</button>
+</div>
+
+<!-- breadcrumb of the focus walk -->
+<nav class="crumbs" aria-label="Focus history">
+  <span data-tip="The canvas draws only the neighborhood of the focused node — never all 103,412. Double-click any node to move focus; this trail is where you've been.">focus:</span> <button>pageStore</button> › <button>todos</button> › <span class="here">visibleTodos</span>
+  <span style="margin-left:auto">double-click any node to re-focus</span>
+</nav>
+
+<div class="main">
+  <div class="canvas-col">
+    <!-- node list: fills the whole view until a node is selected -->
+    <section class="nodelist" aria-label="All nodes">
+      <table>
+        <thead>
+          <tr>
+            <th>name</th><th>kind</th><th>value</th><th>last event</th><th style="text-align:right"><button class="tbtn" style="padding:2px 8px" data-tip="Add metric columns — recomputes, time spent, % cached, downstream cost — ranked over the recorded window. Off by default: opt into the numbers.">+ metrics</button></th></tr>
+        </thead>
+        <tbody>
+          <tr class="selected" aria-selected="true">
+            <td><span class="dot" style="background:var(--computed)"></span>visibleTodos</td>
+            <td>computed</td><td class="dimtxt">Array(4)</td>
+            <td class="dimtxt">#484 recompute</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--atom)"></span>todos</td>
+            <td>atom</td><td class="dimtxt">Array(7)</td>
+            <td class="dimtxt">#482 update</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--atom)"></span>todoItem[*].done <span class="dimtxt">×2,431</span></td>
+            <td>atom ⊞</td><td class="dimtxt">boolean</td>
+            <td class="dimtxt">#449 set</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--computed)"></span>syncStatus</td>
+            <td>computed</td><td style="color:var(--danger)">! TypeError: cannot read 'id'</td>
+            <td class="dimtxt">#448 recompute-error</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--computed)"></span>avatarUrls</td>
+            <td>computed</td><td style="color:var(--suspended)">⧗ suspended 120ms · Api.ts:18</td>
+            <td class="dimtxt">#498 suspended</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--watcher)"></span>&lt;VirtualList&gt;</td>
+            <td>watcher</td><td class="dimtxt">—</td>
+            <td class="dimtxt">#487 notify</td><td></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--effect)"></span>document.title <span class="own">&lt;TodoFooter&gt;</span></td>
+            <td>useSignalEffect</td><td class="dimtxt">"4 remaining"</td>
+            <td class="dimtxt">#495 run</td><td></td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="5">… 103,405 more</td></tr>
+        </tfoot>
+      </table>
+    </section>
+    <div class="canvas-wrap">
+      <svg viewBox="0 0 900 280" aria-label="Focus graph around visibleTodos: 11 nodes shown of 103,412; frontier stubs carry the rest">
+        <defs>
+          <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--border-strong)"/>
+          </marker>
+          <marker id="arr-hot" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--thread)"/>
+          </marker>
+        </defs>
+
+        <!-- edges (dep → sub) -->
+        <path class="edge" d="M 258,158 C 296,158 296,126 330,126"/>
+        <path class="edge dim" d="M 278,212 C 308,212 304,134 330,134"/>
+        <path class="edge dim" d="M 258,258 C 304,258 304,140 330,140"/>
+        <path class="edge dim" d="M 540,124 C 572,124 572,142 600,142"/>
+        <path class="edge dim" d="M 540,130 C 576,130 576,188 600,188"/>
+        <path class="edge dim" d="M 540,136 C 580,136 580,242 600,242"/>
+
+        <!-- the causal thread: last propagation -->
+        <path class="thread" d="M 258,104 C 296,104 296,116 330,116" data-tip="The causal thread: the path the last change took through the graph."/>
+        <path class="thread" d="M 540,116 C 572,116 572,104 600,104" data-tip="The causal thread: the path the last change took through the graph."/>
+        <path class="thread-anim" d="M 258,104 C 296,104 296,116 330,116 L 540,116 C 572,116 572,104 600,104"/>
+
+        <!-- upstream -->
+        <g class="node atom hot" transform="translate(88,84)" data-tip="Atom: holds a value you set directly. Setting it started the highlighted propagation." aria-label="Atom: holds a value you set directly. Setting it started the highlighted propagation.">
+          <rect class="ring" width="170" height="40" rx="5" fill="none" stroke="var(--thread)" stroke-width="2" opacity="0"/>
+          <rect width="170" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">◆</tspan> todos <tspan class="sub">· Array(7)</tspan></text>
+          <text class="sub" x="8" y="30">3 sets · #482 · cost 124µs</text>
+        </g>
+        <g class="node atom" transform="translate(88,138)" data-tip="Atom: holds a value you set directly." aria-label="Atom: holds a value you set directly.">
+          <rect width="170" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">◆</tspan> filter <tspan class="sub">· "active"</tspan></text>
+          <text class="sub" x="8" y="30">1 set · clean</text>
+        </g>
+        <g class="cluster" transform="translate(88,192)" tabindex="0" role="button" aria-label="Expand cluster todoItem[*].done, 2,431 atoms" data-tip="2,431 per-item atoms collapsed into one box. Click to expand a page of them." aria-label="2,431 per-item atoms collapsed into one box. Click to expand a page of them.">
+          <rect width="190" height="40"/>
+          <text x="8" y="16"><tspan class="glyph">◆⊞</tspan> todoItem[*].done</text>
+          <text class="sub" x="8" y="30">×2,431 atoms · cost 31µs</text>
+        </g>
+        <g class="stub" transform="translate(88,246)" tabindex="0" role="button" aria-label="Expand 9 more transitive dependencies" data-tip="Dependencies not yet drawn. Click to expand." aria-label="Dependencies not yet drawn. Click to expand.">
+          <rect width="170" height="24"/>
+          <text x="8" y="16">⊞ <tspan class="count">9</tspan> more deps…</text>
+        </g>
+
+        <!-- focus: selection changes stroke only, never geometry -->
+        <g class="node computed selected" transform="translate(330,96)" data-tip="Computed: derives its value from other values; recomputes when they change." aria-label="Computed: derives its value from other values; recomputes when they change.">
+          <rect width="210" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">ƒ</tspan> visibleTodos <tspan class="sub">· Array(4)</tspan></text>
+          <text class="sub" x="8" y="30">14µs · 57% cached · 6 new 3 same</text>
+        </g>
+
+        <!-- downstream -->
+        <g class="node watcher hot" transform="translate(600,84)" data-tip="Watcher: a UI subscription — this component re-renders when notified that its inputs changed." aria-label="Watcher: a UI subscription — this component re-renders when notified that its inputs changed.">
+          <rect class="ring" width="180" height="40" rx="5" fill="none" stroke="var(--thread)" stroke-width="2" opacity="0"/>
+          <rect width="180" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">▣</tspan> &lt;VirtualList&gt;</text>
+          <text class="sub" x="8" y="30">notified #487 · render 210µs</text>
+        </g>
+        <g class="stub" transform="translate(600,130)" tabindex="0" role="button" aria-label="Expand 1,204 more subscribers" data-tip="Subscribers not yet drawn: 94 watchers, 12 effects, 1,098 computeds. Click to expand a page of them." aria-label="Subscribers not yet drawn: 94 watchers, 12 effects, 1,098 computeds. Click to expand a page of them.">
+          <rect width="200" height="24"/>
+          <text x="8" y="16">⊞ <tspan class="count">1,204</tspan> more subscribers</text>
+        </g>
+        <g class="node computed suspended" transform="translate(600,168)" data-tip="Computed, currently suspended: its recompute is awaiting a Promise. Api.ts:18 created it, 120ms ago." aria-label="Computed, currently suspended: its recompute is awaiting a Promise. Api.ts:18 created it, 120ms ago.">
+          <rect width="180" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">ƒ</tspan> avatarUrls</text>
+          <text class="sub status" x="8" y="30">⧗ awaiting Api.ts:18 · 120ms</text>
+        </g>
+        <g class="node computed error" transform="translate(600,222)" data-tip="Computed, currently errored: its last recompute threw. Select it to see the failing input’s cause chain." aria-label="Computed, currently errored: its last recompute threw. Select it to see the failing input’s cause chain.">
+          <rect width="180" height="40" rx="5"/>
+          <text x="8" y="16"><tspan class="glyph">ƒ</tspan> syncStatus</text>
+          <text class="sub status" x="8" y="30">! TypeError: reading 'id'</text>
+        </g>
+      </svg>
+      <div class="canvas-status">showing <b>11</b> of <b>103,412</b> nodes · focus <b>visibleTodos</b> depth 2 · <b>last propagation</b> #482 update todos → recompute → notify · 61µs</div>
+    </div>
+
+    <!-- node event drawer: the Events view, scoped to the selection -->
+    <section class="drawer" aria-label="Log entries for visibleTodos">
+      <div class="drawer-head">
+        Log <span class="name">visibleTodos</span> · 21 entries
+        <span class="spacer"></span>
+        <button>Open in Log ↗</button>
+        <button aria-expanded="true">▾ hide</button>
+      </div>
+      <table>
+        <tbody>
+          <tr>
+            <td class="id">#484</td><td class="t">12.414ms</td>
+            <td><span class="chip eval" data-tip="Recompute: this computed re-ran its function.">recompute</span></td>
+            <td class="data">new result · depth:1 · cause: #482 update todos</td><td class="took">14µs</td>
+          </tr>
+          <tr>
+            <td class="id">#473</td><td class="t">12.092ms</td>
+            <td><span class="chip eval" data-tip="Recompute: this computed re-ran its function.">recompute</span></td>
+            <td class="data">new result · depth:1 · cause: #471 set filter</td><td class="took">9µs</td>
+          </tr>
+          <tr>
+            <td class="id">#452</td><td class="t">11.780ms</td>
+            <td><span class="chip eval" data-tip="Recompute: this computed re-ran its function.">recompute</span></td>
+            <td class="data">same result · depth:1 · cause: #449 set todoItem[3].text</td><td class="took">11µs</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+
+  <!-- inspector: visibleTodos selected -->
+  <aside class="inspector" aria-label="Node inspector">
+    <div class="insp-head">
+      <div class="insp-kind"><span class="sw"></span>Computed</div>
+      <div class="insp-name">visibleTodos</div>
+      <div class="insp-id">computed#6 · engine cosignals/notion-web</div>
+      <button class="srclink2" data-tip="Copies this node as agent-ready markdown: identity, value, stats, dependencies, and the why-this-recomputed chain with source links. Paste it into any AI chat.">⧉ copy as markdown</button>
+    </div>
+
+    <div class="insp-section">
+      <h3>▾ Value</h3>
+      <div class="value-preview">[
+  { <span class="key">id</span>: <span class="num">3</span>, <span class="key">text</span>: <span class="str">"water plants"</span>, … },
+  { <span class="key">id</span>: <span class="num">5</span>, <span class="key">text</span>: <span class="str">"call bank"</span>, … },
+  … 2 more
+]</div>
+    </div>
+
+    <div class="insp-section">
+      <h3 data-tip="Every time this value was read, it was answered one of three ways: from cache (nothing changed, no work), recomputed with the same result (downstream work stopped), or recomputed with a new result (changes flowed downstream).">▾ Evaluation <span class="win">recorded window</span></h3>
+      <div class="kv">
+        <span class="k">last recompute</span><span class="v">#484 · 14µs · depth 1</span>
+        <span class="k">equals</span><span class="v">shallowArray</span>
+        <span class="k" data-tip="Total time spent running this node's function in the recorded window.">recompute time</span><span class="v">131µs · 9 recomputes</span>
+        <span class="k" data-tip="How many times this value was read in the recorded window. Each read is answered from cache or by recomputing — the bar below shows the split.">reads</span><span class="v">21 in window</span>
+      </div>
+      <div class="memo-bar" role="img" aria-label="21 reads: 12 answered from cache, 3 recomputed with same result, 6 recomputed with new result">
+        <span style="width:57%; background:var(--effect)"></span>
+        <span style="width:14%; background:var(--system)"></span>
+        <span style="width:29%; background:var(--computed)"></span>
+      </div>
+      <div class="memo-legend">
+        <span><span class="sw" style="background:var(--effect)"></span><b>12×</b> from cache — no work · 57%</span>
+        <span><span class="sw" style="background:var(--system)"></span><b>3×</b> recomputed — same result · 14% · saved ~258µs downstream</span>
+        <span><span class="sw" style="background:var(--computed)"></span><b>6×</b> recomputed — new result · 29%</span>
+      </div>
+    </div>
+
+    <div class="insp-section">
+      <h3 data-tip="The chain of entries that led to this node's most recent recompute, starting from user input.">▾ Why this recomputed</h3>
+      <ol class="spine">
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#481</span><button>click button#toggle-3</button></div>
+          <div class="because">onToggle · <button style="padding:0; color:var(--computed); border-bottom:1px dotted var(--computed)">TodoItem.tsx:42</button></div>
+        </li>
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#482</span><button>update todos</button></div>
+          <div class="because">todos[3].done: <span class="diff-old">false</span> → <span class="diff-new">true</span></div>
+        </li>
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#483</span><button>batch toggleTodo begins</button></div>
+          <div class="because">groups these changes so reactions run once</div>
+        </li>
+        <li class="terminus">
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#484</span><button>recompute visibleTodos</button></div>
+          <div class="because">dep <b>todos</b> changed · 14µs</div>
+        </li>
+      </ol>
+    </div>
+
+    <div class="insp-section">
+      <h3 data-tip="Everything this node reads, directly or transitively. Changes up here are why this node recomputes. Expand for direct dependencies and which atoms cause the most recomputes.">▸ Upstream <span class="win">2 direct · 2,443 transitive</span></h3>
+    </div>
+
+    <div class="insp-section">
+      <h3 data-tip="Everything that reacts when this node changes, directly or transitively. Downstream cost is what a change of this node spends here.">▾ Downstream <span class="win">3 direct · 1,207 total</span></h3>
+      <ul class="linklist">
+        <li><span class="sw" style="background:var(--watcher)"></span><button>&lt;VirtualList&gt;</button><span class="meta">notified #487</span></li>
+        <li><span class="sw" style="background:var(--suspended)"></span><button>avatarUrls</button><span class="meta" style="color:var(--suspended)">⧗ suspended 120ms</span></li>
+        <li><span class="sw" style="background:var(--danger)"></span><button>syncStatus</button><span class="meta" style="color:var(--danger)">! TypeError</span></li>
+      </ul>
+      <div class="sumline"><b>94 watchers · 12 effects · 1,098 computeds</b></div>
+      <div class="sumline">cost per change <b>~86µs</b></div>
+      <div class="sumline"><span data-tip="Downstream nodes ranked by time attributable to this node’s changes: walk each change’s consequence chain, sum recompute/effect/render durations per node, over the recorded window.">costliest when this changes</span></div>
+      <ul class="ranked">
+        <li><span class="sw" style="background:var(--watcher)"></span><button>&lt;VirtualList&gt;</button>
+          <span class="bar"><i style="width:72%; background:var(--watcher)"></i></span><span class="stat">34µs</span></li>
+        <li><span class="sw" style="background:var(--effect)"></span><button>persistTodos</button>
+          <span class="bar"><i style="width:44%; background:var(--effect)"></i></span><span class="stat">21µs</span></li>
+        <li><span class="sw" style="background:var(--computed)"></span><button>groupedByDay</button>
+          <span class="bar"><i style="width:26%; background:var(--computed)"></i></span><span class="stat">12µs</span></li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+  const svgtip = document.createElement('div');
+  svgtip.className = 'svgtip';
+  document.body.appendChild(svgtip);
+  function showTip(el) {
+    const r = el.getBoundingClientRect();
+    svgtip.textContent = el.dataset.tip;
+    svgtip.style.display = 'block';
+    const h = svgtip.offsetHeight;
+    const below = r.bottom + 6 + h <= innerHeight;
+    svgtip.style.top = (below ? r.bottom + 6 : Math.max(6, r.top - h - 6)) + 'px';
+    svgtip.style.left = Math.max(6, Math.min(r.left, innerWidth - 262)) + 'px';
+  }
+  const hideTip = () => { svgtip.style.display = 'none'; };
+  for (const el of document.querySelectorAll('[data-tip]')) {
+    el.addEventListener('mouseenter', () => showTip(el));
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focus', () => showTip(el));
+    el.addEventListener('blur', hideTip);
+  }
+</script>
+
+<dialog id="theme-dialog" class="theme-dialog" aria-label="Theme">
+  <form method="dialog">
+    <div class="td-head">
+      <strong>Theme</strong>
+      <span class="td-sub">16 base colors — everything derives from these</span>
+      <button value="cancel" class="td-x" aria-label="Close">✕</button>
+    </div>
+    <div class="td-body">
+      <div class="td-swatches" id="td-swatches"></div>
+      <label class="td-json-label" for="td-json">Or paste a base16 theme (JSON)</label>
+      <textarea id="td-json" class="td-json" spellcheck="false" placeholder='{ "base00": "#191919", "base01": "#202020", … }'></textarea>
+      <div class="td-note" id="td-note"></div>
+    </div>
+    <div class="td-foot">
+      <button value="cancel" class="tbtn">Cancel</button>
+      <button type="button" class="tbtn" id="td-reset">Reset to default</button>
+      <button type="button" class="tbtn td-apply" id="td-apply">Apply</button>
+    </div>
+  </form>
+</dialog>
+<script>
+(() => {
+  const KEYS = ['base00','base01','base02','base03','base04','base05','base06','base07','base08','base09','base0A','base0B','base0C','base0D','base0E','base0F'];
+  const ROLE = {base00:'background',base01:'panels',base02:'lines',base03:'faint text',base04:'muted text',base05:'text',base06:'bright',base07:'brightest',base08:'red · error',base09:'orange',base0A:'yellow · you',base0B:'green · effect',base0C:'cyan · compute',base0D:'blue · async',base0E:'purple · render',base0F:'pink'};
+  const DEFAULT = {base00:'#191919',base01:'#202020',base02:'#383836',base03:'#7d7a75',base04:'#a19e99',base05:'#d4d3cf',base06:'#f0efed',base07:'#f9f8f7',base08:'#e97366',base09:'#de9255',base0A:'#eac26b',base0B:'#72bc8f',base0C:'#4fb9c9',base0D:'#5e9fe8',base0E:'#bf8eda',base0F:'#df84a8'};
+  const dlg = document.getElementById('theme-dialog');
+  const wrap = document.getElementById('td-swatches');
+  const json = document.getElementById('td-json');
+  const note = document.getElementById('td-note');
+  const root = document.documentElement;
+  const norm = h => { h = String(h).trim(); if (!h.startsWith('#')) h = '#' + h; return /^#[0-9a-fA-F]{6}$/.test(h) ? h.toLowerCase() : null; };
+  const inputs = {};
+  for (const k of KEYS) {
+    const row = document.createElement('div'); row.className = 'td-row';
+    const col = document.createElement('input'); col.type = 'color';
+    const key = document.createElement('span'); key.className = 'td-key'; key.textContent = k;
+    const role = document.createElement('span'); role.className = 'td-role'; role.textContent = ROLE[k];
+    const hex = document.createElement('input'); hex.className = 'td-hex'; hex.value = DEFAULT[k];
+    col.addEventListener('input', () => { hex.value = col.value; syncJSON(); });
+    hex.addEventListener('input', () => { const n = norm(hex.value); if (n) col.value = n; syncJSON(); });
+    row.append(col, key, role, hex); wrap.appendChild(row);
+    inputs[k] = { col, hex };
+  }
+  const read = () => { const o = {}; for (const k of KEYS) { const n = norm(inputs[k].hex.value); if (n) o[k] = n; } return o; };
+  const fill = t => { for (const k of KEYS) if (t[k]) { const n = norm(t[k]); if (n) { inputs[k].hex.value = n; inputs[k].col.value = n; } } };
+  const apply = t => { for (const k of KEYS) if (t[k]) root.style.setProperty('--' + k, t[k]); };
+  const current = () => { const o = {}; const cs = getComputedStyle(root); for (const k of KEYS) o[k] = (cs.getPropertyValue('--' + k).trim() || DEFAULT[k]); return o; };
+  const syncJSON = () => { json.value = JSON.stringify(read(), null, 2); };
+  json.addEventListener('input', () => {
+    let data; try { data = JSON.parse(json.value); } catch { note.className = 'td-note err'; note.textContent = 'Not valid JSON yet.'; return; }
+    const pal = data.palette || data;
+    let n = 0; for (const k of KEYS) if (typeof pal[k] === 'string' && norm(pal[k])) { inputs[k].hex.value = norm(pal[k]); inputs[k].col.value = norm(pal[k]); n++; }
+    note.className = 'td-note ok'; note.textContent = n + ' of 16 colors loaded — Apply to use.';
+  });
+  document.getElementById('theme-open').addEventListener('click', () => { fill(current()); syncJSON(); note.textContent = ''; note.className = 'td-note'; dlg.showModal(); });
+  document.getElementById('td-apply').addEventListener('click', () => { apply(read()); dlg.close(); });
+  document.getElementById('td-reset').addEventListener('click', () => { fill(DEFAULT); apply(DEFAULT); syncJSON(); note.className = 'td-note'; note.textContent = 'Reset to default.'; });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signals devtools — Log (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* ── base16 core palette — the only 16 values a theme sets. ──
+       Everything below derives from these via color-mix(). Swap them
+       (Theme button) and the whole UI re-tints. Default: a graphite dark set. */
+    --base00: #191919;  /* background */
+    --base01: #202020;  /* panels, chrome */
+    --base02: #383836;  /* lines, node strokes */
+    --base03: #7d7a75;  /* faint text */
+    --base04: #a19e99;  /* muted text */
+    --base05: #d4d3cf;  /* text */
+    --base06: #f0efed;  /* bright text */
+    --base07: #f9f8f7;  /* brightest */
+    --base08: #e97366;  /* red   — errors */
+    --base09: #de9255;  /* orange */
+    --base0A: #eac26b;  /* yellow — you (set/update) */
+    --base0B: #72bc8f;  /* green  — effects */
+    --base0C: #4fb9c9;  /* cyan   — computing */
+    --base0D: #5e9fe8;  /* blue   — awaiting async */
+    --base0E: #bf8eda;  /* purple — rendering */
+    --base0F: #df84a8;  /* pink */
+
+    /* ── surfaces & ink, derived from the base16 grays ── */
+    --bg: var(--base00);
+    --surface: var(--base01);
+    --surface-2: color-mix(in srgb, var(--base02) 45%, var(--base01));
+    --elevated: color-mix(in srgb, var(--base02) 70%, var(--base01));
+    --border: color-mix(in srgb, var(--base02) 60%, var(--base00));
+    --border-strong: var(--base02);
+    --row-line: color-mix(in srgb, var(--base01) 70%, var(--base00));
+    --text: var(--base05);
+    --muted: var(--base04);
+    --faint: var(--base03);
+
+    /* ── roles: who acted (mapped onto base16 accent slots) ── */
+    --atom: var(--base0A);
+    --computed: var(--base0C);
+    --watcher: var(--base0E);
+    --effect: var(--base0B);
+    --danger: var(--base08);
+    --suspended: var(--base0D);
+    --system: var(--base04);
+    --thread: color-mix(in srgb, var(--base0A) 72%, var(--base07));
+
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 12px/1.45 var(--sans);
+    display: flex; flex-direction: column;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--thread); outline-offset: 1px; border-radius: 3px; }
+
+  /* ── panel chrome (identical to graph view) ───── */
+  .chrome {
+    display: flex; align-items: stretch;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 10px; flex: none;
+  }
+  .brand { display: flex; align-items: center; gap: 7px; padding: 8px 12px 8px 2px; margin-right: 4px; font-weight: 600; letter-spacing: .02em; }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--thread); box-shadow: 0 0 8px var(--thread); }
+  .tabs { display: flex; align-items: stretch; }
+  .tab { display: flex; align-items: center; padding: 0 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; font-weight: 500; }
+  .tab[aria-current="page"] { color: var(--text); border-bottom-color: var(--thread); }
+  .tab:hover { color: var(--text); }
+  .chrome .spacer { flex: 1; }
+  .rec { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); }
+  .rec .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .rec .pulse { animation: none; } }
+
+  /* ── controls + timeline ──────────────────────── */
+  .controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); flex: none;
+  }
+  .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; background: var(--surface); }
+  .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
+  .search {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--muted); font: 11px var(--mono); padding: 4px 8px; width: 200px;
+  }
+  .kind-filters { display: flex; gap: 4px; }
+  .kchip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font: 11px var(--mono); padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  }
+  .kchip .sw { width: 8px; height: 8px; border-radius: 2px; }
+  .kchip.on { color: var(--text); border-color: var(--border-strong); }
+  .controls .spacer { flex: 1; }
+
+  .timeline {
+    flex: none; border-bottom: 1px solid var(--border); padding: 6px 10px 8px;
+    background: var(--bg);
+  }
+  .timeline svg { display: block; width: 100%; height: 56px; }
+  .tl-label { font: 9.5px var(--mono); fill: var(--faint); }
+  .tl-span { rx: 2; }
+  .tl-window { fill: color-mix(in srgb, var(--thread) 8%, transparent); stroke: var(--thread); stroke-width: 1; stroke-dasharray: 3 3; }
+
+  /* ── main split ───────────────────────────────── */
+  .main { flex: 1; display: flex; min-height: 0; }
+
+  /* event tree table */
+  .log { flex: 1; overflow-y: auto; font: 11.5px var(--mono); }
+  .log table { border-collapse: collapse; width: 100%; }
+  .log th {
+    position: sticky; top: 0; background: var(--surface); z-index: 1;
+    font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); text-align: left; padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .log td { padding: 4px 10px; border-bottom: 1px solid var(--row-line); vertical-align: baseline; white-space: nowrap; }
+  .log tr:hover td { background: var(--surface); }
+  .log .id { color: var(--faint); width: 48px; }
+  .log .t { color: var(--muted); width: 84px; }
+  .log .t small { color: var(--faint); }
+  .log .took { color: var(--muted); width: 56px; text-align: right; }
+  .log .data { color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 40%; }
+  .log .name button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
+  .log .name button:hover { color: var(--computed); border-bottom-color: var(--computed); }
+
+  /* tree guides: the table IS the consequence tree. Guides are drawn, not
+     box-drawing characters: .g cells render vertical/tee/elbow connectors. */
+  .kcell { display: flex; align-items: center; }
+  .kcell .ntext { margin-left: 3px; }
+  .g { width: 14px; align-self: stretch; position: relative; flex: none; }
+  .g.vert::before, .g.tee::before {
+    content: ""; position: absolute; left: 6px; top: -6px; bottom: -6px;
+    width: 1px; background: var(--border-strong);
+  }
+  .g.elbow::before {
+    content: ""; position: absolute; left: 6px; top: -6px; height: calc(50% + 6px);
+    width: 1px; background: var(--border-strong);
+  }
+  .g.tee::after, .g.elbow::after {
+    content: ""; position: absolute; left: 7px; top: calc(50% - 1px);
+    width: 7px; height: 1px; background: var(--border-strong);
+  }
+
+  [data-tip] { cursor: help; }
+  th[data-tip], .cz-section h3[data-tip] {
+    text-decoration: underline dotted var(--faint); text-underline-offset: 3px;
+  }
+
+  .tbtn.mode { border: none; border-radius: 0; }
+  .tbtn.mode[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
+  .causeref { display: none; color: var(--faint); font-size: 10px; margin-left: 8px; }
+  .log.flat .g { display: none; }
+  .log:not(.flat) .endrow { display: none; }
+  .log:not(.flat) .phase { display: none; }
+  .log:not(.flat) .flatonly { display: none; }
+  .log.flat .treeonly { display: none; }
+  .endrow td { color: var(--faint); }
+  .log.flat .causeref { display: inline; }
+
+  .svgtip {
+    display: none; position: fixed; z-index: 20; width: 250px;
+    background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 6px;
+    padding: 8px 10px; font: 400 11px/1.5 var(--sans); color: var(--text);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5); pointer-events: none; white-space: normal;
+  }
+
+  .chip {
+    display: inline-block; font: 500 10.5px var(--mono); padding: 1px 7px;
+    border-radius: 3px; border: 1px solid;
+  }
+  .chip.write   { color: var(--atom); border-color: color-mix(in srgb, var(--atom) 45%, transparent); background: color-mix(in srgb, var(--atom) 9%, transparent); }
+  .chip.eval    { color: var(--computed); border-color: color-mix(in srgb, var(--computed) 45%, transparent); background: color-mix(in srgb, var(--computed) 9%, transparent); }
+  .chip.render  { color: var(--watcher); border-color: color-mix(in srgb, var(--watcher) 45%, transparent); background: color-mix(in srgb, var(--watcher) 9%, transparent); }
+  .chip.effect  { color: var(--effect); border-color: color-mix(in srgb, var(--effect) 45%, transparent); background: color-mix(in srgb, var(--effect) 9%, transparent); }
+  .chip.batch   { color: var(--atom); border-color: color-mix(in srgb, var(--atom) 45%, transparent); background: color-mix(in srgb, var(--atom) 9%, transparent); }
+  .chip.danger  { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+  .chip.suspended { color: var(--suspended); border-color: color-mix(in srgb, var(--suspended) 45%, transparent); background: color-mix(in srgb, var(--suspended) 9%, transparent); }
+  .chip.origin  { color: var(--thread); border-color: color-mix(in srgb, var(--thread) 45%, transparent); background: color-mix(in srgb, var(--thread) 9%, transparent); }
+
+  .srclink { padding: 0; color: var(--computed); border-bottom: 1px dotted var(--computed); font: inherit; }
+  .diff-old { color: var(--faint); }
+  .diff-new { color: var(--text); }
+
+  /* old/new value diff blocks (Root change section) */
+  .diff-block {
+    font: 11px var(--mono); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 8px 10px; white-space: pre; overflow-x: auto; color: var(--muted);
+  }
+  .diff-block .del { color: var(--danger); }
+  .diff-block .add { color: var(--effect); }
+  .diff-block .del::before { content: "- "; }
+  .diff-block .add::before { content: "+ "; }
+  .diff-block .ctx::before { content: "  "; }
+  .diff-block .ctx { display: block; }
+  .diff-block .del, .diff-block .add { display: block; }
+
+  /* operation group headers = root events (cause = 0) */
+  tr.op-head td {
+    background: var(--surface-2); border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); padding-top: 5px; padding-bottom: 5px;
+  }
+  tr.op-head:hover td { background: var(--surface-2); }
+  .op-title { font-weight: 500; }
+  tr.op-head .data { overflow: visible; max-width: none; width: auto; white-space: nowrap; }
+  .op-title .tw { color: var(--faint); font-weight: 400; }
+  .caret { color: var(--faint); width: 10px; display: inline-block; }
+
+  tr.selected td { background: color-mix(in srgb, var(--thread) 8%, var(--bg)) !important; }
+  tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
+
+  tr.collapsed-summary td { color: var(--faint); font-style: italic; }
+
+  /* ── causality panel ──────────────────────────── */
+  .causality {
+    width: 330px; flex: none; border-left: 1px solid var(--border);
+    background: var(--surface); overflow-y: auto;
+  }
+  .cz-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }
+  .cz-kicker { font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .cz-title { font: 600 13px var(--mono); margin-top: 4px; color: var(--effect); }
+  .cz-sub { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
+  .cz-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .cz-section h3 { margin: 0 0 10px; font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+  /* the causal thread: chain spine */
+  .spine { list-style: none; margin: 0; padding: 0; position: relative; }
+  .spine::before {
+    content: ""; position: absolute; left: 7px; top: 10px; bottom: 10px; width: 2px;
+    background: linear-gradient(var(--thread), color-mix(in srgb, var(--thread) 70%, transparent));
+    box-shadow: 0 0 6px color-mix(in srgb, var(--thread) 40%, transparent); border-radius: 1px;
+  }
+  .spine li { position: relative; padding: 0 0 14px 26px; }
+  .spine li:last-child { padding-bottom: 0; }
+  .spine .knot {
+    position: absolute; left: 2px; top: 4px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--bg); border: 2px solid var(--thread);
+  }
+  .spine li.terminus .knot { background: var(--thread); box-shadow: 0 0 8px var(--thread); }
+  .spine .ev { font: 11.5px var(--mono); display: flex; gap: 8px; align-items: baseline; }
+  .spine .ev .id { color: var(--faint); }
+  .spine .ev button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
+  .spine .ev button:hover { color: var(--thread); border-bottom-color: var(--thread); }
+  .spine .because { font: 10.5px var(--mono); color: var(--muted); margin-top: 2px; }
+  .spine .because b { color: var(--text); font-weight: 500; }
+
+  .rollup { font: 11px var(--mono); color: var(--muted); }
+  .impact-card {
+    margin-top: 8px; font: 11px/1.7 var(--mono); color: var(--muted);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px;
+  }
+  .impact-card b { color: var(--text); font-weight: 500; }
+  .rollup b { color: var(--text); font-weight: 500; }
+
+  /* ── theme button + dialog ── */
+  .theme-btn { align-self: center; margin-right: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font: 11px var(--mono); background: var(--surface); }
+  .theme-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .theme-dialog { width: 440px; max-width: 92vw; padding: 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .theme-dialog::backdrop { background: rgba(0,0,0,.5); }
+  .td-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .td-head strong { font: 600 13px var(--sans); }
+  .td-sub { font: 11px var(--mono); color: var(--faint); flex: 1; }
+  .td-x { color: var(--muted); font-size: 14px; cursor: pointer; }
+  .td-body { padding: 14px 16px; max-height: 62vh; overflow-y: auto; }
+  .td-swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 16px; }
+  .td-row { display: flex; align-items: center; gap: 8px; }
+  .td-row input[type=color] { width: 22px; height: 22px; flex: none; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; }
+  .td-key { font: 600 11px var(--mono); color: var(--text); width: 48px; flex: none; }
+  .td-role { font: 10px var(--mono); color: var(--faint); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .td-hex { width: 76px; flex: none; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: 11px var(--mono); padding: 3px 6px; }
+  .td-json-label { display: block; margin: 16px 0 5px; font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .td-json { width: 100%; height: 80px; resize: vertical; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: 11px var(--mono); padding: 8px; }
+  .td-note { font: 11px var(--mono); margin-top: 6px; min-height: 15px; color: var(--faint); }
+  .td-note.ok { color: var(--effect); }
+  .td-note.err { color: var(--danger); }
+  .td-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .td-foot .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 5px 12px; font: 11px var(--mono); background: var(--surface); cursor: pointer; }
+  .td-foot .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
+  .td-foot .td-apply { color: var(--bg); background: var(--thread); border-color: var(--thread); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="chrome">
+  <div class="brand"><span class="dot"></span>Signals</div>
+  <nav class="tabs">
+    <a class="tab" href="graph-explorer.html">Graph</a>
+    <a class="tab" aria-current="page" href="event-log.html">Log</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="theme-open" data-tip="Recolor the whole UI from 16 base colors. Paste a base16 theme as JSON or edit the hex codes.">Theme</button>
+  <div class="rec"><span class="pulse"></span>recording · ring 4096 · 0 dropped</div>
+</header>
+
+<div class="controls">
+  <button class="tbtn">⏸ Pause</button>
+  <button class="tbtn">Clear</button>
+  <span role="group" aria-label="Ordering" style="display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden">
+    <button class="tbtn mode" data-mode="tree" aria-pressed="false" data-tip="Nest entries under the entry that caused them — the view for why questions.">Tree</button>
+    <button class="tbtn mode" data-mode="flat" aria-pressed="true" data-tip="Strict time order — what actually interleaved. ⤷#id shows each entry’s cause; click it to jump there. The default.">Flat</button>
+  </span>
+  <input class="search" type="search" placeholder="filter… kind:set name:todos" aria-label="Filter events">
+  <div class="kind-filters" role="group" aria-label="Entry kinds">
+    <button class="kchip on" data-tip="Changes to atoms: set (assigned a value) and update (computed from the previous value) — where every change starts."><span class="sw" style="background:var(--atom)"></span>set/update</button>
+    <button class="kchip on" data-tip="Recompute: a computed re-ran its function."><span class="sw" style="background:var(--computed)"></span>recompute</button>
+    <button class="kchip on" data-tip="Rendering: notify (a watcher was told its inputs changed) and render (a render pass, start to commit)."><span class="sw" style="background:var(--watcher)"></span>render</button>
+    <button class="kchip on" data-tip="Effects — code that runs after changes commit: effect() (library) and useSignalEffect (component)."><span class="sw" style="background:var(--effect)"></span>effect</button>
+    <button class="kchip" data-tip="Library bookkeeping with no user intent behind it: batch settle/retire, render pass phases (start/end/commit), slots, clocks. Off by default. Batch begins and transitions stay visible — they are structure, not noise."><span class="sw" style="background:var(--system)"></span>internals</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="tbtn">Collapse to roots</button>
+  <button class="tbtn" data-tip="Copy the current view as markdown — respects the tree/flat toggle and filters. Cause chains, value diffs, timings, and raw source frames included, so you can paste it into any AI chat and ask.">⧉ Copy as markdown</button>
+</div>
+
+<!-- timeline strip: spans for batches & render passes, ticks for events -->
+<div class="timeline">
+  <svg viewBox="0 0 1200 56" preserveAspectRatio="none" aria-label="Timeline: 340ms window, batches 29–31, render passes 110–112">
+    <!-- batch spans -->
+    <rect class="tl-span" x="60"  y="6" width="150" height="9" fill="var(--border)"/>
+    <rect class="tl-span" x="330" y="6" width="120" height="9" fill="var(--border)"/>
+    <rect class="tl-span" x="880" y="6" width="230" height="9" fill="var(--border-strong)" data-tip="Batch 31 (action toggleTodo): atom changes grouped so reactions run once, after all of them land. This is the signals library’s grouping — not React batching. React work appears below as render passes."/>
+    <text class="tl-label" x="62"  y="27">batch 29</text>
+    <text class="tl-label" x="332" y="27">batch 30</text>
+    <text class="tl-label" x="882" y="27">toggleTodo · batch 31</text>
+    <!-- render pass spans -->
+    <rect class="tl-span" x="120" y="32" width="70" height="9" fill="color-mix(in srgb, var(--watcher) 35%, transparent)"/>
+    <rect class="tl-span" x="380" y="32" width="55" height="9" fill="color-mix(in srgb, var(--watcher) 35%, transparent)"/>
+    <rect class="tl-span" x="952" y="32" width="88" height="9" fill="color-mix(in srgb, var(--watcher) 55%, transparent)" data-tip="Render pass 112: React rendering for root app. Several notifies can share one render pass — that is React’s automatic batching, which is separate from signals batches."/>
+    <text class="tl-label" x="1128" y="41">render 112</text>
+    <!-- event ticks -->
+    <g>
+      <rect x="62"  y="44" width="2" height="8" fill="var(--atom)"/><rect x="88" y="44" width="2" height="8" fill="var(--computed)"/>
+      <rect x="102" y="44" width="2" height="8" fill="var(--computed)"/><rect x="150" y="44" width="2" height="8" fill="var(--watcher)"/>
+      <rect x="196" y="44" width="2" height="8" fill="var(--effect)"/><rect x="332" y="44" width="2" height="8" fill="var(--atom)"/>
+      <rect x="356" y="44" width="2" height="8" fill="var(--danger)"/><rect x="398" y="44" width="2" height="8" fill="var(--watcher)"/>
+      <rect x="440" y="44" width="2" height="8" fill="var(--effect)"/><rect x="884" y="44" width="2" height="8" fill="var(--atom)"/>
+      <rect x="900" y="44" width="2" height="8" fill="var(--computed)"/><rect x="908" y="44" width="2" height="8" fill="var(--computed)"/>
+      <rect x="922" y="44" width="2" height="8" fill="var(--watcher)"/><rect x="938" y="44" width="2" height="8" fill="var(--watcher)"/>
+      <rect x="1005" y="44" width="2" height="8" fill="var(--watcher)"/><rect x="1046" y="44" width="2" height="8" fill="var(--effect)"/>
+      <rect x="1060" y="44" width="2" height="8" fill="var(--effect)"/><rect x="1082" y="44" width="2" height="8" fill="var(--system)"/>
+    </g>
+    <!-- selected window -->
+    <rect class="tl-window" x="874" y="2" width="246" height="52" rx="3"/>
+  </svg>
+</div>
+
+<div class="main">
+  <div class="log" role="region" aria-label="Log tree">
+    <table>
+      <thead>
+        <tr><th>#</th><th data-tip="When this happened — the start moment, never a duration. One anchor for every row: time since recording started. The offset into the operation shows in the panel on selection.">when</th><th data-tip="What happened. Chips are colored by category; hover a filter chip above for definitions.">kind</th><th data-tip="The node this event is about. Indentation shows what caused what.">name</th><th data-tip="What came of it, in plain words. Turn on internals for raw library fields.">outcome</th><th style="text-align:right" data-tip="How long it ran, where a duration exists: recomputes, effects, render passes, whole batches. Blank means effectively instant.">took</th></tr>
+      </thead>
+      <tbody>
+        <tr class="op-head">
+          <td class="id"><span class="caret">▸</span>#471</td>
+          <td class="t">12.081ms</td>
+          <td><span class="chip write" data-tip="atom.set(value): the atom was assigned a new value — the root cause of everything nested beneath.">set</span></td>
+          <td class="name"><button>filter</button></td>
+          <td class="data op-title"><span class="diff-old">"all"</span> → <span class="diff-new">"active"</span> <span class="tw">· 10 entries · batch 30</span></td>
+          <td class="took">74µs</td>
+        </tr>
+        <tr class="op-head">
+          <td class="id"><span class="caret">▾</span>#481</td>
+          <td class="t">12.403ms</td>
+          <td><span class="chip origin">click</span></td>
+          <td class="name"><button>button#toggle-3</button></td>
+          <td class="data op-title">onToggle · <button class="srclink">TodoItem.tsx:42</button> <span class="tw">· 14 entries · re-rendered 2</span></td>
+          <td class="took">96µs</td>
+        </tr>
+        <tr>
+          <td class="id">#482</td><td class="t">12.404ms</td>
+          <td><span class="chip write" data-tip="atom.update(fn): the atom’s value was computed from its previous value — the root cause of everything nested beneath.">update</span></td>
+          <td class="name"><div class="kcell"><span class="g elbow"></span><span class="ntext"><button>todos</button><button class="causeref">⤷#481</button></span></div></td>
+          <td class="data">todos[3].done: <span class="diff-old">false</span> → <span class="diff-new">true</span></td>
+          <td class="took"></td>
+        </tr>
+        <tr>
+          <td class="id">#483</td><td class="t">12.405ms</td>
+          <td><span class="chip batch" data-tip="A batch groups atom changes so reactions run once, after all of them land (beginBatch/endBatch or an action wrapper). This is the signals library’s grouping — not React batching.">batch<span class="phase">/begin</span></span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g tee"></span><span class="ntext"><button>toggleTodo</button><button class="causeref">⤷#482</button></span></div></td>
+          <td class="data">#31</td>
+          <td class="took"><span class="treeonly">94µs</span></td>
+        </tr>
+        <tr>
+          <td class="id">#484</td><td class="t">12.414ms</td>
+          <td><span class="chip eval" data-tip="A computed re-ran its function because something it reads changed.">recompute</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g vert"></span><span class="g tee"></span><span class="ntext"><button>visibleTodos</button><button class="causeref">⤷#483</button></span></div></td>
+          <td class="data">new result</td>
+          <td class="took">14µs</td>
+        </tr>
+        <tr>
+          <td class="id">#485</td><td class="t">12.430ms</td>
+          <td><span class="chip eval" data-tip="A computed re-ran its function because something it reads changed.">recompute</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g vert"></span><span class="g tee"></span><span class="ntext"><button>remainingCount</button><button class="causeref">⤷#483</button></span></div></td>
+          <td class="data"><span class="diff-old">5</span> → <span class="diff-new">4</span></td>
+          <td class="took">3µs</td>
+        </tr>
+        <tr>
+          <td class="id">#487</td><td class="t">12.434ms</td>
+          <td><span class="chip render" data-tip="The watcher was told its inputs changed. For a component, this schedules its re-render in the next render pass.">notify</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g vert"></span><span class="g tee"></span><span class="ntext"><button>&lt;TodoList&gt;</button><button class="causeref">⤷#483</button></span></div></td>
+          <td class="data">scheduled re-render</td>
+          <td class="took"></td>
+        </tr>
+        <tr>
+          <td class="id">#488</td><td class="t">12.436ms</td>
+          <td><span class="chip render" data-tip="The watcher was told its inputs changed. For a component, this schedules its re-render in the next render pass.">notify</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g vert"></span><span class="g elbow"></span><span class="ntext"><button>&lt;Footer&gt;</button><button class="causeref">⤷#483</button></span></div></td>
+          <td class="data">scheduled re-render</td>
+          <td class="took"></td>
+        </tr>
+        <tr>
+          <td class="id">#489</td><td class="t">12.441ms</td>
+          <td><span class="chip render" data-tip="React re-rendered this root: one render pass, start to commit. Turn on internals to see the pass’s phases.">render<span class="phase">/start</span></span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g elbow"></span><span class="ntext"><button>root:app</button><button class="causeref">⤷#482</button></span></div></td>
+          <td class="data">pass 112 · <span class="treeonly">committed · </span>re-rendered &lt;TodoList&gt; + &lt;Footer&gt;</td>
+          <td class="took"><span class="treeonly">26µs</span></td>
+        </tr>
+        <tr class="endrow">
+          <td class="id">#492</td><td class="t">12.467ms</td>
+          <td><span class="chip render" data-tip="render/commit: the moment the render pass’s results were committed to the UI. Shown in flat mode so you can see what interleaved between start and commit.">render/commit</span></td>
+          <td class="name"><div class="kcell"><span class="ntext"><button>root:app</button><button class="causeref">⤷#489</button></span></div></td>
+          <td class="data">pass 112 · UI updated</td>
+          <td class="took">26µs</td>
+        </tr>
+        <tr>
+          <td class="id">#494</td><td class="t">12.474ms</td>
+          <td><span class="chip effect" data-tip="A signal effect ran after the changes committed. Component effects (useSignalEffect) are not React’s useEffect — they re-run when the signals they read change.">effect</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g"></span><span class="g tee"></span><span class="ntext"><button>persistTodos</button><button class="causeref">⤷#489</button></span></div></td>
+          <td class="data">ran · Array(7)</td>
+          <td class="took">4µs</td>
+        </tr>
+        <tr class="selected" aria-selected="true">
+          <td class="id">#495</td><td class="t">12.486ms</td>
+          <td><span class="chip effect" data-tip="useSignalEffect(fn): a component’s signal effect ran after changes committed. Not React’s useEffect — it re-runs when the signals it reads change.">useSignalEffect</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g"></span><span class="g elbow"></span><span class="ntext"><button>document.title</button> · <span style="color:var(--watcher)">&lt;TodoFooter&gt;</span><button class="causeref">⤷#489</button></span></div></td>
+          <td class="data">ran · "4 remaining" · run 18</td>
+          <td class="took">8µs</td>
+        </tr>
+        <tr class="endrow">
+          <td class="id">#496</td><td class="t">12.499ms</td>
+          <td><span class="chip batch" data-tip="batch/end: the batch settled — every reaction to its changes has finished. Shown in flat mode so the batch’s extent is visible against interleaving.">batch/end</span></td>
+          <td class="name"><div class="kcell"><span class="ntext"><button>toggleTodo</button><button class="causeref">⤷#483</button></span></div></td>
+          <td class="data">#31 settled · 12 entries</td>
+          <td class="took">94µs</td>
+        </tr>
+        <tr class="op-head">
+          <td class="id"><span class="caret">▸</span>#497</td>
+          <td class="t">14.220ms</td>
+          <td><span class="chip write" data-tip="atom.set(value): the atom was assigned a new value — the root cause of everything nested beneath.">set</span></td>
+          <td class="name"><button>now</button></td>
+          <td class="data op-title">quiet — no watchers notified <span class="tw">· 2 entries</span></td>
+          <td class="took"></td>
+        </tr>
+        <tr class="op-head">
+          <td class="id"><span class="caret">▸</span>#499</td>
+          <td class="t">15.007ms</td>
+          <td><span class="chip write" data-tip="atom.set(value): the atom was assigned a new value — the root cause of everything nested beneath.">set</span></td>
+          <td class="name"><button>newTodoText</button></td>
+          <td class="data op-title"><span class="diff-old">""</span> → <span class="diff-new">"b"</span> <span class="tw">· 8 entries · batch 32</span></td>
+          <td class="took"></td>
+        </tr>
+        <tr class="op-head">
+          <td class="id"><span class="caret">▾</span>#501</td>
+          <td class="t">15.612ms</td>
+          <td><span class="chip origin">click</span></td>
+          <td class="name"><button>button#show-all</button></td>
+          <td class="data op-title">onShowAll · <button class="srclink">FilterBar.tsx:27</button> <span class="tw">· 10 entries · re-rendered 2</span></td>
+          <td class="took">1.2ms</td>
+        </tr>
+        <tr>
+          <td class="id">#502</td><td class="t">15.614ms</td>
+          <td><span class="chip origin" data-tip="A transition (startTransition, useTransition, or the library’s transition API) marks the changes inside as non-urgent. React renders them in a background transition render pass and keeps the UI responsive; the pass can yield, resume, or be discarded if newer changes arrive.">transition<span class="phase">/begin</span></span></td>
+          <td class="name"><div class="kcell"><span class="g elbow"></span><span class="ntext"><span style="color:var(--faint)">—</span><button class="causeref">⤷#501</button></span></div></td>
+          <td class="data">non-urgent, renders in background</td>
+          <td class="took"></td>
+        </tr>
+        <tr>
+          <td class="id">#503</td><td class="t">15.617ms</td>
+          <td><span class="chip write" data-tip="atom.set(value): the atom was assigned a new value — the root cause of everything nested beneath.">set</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g elbow"></span><span class="ntext"><button>filter</button><button class="causeref">⤷#502</button></span></div></td>
+          <td class="data"><span class="diff-old">"active"</span> → <span class="diff-new">"all"</span></td>
+          <td class="took"></td>
+        </tr>
+        <tr>
+          <td class="id">#504</td><td class="t">15.641ms</td>
+          <td><span class="chip eval" data-tip="A computed re-ran its function because something it reads changed.">recompute</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g"></span><span class="g tee"></span><span class="ntext"><button>visibleTodos</button><button class="causeref">⤷#503</button></span></div></td>
+          <td class="data">new result · in background draft</td>
+          <td class="took">22µs</td>
+        </tr>
+        <tr>
+          <td class="id">#505</td><td class="t">15.646ms</td>
+          <td><span class="chip suspended" data-tip="This computed’s recompute paused awaiting a Promise. It resumes and settles when the Promise does.">suspended</span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g"></span><span class="g tee"></span><span class="ntext"><button>avatarUrls</button><button class="causeref">⤷#504</button></span></div></td>
+          <td class="data">recompute paused · awaiting Api.ts:18</td>
+          <td class="took">120ms…</td>
+        </tr>
+        <tr>
+          <td class="id">#506</td><td class="t">15.653ms</td>
+          <td><span class="chip render" data-tip="React re-rendered this root: one render pass, start to commit. Turn on internals to see the pass’s phases.">render<span class="phase">/start</span></span></td>
+          <td class="name"><div class="kcell"><span class="g"></span><span class="g"></span><span class="g elbow"></span><span class="ntext"><button>root:app</button><button class="causeref">⤷#503</button></span></div></td>
+          <td class="data">pass 113 · transition · yielded ×2<span class="treeonly"> · committed</span></td>
+          <td class="took"><span class="treeonly">1.2ms</span></td>
+        </tr>
+        <tr class="endrow">
+          <td class="id">#507</td><td class="t">16.812ms</td>
+          <td><span class="chip origin" data-tip="transition/commit: the transition’s background work committed. Everything between begin and here rendered without blocking the UI. A transition can also end as transition/discarded when newer changes make its work stale.">transition/commit</span></td>
+          <td class="name"><div class="kcell"><span class="ntext"><span style="color:var(--faint)">—</span><button class="causeref">⤷#502</button></span></div></td>
+          <td class="data">UI updated</td>
+          <td class="took">1.2ms</td>
+        </tr>
+        <tr class="collapsed-summary">
+          <td class="id"></td><td class="t"></td><td></td><td></td>
+          <td class="data">… live · 3,481 earlier entries in the recording</td>
+          <td class="took"></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- causality panel: ancestors only — descendants are the tree itself -->
+  <aside class="causality" aria-label="Why this ran">
+    <div class="cz-head">
+      <div class="cz-kicker">Selected entry</div>
+      <div class="cz-title">#495 useSignalEffect</div>
+      <div class="cz-sub">document.title · &lt;TodoFooter&gt; · +83µs into the operation</div>
+    </div>
+
+    <div class="cz-section">
+      <h3 data-tip="The chain of entries that led to the selected one, from user input down. The value change rides on the knot that made it; the cost rides on the end.">Why this ran</h3>
+      <ol class="spine">
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#481</span><button>click button#toggle-3</button></div>
+          <div class="because">onToggle · <button class="srclink">TodoItem.tsx:42</button></div>
+        </li>
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#482</span><button>update todos</button></div>
+          <div class="diff-block" style="margin-top:6px"><span class="ctx">[3]: {</span><span class="ctx">  text: "water plants",</span><span class="del">  done: false</span><span class="add">  done: true</span><span class="ctx">}</span><span class="ctx">… 6 unchanged items</span></div>
+        </li>
+        <li>
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#489</span><button>render root:app</button></div>
+          <div class="because">pass 112 · committed · re-rendered <b>&lt;TodoList&gt;</b> + <b>&lt;Footer&gt;</b></div>
+        </li>
+        <li class="terminus">
+          <div class="knot"></div>
+          <div class="ev"><span class="id">#495</span><button>useSignalEffect document.title</button></div>
+          <div class="because">dep <b>remainingCount</b> changed <span class="diff-old">5</span> → <span class="diff-new">4</span> · ran · value <b>"4 remaining"</b> · run 18</div>
+          <div class="impact-card">
+            end of its chain — caused nothing further<br>
+            whole operation: <b>14 entries · 96µs</b> · 2 recomputes <b>17µs</b> · re-rendered 2 <b>23µs</b> · 2 effects <b>12µs</b><br>
+            <button class="srclink">view document.title in graph →</button> · <button class="srclink">⧉ copy as markdown</button>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </aside>
+</div>
+
+<script>
+  const log = document.querySelector('.log');
+  const modeButtons = document.querySelectorAll('.tbtn.mode');
+  function setMode(mode) {
+    log.classList.toggle('flat', mode === 'flat');
+    for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+  }
+  for (const b of modeButtons) b.addEventListener('click', () => setMode(b.dataset.mode));
+  setMode('flat');
+</script>
+<script>
+  // SVG can’t host the CSS ::after tooltips — same card, positioned by script.
+  const svgtip = document.createElement('div');
+  svgtip.className = 'svgtip';
+  document.body.appendChild(svgtip);
+  function showTip(el) {
+    const r = el.getBoundingClientRect();
+    svgtip.textContent = el.dataset.tip;
+    svgtip.style.display = 'block';
+    const h = svgtip.offsetHeight;
+    const below = r.bottom + 6 + h <= innerHeight;
+    svgtip.style.top = (below ? r.bottom + 6 : Math.max(6, r.top - h - 6)) + 'px';
+    svgtip.style.left = Math.max(6, Math.min(r.left, innerWidth - 262)) + 'px';
+  }
+  const hideTip = () => { svgtip.style.display = 'none'; };
+  for (const el of document.querySelectorAll('[data-tip]')) {
+    el.addEventListener('mouseenter', () => showTip(el));
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focus', () => showTip(el));
+    el.addEventListener('blur', hideTip);
+  }
+</script>
+
+<dialog id="theme-dialog" class="theme-dialog" aria-label="Theme">
+  <form method="dialog">
+    <div class="td-head">
+      <strong>Theme</strong>
+      <span class="td-sub">16 base colors — everything derives from these</span>
+      <button value="cancel" class="td-x" aria-label="Close">✕</button>
+    </div>
+    <div class="td-body">
+      <div class="td-swatches" id="td-swatches"></div>
+      <label class="td-json-label" for="td-json">Or paste a base16 theme (JSON)</label>
+      <textarea id="td-json" class="td-json" spellcheck="false" placeholder='{ "base00": "#191919", "base01": "#202020", … }'></textarea>
+      <div class="td-note" id="td-note"></div>
+    </div>
+    <div class="td-foot">
+      <button value="cancel" class="tbtn">Cancel</button>
+      <button type="button" class="tbtn" id="td-reset">Reset to default</button>
+      <button type="button" class="tbtn td-apply" id="td-apply">Apply</button>
+    </div>
+  </form>
+</dialog>
+<script>
+(() => {
+  const KEYS = ['base00','base01','base02','base03','base04','base05','base06','base07','base08','base09','base0A','base0B','base0C','base0D','base0E','base0F'];
+  const ROLE = {base00:'background',base01:'panels',base02:'lines',base03:'faint text',base04:'muted text',base05:'text',base06:'bright',base07:'brightest',base08:'red · error',base09:'orange',base0A:'yellow · you',base0B:'green · effect',base0C:'cyan · compute',base0D:'blue · async',base0E:'purple · render',base0F:'pink'};
+  const DEFAULT = {base00:'#191919',base01:'#202020',base02:'#383836',base03:'#7d7a75',base04:'#a19e99',base05:'#d4d3cf',base06:'#f0efed',base07:'#f9f8f7',base08:'#e97366',base09:'#de9255',base0A:'#eac26b',base0B:'#72bc8f',base0C:'#4fb9c9',base0D:'#5e9fe8',base0E:'#bf8eda',base0F:'#df84a8'};
+  const dlg = document.getElementById('theme-dialog');
+  const wrap = document.getElementById('td-swatches');
+  const json = document.getElementById('td-json');
+  const note = document.getElementById('td-note');
+  const root = document.documentElement;
+  const norm = h => { h = String(h).trim(); if (!h.startsWith('#')) h = '#' + h; return /^#[0-9a-fA-F]{6}$/.test(h) ? h.toLowerCase() : null; };
+  const inputs = {};
+  for (const k of KEYS) {
+    const row = document.createElement('div'); row.className = 'td-row';
+    const col = document.createElement('input'); col.type = 'color';
+    const key = document.createElement('span'); key.className = 'td-key'; key.textContent = k;
+    const role = document.createElement('span'); role.className = 'td-role'; role.textContent = ROLE[k];
+    const hex = document.createElement('input'); hex.className = 'td-hex'; hex.value = DEFAULT[k];
+    col.addEventListener('input', () => { hex.value = col.value; syncJSON(); });
+    hex.addEventListener('input', () => { const n = norm(hex.value); if (n) col.value = n; syncJSON(); });
+    row.append(col, key, role, hex); wrap.appendChild(row);
+    inputs[k] = { col, hex };
+  }
+  const read = () => { const o = {}; for (const k of KEYS) { const n = norm(inputs[k].hex.value); if (n) o[k] = n; } return o; };
+  const fill = t => { for (const k of KEYS) if (t[k]) { const n = norm(t[k]); if (n) { inputs[k].hex.value = n; inputs[k].col.value = n; } } };
+  const apply = t => { for (const k of KEYS) if (t[k]) root.style.setProperty('--' + k, t[k]); };
+  const current = () => { const o = {}; const cs = getComputedStyle(root); for (const k of KEYS) o[k] = (cs.getPropertyValue('--' + k).trim() || DEFAULT[k]); return o; };
+  const syncJSON = () => { json.value = JSON.stringify(read(), null, 2); };
+  json.addEventListener('input', () => {
+    let data; try { data = JSON.parse(json.value); } catch { note.className = 'td-note err'; note.textContent = 'Not valid JSON yet.'; return; }
+    const pal = data.palette || data;
+    let n = 0; for (const k of KEYS) if (typeof pal[k] === 'string' && norm(pal[k])) { inputs[k].hex.value = norm(pal[k]); inputs[k].col.value = norm(pal[k]); n++; }
+    note.className = 'td-note ok'; note.textContent = n + ' of 16 colors loaded — Apply to use.';
+  });
+  document.getElementById('theme-open').addEventListener('click', () => { fill(current()); syncJSON(); note.textContent = ''; note.className = 'td-note'; dlg.showModal(); });
+  document.getElementById('td-apply').addEventListener('click', () => { apply(read()); dlg.close(); });
+  document.getElementById('td-reset').addEventListener('click', () => { fill(DEFAULT); apply(DEFAULT); syncJSON(); note.className = 'td-note'; note.textContent = 'Reset to default.'; });
+})();
+</script>
+</body>
+</html>
