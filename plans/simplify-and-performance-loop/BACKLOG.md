@@ -39,7 +39,6 @@ condition still leaves a useful direction.
 - Converge effect rerun cleanup and final-disposal release only if one non-allocating mechanism preserves child-before-parent order, complete sibling disposal, self-disposal, poisoning, tracing, and the first thrown object.
 - Remove the redundant `Flag.Watching` kind bit only if `WatchRender` and `WatchRunEffect` capabilities identify every render watcher plus live, disposed, and reentrantly disposing effect; `WatchDraft` must never become a standalone sink kind.
 - Direct-index tracer ring events from session-local ID/head/size state only if stopped tracers remain queryable after later sessions advance the global event ID.
-- Replace `RenderedResolution.live` with an existing nullable state only if first render, aborted render, hydration, and late subscription repair remain distinguishable without a hidden mode.
 - Give the three Royale adapters one shared autorun shim and the four playground bridges one shared legacy split-effect composer; both utilities have multiple callers, but keep conformance and measurement surfaces frozen while extracting them.
 - Converge the render-notify double buffer with lane queue state only if nested delivery still cannot overwrite a buffer under iteration; this is a high-risk follow-up to per-lane reentrancy, not an independent first round.
 
@@ -56,6 +55,7 @@ condition still leaves a useful direction.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Replace the mutable thenable-settlement installer with the direct ESM binding; retry the exact Round 86 semantic diff only after a natural layout/runtime change or separately stable suspension-control window, retaining both artifacts' pre/post manifests and all four frozen modes.
 - Remove render-watcher staleness and let `Scheduled` plus queue membership own pending notification; retry the exact Round 95 model only after a natural propagation-layout change, keeping first-cause base waves, latest-cause draft pokes, the 280-byte `propagateWave` pin, and both notification controls.
+- Replace `RenderedResolution.live` with the private `NO_IDS` identity; retry the exact Round 96 two-file diff only under stable host load or a separately reviewed control protocol, retaining the resolved-runtime client probe and direct first-mount, held-render, empty-world, and repair coverage; re-audit the untested hydration path before acceptance.
 - Keep the computed-cycle throw extraction parked: after the latest plain-value fast path `recompute` is pinned at 590 bytes, farther above V8's 460-byte limit than Round 90's 464-byte shape. Reconsider only after a natural change moves the whole function near the limit; do not source-shape-tune it or retry the slower shared helpers.
 
 ## Completed or deliberately closed
