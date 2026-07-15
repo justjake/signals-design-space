@@ -126,7 +126,14 @@ const adapter = {
 		// refresh the body without re-creating the effect.
 		const latest = React.useRef(fn)
 		latest.current = fn
-		useSignalEffect(() => latest.current(), (cleanup) => cleanup, [], { equals: NEVER_EQUAL })
+		useSignalEffect(
+			() => ({
+				watch: () => latest.current(),
+				run: (cleanup) => cleanup,
+				equals: NEVER_EQUAL,
+			}),
+			[],
+		)
 	},
 	useIsPending(x: unknown): boolean {
 		return useIsPending(x as Signal<unknown>)

@@ -454,18 +454,79 @@ export interface EffectOptions<T> extends ComputedOptions<T> {
 	schedule?: EffectSchedule
 }
 
+/** Element-wise (arrays) or own-key-wise (plain objects) Object.is, one
+ * level deep. The default cutoff for tuple and record effect sources,
+ * whose computes rebuild their container on every run. */
+export function shallowEquals(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) {
+		return true
+	}
+	if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) {
+		return false
+	}
+	if (Array.isArray(a)) {
+		if (!Array.isArray(b) || a.length !== b.length) {
+			return false
+		}
+		for (let i = 0; i < a.length; i++) {
+			if (!Object.is(a[i], b[i])) {
+				return false
+			}
+		}
+		return true
+	}
+	if (Array.isArray(b)) {
+		return false
+	}
+	const keysA = Object.keys(a)
+	if (keysA.length !== Object.keys(b).length) {
+		return false
+	}
+	for (const key of keysA) {
+		if (
+			!Object.prototype.hasOwnProperty.call(b, key) ||
+			!Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+		) {
+			return false
+		}
+	}
+	return true
+}
+
+/** The value a signal handle produces. */
+export type SignalValue<S> = S extends Signal<infer V> ? V : never
+
+/** Signal container sources map to same-shaped value containers: a tuple
+ * of signals yields a tuple of values, a record yields a record. */
+export type SignalValues<S> = { -readonly [K in keyof S]: SignalValue<S[K]> }
+
+/** A signal handle: an object whose flags carry an engine kind bit.
+ * Distinguishes handles from plain objects (a record source) without
+ * duck-typing on `get`, which Map and foreign reactives would satisfy. */
+function isSignalHandle(x: object): x is Signal<unknown> {
+	return (
+		typeof (x as { flags?: unknown }).flags === 'number' &&
+		((x as { flags: number }).flags & (Flag.KindAtom | Flag.KindComputed)) !== 0
+	)
+}
+
 /**
- * An effect is two functions with different rules. `compute` uses the same
- * evaluator and semantics as a computed: it is tracked dynamically, cached,
- * cut off by equals, async-capable through use(), and receives its previous
- * value. Its evaluation state lives on the effect node, not a separate
- * computed node.
+ * An effect is a source and a handler with different rules.
  *
- * `handler` runs untracked with the compute's settled (value,
- * previous-handled) pair when that value changes. It may return a cleanup
- * that runs before the next handler run and at disposal. Reads inside the
- * handler are deliberately untracked — a value the effect should react to
- * belongs in the compute.
+ * The source declares what the effect reacts to:
+ * - a compute function — tracked dynamically, cached, cut off by equals,
+ *   async-capable through use(), handed its previous value; its evaluation
+ *   state lives on the effect node, not a separate computed node;
+ * - a signal — shorthand for reading it (cutoff Object.is);
+ * - a tuple or record of signals — shorthand for reading each into a
+ *   same-shaped container (cutoff shallowEquals, since the container is
+ *   rebuilt every run; an explicit equals overrides).
+ *
+ * `handler` runs untracked with the settled (value, previous-handled)
+ * pair when that value changes. It may return a cleanup that runs before
+ * the next handler run and at disposal. Reads inside the handler are
+ * deliberately untracked — a value the effect should react to belongs in
+ * the source.
  *
  * The first run is synchronous at creation when the compute settles
  * immediately; a parked first evaluation fires its first handler at
@@ -482,6 +543,30 @@ export function effect<T>(
 	compute: (use: UseFn, previous: T | undefined) => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	opts?: EffectOptions<T>,
+): () => void
+export function effect<S extends Signal<any>>(
+	source: S,
+	handler: (value: SignalValue<S>, previous: SignalValue<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValue<S>>,
+): () => void
+export function effect<const S extends readonly Signal<any>[]>(
+	sources: S,
+	handler: (values: SignalValues<S>, previous: SignalValues<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValues<S>>,
+): () => void
+export function effect<S extends Record<string, Signal<any>>>(
+	sources: S,
+	handler: (values: SignalValues<S>, previous: SignalValues<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValues<S>>,
+): () => void
+export function effect(
+	source:
+		| ((use: UseFn, previous: any) => unknown)
+		| Signal<any>
+		| readonly Signal<any>[]
+		| Record<string, Signal<any>>,
+	handler: (value: any, previous: any) => void | (() => void),
+	opts?: EffectOptions<any>,
 ): () => void {
 	const schedule = opts?.schedule
 	const lane =
@@ -490,13 +575,35 @@ export function effect<T>(
 			: schedule === 'useEffect'
 				? Lane.UseEffect
 				: Lane.Sync
-	return makeEffect(
-		compute as (use: UseFn, previous: unknown) => unknown,
-		handler as (value: unknown, previous: unknown) => void | (() => void),
-		lane,
-		opts?.equals as EqualsFn<unknown> | undefined,
-		opts?.label,
-	)
+	let compute: (use: UseFn, previous: unknown) => unknown
+	let equals = opts?.equals as EqualsFn<unknown> | undefined
+	if (typeof source === 'function') {
+		compute = source
+	} else if (isSignalHandle(source)) {
+		compute = () => source.get()
+	} else if (Array.isArray(source)) {
+		const sources = source as readonly Signal<unknown>[]
+		compute = () => {
+			const values = new Array<unknown>(sources.length)
+			for (let i = 0; i < sources.length; i++) {
+				values[i] = sources[i]!.get()
+			}
+			return values
+		}
+		equals ??= shallowEquals
+	} else {
+		const record = source as Record<string, Signal<unknown>>
+		const keys = Object.keys(record)
+		compute = () => {
+			const values: Record<string, unknown> = {}
+			for (const key of keys) {
+				values[key] = record[key]!.get()
+			}
+			return values
+		}
+		equals ??= shallowEquals
+	}
+	return makeEffect(compute, handler, lane, equals, opts?.label)
 }
 
 export {

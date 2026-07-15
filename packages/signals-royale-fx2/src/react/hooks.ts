@@ -51,6 +51,7 @@ import {
 	type AtomOptions,
 	type EqualsFn,
 	type Signal,
+	type SignalValues,
 	type UseFn,
 } from '../index.ts'
 import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
@@ -293,59 +294,77 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	return useValue(c)
 }
 
+/** Everything a spec's `watch` can be: effect()'s source union — a
+ * compute function, a signal, a tuple of signals, or a record of
+ * signals. */
+export type WatchSource =
+	| ((use: UseFn, previous: any) => unknown)
+	| Signal<any>
+	| readonly Signal<any>[]
+	| Record<string, Signal<any>>
+
+/** The value a watch source delivers to run(). */
+export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
+	? T
+	: S extends Signal<infer V>
+		? V
+		: S extends readonly Signal<any>[] | Record<string, Signal<any>>
+			? SignalValues<S>
+			: never
+
+/** One component-owned signal effect, described by a factory: `watch` is
+ * the effect's source (a compute in engine terms, or the signal / tuple /
+ * record shorthands) and `run` is its handler — untracked, handed the
+ * settled (value, previous) pair, may return a cleanup. `equals` and
+ * `label` pass through to effect(); the schedule is the hook's phase. */
+export interface SignalEffectSpec<S extends WatchSource> {
+	watch: S
+	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
+	equals?: EqualsFn<WatchValue<S>>
+	label?: string
+}
+
 /**
- * The component-owned effect: engine effect() with React-phase setup.
- * Creation and deps-array changes run inside the matching React phase, so
- * the first run lands exactly in React's phase and tree order; only
- * signal-triggered re-runs use the effect's lane. The handler reads
- * through a latest ref, so it sees the most recent committed render's
- * props without re-creating the effect. Both hooks observe base state and
- * therefore need no provider.
+ * The component-owned effect. The factory runs inside the matching React
+ * phase on mount and on every deps change — disposing the previous
+ * effect first, exactly useEffect's re-create cycle, so captures are
+ * always deps-fresh and `previous` restarts at undefined. One closure
+ * carries every capture, so react-hooks/exhaustive-deps checks the whole
+ * spec against deps once these hooks are listed in `additionalHooks`.
+ * Both hooks observe base state and therefore need no provider.
  */
-function useSignalPhaseEffect<T>(
+function useSignalPhaseEffect(
 	usePhaseEffect: typeof useEffect,
 	schedule: 'useLayoutEffect' | 'useEffect',
-	compute: (use: UseFn, previous: T | undefined) => T,
-	handler: (value: T, previous: T | undefined) => void | (() => void),
+	create: () => SignalEffectSpec<any>,
 	deps: React.DependencyList,
-	equals: EqualsFn<T> | undefined,
 ): void {
-	const latestHandler = useRef(handler)
-	// Declared before the keyed effect, so on a deps-change commit the ref
-	// holds this render's handler before the new effect's first run.
 	usePhaseEffect(() => {
-		latestHandler.current = handler
-	})
-	usePhaseEffect(
-		() => effect(compute, (value, previous) => latestHandler.current(value, previous), { equals, schedule }),
+		const spec = create()
+		return effect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		deps,
-	)
+	}, deps)
 }
 
 /** A signal effect whose setup runs in React's passive phase and whose
  * signal-triggered re-runs drain in the passive phase of the pass the
- * write produced. See effect() for the compute/handler contract. */
-export function useSignalEffect<T>(
-	compute: (use: UseFn, previous: T | undefined) => T,
-	handler: (value: T, previous: T | undefined) => void | (() => void),
+ * write produced. See SignalEffectSpec for the factory contract. */
+export function useSignalEffect<const S extends WatchSource>(
+	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
-	opts?: { equals?: EqualsFn<T> },
 ): void {
-	useSignalPhaseEffect(useEffect, 'useEffect', compute, handler, deps, opts?.equals)
+	useSignalPhaseEffect(useEffect, 'useEffect', create, deps)
 }
 
 /** A signal effect whose setup runs in React's layout phase and whose
  * signal-triggered re-runs drain in the layout phase of the pass the
  * write produced — after its DOM mutations, before it paints. See
- * effect() for the compute/handler contract. */
-export function useSignalLayoutEffect<T>(
-	compute: (use: UseFn, previous: T | undefined) => T,
-	handler: (value: T, previous: T | undefined) => void | (() => void),
+ * SignalEffectSpec for the factory contract. */
+export function useSignalLayoutEffect<const S extends WatchSource>(
+	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
-	opts?: { equals?: EqualsFn<T> },
 ): void {
-	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', compute, handler, deps, opts?.equals)
+	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', create, deps)
 }
 
 /** True while newer data exists behind the committed value of x: a

@@ -35,17 +35,21 @@ describe('scheduled React signal effects', () => {
 		const events: string[] = []
 		function App() {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					events.push(`layout:${v}`)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`layout:${v}`)
+					},
+				}),
 				[],
 			)
 			useSignalEffect(
-				() => atom.get(),
-				(v) => {
-					events.push(`passive:${v}`)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`passive:${v}`)
+					},
+				}),
 				[],
 			)
 			return null
@@ -84,19 +88,23 @@ describe('scheduled React signal effects', () => {
 		const events: string[] = []
 		function App() {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(value) => {
-					events.push(`layout:run:${value}`)
-					return () => events.push(`layout:cleanup:${value}`)
-				},
+				() => ({
+					watch: atom, // signal-source shorthand through the hook
+					run: (value) => {
+						events.push(`layout:run:${value}`)
+						return () => events.push(`layout:cleanup:${value}`)
+					},
+				}),
 				[],
 			)
 			useSignalEffect(
-				() => atom.get(),
-				(value) => {
-					events.push(`passive:run:${value}`)
-					return () => events.push(`passive:cleanup:${value}`)
-				},
+				() => ({
+					watch: atom,
+					run: (value) => {
+						events.push(`passive:run:${value}`)
+						return () => events.push(`passive:cleanup:${value}`)
+					},
+				}),
 				[],
 			)
 			return null
@@ -129,17 +137,21 @@ describe('scheduled React signal effects', () => {
 		const passive: number[] = []
 		function App() {
 			useSignalLayoutEffect(
-				() => latest(atom),
-				(v) => {
-					layout.push(v)
-				},
+				() => ({
+					watch: () => latest(atom),
+					run: (v) => {
+						layout.push(v)
+					},
+				}),
 				[],
 			)
 			useSignalEffect(
-				() => latest(atom),
-				(v) => {
-					passive.push(v)
-				},
+				() => ({
+					watch: () => latest(atom),
+					run: (v) => {
+						passive.push(v)
+					},
+				}),
 				[],
 			)
 			return null
@@ -158,13 +170,15 @@ describe('scheduled React signal effects', () => {
 		const seen: number[] = []
 		function App() {
 			useSignalEffect(
-				() => atom.get(),
-				(value) => {
-					seen.push(value)
-					if (value === 0) {
-						atom.set(1)
-					}
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (value) => {
+						seen.push(value)
+						if (value === 0) {
+							atom.set(1)
+						}
+					},
+				}),
 				[],
 			)
 			return null
@@ -179,10 +193,12 @@ describe('scheduled React signal effects', () => {
 		const seen: number[] = []
 		function App() {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					seen.push(v)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
 				[],
 			)
 			return null
@@ -209,14 +225,16 @@ describe('scheduled React signal effects', () => {
 			function App() {
 				const usePhase = phase === 'layout' ? useSignalLayoutEffect : useSignalEffect
 				usePhase(
-					() => {
-						const isWide = wide.get()
-						const values = `${isWide}:${first.get()}`
-						return isWide ? `${values}:${second.get()}` : values
-					},
-					(s) => {
-						seen.push(s)
-					},
+					() => ({
+						watch: () => {
+							const isWide = wide.get()
+							const values = `${isWide}:${first.get()}`
+							return isWide ? `${values}:${second.get()}` : values
+						},
+						run: (s) => {
+							seen.push(s)
+						},
+					}),
 					[],
 				)
 				return null
@@ -244,11 +262,13 @@ describe('scheduled React signal effects', () => {
 			function Broken() {
 				const usePhase = phase === 'layout' ? useSignalLayoutEffect : useSignalEffect
 				usePhase(
-					() => {
-						atom.get()
-						throw new Error(`${phase} boom`)
-					},
-					() => {},
+					() => ({
+						watch: () => {
+							atom.get()
+							throw new Error(`${phase} boom`)
+						},
+						run: () => {},
+					}),
 					[],
 				)
 				return null
@@ -269,17 +289,21 @@ describe('scheduled React signal effects', () => {
 		const events: string[] = []
 		function Effects() {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					events.push(`layout:${v}`)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`layout:${v}`)
+					},
+				}),
 				[],
 			)
 			useSignalEffect(
-				() => atom.get(),
-				(v) => {
-					events.push(`passive:${v}`)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`passive:${v}`)
+					},
+				}),
 				[],
 			)
 			return null
@@ -324,10 +348,12 @@ describe('scheduled React signal effects', () => {
 		let showEffect!: (show: boolean) => void
 		function Effect() {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					seen.push(v)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
 				[],
 			)
 			return null
@@ -378,10 +404,12 @@ describe('scheduled React signal effects', () => {
 		const secondSeen: number[] = []
 		function Effect({ seen }: { seen: number[] }) {
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					seen.push(v)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
 				[],
 			)
 			return null
@@ -455,10 +483,12 @@ describe('scheduled React signal effects', () => {
 		const seen: number[] = []
 		function Effect() {
 			useSignalLayoutEffect(
-				() => pick.get(),
-				(v) => {
-					seen.push(v)
-				},
+				() => ({
+					watch: pick,
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
 				[],
 			)
 			return null
@@ -516,11 +546,13 @@ describe('scheduled React signal effects', () => {
 			const [gen, setGen] = React.useState(0)
 			bump = () => setGen((g) => g + 1)
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					events.push(`run:${gen}:${v}`)
-					return () => events.push(`cleanup:${gen}:${v}`)
-				},
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`run:${gen}:${v}`)
+						return () => events.push(`cleanup:${gen}:${v}`)
+					},
+				}),
 				[gen],
 			)
 			return null
@@ -536,28 +568,73 @@ describe('scheduled React signal effects', () => {
 		expect(events).toEqual(['run:0:0', 'cleanup:0:0', 'run:1:0', 'cleanup:1:0', 'run:1:1'])
 	})
 
-	test('the handler sees the latest committed render props without re-creating the effect', async () => {
+	test('factory spec typing follows the watch shape', () => {
+		const n = createAtom(0)
+		const s = createAtom('x')
+		function Probe() {
+			useSignalEffect(
+				() => ({
+					watch: [n, s],
+					run: (values) => {
+						values satisfies [number, string]
+					},
+				}),
+				[],
+			)
+			useSignalLayoutEffect(
+				() => ({
+					watch: { n, s },
+					run: (values) => {
+						values satisfies { n: number; s: string }
+						// @ts-expect-error record values are not a tuple
+						values satisfies [number, string]
+					},
+				}),
+				[],
+			)
+			return null
+		}
+		expect(typeof Probe).toBe('function')
+	})
+
+	test('captured props are deps-fresh: listed deps re-create, omitted deps freeze', async () => {
 		const atom = createAtom(0)
-		const seen: string[] = []
+		const fresh: string[] = []
+		const frozen: string[] = []
 		let setLabel!: (label: string) => void
 		function App() {
 			const [label, set] = React.useState('a')
 			setLabel = set
 			useSignalLayoutEffect(
-				() => atom.get(),
-				(v) => {
-					seen.push(`${label}:${v}`)
-				},
-				[],
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						fresh.push(`${label}:${v}`)
+					},
+				}),
+				[label], // what exhaustive-deps demands for the capture
+			)
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						frozen.push(`${label}:${v}`)
+					},
+				}),
+				// eslint-disable-next-line react-hooks/exhaustive-deps
+				[], // omitted on purpose: creation-time capture, useEffect's own rule
 			)
 			return null
 		}
 		await h.mount(<App />)
-		expect(seen).toEqual(['a:0'])
-		await act(() => setLabel('b')) // re-render only: no signal change, no run
-		expect(seen).toEqual(['a:0'])
+		expect(fresh).toEqual(['a:0'])
+		expect(frozen).toEqual(['a:0'])
+		await act(() => setLabel('b')) // deps change re-creates: cleanup + first run
+		expect(fresh).toEqual(['a:0', 'b:0'])
+		expect(frozen).toEqual(['a:0'])
 		await act(() => atom.set(1))
 		await flushEffects()
-		expect(seen).toEqual(['a:0', 'b:1']) // latest-ref: the committed props
+		expect(fresh).toEqual(['a:0', 'b:0', 'b:1'])
+		expect(frozen).toEqual(['a:0', 'a:1']) // stale by contract, like useEffect
 	})
 })

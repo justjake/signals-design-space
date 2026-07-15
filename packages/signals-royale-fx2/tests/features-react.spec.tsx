@@ -729,10 +729,12 @@ describe('fx2 extras', () => {
 			const own = useAtom(10)
 			const sum = useComputed(() => base.get() + own.get(), [own])
 			useSignalEffect(
-				() => base.get(),
-				(v) => {
-					effectSeen.push(v)
-				},
+				() => ({
+					watch: () => base.get(),
+					run: (v) => {
+						effectSeen.push(v)
+					},
+				}),
 				[],
 			)
 			return (

@@ -158,18 +158,36 @@ concurrent React without any coupling to render worlds.
 ## React hooks
 
 ```ts
-useSignalEffect(compute, handler, deps, opts?)       // useEffect lane
-useSignalLayoutEffect(compute, handler, deps, opts?) // useLayoutEffect lane
+useSignalEffect(() => ({ watch, run, equals?, label? }), deps)       // useEffect lane
+useSignalLayoutEffect(() => ({ watch, run, equals?, label? }), deps) // useLayoutEffect lane
 ```
 
-- The effect is created inside the matching React phase effect, keyed on
-  `deps` (required, mirroring `useComputed`): mount and deps changes set
-  up and first-run **exactly** in React's phase and tree order. Only
-  signal-triggered re-runs use the lane, which is the relaxation that
-  removes the old re-render-to-run machinery.
-- The handler reads through a latest ref, so it sees the most recent
-  committed render's props without re-creating the effect — the same
-  freshness the old design provided.
+The factory-built spec names effect()'s two slots: `watch` is the source
+(a compute function, a signal, a tuple, or a record) and `run` is the
+handler. The factory runs inside the matching React phase effect, keyed
+on `deps`: mount and deps changes dispose the previous effect and set up
+and first-run the new one **exactly** in React's phase and tree order —
+`useEffect`'s own re-create cycle. Only signal-triggered re-runs use the
+lane, which is the relaxation that removes the old re-render-to-run
+machinery.
+
+- Captures are deps-fresh, never ref-fresh: the factory shape exists so
+  one closure carries every capture — the compute's and the handler's —
+  and stock `react-hooks/exhaustive-deps` checks them all against `deps`
+  (callback at argument 0, deps at argument 1) once the hooks are listed:
+
+  ```jsonc
+  "react-hooks/exhaustive-deps": ["error", {
+    "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
+  }]
+  ```
+
+  A deps change resets `previous` to undefined (fresh effect, first run
+  in-phase), exactly like a `useEffect` re-run. The earlier design's
+  latest-ref handler — commit-anchored freshness without re-creation —
+  was deleted with the move to deps-driven re-creation: its safety
+  argument had to be re-proven under every concurrent feature, while
+  deps-only freshness has nothing to prove.
 - No provider is required: the hooks observe base state, which needs no
   root channel. StrictMode's double mount nets one live effect.
 

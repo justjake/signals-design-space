@@ -48,14 +48,24 @@ stop();
 - **Computeds** are lazy and cached, track dependencies dynamically (a
   branch not taken this evaluation is not a dependency), and only recompute
   when an input's value generation actually advanced.
-- **Effects** are two functions. The compute uses the same evaluator and
-  semantics as a computed — tracked, cached, cut off by `equals`, and
-  async-capable through `use()` — but its state lives on the effect itself.
+- **Effects** are a source and a handler. The source declares what the
+  effect reacts to: a compute function (the same evaluator and semantics
+  as a computed — tracked, cached, cut off by `equals`, async-capable
+  through `use()` — with state living on the effect itself), a signal, a
+  tuple of signals, or a record of signals. The container shorthands read
+  each signal into a same-shaped value and default their cutoff to
+  `shallowEquals` (exported; an explicit `equals` overrides):
 
-  The handler runs untracked with the compute's settled `(value, previous)`
+  ```ts
+  effect(query, (q) => syncUrl(q))
+  effect([user, theme], ([u, t]) => paintHeader(u, t))
+  effect({ user, theme }, ({ user, theme }) => paintHeader(user, theme))
+  ```
+
+  The handler runs untracked with the source's settled `(value, previous)`
   pair when that value changes, and may return a cleanup that runs before
   the next handler run and at disposal. Reads the effect should react to
-  belong in the compute; handler reads are untracked.
+  belong in the source; handler reads are untracked.
 
   A pending compute is silent: settlement fires the handler only when the
   settled value differs. A compute error rethrows from the drain site without
@@ -342,14 +352,25 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
   urgent render with settled history serves stale instead — no fallback
   flash).
 - `useComputed(fn, deps)` — component-owned computed.
-- `useSignalEffect(compute, handler, deps, opts?)` /
-  `useSignalLayoutEffect(...)` — the engine effect with React-phase setup.
-  Mount and `deps` changes create the effect (and first-run it) exactly in
-  React's passive or layout phase and tree order; signal-triggered re-runs
-  drain in the matching phase of the pass the write produced, after its
-  DOM mutations. The handler sees the latest committed render's
-  props without re-creating the effect; cleanup honored; StrictMode nets
-  one; base state only — a transition reaches it once, at retirement.
+- `useSignalEffect(() => ({ watch, run, equals?, label? }), deps)` /
+  `useSignalLayoutEffect(...)` — the engine effect owned by a component.
+  `watch` is the effect's source (compute, signal, tuple, or record);
+  `run` is its handler. The factory runs in the hook's React phase on
+  mount and on every `deps` change — disposing the previous effect first,
+  exactly `useEffect`'s re-create cycle, so captured props are always
+  deps-fresh. Signal-triggered re-runs drain in the matching phase of the
+  pass the write produced, after its DOM mutations. Because one closure
+  carries every capture, `react-hooks/exhaustive-deps` checks the whole
+  spec once configured:
+
+  ```jsonc
+  "react-hooks/exhaustive-deps": ["error", {
+    "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
+  }]
+  ```
+
+  Cleanup honored; StrictMode nets one; base state only — a transition
+  reaches it once, at retirement.
 - `useIsPending(x)` — the pending probe, delivered urgently (an indicator
   must not be held hostage by the transition it indicates).
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after

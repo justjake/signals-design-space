@@ -57,13 +57,15 @@ export function useSignal<T>(signal: ReadableSignal<T>): T {
 	return useValue((signal as RoyaleAtom<T> | RoyaleComputed<T>).signal)
 }
 
-/** The interface's split shape is fx2's native shape. */
+/** The interface's split (compute, handler, deps) shape desugars to fx2's
+ * factory form: one spec object per deps window. */
 export function useSignalEffect<T>(
 	compute: () => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps?: readonly unknown[],
 ): void {
-	useRoyaleSignalEffect(compute, handler, deps ?? [])
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useRoyaleSignalEffect(() => ({ watch: compute, run: handler }), deps ?? [])
 }
 
 export { startSignalTransition, useComputed }

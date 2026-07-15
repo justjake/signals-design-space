@@ -16,5 +16,8 @@ export {
 	useSignalLayoutEffect,
 	useIsPending,
 	useAtom,
+	type SignalEffectSpec,
+	type WatchSource,
+	type WatchValue,
 } from './hooks.ts'
 export { startSignalTransition, useSignalTransition } from './transitions.ts'
