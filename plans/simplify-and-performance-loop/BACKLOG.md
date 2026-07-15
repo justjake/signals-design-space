@@ -62,6 +62,7 @@ condition still leaves a useful direction.
 
 - Scope ownership and React root naming.
 - Commit-handshake collapse is closed until React exposes different ordering: making the committed stash canonical during root confirmation requires a second marker or insertion-effect phase to keep the root registered before descendant layout effects.
+- The sole-caller `expiryFor` helper remains: its exact TypeScript 7 inline regressed expiry arming 6.58% and the pre-reviewed paired arm/control ratio 13.63% in Round 102. Reopen only after a natural toolchain change, not with callback syntax variants.
 - `worldsReducer` always returns a fresh React state wrapper but reuses the canonical draft-ID array while live membership is unchanged; only adding or pruning materializes a replacement array.
 - Render subscriptions alone own one permanent pinned `Link`; their dedicated watcher shape has six fields and no effect-only state.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
