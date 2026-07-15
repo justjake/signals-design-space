@@ -14,8 +14,8 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-1. Unify the tracer's root and suspension object-ID lookup only if separate fixed numbering remains stable; prefer one weak owner and a two-caller mechanism over a new tagged representation.
-2. Replace the five public alias bindings for batch/effect-scope/untracked with direct aliased exports while preserving package export names, declaration output, function identity, and behavior.
+1. Make `flushScheduledEffects` a direct graph re-export, deleting its import-only local binding while preserving identity, declaration output, and the exact public export list.
+2. Specialize lane pump state now that only after-paint is host-configurable; delete impossible sync/before-paint pump ownership and generic selection only if nested drains, reset, total lane order, and hidden/headless hosts remain exact.
 
 ## Other unmeasured broader leads
 
@@ -74,6 +74,8 @@ condition still leaves a useful direction.
 - Internal `activeConsumer`, `currentWorld`, and `currentPark` consumers now read their canonical ESM live bindings directly; the three zero-policy getter wrappers and ten calls are gone while public `getActiveTracer()` remains a function.
 - The playground's `alt-a`, `alt-b`, and `cosignals` adapters share one three-caller split-effect composer; Solid and Royale retain their distinct lifecycle mechanisms.
 - Tracer ring `head` plus `size` own occupancy; private slots are non-optional and `events()`/`find()` no longer defend against impossible holes.
+- Root and suspension trace IDs share one two-caller allocation mechanism while retaining two weak owners and separate fixed per-session numbering.
+- Public effect-scope, batch, start/end-batch, and untracked controls are direct graph re-exports; their five local runtime alias bindings are gone.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
