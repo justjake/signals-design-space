@@ -403,6 +403,35 @@ describe('causality tracer', () => {
 		tracer.stop()
 	})
 
+	test('a self-disposing cleanup preserves its thrown object and trace label', () => {
+		const tracer = attachTracer()
+		const source = createAtom(0)
+		const cleanupError = { kind: 'cleanup' }
+		let dispose!: () => void
+		dispose = effect(
+			() => source.get(),
+			() => () => {
+				dispose()
+				throw cleanupError
+			},
+			{ label: 'self-disposing effect' },
+		)
+
+		let thrown: unknown
+		try {
+			source.set(1)
+		} catch (error) {
+			thrown = error
+		}
+		expect(thrown).toBe(cleanupError)
+		const cleanupEvent = tracer
+			.events()
+			.find((event) => event.kind === 'cleanup-error' && event.error === cleanupError)!
+		expect(cleanupEvent.error).toBe(cleanupError)
+		expect(cleanupEvent.label).toBe('self-disposing effect')
+		tracer.stop()
+	})
+
 	test('a handler failure is reported to the tracer attached by the handler', () => {
 		const attachedError = new Error('attached in handler')
 		let attached!: Tracer
@@ -449,6 +478,7 @@ describe('causality tracer', () => {
 		effect(
 			() => a.get(),
 			(v) => b.set(v + 1),
+			{ label: 'copy a to b' },
 		) // writes b whenever a changes
 		a.set(1)
 		const events = t.events()
@@ -460,6 +490,7 @@ describe('causality tracer', () => {
 		const writeB = [...events].reverse().find((e) => e.kind === 'write' && e.label === 'b')!
 		const effectRun = events.find((e) => e.id === writeB.cause)!
 		expect(effectRun.kind).toBe('effect-run')
+		expect(effectRun.label).toBe('copy a to b')
 		const writeA = events.find((e) => e.id === effectRun.cause)!
 		expect(writeA.kind).toBe('write')
 		expect(writeA.label).toBe('a')

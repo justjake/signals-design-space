@@ -15,7 +15,6 @@ import {
 	type ConsumerNode,
 	type Link,
 	type ProducerNode,
-	type ReactiveNode,
 	Flag,
 	Lane,
 	NO_EVENT,
@@ -27,7 +26,6 @@ import {
 	observeNode,
 	readAtom,
 	readComputed,
-	setTraceHook,
 	writeAtom,
 } from '../src/graph.ts'
 import {
@@ -152,29 +150,36 @@ describe('two-tier graph: promote validation', () => {
 })
 
 describe('two-tier graph: promote/demote structure', () => {
-	test('watchers do not carry producer-only graph state', () => {
-		let watcher: ReactiveNode | null = null
-		let stop: (() => void) | undefined
-		setTraceHook((kind, node) => {
-			if (kind === 'effect-run') watcher = node
-			return NO_EVENT
-		})
+	test('watchers retain only their one pinned dependency link', () => {
+		const computed = makeGraphComputed(() => 1)
+		const stopEffect = makeEffect(
+			computed as unknown as ComputedNode<unknown>,
+			() => {},
+			Lane.Sync,
+		)
+		const effectLink = computed.subs!
+		const effectWatcher = effectLink.sub
+		const source = atom(1)
+		const stopSubscription = observeNode(source, () => {})
+		const subscriptionLink = source.subs!
+		const subscriptionWatcher = subscriptionLink.sub
 		try {
-			stop = syncEffect(() => 0)
-			const captured = watcher
-			if (captured === null) {
-				throw new Error('effect watcher was not traced')
+			for (const [watcher, link] of [
+				[effectWatcher, effectLink],
+				[subscriptionWatcher, subscriptionLink],
+			] as const) {
+				expect(watcher.deps).toBe(link)
+				expect(Object.hasOwn(watcher, 'compute')).toBe(false)
+				expect(Object.hasOwn(watcher, 'depsTail')).toBe(false)
+				expect(Object.hasOwn(watcher, 'label')).toBe(false)
+				expect(Object.hasOwn(watcher, 'changedAtGraphChange')).toBe(false)
+				expect(Object.hasOwn(watcher, 'throwable')).toBe(false)
+				expect(Object.hasOwn(watcher, 'subs')).toBe(false)
+				expect(Object.hasOwn(watcher, 'subsTail')).toBe(false)
+				expect(Object.hasOwn(watcher, 'observerCount')).toBe(false)
+				expect(Object.hasOwn(watcher, 'worldMemos')).toBe(false)
+				expect(Object.hasOwn(watcher, 'validAtGraphChange')).toBe(false)
 			}
-			expect(Object.hasOwn(captured, 'changedAtGraphChange')).toBe(false)
-			expect(Object.hasOwn(captured, 'throwable')).toBe(false)
-			expect(Object.hasOwn(captured, 'subs')).toBe(false)
-			expect(Object.hasOwn(captured, 'subsTail')).toBe(false)
-			expect(Object.hasOwn(captured, 'observerCount')).toBe(false)
-			expect(Object.hasOwn(captured, 'worldMemos')).toBe(false)
-			// Watchers never validate by clock; the watermark lives on computeds.
-			expect(Object.hasOwn(captured, 'validAtGraphChange')).toBe(false)
-
-			const computed = makeGraphComputed(() => 1)
 			expect(Object.hasOwn(computed, 'changedAtGraphChange')).toBe(true)
 			expect(Object.hasOwn(computed, 'throwable')).toBe(true)
 			expect(Object.hasOwn(computed, 'subs')).toBe(true)
@@ -182,8 +187,8 @@ describe('two-tier graph: promote/demote structure', () => {
 			expect(Object.hasOwn(computed, 'observerCount')).toBe(true)
 			expect(Object.hasOwn(computed, 'worldMemos')).toBe(true)
 		} finally {
-			setTraceHook(null)
-			stop?.()
+			stopSubscription()
+			stopEffect()
 		}
 	})
 

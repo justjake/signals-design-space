@@ -9,11 +9,11 @@ condition still leaves a useful direction.
 
 - Delete the zero-production-caller `currentDraftChange` and `isErrorBox` exports with the next related source change. The runtime call site that made the Round 64 brand deletion measurable disappeared with `useCommitted`; do not retain test-only production APIs.
 - Correct comments that still describe deleted `committed()` / per-root committed views or the removed requestAnimationFrame pump; do not spend a performance round on comment-only residue.
+- Delete `unwrapAsyncRead`'s now-vestigial `KindComputed` guard with the next `index.ts` source change; `getActiveConsumer()` now returns only `ComputedNode | null`.
 - Delete dead switches and wrappers only when one coherent owner disappears; keep `FORBID_WRITE_FROM_COMPUTED` enabled.
 
 ## Current priority after the split-effect rewrite
 
-1. Make each watcher's pinned `Link` the sole dependency owner: remove the duplicate effect `compute` reference, copied label, and unused dynamic-tracking cursor state if construction, retained-size, promotion, and inlining probes improve without shape polymorphism regressions.
 2. Delete watcher staleness marks if falsification confirms `Scheduled` plus queue membership fully owns pending work. Current effect drains and render delivery clear watcher stale bits without reading them; keep computed visited-set behavior byte-for-byte.
 3. Give each lane one reentrancy owner. First add a same-lane nested-drain falsifier for `flushScheduledEffects()` inside a cleanup/handler; only then replace the sync-only `flushing` owner if cursor and tail ownership remain exact.
 4. Let the before-paint microtask also settle lifetime transitions, deleting `lifetimeFlushScheduled` and its separate microtask only if activation ordering, StrictMode flaps, and `onObserved` writes remain exact.
@@ -57,6 +57,7 @@ condition still leaves a useful direction.
 ## Completed or deliberately closed
 
 - Scope ownership and React root naming.
+- Each watcher now owns one permanent pinned `Link`; duplicate `compute`, copied `label`, watcher `depsTail`, and watcher-side dynamic tracking are gone. Watcher shape fell from 14 to 11 fields while cleanup self-disposal retains exact error and trace identity.
 - Tracer diagnostic ownership, causal events, weak delivery retention, and removal of `draftWakeStats`.
 - One dynamically traversed collection for `draftsAffecting`.
 - The stale `draftsAffecting` import in `index.ts` was removed; `react/host.ts` remains its real production consumer for late-subscription repair.

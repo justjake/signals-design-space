@@ -166,7 +166,7 @@ export interface ReactiveNode {
 	/** Tracing: the event that caused the latest invalidation to reach
 	 * this node. */
 	causeEvent: TraceEventId
-	label: string | undefined
+	label?: string | undefined
 }
 
 /** State carried only by value producers: atoms and computeds. */
@@ -204,7 +204,6 @@ export interface ConsumerNode extends ReactiveNode {
 	 * at creation (an effect's compute, a subscription's observed node) and
 	 * never re-tracked — dynamic tracking lives only in computeds. */
 	deps: Link | undefined
-	depsTail: Link | undefined
 	/** The last poke walk that reached this node. Equality with the
 	 * running walk's pass means the walk already visited it. */
 	pokePass: PokePass
@@ -224,7 +223,7 @@ function newEvalPass(): EvalPass {
 }
 /** The node whose dependencies are being tracked right now: reads inside
  * an evaluation register edges against this node. */
-let activeConsumer: ConsumerNode | null = null
+let activeConsumer: ComputedNode<unknown> | null = null
 /** The world an evaluation is running in; null means base state. A world
  * boundary also detaches graph collectors owned by its caller. */
 let currentWorld: World | null = null
@@ -303,6 +302,8 @@ export interface AtomNode<T> extends ProducerNode {
 
 /** A cached computed-value node — the engine side of a computed. */
 export interface ComputedNode<T> extends ProducerNode, ConsumerNode {
+	/** Cursor through the dependency list during dynamic evaluation. */
+	depsTail: Link | undefined
 	/** The ErrorBox or Suspension selected by the async flags; null for a
 	 * plain value. The stable slot avoids changing shape when a computed
 	 * moves between value, error, and suspended states. */
@@ -341,8 +342,6 @@ export const enum Lane {
  * render-notify subscribers. Neither kind re-tracks dependencies; an
  * effect's dynamic tracking happens inside its compute node. */
 export interface WatcherNode extends ConsumerNode, EffectOwner {
-	/** Effect watchers: the pinned compute this watcher delivers. */
-	compute: ComputedNode<unknown> | null
 	/** Effect watchers: the untracked side effect, handed the compute's
 	 * settled value and the previously handled one; may return a cleanup.
 	 * Reads inside the handler are deliberately untracked — a value the
@@ -591,7 +590,7 @@ export function flushLifetimeTransitions(): void {
  * dependency list is reused in place: depsTail is a cursor that advances
  * as the evaluation re-reads dependencies in the same order as last time,
  * so a stable evaluation allocates nothing. */
-function trackRead(dep: ProducerNode, sub: ConsumerNode): Link {
+function trackRead(dep: ProducerNode, sub: ComputedNode<unknown>): Link {
 	const tail = sub.depsTail
 	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
 		return tail
@@ -639,7 +638,7 @@ function trackRead(dep: ProducerNode, sub: ConsumerNode): Link {
 }
 
 /** Drop dependency edges the just-finished evaluation did not re-read. */
-function trimDeps(sub: ConsumerNode): void {
+function trimDeps(sub: ComputedNode<unknown>): void {
 	const tail = sub.depsTail
 	let stale = tail === undefined ? sub.deps : tail.nextDep
 	if (tail !== undefined) {
@@ -656,6 +655,23 @@ function trimDeps(sub: ConsumerNode): void {
 		stale.nextDep = undefined
 		stale = next
 	}
+}
+
+/** Install a watcher's one permanent producer edge. Dynamic dependency
+ * tracking belongs to computeds; watchers only pin this link until disposal. */
+function pinWatcher(dep: ProducerNode, watcher: WatcherNode): void {
+	const link: Link = {
+		dep,
+		sub: watcher,
+		nextDep: undefined,
+		prevSub: undefined,
+		nextSub: undefined,
+		inSubs: false,
+		evalPass: 0,
+	}
+	watcher.deps = link
+	linkIntoSubs(link)
+	addObserver(dep)
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,7 +1111,7 @@ function drainLane(state: LaneState): void {
 					state.queue[i] = undefined
 					continue
 				}
-				const compute = w.compute!
+				const compute = w.deps!.dep as ComputedNode<unknown>
 				ensureFresh(compute)
 				const cflags = compute.flags
 				if ((cflags & Flag.AsyncError) !== 0) {
@@ -1595,7 +1611,7 @@ export function withWorld<T>(world: World | null, fn: () => T): T {
 	}
 }
 
-export function getActiveConsumer(): ConsumerNode | null {
+export function getActiveConsumer(): ComputedNode<unknown> | null {
 	return activeConsumer
 }
 
@@ -1624,10 +1640,7 @@ function makeWatcher(capabilities: number): WatcherNode {
 		// route scheduling for the watcher's whole life.
 		flags: Flag.Watching | Flag.Watched | capabilities,
 		deps: undefined,
-		depsTail: undefined,
 		causeEvent: NO_EVENT,
-		label: undefined,
-		compute: null,
 		handler: null,
 		lastHandled: UNINITIALIZED,
 		lane: Lane.Sync,
@@ -1687,12 +1700,13 @@ function runEffectCleanup(w: WatcherNode): void {
 	}
 	if (w.cleanup !== undefined) {
 		const c = w.cleanup
+		const compute = w.deps!.dep
 		w.cleanup = undefined
 		try {
 			untracked(c)
 		} catch (e) {
 			if (traceHook !== null) {
-				traceHook('cleanup-error', w, w.causeEvent, { error: e })
+				traceHook('cleanup-error', compute, w.causeEvent, { error: e })
 			}
 			disposeWatcher(w)
 			throw e
@@ -1704,7 +1718,7 @@ function runEffectCleanup(w: WatcherNode): void {
  * is settled here by construction: a pull that parked was skipped, and a
  * post-pull invalidation set Scheduled, which skipped the pair. */
 function runHandler(w: WatcherNode): void {
-	const compute = w.compute!
+	const compute = w.deps!.dep as ComputedNode<unknown>
 	const value = compute.value
 	const previous = w.lastHandled === UNINITIALIZED ? undefined : w.lastHandled
 	w.lastHandled = value
@@ -1715,7 +1729,7 @@ function runHandler(w: WatcherNode): void {
 	activeConsumer = null
 	activeEffectOwner = w
 	const trace = traceHook
-	const cause = trace !== null ? trace('effect-run', w, w.causeEvent) : NO_EVENT
+	const cause = trace !== null ? trace('effect-run', compute, w.causeEvent) : NO_EVENT
 	const prevCause = setCurrentCause(cause)
 	try {
 		let ret: void | (() => void)
@@ -1723,7 +1737,7 @@ function runHandler(w: WatcherNode): void {
 			ret = w.handler!(value, previous)
 		} catch (error) {
 			if (traceHook !== null) {
-				traceHook('effect-error', w, cause, { error })
+				traceHook('effect-error', compute, cause, { error })
 			}
 			throw error
 		}
@@ -1761,7 +1775,7 @@ export function disposeWatcher(w: WatcherNode): void {
 				untracked(c)
 			} catch (error) {
 				if (traceHook !== null) {
-					traceHook('cleanup-error', w, w.causeEvent, { error })
+					traceHook('cleanup-error', w.deps!.dep, w.causeEvent, { error })
 				}
 				if (!failed) {
 					failed = true
@@ -1780,7 +1794,6 @@ export function disposeWatcher(w: WatcherNode): void {
 function unlinkAllDeps(w: WatcherNode): void {
 	let l = w.deps
 	w.deps = undefined
-	w.depsTail = undefined
 	while (l !== undefined) {
 		const next = l.nextDep
 		if (l.inSubs) {
@@ -1803,10 +1816,8 @@ export function makeEffect(
 	lane: Lane,
 ): () => void {
 	const w = makeWatcher(Flag.WatchRunEffect)
-	w.compute = compute
 	w.handler = handler
 	w.lane = lane
-	w.label = compute.label
 	const owner = activeEffectOwner
 	if (owner !== null && (owner.flags & Flag.Watched) !== 0) {
 		;(owner.children ??= []).push(w)
@@ -1815,7 +1826,7 @@ export function makeEffect(
 		// The pinned dependency edge watcher → compute. The watcher is born
 		// watched, so this links into the compute's subscriber list and
 		// promotes its chain.
-		trackRead(compute, w)
+		pinWatcher(compute, w)
 		ensureFresh(compute)
 		if ((compute.flags & Flag.AsyncError) !== 0) {
 			throw (compute.throwable as ErrorBox).error
@@ -1879,35 +1890,20 @@ export function observeNode(
 	sub.onNotify = notify
 	sub.onDraftWake = draftWake
 	try {
-		newEvalPass()
-		sub.depsTail = undefined
-		const prevConsumer = activeConsumer
-		activeConsumer = sub
-		try {
-			if ((node.flags & Flag.KindAtom) !== 0) {
-				readAtom(node as AtomNode<unknown>)
-			} else if ((node.flags & Flag.KindComputed) !== 0) {
-				// Subscribe to invalidation only; do not force an evaluation here.
-				trackRead(node, sub)
-				// This installed a subscriber edge without pulling the node. If
-				// the node is already stale, the invalidation this subscriber
-				// cares about already happened (or, while the node was unwatched,
-				// could never be delivered), and no future wave will re-enter the
-				// stale subtree — so apply the wave's visit rules to the new
-				// subscriber now, once. Never-computed nodes are exempt: they are
-				// born StaleDirty with no dependency edges, so there is no missed
-				// invalidation to deliver.
-				if (
-					(node.flags & Flag.StaleMask) !== 0 &&
-					(node as ComputedNode<unknown>).value !== UNINITIALIZED
-				) {
-					sub.flags |= Flag.StaleCheck
-					sub.causeEvent = node.causeEvent
-					scheduleWatcher(sub)
-				}
-			}
-		} finally {
-			activeConsumer = prevConsumer
+		if ((node.flags & Flag.KindAtom) !== 0) {
+			peekAtom(node as AtomNode<unknown>)
+		}
+		pinWatcher(node, sub)
+		if (
+			(node.flags & Flag.KindComputed) !== 0 &&
+			(node.flags & Flag.StaleMask) !== 0 &&
+			(node as ComputedNode<unknown>).value !== UNINITIALIZED
+		) {
+			// The pinned edge does not pull the node. If it was already stale,
+			// deliver the invalidation that happened before this edge existed.
+			sub.flags |= Flag.StaleCheck
+			sub.causeEvent = node.causeEvent
+			scheduleWatcher(sub)
 		}
 		if (batchDepth === 0) {
 			flush()
