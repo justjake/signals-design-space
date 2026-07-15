@@ -521,33 +521,6 @@ export function atomHasDraftIntents(atom: AtomNode<unknown>): boolean {
 	return false
 }
 
-/** True while some live draft holds intents against this computed's current
- * source atoms. Unlike draftsAffecting, this boolean query stops at the
- * first match and does not construct the exact draft-id list. */
-export function computedHasDraftIntents(node: ComputedNode<unknown>): boolean {
-	if (liveDrafts.size === 0) {
-		return false
-	}
-	const sources = new Set<ProducerNode>()
-	sources.add(node)
-	for (const source of sources) {
-		if ((source.flags & Flag.KindAtom) !== 0) {
-			if (atomHasDraftIntents(source as AtomNode<unknown>)) {
-				return true
-			}
-			continue
-		}
-		for (
-			let l = (source as ComputedNode<unknown>).deps;
-			l !== undefined;
-			l = l.nextDep
-		) {
-			sources.add(l.dep)
-		}
-	}
-	return false
-}
-
 /** Test/reset seam: discard every live draft and clear per-suspension state. */
 export function discardAllDrafts(): void {
 	for (const id of [...liveDrafts.keys()]) {
