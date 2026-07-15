@@ -8,8 +8,10 @@
  * still renders. No DOM, no signals — this module is pure data.
  */
 
-/** Coarse bucket for coloring/filtering; the only place the UI reduces the
- * open kind vocabulary. Mirrors signals-royale-fx2/debug's TraceKindClass. */
+/**
+ * Coarse bucket for coloring/filtering; the only place the UI reduces the
+ * open kind vocabulary. Mirrors signals-royale-fx2/debug's TraceKindClass.
+ */
 export type KindClass =
 	| 'origin'
 	| 'write'
@@ -25,8 +27,10 @@ export type KindClass =
 export type NodeKind = 'atom' | 'computed' | 'watcher' | 'effect'
 export type NodeStatus = 'ok' | 'suspended' | 'error'
 
-/** A graph node as the panel sees it. `id` is adapter-scoped; pair with the
- * engine id for global uniqueness. */
+/**
+ * A graph node as the panel sees it. `id` is adapter-scoped; pair with the
+ * engine id for global uniqueness.
+ */
 export interface GraphNode {
 	id: number
 	kind: NodeKind
@@ -39,8 +43,10 @@ export interface GraphNode {
 	/** Retained per-node stats reduced from the event stream. */
 	recomputes: number
 	changes: number
-	/** The node's most recent entry — retained, so listing a node never scans
-	 * the ring. 0 / null when the node has no entry in the window. */
+	/**
+	 * The node's most recent entry — retained, so listing a node never scans
+	 * the ring. 0 / null when the node has no entry in the window.
+	 */
 	lastEventId: number
 	lastKind: string | null
 }
@@ -86,8 +92,10 @@ export interface EventFilter {
 	classes?: KindClass[]
 }
 
-/** The query surface the panel talks to. In-realm inline; an RPC proxy in the
- * extension. Query, don't snapshot — the adapter walks the live graph. */
+/**
+ * The query surface the panel talks to. In-realm inline; an RPC proxy in the
+ * extension. Query, don't snapshot — the adapter walks the live graph.
+ */
 export interface Backend {
 	counts(): Counts
 	/** Recent entries, newest last, capped. */
@@ -102,8 +110,10 @@ export interface Backend {
 	subscribe(listener: () => void): () => void
 }
 
-/** Classify a verbatim kind string. Unknown → 'system'. Kept in sync with
- * signals-royale-fx2/debug's kindClass; the adapter may pass its own instead. */
+/**
+ * Classify a verbatim kind string. Unknown → 'system'. Kept in sync with
+ * signals-royale-fx2/debug's kindClass; the adapter may pass its own instead.
+ */
 export function kindClass(kind: string): KindClass {
 	switch (kind) {
 		case 'dom-event':

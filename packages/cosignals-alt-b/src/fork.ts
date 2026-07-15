@@ -104,8 +104,10 @@ export class ForkDouble {
 	private serial = 0
 	private lineageSerial = 0
 	private batches = new Map<number, BatchState>()
-	/** Live (unretired) tokens — O(1) liveness bookkeeping so long sessions
-	 * do not degrade quadratically scanning every batch ever created. */
+	/**
+	 * Live (unretired) tokens — O(1) liveness bookkeeping so long sessions
+	 * do not degrade quadratically scanning every batch ever created.
+	 */
 	private live = new Set<number>()
 	/** Batch context stack for write attribution (innermost wins, §6.5). */
 	private contextStack: number[] = []
@@ -114,8 +116,10 @@ export class ForkDouble {
 	private pass: PassState | undefined
 	/** Record of every runInBatch call, for test assertions. */
 	readonly entangleLog: EntangleRecord[] = []
-	/** Cap on live tokens; §6.2 invariant is 31. Tests may raise it to force
-	 * the engine's slot-exhaustion fallback. */
+	/**
+	 * Cap on live tokens; §6.2 invariant is 31. Tests may raise it to force
+	 * the engine's slot-exhaustion fallback.
+	 */
 	maxLiveTokens = 31
 
 	// ---- §6.1 isomorphic API -------------------------------------------------
@@ -136,9 +140,11 @@ export class ForkDouble {
 		return false
 	}
 
-	/** §6.1 — token of the batch a write issued right now belongs to, minting
+	/**
+	 * §6.1 — token of the batch a write issued right now belongs to, minting
 	 * lazily. The double mints an ambient urgent token when no scripted batch
-	 * context is live (the real fork's per-event batch). */
+	 * context is live (the real fork's per-event batch).
+	 */
 	getCurrentWriteBatch(): number {
 		const token = this.currentContextToken()
 		if (token !== 0) {
@@ -150,8 +156,10 @@ export class ForkDouble {
 		return this.ambientToken
 	}
 
-	/** §6.1 — defined only while React is *executing* render code. The double
-	 * mirrors that: undefined inside yield gaps. */
+	/**
+	 * §6.1 — defined only while React is *executing* render code. The double
+	 * mirrors that: undefined inside yield gaps.
+	 */
 	getRenderContext(): { container: Container } | undefined {
 		if (this.pass !== undefined && !this.pass.yielded) {
 			return { container: this.pass.container }
@@ -159,9 +167,11 @@ export class ForkDouble {
 		return undefined
 	}
 
-	/** §6.5 — batch entanglement. Token live: run fn in that batch's context
+	/**
+	 * §6.5 — batch entanglement. Token live: run fn in that batch's context
 	 * (write classification included) and return true. Retired: return false
-	 * without running fn. Nesting uses the innermost override. */
+	 * without running fn. Nesting uses the innermost override.
+	 */
 	runInBatch(token: number, fn: () => void): boolean {
 		const b = this.batches.get(token)
 		if (b === undefined || b.retired) {
@@ -199,8 +209,10 @@ export class ForkDouble {
 		return token
 	}
 
-	/** Run fn with writes attributed to `token` (like code inside a
-	 * startTransition scope, or an event handler for an urgent batch). */
+	/**
+	 * Run fn with writes attributed to `token` (like code inside a
+	 * startTransition scope, or an event handler for an urgent batch).
+	 */
 	inBatch(token: number, fn: () => void): void {
 		const b = this.batches.get(token)
 		if (b === undefined) {
@@ -222,8 +234,10 @@ export class ForkDouble {
 		return this.contextStack.length !== 0 ? this.contextStack[this.contextStack.length - 1] : 0
 	}
 
-	/** Convenience: open a deferred batch, run scope inside it (a
-	 * startTransition analogue). Returns the token; caller retires it. */
+	/**
+	 * Convenience: open a deferred batch, run scope inside it (a
+	 * startTransition analogue). Returns the token; caller retires it.
+	 */
 	startTransition(scope: () => void): number {
 		const token = this.openBatch(true)
 		this.inBatch(token, scope)
@@ -278,8 +292,10 @@ export class ForkDouble {
 		this.emit((l) => l.onRenderPassEnd?.(p.container))
 	}
 
-	/** Restart: end the old pass, start a new one with the SAME lineage,
-	 * re-delivering (possibly newer) includedBatches. */
+	/**
+	 * Restart: end the old pass, start a new one with the SAME lineage,
+	 * re-delivering (possibly newer) includedBatches.
+	 */
 	restartRenderPass(includedBatches: readonly number[]): void {
 		const p = this.requirePass('restartRenderPass')
 		const { container, lineage } = p

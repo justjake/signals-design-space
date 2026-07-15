@@ -31,8 +31,10 @@ import type { Computed, Link, Signal } from './solid/types.js'
 
 export type DepNode = Signal<any> | Computed<any>
 
-/** An IQueue that invokes wake-ups immediately in the caller's stack, so a
- * reader's React setState inherits the writer's priority/batch context. */
+/**
+ * An IQueue that invokes wake-ups immediately in the caller's stack, so a
+ * reader's React setState inherits the writer's priority/batch context.
+ */
 const immediateQueue: IQueue = {
 	enqueue(_type: number, fn: QueueCallback): void {
 		fn(0)
@@ -203,11 +205,13 @@ export function pokeReadersInCone(
 	}
 }
 
-/** Create a persistent reader for one component hook. `wake` is invoked on
+/**
+ * Create a persistent reader for one component hook. `wake` is invoked on
  * every invalidation/status change of a linked dep; `urgent` is true when the
  * invalidation came from optimistic propagation — optimistic UI must flush
  * immediately (Solid lane semantics / React useOptimistic), never held to the
- * transition that wrote it. */
+ * transition that wrote it.
+ */
 export function createReader(name: string, wake: (urgent: boolean) => void): ReaderNode {
 	const node = bareNode(name) as ReaderNode
 	node._type = EFFECT_TRACKED
@@ -225,9 +229,11 @@ export function createReader(name: string, wake: (urgent: boolean) => void): Rea
 	return node
 }
 
-/** Replace the reader's dependency links with `deps` (idempotent; called at
+/**
+ * Replace the reader's dependency links with `deps` (idempotent; called at
  * every React commit). Deps that drop out react to unobservation only after
- * the new links are in place. */
+ * the new links are in place.
+ */
 export function syncReaderDeps(reader: ReaderNode, deps: DepNode[]): void {
 	deferUnobserved(() => {
 		let toRemove = reader._deps

@@ -42,8 +42,10 @@ function freshEngine(): CosignalEngine {
 	return b
 }
 
-/** The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
- * folds to the thenable's stable sentinel VALUE instead of unwinding. */
+/**
+ * The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
+ * folds to the thenable's stable sentinel VALUE instead of unwinding.
+ */
 function suspending(
 	b: CosignalEngine,
 	name: string,
@@ -69,8 +71,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 	return { promise, resolve }
 }
 
-/** A manually-settled thenable whose callbacks fire SYNCHRONOUSLY at
- * settle() — the custom-thenable shape the step-0 pins need. */
+/**
+ * A manually-settled thenable whose callbacks fire SYNCHRONOUSLY at
+ * settle() — the custom-thenable shape the step-0 pins need.
+ */
 function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 	const cbs: ((v: T) => void)[] = []
 	const t: PromiseLike<T> = {

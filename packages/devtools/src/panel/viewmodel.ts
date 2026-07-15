@@ -86,8 +86,10 @@ export function fmtTook(us: number | null): string {
 	return `${(us / 1000).toFixed(us < 10000 ? 1 : 0)}ms`
 }
 
-/** A row in the causal tree: a log row plus its nesting depth and the guide
- * glyphs that draw the branch lines to its left. */
+/**
+ * A row in the causal tree: a log row plus its nesting depth and the guide
+ * glyphs that draw the branch lines to its left.
+ */
 export type Guide = 'vert' | 'tee' | 'elbow' | 'none'
 export interface TreeRow {
 	row: LogRow
@@ -161,8 +163,10 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 	}))
 }
 
-/** A resolved neighbor (dependency or subscriber), enriched for the inspector's
- * colored, clickable lists. */
+/**
+ * A resolved neighbor (dependency or subscriber), enriched for the inspector's
+ * colored, clickable lists.
+ */
 export interface NeighborRef {
 	id: number
 	name: string
@@ -170,8 +174,10 @@ export interface NeighborRef {
 	status: NodeStatus
 }
 
-/** How many neighbors the inspector enriches per direction before summarizing
- * the rest as a count — bounds work when a node has a huge fan-out. */
+/**
+ * How many neighbors the inspector enriches per direction before summarizing
+ * the rest as a count — bounds work when a node has a huge fan-out.
+ */
 const NEIGHBOR_CAP = 40
 
 function neighbors(backend: Backend, ids: number[]): NeighborRef[] {
@@ -185,8 +191,10 @@ function neighbors(backend: Backend, ids: number[]): NeighborRef[] {
 	return out
 }
 
-/** The inspector payload plus the "why this ran" cause chain, resolved to
- * display rows. */
+/**
+ * The inspector payload plus the "why this ran" cause chain, resolved to
+ * display rows.
+ */
 export interface InspectorModel {
 	node: NodeDetails
 	name: string

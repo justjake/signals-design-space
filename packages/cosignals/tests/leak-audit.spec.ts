@@ -84,8 +84,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 /** The engine's dense nodeIndex-keyed columns (probes only observe; they never mutate). */
 const engineCols = (b: CosignalEngine) => b.__TEST__columns()
 
-/** Sample the kernel node free-list head: create a throwaway Computed (alloc
- * pops the free list first) and dispose it right back. */
+/**
+ * Sample the kernel node free-list head: create a throwaway Computed (alloc
+ * pops the free list first) and dispose it right back.
+ */
 function sampleFreeNodeId(): number {
 	const c = new Computed(() => 0)
 	const id = (c as unknown as { _id: number })._id

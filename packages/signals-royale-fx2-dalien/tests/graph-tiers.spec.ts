@@ -62,10 +62,12 @@ function isWatched(n: ReactiveNode): boolean {
 	return (n.flags & Flag.Watched) !== 0
 }
 
-/** The tier invariant promote/demote must maintain: for cells and deriveds
+/**
+ * The tier invariant promote/demote must maintain: for cells and deriveds
  * the Watched bit mirrors observerCount (watchers own their bit through
  * create/dispose). A path that set Watched without promote-validation would
- * resurrect the stale-Clean serve that promote exists to prevent. */
+ * resurrect the stale-Clean serve that promote exists to prevent.
+ */
 function expectTierInvariant(nodes: ReactiveNode[]): void {
 	for (const n of nodes) {
 		if ((n.flags & Flag.Watching) !== 0) {
@@ -576,11 +578,13 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 })
 
 describe('deps-from-eval invariant (test-side check, was a shipped dev assertion)', () => {
-	/** The invariant: a derived's deps list is exactly what its last
+	/**
+	 * The invariant: a derived's deps list is exactly what its last
 	 * evaluation read, in read order — evaluation is the only site that
 	 * creates or keeps dep edges. Checked from the test by walking the list,
 	 * per the owner's rule that invariant nets live in tests, not the
-	 * library. */
+	 * library.
+	 */
 	const depsOf = (node: ReactiveNode) => {
 		const out: unknown[] = []
 		for (let l = node.deps; l !== undefined; l = nextDependency(l)) {

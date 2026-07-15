@@ -31,8 +31,10 @@ const drainMicrotasks = async () => {
 	}
 }
 
-/** Wait (macrotasks) until the condition holds, so scheduler-task renders
- * can land; bounded so a genuine failure still fails fast. */
+/**
+ * Wait (macrotasks) until the condition holds, so scheduler-task renders
+ * can land; bounded so a genuine failure still fails fast.
+ */
 const settleUntil = async (cond: () => boolean) => {
 	for (let i = 0; i < 20 && !cond(); i++) {
 		await tick()

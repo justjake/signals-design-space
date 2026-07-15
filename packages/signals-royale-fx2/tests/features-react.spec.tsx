@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-/** Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
+/**
+ * Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
  * useSignalTransition, useAtom, useComputed,
- * useSignalEffect/useSignalLayoutEffect). */
+ * useSignalEffect/useSignalLayoutEffect).
+ */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
 	act,
@@ -42,8 +44,10 @@ afterEach(async () => {
 })
 
 describe('scenario 11 — suspense family', () => {
-	/** The resource idiom: one request per param key, so requests are stable
-	 * across re-evaluations and a param change is what refetches. */
+	/**
+	 * The resource idiom: one request per param key, so requests are stable
+	 * across re-evaluations and a param change is what refetches.
+	 */
 	function makeResource(param: Atom<number>) {
 		let fetchCount = 0
 		const gates = new Map<string, ReturnType<typeof deferred<string>>>()

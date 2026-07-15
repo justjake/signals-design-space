@@ -63,8 +63,10 @@ function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): voi
 	b.retire(t.id)
 }
 
-/** The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
- * folds to the thenable's stable sentinel VALUE instead of unwinding. */
+/**
+ * The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
+ * folds to the thenable's stable sentinel VALUE instead of unwinding.
+ */
 function suspending(
 	b: CosignalEngine,
 	name: string,

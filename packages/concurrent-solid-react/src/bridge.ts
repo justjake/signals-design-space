@@ -56,8 +56,10 @@ interface WorldRecord {
 }
 
 export interface BridgeHandle {
-	/** Errors thrown inside protocol listeners (never rethrown into React's
-	 * commit); tests assert this stays empty. */
+	/**
+	 * Errors thrown inside protocol listeners (never rethrown into React's
+	 * commit); tests assert this stays empty.
+	 */
 	errors: unknown[]
 	dispose(): void
 }
@@ -430,8 +432,10 @@ export function assertForkPresent(react: Partial<ForkReact>): asserts react is F
 	}
 }
 
-/** Test-only: run `fn` inside a transition world (simulates a deferred batch
- * without React). */
+/**
+ * Test-only: run `fn` inside a transition world (simulates a deferred batch
+ * without React).
+ */
 export function __runInWorld<T>(t: Transition, fn: () => T): T {
 	return runInTransition(t, fn)
 }

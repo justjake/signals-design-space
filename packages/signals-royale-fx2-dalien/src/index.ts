@@ -80,8 +80,10 @@ import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer
 export interface AtomOptions<T> {
 	equals?: EqualsFn<T>
 	label?: string
-	/** Runs when the atom gains its first subscriber of any kind; the cleanup
-	 * runs when the last subscriber of every kind is gone. */
+	/**
+	 * Runs when the atom gains its first subscriber of any kind; the cleanup
+	 * runs when the last subscriber of every kind is gone.
+	 */
 	onObserved?: (ctx: { get(): T; set(v: T): void }) => void | (() => void)
 }
 
@@ -112,8 +114,10 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 		super()
 		initializeCell(this, initial, opts)
 	}
-	/** Base-state read (tracked inside computations); in a draft evaluation,
-	 * resolves that evaluation's own world. */
+	/**
+	 * Base-state read (tracked inside computations); in a draft evaluation,
+	 * resolves that evaluation's own world.
+	 */
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
@@ -127,8 +131,10 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 	set(value: T): void {
 		set(this, value)
 	}
-	/** Functional update. Inside a transition the function is recorded and
-	 * REPLAYS against each world's base value (React updater-queue rules). */
+	/**
+	 * Functional update. Inside a transition the function is recorded and
+	 * REPLAYS against each world's base value (React updater-queue rules).
+	 */
 	update(fn: (prev: T) => T): void {
 		update(this, fn)
 	}
@@ -245,9 +251,11 @@ export function nodeOf(x: Signal<any>): ReactiveNode {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** Cold tail of a computed read that is in an async state: rethrow errors,
+/**
+ * Cold tail of a computed read that is in an async state: rethrow errors,
  * park an evaluating consumer on the suspension, serve stale data when a
- * settled value exists, otherwise suspend (first load). */
+ * settled value exists, otherwise suspend (first load).
+ */
 function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
 	if ((graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncError) !== 0) {
 		throw (node.throwable as ErrorBox).error
@@ -264,18 +272,22 @@ function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
 	throw suspension.promise // never settled: suspend
 }
 
-/** The value slot of a state view, sentinel normalized: a suspended state
+/**
+ * The value slot of a state view, sentinel normalized: a suspended state
  * with no settled value reads as undefined on the never-suspending channels
- * (latest, committed). */
+ * (latest, committed).
+ */
 function stateValue(st: ResolvedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
-/** Newest intent: base state plus every live draft; never suspends. That is
+/**
+ * Newest intent: base state plus every live draft; never suspends. That is
  * the AMBIENT meaning — inside an evaluation context, latest() resolves that
  * context's own world instead, because reading ahead of your world is a
  * tear: a draft evaluation sees its draft world, a base-state computed or
- * effect evaluation sees base state, a render pass sees the pass's world. */
+ * effect evaluation sees base state, a render pass sees the pass's world.
+ */
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = getCurrentWorld()
@@ -328,9 +340,11 @@ export function committed<T>(x: Signal<T>, container?: object): T {
 	return stateValue(st) as T
 }
 
-/** Committed-view snapshot with stable identity: the value, or the ErrorBox
+/**
+ * Committed-view snapshot with stable identity: the value, or the ErrorBox
  * itself (identity-stable for the whole error span — see isErrorBox) whose
- * error the caller rethrows. The React bindings' useCommitted snapshot. */
+ * error the caller rethrows. The React bindings' useCommitted snapshot.
+ */
 export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
 	const st = resolveState(node, committedWorldOf(container))
 	if ((st.flags & Flag.AsyncError) !== 0) {
@@ -339,16 +353,20 @@ export function committedSnapshot(node: ReactiveNode, container: object | undefi
 	return stateValue(st)
 }
 
-/** Cheap flip-only probe: true while newer data exists behind what is on
+/**
+ * Cheap flip-only probe: true while newer data exists behind what is on
  * screen — a pending transition draft on this atom, or an async refetch
  * loading behind a stale value. Passive by contract: never evaluates,
- * never refetches, never suspends. */
+ * never refetches, never suspends.
+ */
 export function isPending(x: Signal<any>): boolean {
 	return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld())
 }
 
-/** Node-level pendingness probe; `world` scopes the suspended-memo check
- * (null = ambient). The React bindings' useIsPending snapshot. */
+/**
+ * Node-level pendingness probe; `world` scopes the suspended-memo check
+ * (null = ambient). The React bindings' useIsPending snapshot.
+ */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
 	assertSignalReadAllowed()
 	const flags = graphMemory[node.id + NodeSlot.Flags]
@@ -470,8 +488,10 @@ export function serializeAtomState(
 	return JSON.stringify(out, replacer as never)
 }
 
-/** Install a value without running lazy initializers and without counting
- * as a write: no propagation, no equality check, no effects. */
+/**
+ * Install a value without running lazy initializers and without counting
+ * as a write: no propagation, no equality check, no effects.
+ */
 export function installState<T>(atom: Atom<T>, value: T): void {
 	assertSignalWriteAllowed()
 	const node = atom as unknown as CellNode<T>
@@ -515,7 +535,8 @@ export type { TraceEvent }
 // engine modules directly — the react directory is part of the library).
 // ---------------------------------------------------------------------------
 
-/** Installed by the bindings: answers "what world is rendering right now".
+/**
+ * Installed by the bindings: answers "what world is rendering right now".
  * - draft ids: the pass's world was noted by this pass and is still valid;
  * - 'base': a component render is executing but no valid note exists
  *   (the note expired or belongs to another pass) — plain latest()/
@@ -523,7 +544,8 @@ export type { TraceEvent }
  *   or read ahead into live drafts;
  * - null: no render is executing — ambient reads see newest intent.
  * A provider (not a sticky setter) because only the host knows when React
- * is rendering and which notes a pass refreshed. */
+ * is rendering and which notes a pass refreshed.
+ */
 let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null
 
 export function setRenderWorldProvider(
@@ -546,8 +568,10 @@ function renderWorld(): World | null {
 	return worldOf(ids)
 }
 
-/** Reset seam for tests: discard live drafts, settle lifetime flaps, drop
- * ambient classification, detach any tracer. Existing atoms stay valid. */
+/**
+ * Reset seam for tests: discard live drafts, settle lifetime flaps, drop
+ * ambient classification, detach any tracer. Existing atoms stay valid.
+ */
 export function resetEngineForTest(): void {
 	discardAllDrafts()
 	flushLifetimeTransitions()
@@ -558,8 +582,10 @@ export function resetEngineForTest(): void {
 }
 
 export type { ResolvedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
-/** The ResolvedState read protocol: the Flag bit constants (test async bits
+/**
+ * The ResolvedState read protocol: the Flag bit constants (test async bits
  * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
- * check, and the never-settled sentinel test. */
+ * check, and the never-settled sentinel test.
+ */
 export { Flag, isErrorBox, isUninitialized }
 export { BASE_WORLD }

@@ -40,23 +40,31 @@ import type { DraftId } from './worlds.ts'
 
 export type EqualsFn<T> = (a: T, b: T) => boolean
 
-/** Weak number brand. Plain numbers assign in, so creation and increment
+/**
+ * Weak number brand. Plain numbers assign in, so creation and increment
  * stay cast-free (`let x: EvalPass = 1; x++`), but a value of one brand
  * does not assign to a slot or parameter of another — counter mixups are
  * type errors. The symbol is declared, never created: purely type-level,
- * and the runtime representation stays a plain number. */
+ * and the runtime representation stays a plain number.
+ */
 declare const brand: unique symbol
 export type Brand<T, B extends string> = T & { readonly [brand]?: B }
 
-/** Monotone logical clock: ticks on every base-state change — writes AND
- * settlements. Validation shortcut for unwatched reads. */
+/**
+ * Monotone logical clock: ticks on every base-state change — writes AND
+ * settlements. Validation shortcut for unwatched reads.
+ */
 export type GraphChangeClock = Brand<number, 'GraphChangeClock'>
 export type TraceEventId = Brand<number, 'TraceEventId'>
-/** Identity of one evaluation pass; monotonic, never reused (see
- * evalPassCounter). */
+/**
+ * Identity of one evaluation pass; monotonic, never reused (see
+ * evalPassCounter).
+ */
 export type EvalPass = Brand<number, 'EvalPass'>
-/** Identity of one poke walk; monotonic, never reused, so no per-walk
- * clearing is needed (same discipline as EvalPass). */
+/**
+ * Identity of one poke walk; monotonic, never reused, so no per-walk
+ * clearing is needed (same discipline as EvalPass).
+ */
 export type PokePass = Brand<number, 'PokePass'>
 
 /**
@@ -73,67 +81,87 @@ export const enum Flag {
 	KindCell = 0b0000_0000_0001,
 	/** Cached computed. */
 	KindDerived = 0b0000_0000_0010,
-	/** Subscriber (alien-signals' name): an effect, a store subscription, or
-	 * a scope anchor. */
+	/**
+	 * Subscriber (alien-signals' name): an effect, a store subscription, or
+	 * a scope anchor.
+	 */
 	Watching = 0b0000_0000_0100,
 
 	// Watch capabilities: creation-fixed, Watching nodes only; dispatch
 	// routes on these bits, never on callback presence. Component
 	// subscription = Watching|WatchRender|WatchDraft; engine effect =
 	// Watching|WatchRunEffect; scope anchor = Watching alone.
-	/** Schedule into the render-notify queue, delivered after effects
+	/**
+	 * Schedule into the render-notify queue, delivered after effects
 	 * settle; the subscriber's notify predicate decides whether the delivery
-	 * becomes a re-render. */
+	 * becomes a re-render.
+	 */
 	WatchRender = 0b0000_0000_1000,
 	/** Schedule into the validated effect queue (runs the body). */
 	WatchRunEffect = 0b0000_0001_0000,
-	/** Draft pings and wakes reach this watcher; absent = base-state-only.
-	 * Ordinary engine effects omit it; React-phase effects carry it. */
+	/**
+	 * Draft pings and wakes reach this watcher; absent = base-state-only.
+	 * Ordinary engine effects omit it; React-phase effects carry it.
+	 */
 	WatchDraft = 0b0000_0010_0000,
-	/** Validation asks the host to schedule the user body instead of running
-	 * it inside the graph flush. Used by React-phase signal effects. */
+	/**
+	 * Validation asks the host to schedule the user body instead of running
+	 * it inside the graph flush. Used by React-phase signal effects.
+	 */
 	WatchSchedule = 0b1_0000_0000_0000_0000,
 
 	// Staleness: an exclusive pair; writes clear the whole field before
 	// setting, so a single-bit test reads the exact state.
-	/** Possibly stale: confirm dependency changedAt readings before
-	 * recomputing. */
+	/**
+	 * Possibly stale: confirm dependency changedAt readings before
+	 * recomputing.
+	 */
 	StaleCheck = 0b0000_0100_0000,
 	/** Definitely stale: recompute on next pull. */
 	StaleDirty = 0b0000_1000_0000,
 
 	// Async value plane: an exclusive pair; both clear = plain value.
-	/** Latest evaluation threw; node.throwable holds the ErrorBox to
-	 * rethrow. */
+	/**
+	 * Latest evaluation threw; node.throwable holds the ErrorBox to
+	 * rethrow.
+	 */
 	AsyncError = 0b0001_0000_0000,
 	/** Latest evaluation parked; node.throwable holds the Suspension. */
 	AsyncSuspended = 0b0010_0000_0000,
 
 	// State.
-	/** Double role by kind. Cells/deriveds: mirror of observerCount > 0 —
+	/**
+	 * Double role by kind. Cells/deriveds: mirror of observerCount > 0 —
 	 * promote (0→1) sets it, demote (1→0) clears it; the count stays
 	 * authoritative, the bit is the one-load hot-path test. Watchers: ALIVE —
 	 * set at creation, cleared at dispose, so disposal = Watching set,
-	 * Watched clear. */
+	 * Watched clear.
+	 */
 	Watched = 0b0100_0000_0000,
 	/** Watcher sits in a flush queue. */
 	Scheduled = 0b1000_0000_0000,
 	/** Canonical derived evaluation in progress. */
 	Computing = 0b1_0000_0000_0000,
-	/** Draft-world derived evaluation in progress. Separate because only a
-	 * canonical evaluation refreshes the graph-validation watermark. */
+	/**
+	 * Draft-world derived evaluation in progress. Separate because only a
+	 * canonical evaluation refreshes the graph-validation watermark.
+	 */
 	DraftComputing = 0b100_0000_0000_0000,
-	/** This record's owner is registered with the node finalizer. Deriveds
+	/**
+	 * This record's owner is registered with the node finalizer. Deriveds
 	 * always are (their records own dep links a dead handle must free). An
 	 * unregistered cell's record is owned by its incoming links alone: when
 	 * the last one drops the record detaches instead (see freeLink), so it never
-	 * needs the registry — and must never be freed by it. */
+	 * needs the registry — and must never be freed by it.
+	 */
 	Registered = 0b1000_0000_0000_0000,
 
 	/** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
 	StaleMask = StaleCheck | StaleDirty,
-	/** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
-	 * state — how ResolvedState views are read (see asyncs.ts). */
+	/**
+	 * Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
+	 * state — how ResolvedState views are read (see asyncs.ts).
+	 */
 	AsyncMask = AsyncError | AsyncSuspended,
 	/** Either kind of derived evaluation; any re-entry is a cycle. */
 	ComputingMask = Computing | DraftComputing,
@@ -145,11 +173,13 @@ export type Flags = Brand<number, 'Flags'>
 export type ReactiveNodeId = Brand<number, 'ReactiveNodeId'>
 export type Link = Brand<number, 'Link'>
 
-/** Node and link records are both 8 words. The changed-at clock reading is
+/**
+ * Node and link records are both 8 words. The changed-at clock reading is
  * a Float64 value in words 6-7, read through the graphClocks view; the
  * remaining per-node fields the record cannot fit live in side columns
  * indexed by record number (validation watermark, observer count, causal
- * event, walk passes, generation). */
+ * event, walk passes, generation).
+ */
 export const enum NodeSlot {
 	Flags = 0,
 	Deps = 1,
@@ -162,10 +192,12 @@ export const enum NodeSlot {
 	FreeNext = Deps,
 }
 
-/** The two clock readings are Float64 values read through the graphClocks
+/**
+ * The two clock readings are Float64 values read through the graphClocks
  * view. A record id is a word offset; id >> WordsPerClock is the record's
  * first f64 slot, and the NodeSlot word offsets halve into f64 slot
- * offsets. */
+ * offsets.
+ */
 export const enum ClockSlot {
 	/** log2(words per f64): converts a word offset into an f64 slot. */
 	Shift = 1,
@@ -185,10 +217,12 @@ export const enum LinkSlot {
 
 export abstract class ReactiveNode {
 	declare readonly id: ReactiveNodeId
-	/** Dependency-list append cursor for the evaluation in progress. A handle
+	/**
+	 * Dependency-list append cursor for the evaluation in progress. A handle
 	 * field, not a record slot: every touch site holds the handle, and the
 	 * cursor is hit twice per tracked read — one property load beats an id
-	 * load plus an indexed load. */
+	 * load plus an indexed load.
+	 */
 	declare depsTail: Link
 	declare throwable: ErrorBox | Suspension | null
 	declare label: string | undefined
@@ -305,11 +339,15 @@ function initDetachedRecords(): void {
 }
 initDetachedRecords()
 
-/** The computed body executing now, independent of dependency tracking.
- * untracked() clears activeConsumer but must not bypass computed policies. */
+/**
+ * The computed body executing now, independent of dependency tracking.
+ * untracked() clears activeConsumer but must not bypass computed policies.
+ */
 export let activeEvaluation: DerivedNode<unknown> | null = null
-/** Auxiliary watcher collecting draft-world certificate sources for the
- * scheduled effect currently running. */
+/**
+ * Auxiliary watcher collecting draft-world certificate sources for the
+ * scheduled effect currently running.
+ */
 export let activeWorldSourceConsumer: WatcherNode | null = null
 export type TraceFn = (
 	kind: string,
@@ -323,11 +361,13 @@ export function setTraceHook(fn: TraceFn | null): void {
 	traceHook = fn
 }
 
-/** Installed by worlds.ts: true while any draft is live. Detached cells take
+/**
+ * Installed by worlds.ts: true while any draft is live. Detached cells take
  * the recordless write fast path only when this reports false — a live
  * draft world may hold certificate readings of a detached cell's changedAt,
  * and the single-draft cutoff relies on the clock ticking for every real
- * base change. */
+ * base change.
+ */
 export let hasLiveDrafts: () => boolean = () => false
 export function setHasLiveDrafts(fn: () => boolean): void {
 	hasLiveDrafts = fn
@@ -412,8 +452,10 @@ export function initializeDerived<T>(
 // Dependency linking
 // ---------------------------------------------------------------------------
 
-/** Host microtask scheduler (present in every supported runtime; typed here
- * so the engine's type surface stays lib-agnostic). */
+/**
+ * Host microtask scheduler (present in every supported runtime; typed here
+ * so the engine's type surface stays lib-agnostic).
+ */
 declare const queueMicrotask: (fn: () => void) => void
 
 /** Hard iteration ceiling: converts livelock into a thrown error. */
@@ -428,9 +470,11 @@ export class SignalReadForbidden extends Error {
 export class SignalWriteForbidden extends Error {
 	name = 'SignalWriteForbidden'
 }
-/** Policy only. The graph's self-affecting-computed mechanism remains intact;
+/**
+ * Policy only. The graph's self-affecting-computed mechanism remains intact;
  * changing this to false restores writes from computeds without changing the
- * evaluation or validation machinery. */
+ * evaluation or validation machinery.
+ */
 export const FORBID_WRITE_FROM_COMPUTED: boolean = true
 
 let readsForbidden: string | null = null
@@ -481,9 +525,11 @@ export function setUseImpl(impl: typeof useImpl): void {
 	useImpl = impl
 }
 
-/** Set by asyncs.ts: finish a recompute, folding parks into async state.
+/**
+ * Set by asyncs.ts: finish a recompute, folding parks into async state.
  * Positional outcome (parked, hasError, error, value) — this runs once per
- * recompute, so it must not cost an outcome-object allocation. */
+ * recompute, so it must not cost an outcome-object allocation.
+ */
 export let finishComputeImpl: (
 	node: DerivedNode<unknown>,
 	parked: boolean,
@@ -584,8 +630,10 @@ function createGraphCore(
 		freeNodeStack[freeNodeCount++] = id
 	}
 
-	/** Materialize the arena record of a detached cell/derived (see above), with
-	 * finalizer registration: the general-purpose, always-safe variant. */
+	/**
+	 * Materialize the arena record of a detached cell/derived (see above), with
+	 * finalizer registration: the general-purpose, always-safe variant.
+	 */
 	function ensureNodeRecord(node: ReactiveNode): ReactiveNodeId {
 		const id = node.id
 		if (id >= FIRST_REAL_RECORD) {
@@ -597,12 +645,14 @@ function createGraphCore(
 		return real
 	}
 
-	/** Materialize a dependency's record at link creation. Cells stay
+	/**
+	 * Materialize a dependency's record at link creation. Cells stay
 	 * unregistered here: the link about to be created pins the record (and the
 	 * handle), and when the last link drops the record detaches in
 	 * freeLink — the registry never needs to know. A derived reaching this
 	 * point has always evaluated already (readDerived freshens before it
-	 * tracks), so the derived branch is a should-not-happen safety net. */
+	 * tracks), so the derived branch is a should-not-happen safety net.
+	 */
 	function ensureDepRecord(dep: ReactiveNode): ReactiveNodeId {
 		const id = dep.id
 		if (id >= FIRST_REAL_RECORD) {
@@ -642,12 +692,14 @@ function createGraphCore(
 		return id
 	}
 
-	/** Last link onto an unregistered cell: the record's only owners were its
+	/**
+	 * Last link onto an unregistered cell: the record's only owners were its
 	 * links, so hand it back and point the live handle at the shared detached
 	 * record again. Provably-zero slots stay untouched (no deps ever; refcount
 	 * 0 means no subs and no observers); pass stamps are monotonic and
 	 * tolerate staleness. Out of line so unpinning stays cheap in freeLink
-	 * (hot-cluster inlining budget). */
+	 * (hot-cluster inlining budget).
+	 */
 	function unpinDep(dep: ReactiveNodeId): void {
 		const mem = M
 		const clocks = graphClocks
@@ -742,12 +794,14 @@ function createGraphCore(
 	let graphChangeClock: GraphChangeClock = 1
 	/** Identity of the evaluation pass in progress. */
 	let evalPass: EvalPass = 1
-	/** Pass counter — monotonic, never reused. Uniqueness is load-bearing for
+	/**
+	 * Pass counter — monotonic, never reused. Uniqueness is load-bearing for
 	 * the same-pass dedup probe in trackRead: an evalPass match there asserts
 	 * "this edge was touched by the pass in progress", and a recycled value could
 	 * match an edge from a dead pass, whose position may be outside the kept
 	 * prefix — trimming would then silently drop a dependency the evaluation
-	 * read. */
+	 * read.
+	 */
 	let evalPassCounter: EvalPass = 1
 	function newEvalPass(): EvalPass {
 		evalPass = ++evalPassCounter
@@ -957,8 +1011,10 @@ function createGraphCore(
 		}
 	}
 
-	/** Record "sub read dep". The common repeat-read path stays small enough to
-	 * inline into cell/computed reads; cursor movement and insertion are cold. */
+	/**
+	 * Record "sub read dep". The common repeat-read path stays small enough to
+	 * inline into cell/computed reads; cursor movement and insertion are cold.
+	 */
 	function trackRead(dep: ReactiveNode, sub: ReactiveNode): void {
 		const mem = M
 		const depId = dep.id
@@ -976,9 +1032,11 @@ function createGraphCore(
 		trackReadInsert(dep, sub)
 	}
 
-	/** Link a world-resolved read to the scheduled watcher collecting it.
+	/**
+	 * Link a world-resolved read to the scheduled watcher collecting it.
 	 * Draft evaluation itself is untracked, so ordinary evaluations never
-	 * reach this path. */
+	 * reach this path.
+	 */
 	function trackWorldRead(node: ReactiveNode): void {
 		const consumer = activeConsumer
 		if (
@@ -990,8 +1048,10 @@ function createGraphCore(
 		}
 	}
 
-	/** Link one flattened draft-world certificate source to the scheduled
-	 * effect's wake-only watcher. */
+	/**
+	 * Link one flattened draft-world certificate source to the scheduled
+	 * effect's wake-only watcher.
+	 */
 	function trackWorldSource(node: ReactiveNode): void {
 		const consumer = activeWorldSourceConsumer
 		if (consumer !== null && (flagsOf(consumer) & Flag.Watched) !== 0) {
@@ -1059,10 +1119,12 @@ function createGraphCore(
 		}
 	}
 
-	/** Drop dependency edges not re-read by the eval that just finished. The
+	/**
+	 * Drop dependency edges not re-read by the eval that just finished. The
 	 * steady state (every edge re-read) is the two loads and one store here;
 	 * the freeing walk lives out of line so trimDeps inlines into recompute
-	 * and executeWatcher (hot-cluster inlining budget). */
+	 * and executeWatcher (hot-cluster inlining budget).
+	 */
 	function trimDeps(sub: ReactiveNode): void {
 		const mem = M
 		const subId = sub.id
@@ -1097,11 +1159,13 @@ function createGraphCore(
 	// Invalidation (push through watched edges)
 	// ---------------------------------------------------------------------------
 
-	/** Effect watchers scheduled by the current wave, as (record id, generation)
+	/**
+	 * Effect watchers scheduled by the current wave, as (record id, generation)
 	 * pairs. Ids never pin anything, so retained capacity needs no slot nulling
 	 * and enqueue costs two int stores — no handle lookup, no write barrier.
 	 * Append-then-fully-drain; a drain entry is dead when its generation moved
-	 * (record reclaimed) or its Watched bit dropped (disposed in place). */
+	 * (record reclaimed) or its Watched bit dropped (disposed in place).
+	 */
 	let effectIds = new Int32Array(256)
 	let effectGens = new Int32Array(256)
 	let effectCount = 0
@@ -1115,22 +1179,28 @@ function createGraphCore(
 		effectGens = gens
 	}
 
-	/** Render-notify subscribers scheduled by the current wave; notified after
+	/**
+	 * Render-notify subscribers scheduled by the current wave; notified after
 	 * effects settle. Double-buffered under the same retained-capacity
 	 * discipline: a draining wave iterates its own buffer while re-marks from
 	 * onNotify land in the spare, so a wave's iteration never sees entries added
-	 * during delivery. */
+	 * during delivery.
+	 */
 	let renderNotifyQueue: Array<ReactiveNode | undefined> = []
 	let renderNotifyCount = 0
-	/** The off-duty render-notify buffer; null while checked out by a draining
+	/**
+	 * The off-duty render-notify buffer; null while checked out by a draining
 	 * frame. Delivery can nest (onNotify may write, and that flush drains the
 	 * buffer this frame's re-marks are landing in), so a doubly-nested frame
 	 * finds the spare checked out and must not reuse a buffer that is
-	 * mid-iteration. */
+	 * mid-iteration.
+	 */
 	let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
 
-	/** Route a watcher into its flush queue by capability bit. Scope anchors
-	 * carry neither bit and are never scheduled (they track no dependencies). */
+	/**
+	 * Route a watcher into its flush queue by capability bit. Scope anchors
+	 * carry neither bit and are never scheduled (they track no dependencies).
+	 */
 	function scheduleWatcher(id: ReactiveNodeId, flags: Flags): void {
 		const mem = M
 		const pins = pinnedInternals
@@ -1181,18 +1251,22 @@ function createGraphCore(
 	// the root node's changedAt/clock movement, then run the wave.
 	// ---------------------------------------------------------------------------
 
-	/** Suspended traversal positions for the poke walk (heap, not the JS
-	 * call stack, so walk depth is bounded by memory rather than stack frames). */
+	/**
+	 * Suspended traversal positions for the poke walk (heap, not the JS
+	 * call stack, so walk depth is bounded by memory rather than stack frames).
+	 */
 	interface PokeFrame {
 		value: Link | undefined
 		changed: boolean
 		prev: PokeFrame | undefined
 	}
 
-	/** Suspended traversal positions for the invalidation wave: a persistent
+	/**
+	 * Suspended traversal positions for the invalidation wave: a persistent
 	 * integer stack rather than per-frame heap cells. propagateWave never runs
 	 * user code, so it cannot nest — one module-level stack serves every wave
-	 * with zero allocation on the steady path. */
+	 * with zero allocation on the steady path.
+	 */
 	let waveStack = new Int32Array(256)
 
 	function growWaveStack(): Int32Array<ArrayBuffer> {
@@ -1288,9 +1362,11 @@ function createGraphCore(
 		} while (true)
 	}
 
-	/** Identity of the poke walk in progress. Monotonic and never reused, so a
+	/**
+	 * Identity of the poke walk in progress. Monotonic and never reused, so a
 	 * node's pokePass reading needs no clearing: a match asserts "this walk
-	 * already visited the node" and nothing else (same discipline as EvalPass). */
+	 * already visited the node" and nothing else (same discipline as EvalPass).
+	 */
 	let pokePass: PokePass = 0
 
 	/**
@@ -1463,13 +1539,17 @@ function createGraphCore(
 	}
 
 	let flushing = false
-	/** Drain cursor into the effect queue (index, not shift: it can be large
-	 * and repeated shifts would make wide flushes quadratic). */
+	/**
+	 * Drain cursor into the effect queue (index, not shift: it can be large
+	 * and repeated shifts would make wide flushes quadratic).
+	 */
 	let queueHead = 0
 
-	/** Run queued effects until settled, then deliver render notifications. A
+	/**
+	 * Run queued effects until settled, then deliver render notifications. A
 	 * throwing effect aborts the flush; the effects it preempted are skipped
-	 * (cleared), not left armed for unrelated writes to trigger later. */
+	 * (cleared), not left armed for unrelated writes to trigger later.
+	 */
 	function flush(): void {
 		const mem = M
 		const pins = pinnedInternals
@@ -1634,12 +1714,14 @@ function createGraphCore(
 		return true
 	}
 
-	/** The use() argument every base recompute passes to fn: one shared
+	/**
+	 * The use() argument every base recompute passes to fn: one shared
 	 * function, no per-node closure — the evaluating computed IS the
 	 * activeConsumer at call time. (Draft evaluations pass their own worldUse
 	 * instead; see worlds.ts.) A use() that escapes its evaluation — captured
 	 * and called later, or called inside untracked() — finds no evaluating
-	 * computed and throws rather than park the wrong node. */
+	 * computed and throws rather than park the wrong node.
+	 */
 	const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 		const consumer = activeConsumer
 		if (consumer === null || (flagsOf(consumer) & Flag.KindDerived) === 0) {
@@ -1648,8 +1730,10 @@ function createGraphCore(
 		return useImpl(t, consumer as DerivedNode<unknown>) as U
 	}
 
-	/** Out of line so the cycle path's Error construction and template string
-	 * stay out of recompute's bytecode (hot-cluster inlining budget). */
+	/**
+	 * Out of line so the cycle path's Error construction and template string
+	 * stay out of recompute's bytecode (hot-cluster inlining budget).
+	 */
 	function throwComputeCycle(node: DerivedNode<unknown>): never {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
@@ -1953,9 +2037,11 @@ function createGraphCore(
 		}
 	}
 
-	/** Dispose every child even when one cleanup throws, then surface the
+	/**
+	 * Dispose every child even when one cleanup throws, then surface the
 	 * first error after the whole owned set is released. Out of line so the
-	 * exceptional loop stays out of executeWatcher's bytecode. */
+	 * exceptional loop stays out of executeWatcher's bytecode.
+	 */
 	function disposeWatcherChildren(w: WatcherNode): void {
 		const children = w.children!
 		w.children = undefined
@@ -1976,9 +2062,11 @@ function createGraphCore(
 		}
 	}
 
-	/** A throwing cleanup poisons the effect: dispose it fully so it never
+	/**
+	 * A throwing cleanup poisons the effect: dispose it fully so it never
 	 * half-runs again, then surface the error. Out of line for the same
-	 * inlining-budget reason (and it carries a try/catch). */
+	 * inlining-budget reason (and it carries a try/catch).
+	 */
 	function runWatcherCleanup(w: WatcherNode): void {
 		const c = w.cleanup!
 		w.cleanup = undefined
@@ -2183,8 +2271,10 @@ function createGraphCore(
 		pendingRegistrationEnd = 0
 	}
 
-	/** Benchmark generation boundary: every handle from the old generation must
-	 * already be unreachable. This keeps arena capacity out of multi-case runs. */
+	/**
+	 * Benchmark generation boundary: every handle from the old generation must
+	 * already be unreachable. This keeps arena capacity out of multi-case runs.
+	 */
 	function resetGraphForBenchmark(): void {
 		M.fill(0, 0, nextNodeRecord)
 		M.fill(0, nextLinkRecord)

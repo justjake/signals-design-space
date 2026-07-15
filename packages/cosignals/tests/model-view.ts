@@ -45,9 +45,11 @@ export class RefereeMirror {
 	private origins = new Map<AtomInternals, Value>()
 	private archives = new Map<AtomInternals, WriteLogEntry[]>()
 
-	/** Install the drop feed on an engine (call once, at driver setup): every
+	/**
+	 * Install the drop feed on an engine (call once, at driver setup): every
 	 * entry leaving a write log — fold-valve fold or episode drop —
-	 * archives here. */
+	 * archives here.
+	 */
 	attach(engine: CosignalEngine): void {
 		engine.onLogEntryDrop = (atom, entry) => this.archiveOf(atom).push(entry)
 	}
@@ -97,8 +99,10 @@ type ViewAtom = {
 }
 type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: EInternals }
 
-/** A view render pass: the model-shaped face of one engine render pass — the Set-valued
- * `maskSlots` the oracle's tenancy check reads, derived from the bit form. */
+/**
+ * A view render pass: the model-shaped face of one engine render pass — the Set-valued
+ * `maskSlots` the oracle's tenancy check reads, derived from the bit form.
+ */
 type ViewRenderPass = {
 	id: RenderPassId
 	root: RootId
@@ -126,16 +130,20 @@ function slotsOf(bits: BatchSlotSet): Set<BatchSlot> {
 	return out
 }
 
-/** Worlds built by the oracle's checkers carry VIEW render passes; the engine folds
- * over its own render records. */
+/**
+ * Worlds built by the oracle's checkers carry VIEW render passes; the engine folds
+ * over its own render records.
+ */
 function engineWorld(w: World): World {
 	return w.kind === 'render' ? { kind: 'render', render: unwrap<RenderPass>(w.render) } : w
 }
 
-/** Pure op application for the shadow fold (test-side: the corpus's updaters/
+/**
+ * Pure op application for the shadow fold (test-side: the corpus's updaters/
  * reducers are pure by the fold-purity contract the engine enforces; the
  * object-shaped op is the materialized WriteLogEntry surface — engine truth is the
- * packed scalar pair). */
+ * packed scalar pair).
+ */
 function applyOp(atom: AtomInternals, op: WriteLogEntry['op'], prev: Value): Value {
 	switch (op.kind) {
 		case 'set':
@@ -182,8 +190,10 @@ export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record
 		maskSlots: slotsOf(p.maskBits),
 		__engine: p,
 	})
-	/** The imported visibility rule's host, answered from the engine's bit
-	 * masks (the two set-valued lookups the render/committed clauses read). */
+	/**
+	 * The imported visibility rule's host, answered from the engine's bit
+	 * masks (the two set-valued lookups the render/committed clauses read).
+	 */
 	const host: VisibilityHost = {
 		includedSet: (render) => slotsOf(unwrap<RenderPass>(render).includedBits),
 		committedSlotsNow: (root) => slotsOf(engine.root(root).committedBits),

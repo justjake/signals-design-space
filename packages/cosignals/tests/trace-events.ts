@@ -172,8 +172,10 @@ export function decodeTraceEvent(e: TraceRecord): TraceEvent | undefined {
 	}
 }
 
-/** Every TraceEvent decodable from `tr`, oldest first (a one-shot decode;
- * specs driving their own tracer use this — comparisons use RefereeStream). */
+/**
+ * Every TraceEvent decodable from `tr`, oldest first (a one-shot decode;
+ * specs driving their own tracer use this — comparisons use RefereeStream).
+ */
 export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
 	const out: TraceEvent[] = []
 	for (const te of tr.events()) {
@@ -248,8 +250,10 @@ export function attachRefereeStream(b: CosignalEngine, opts?: TracerOptions): Re
 	return s
 }
 
-/** The stream attached to `b` THIS EPOCH, or throw (attachRefereeStream
- * after every `__TEST__resetEngine`). */
+/**
+ * The stream attached to `b` THIS EPOCH, or throw (attachRefereeStream
+ * after every `__TEST__resetEngine`).
+ */
 export function refereeStreamOf(b: CosignalEngine): RefereeStream {
 	const s = streams.get(b)
 	if (s === undefined || s.epoch !== engineEpoch) {

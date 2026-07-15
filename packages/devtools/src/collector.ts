@@ -22,8 +22,10 @@ import type {
 } from './protocol.ts'
 import { kindClass } from './protocol.ts'
 
-/** The adapter's view of a live node, by id. All reads are inert (see the
- * fx2 adapter). `undefined` from any method means the node is gone. */
+/**
+ * The adapter's view of a live node, by id. All reads are inert (see the
+ * fx2 adapter). `undefined` from any method means the node is gone.
+ */
 export interface NodeProvider {
 	kind(id: number): NodeKind | undefined
 	label(id: number): string | null
@@ -49,13 +51,17 @@ export class Collector implements Backend {
 	private ringHead = 0
 	private nextId = 1
 	private totalEvents = 0
-	/** id → event, for O(chain) cause walks without scanning the ring. Bounded
-	 * to `capacity`: an entry is dropped when its event is evicted. */
+	/**
+	 * id → event, for O(chain) cause walks without scanning the ring. Bounded
+	 * to `capacity`: an entry is dropped when its event is evicted.
+	 */
 	private readonly byId = new Map<number, DevtoolsEvent>()
 	/** Reduced, retained per-node state — survives ring eviction. */
 	private readonly nodes = new Map<number, DebugState>()
-	/** Live node count per kind, maintained incrementally so `counts()` is O(1)
-	 * rather than O(nodes) — it runs on every panel render. */
+	/**
+	 * Live node count per kind, maintained incrementally so `counts()` is O(1)
+	 * rather than O(nodes) — it runs on every panel render.
+	 */
 	private readonly kindCounts: Partial<Record<NodeKind, number>> = {}
 	private readonly listeners = new Set<() => void>()
 	private t0 = 0

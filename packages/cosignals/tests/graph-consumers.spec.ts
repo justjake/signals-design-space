@@ -62,9 +62,11 @@ import { attachRefereeStream, refereeStreamOf } from './trace-events.js'
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res))
 
-/** Fresh engine in comparison posture (a lossless session tracer is the event
+/**
+ * Fresh engine in comparison posture (a lossless session tracer is the event
  * surface; quiet arms by the production derivation; no driver — the tests
- * pass explicit batch ids). */
+ * pass explicit batch ids).
+ */
 function freshEngine(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {

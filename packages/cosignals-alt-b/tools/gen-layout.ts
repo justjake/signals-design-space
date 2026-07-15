@@ -146,8 +146,10 @@ export function generateDebugTwin(s: Schema): string {
 	return lines.join('\n')
 }
 
-/** Rewrite the generated region of a file; fails hard on missing or
- * duplicated markers. Returns the new content. */
+/**
+ * Rewrite the generated region of a file; fails hard on missing or
+ * duplicated markers. Returns the new content.
+ */
 export function spliceEnumBlock(engineSource: string, s: Schema): string {
 	const start = markerStart(s)
 	const first = engineSource.indexOf(start)

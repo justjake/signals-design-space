@@ -75,8 +75,10 @@ function correctionsTo(b: CosignalEngine, watcher: string) {
 		.filter((e) => e.watcher === watcher)
 }
 
-/** The D1 topology: committed truth shows the b-branch; a parked action
- * flips the discriminant only in its own (soon-discarded) render world. */
+/**
+ * The D1 topology: committed truth shows the b-branch; a parked action
+ * flips the discriminant only in its own (soon-discarded) render world.
+ */
 function d1Topology(b: CosignalEngine) {
 	const flag = b.atom('flag', 0)
 	const a = b.atom('a', 1)

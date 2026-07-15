@@ -82,8 +82,10 @@ export interface AtomOptions<T> {
 	equals?: EqualsFn<T>
 	/** Debug name shown in trace output. */
 	label?: string
-	/** Runs when the atom gains its first subscriber of any kind; the cleanup
-	 * runs when the last subscriber of every kind is gone. */
+	/**
+	 * Runs when the atom gains its first subscriber of any kind; the cleanup
+	 * runs when the last subscriber of every kind is gone.
+	 */
 	onObserved?: (ctx: { get(): T; set(v: T): void }) => void | (() => void)
 }
 
@@ -97,21 +99,27 @@ export interface ComputedOptions<T> {
 
 /** A writable reactive value. */
 export type Atom<in out T> = {
-	/** Tracked read: inside a computed, an effect source, or a subscribed
+	/**
+	 * Tracked read: inside a computed, an effect source, or a subscribed
 	 * component, this registers a dependency, so the reader re-runs when
 	 * the value changes. What it returns depends on where it runs:
 	 * - ordinarily: base state, meaning committed values plus urgent
 	 *   writes, with transition drafts hidden;
 	 * - inside a React render pass or a transition-draft evaluation: the
-	 *   snapshot that context was given, its drafts included. */
+	 *   snapshot that context was given, its drafts included.
+	 */
 	get(): T
-	/** Write through the equality cutoff (equal writes are dropped). Inside
+	/**
+	 * Write through the equality cutoff (equal writes are dropped). Inside
 	 * a React transition the write is recorded into the transition's draft
-	 * and stays invisible to base readers until it commits. */
+	 * and stays invisible to base readers until it commits.
+	 */
 	set(value: T): void
-	/** Functional update. Inside a transition the function itself is
+	/**
+	 * Functional update. Inside a transition the function itself is
 	 * recorded and replays against each world's starting value, the way
-	 * React replays queued useState updaters — keep it pure. */
+	 * React replays queued useState updaters — keep it pure.
+	 */
 	update(fn: (prev: T) => T): void
 	/** Read the current value without registering a dependency. */
 	peek(): T
@@ -166,9 +174,11 @@ const Atom = class<T> implements AtomNode<T> {
 	set(value: T): void {
 		set(this, value)
 	}
-	/** Functional update. Inside a transition the function itself is
+	/**
+	 * Functional update. Inside a transition the function itself is
 	 * recorded and later replays against each world's starting value, the
-	 * way React replays queued useState updaters. */
+	 * way React replays queued useState updaters.
+	 */
 	update(fn: (prev: T) => T): void {
 		update(this, fn)
 	}
@@ -184,10 +194,12 @@ const Atom = class<T> implements AtomNode<T> {
 
 /** An atom whose dispatches replay through one reducer fixed at creation. */
 export type ReducerAtom<S, A> = Atom<S> & {
-	/** Apply `action` through the reducer fixed at creation. Inside a
+	/**
+	 * Apply `action` through the reducer fixed at creation. Inside a
 	 * React transition the dispatch is recorded and replayed against each
 	 * pending snapshot, the same way {@link Atom.update} records its
-	 * function — so keep the reducer pure. */
+	 * function — so keep the reducer pure.
+	 */
 	dispatch: (action: A) => void
 }
 
@@ -195,17 +207,22 @@ type ReducerAtomNode<S, A> = ReducerAtom<S, A> & {
 	reduce: (state: S, action: A) => S
 }
 
-/** Shared by every reducer atom, avoiding one dispatch closure per atom.
- * TypeScript erases the fake `this` parameter. */
+/**
+ * Shared by every reducer atom, avoiding one dispatch closure per atom.
+ * TypeScript erases the fake `this` parameter.
+ */
 function dispatchReducer<S, A>(this: ReducerAtomNode<S, A>, action: A): void {
 	const reduce = this.reduce
 	this.update((state) => reduce(state, action))
 }
 
-/** A cached value derived from atoms and other computeds; recomputes
- * only when read after a dependency changed. */
+/**
+ * A cached value derived from atoms and other computeds; recomputes
+ * only when read after a dependency changed.
+ */
 export type Computed<out T> = {
-	/** Tracked, cached read: registers a dependency and recomputes only if
+	/**
+	 * Tracked, cached read: registers a dependency and recomputes only if
 	 * a dependency changed. When the computed is async (its function reads
 	 * a promise through `use`), the result depends on that promise:
 	 * - settled: returns the settled value;
@@ -213,21 +230,26 @@ export type Computed<out T> = {
 	 *   returning that earlier value, and {@link isPending} reports true;
 	 * - pending with nothing settled yet (a first load): throws the
 	 *   computed's stable pending promise, which React Suspense catches;
-	 * - failed: rethrows the same error object at every read site. */
+	 * - failed: rethrows the same error object at every read site.
+	 */
 	get(): T
-	/** get() without the dependency: returns the same value in every
+	/**
+	 * get() without the dependency: returns the same value in every
 	 * situation described above, but the reader never re-runs when this
-	 * computed changes. */
+	 * computed changes.
+	 */
 	peek(): T
 }
 
-/** Computeds are plain node records. Every record points at this shared
+/**
+ * Computeds are plain node records. Every record points at this shared
  * function instead of allocating a get closure; TypeScript erases the
  * fake `this` parameter and normal method-call syntax supplies the node.
  * World resolutions unwrap under the ambient park (an enclosing draft
  * evaluation forwards pendingness; a render serves stale or suspends) —
  * the same rule for tracked get() and untracked peek(), so the two cannot
- * drift on async behavior. */
+ * drift on async behavior.
+ */
 function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	const world = currentWorld
 	if (world !== null) {
@@ -241,8 +263,10 @@ function getComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	return value
 }
 
-/** Shared untracked counterpart to getComputed, likewise stored directly
- * on every computed record. */
+/**
+ * Shared untracked counterpart to getComputed, likewise stored directly
+ * on every computed record.
+ */
 function peekComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 	const world = currentWorld
 	if (world !== null) {
@@ -309,10 +333,12 @@ export function nodeOf(x: Signal<any>): ProducerNode {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** Finish a computed read that found the node in an async state: park an
+/**
+ * Finish a computed read that found the node in an async state: park an
  * evaluating consumer on the suspension (pending forwards), then apply the
  * shared unwrap — rethrow errors, serve stale data when a settled value
- * exists, otherwise suspend (first load). */
+ * exists, otherwise suspend (first load).
+ */
 function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
 	if ((node.flags & Flag.AsyncSuspended) !== 0) {
 		const consumer = activeConsumer
@@ -324,21 +350,25 @@ function unwrapAsyncRead<T>(node: ComputedNode<T>): T {
 	return unwrapResolved(node, null) as T
 }
 
-/** The value slot of a state view, with the uninitialized sentinel
+/**
+ * The value slot of a state view, with the uninitialized sentinel
  * normalized to undefined — latest() and committed() never suspend, so a
- * suspended state with no settled value reads as undefined there. */
+ * suspended state with no settled value reads as undefined there.
+ */
 function stateValue(st: ResolvedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
-/** Read the newest view of x: base state plus every live transition
+/**
+ * Read the newest view of x: base state plus every live transition
  * draft. Never suspends. That meaning only applies outside any
  * evaluation or render. Inside one, latest() resolves the caller's own
  * context instead, because reading ahead of your context would show a
  * torn mix of snapshots:
  * - a transition-draft evaluation reads its own draft's view;
  * - a base-state computed or effect reads base state;
- * - a React render pass reads that pass's view. */
+ * - a React render pass reads that pass's view.
+ */
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = currentWorld
@@ -364,19 +394,23 @@ export function latest<T>(x: Signal<T>): T {
 	return stateValue(st) as T
 }
 
-/** True while newer data exists behind what is on screen:
+/**
+ * True while newer data exists behind what is on screen:
  * - a transition draft with writes over x is still pending, or
  * - an async computed is loading again while its previous settled value
  *   keeps serving.
  * Passive by contract: never evaluates, never refetches, never
- * suspends. */
+ * suspends.
+ */
 export function isPending(x: Signal<any>): boolean {
 	return isPendingPassive(nodeOf(x), currentWorld ?? renderWorld())
 }
 
-/** Node-level pendingness probe, also used by the React bindings'
+/**
+ * Node-level pendingness probe, also used by the React bindings'
  * useIsPending. `world` scopes the suspended-memo check; null means
- * ambient. */
+ * ambient.
+ */
 export function isPendingPassive(node: ProducerNode, world: World | null): boolean {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.KindAtom) !== 0) {
@@ -474,26 +508,34 @@ export function read<T>(x: Signal<T>): T {
 // Effects, batching, untracked
 // ---------------------------------------------------------------------------
 
-/** When an effect's signal-triggered re-runs drain. Setup runs (creation,
- * or a React deps change) are synchronous and unaffected. */
+/**
+ * When an effect's signal-triggered re-runs drain. Setup runs (creation,
+ * or a React deps change) are synchronous and unaffected.
+ */
 export type EffectSchedule = 'sync' | 'useLayoutEffect' | 'useEffect'
 
-/** Options accepted by effect(). `equals` and `label` configure the
+/**
+ * Options accepted by effect(). `equals` and `label` configure the
  * compute exactly as on createComputed; the same `equals` also gates
- * delivery, comparing fresh settled values against the last-handled one. */
+ * delivery, comparing fresh settled values against the last-handled one.
+ */
 export interface EffectOptions<T> extends ComputedOptions<T> {
-	/** Which React phase runs signal-triggered re-runs ('useLayoutEffect'
+	/**
+	 * Which React phase runs signal-triggered re-runs ('useLayoutEffect'
 	 * or 'useEffect'); 'sync' (default) runs them inside the settling
-	 * flush. */
+	 * flush.
+	 */
 	schedule?: EffectSchedule
 }
 
-/** One-level-deep equality:
+/**
+ * One-level-deep equality:
  * - arrays: same length and element-wise Object.is;
  * - plain objects: same own keys and key-wise Object.is;
  * - everything else: Object.is.
  * The default cutoff for tuple and record effect sources, whose computes
- * rebuild their container on every run. */
+ * rebuild their container on every run.
+ */
 export function shallowEquals(a: unknown, b: unknown): boolean {
 	if (Object.is(a, b)) {
 		return true
@@ -533,13 +575,17 @@ export function shallowEquals(a: unknown, b: unknown): boolean {
 /** The value a signal handle produces. */
 export type SignalValue<S> = S extends Signal<infer V> ? V : never
 
-/** Signal container sources map to same-shaped value containers: a tuple
- * of signals yields a tuple of values, a record yields a record. */
+/**
+ * Signal container sources map to same-shaped value containers: a tuple
+ * of signals yields a tuple of values, a record yields a record.
+ */
 export type SignalValues<S> = { -readonly [K in keyof S]: SignalValue<S[K]> }
 
-/** A signal handle: an object whose flags carry an engine kind bit.
+/**
+ * A signal handle: an object whose flags carry an engine kind bit.
  * Distinguishes handles from plain objects (a record source) without
- * duck-typing on `get`, which Map and foreign reactives would satisfy. */
+ * duck-typing on `get`, which Map and foreign reactives would satisfy.
+ */
 function isSignalHandle(x: object): x is Signal<unknown> {
 	return (
 		typeof (x as { flags?: unknown }).flags === 'number' &&
@@ -664,7 +710,8 @@ export type { TraceEvent }
 // engine modules directly — the react directory is part of this library).
 // ---------------------------------------------------------------------------
 
-/** Answers "what world is rendering right now":
+/**
+ * Answers "what world is rendering right now":
  * - draft ids: the current render pass declared its world and the
  *   declaration is still valid;
  * - 'base': a component render is executing but no valid declaration
@@ -675,7 +722,8 @@ export type { TraceEvent }
  * - null: no render is executing, so ambient reads see the newest view.
  * A provider function rather than a sticky setter, because only the React
  * host knows when React is rendering and which declarations a pass
- * refreshed. */
+ * refreshed.
+ */
 let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null
 
 export function setRenderWorldProvider(
@@ -698,9 +746,11 @@ function renderWorld(): World | null {
 	return worldOf(ids)
 }
 
-/** Test seam: discard live drafts, settle pending lifetime transitions,
+/**
+ * Test seam: discard live drafts, settle pending lifetime transitions,
  * drop ambient classification, detach any tracer. Existing atoms stay
- * valid. */
+ * valid.
+ */
 export function resetEngineForTest(): void {
 	discardAllDrafts()
 	flushLifetimeTransitions()
@@ -712,8 +762,10 @@ export function resetEngineForTest(): void {
 }
 
 export type { ResolvedState, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
-/** For consumers reading ResolvedState views directly: the Flag bit
+/**
+ * For consumers reading ResolvedState views directly: the Flag bit
  * constants (test async bits via Flag.AsyncMask/AsyncError/
- * AsyncSuspended) and the uninitialized sentinel test. */
+ * AsyncSuspended) and the uninitialized sentinel test.
+ */
 export { Flag, isUninitialized }
 export { BASE_WORLD }

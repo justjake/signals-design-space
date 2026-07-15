@@ -77,9 +77,11 @@ function handleOf(source: SignalSource<unknown>): SignalHandle {
 	return 'handle' in source ? source.handle : source
 }
 
-/** Read for render: §4 class getters already unbox (throw errors, suspend on
+/**
+ * Read for render: §4 class getters already unbox (throw errors, suspend on
  * thenables); raw engine handles hand back §11.3 boxes — unbox here so a
- * suspended computed suspends the component either way. */
+ * suspended computed suspends the component either way.
+ */
 function readForRender<T>(source: SignalSource<T>, isTransitionRender: () => boolean): T {
 	// THE CONTEXT-SENSITIVE TWO-LEVEL SUSPENSE RULE (owner amendment):
 	//  (a) transition render pass → ALWAYS hand the thenable to React.use():
@@ -183,8 +185,10 @@ export function useSignal<T>(source: SignalSource<T>): T {
 
 // ---- useAtom / useReducerAtom ------------------------------------------------------
 
-/** Component-owned atom (§4.5): like useState but the value is a signal any
- * computed can read. Created on mount, reclaimed after unmount. */
+/**
+ * Component-owned atom (§4.5): like useState but the value is a signal any
+ * computed can read. Created on mount, reclaimed after unmount.
+ */
 export function useAtom<T>(
 	options: AtomOptions<T>,
 ): InstanceType<CosignalAPI['Atom']> & { state: T } {
@@ -206,8 +210,10 @@ export function useAtom<T>(
 	return atom as InstanceType<CosignalAPI['Atom']> & { state: T }
 }
 
-/** Component-owned reducer atom (§4.5): [value, dispatch] with useReducer
- * parity — actions replay per world (§12.2). */
+/**
+ * Component-owned reducer atom (§4.5): [value, dispatch] with useReducer
+ * parity — actions replay per world (§12.2).
+ */
 export function useReducerAtom<S, A>(
 	reducer: (state: S, action: A) => S,
 	initial: S,
@@ -333,8 +339,10 @@ export function useCommitted<T>(source: SignalSource<T>): T | undefined {
 
 // ---- useIsPending -------------------------------------------------------------------
 
-/** Reactive pending indicator: flips only on pending↔settled transitions of
- * the source (the api.isPending probe subscribed like any signal). */
+/**
+ * Reactive pending indicator: flips only on pending↔settled transitions of
+ * the source (the api.isPending probe subscribed like any signal).
+ */
 export function useIsPending(source: SignalSource<unknown>): boolean {
 	const { api } = requireActive()
 	const probe = React.useMemo(() => api.pendingProbe(handleOf(source)), [api, source])

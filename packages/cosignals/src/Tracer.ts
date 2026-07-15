@@ -219,10 +219,12 @@ const enum WorldPack {
 
 const MAX_I32 = 0x7fffffff
 
-/** Kind codes (record form). Public decoded events carry the NAME, not the
+/**
+ * Kind codes (record form). Public decoded events carry the NAME, not the
  * code. Codes are append-only — existing recordings decode forever, and the
  * decoder accepts every listed code, including any the current engine never
- * emits. */
+ * emits.
+ */
 const K = {
 	write: 1,
 	writeDropped: 2,
@@ -309,8 +311,10 @@ const CAUSE_SETTING = new Set<TraceKindCode>([
 ])
 
 const OP_NAMES = ['set', 'update'] as const
-/** Index 1 ('fast-out-covered') is decode-only: no engine emit site
- * produces it; recordings that contain it still decode. */
+/**
+ * Index 1 ('fast-out-covered') is decode-only: no engine emit site
+ * produces it; recordings that contain it still decode.
+ */
 const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
@@ -379,8 +383,10 @@ function defaultNow(): number {
 	return performance.now() * 1000
 }
 
-/** Depth (entries) of the preallocated eval-pairing stacks — the three stack
- * columns below must stay equal; overflow degrades gracefully. */
+/**
+ * Depth (entries) of the preallocated eval-pairing stacks — the three stack
+ * columns below must stay equal; overflow degrades gracefully.
+ */
 const EVAL_STACK_DEPTH = 1024
 
 // ---- the tracer ------------------------------------------------------------------
@@ -609,10 +615,12 @@ export class Tracer implements TraceHooks {
 		this.rec(K.coreEffectRun, this.label(effect), 0, this.ref(value), 0, 0)
 	}
 
-	/** ARG1 stores ref(values)+1 — 0 means "not captured", so recordings made
+	/**
+	 * ARG1 stores ref(values)+1 — 0 means "not captured", so recordings made
 	 * before dep-value capture (ARG1 always 0) decode unchanged. The `values`
 	 * array is the one payload an emit site allocates (tracer-attached only):
-	 * the model-comparison suites compare it entry by entry. */
+	 * the model-comparison suites compare it entry by entry.
+	 */
 	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void {
 		this.rec(
 			K.reactEffectRun,
@@ -653,8 +661,10 @@ export class Tracer implements TraceHooks {
 		this.rec(K.mountCorrection, this.label(w.name), 0, this.ref(from), this.ref(to), 0)
 	}
 
-	/** The site passes the root's generation (already bumped) — the tracer no
-	 * longer reads engine state to enrich the record. */
+	/**
+	 * The site passes the root's generation (already bumped) — the tracer no
+	 * longer reads engine state to enrich the record.
+	 */
 	perRootCommit(root: RootId, batch: BatchId, commitGen: CommitGen): void {
 		this.rec(K.rootCommit, batch, this.label(root), commitGen, 0, 0)
 	}
@@ -675,10 +685,12 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotBackstop, slot, batch, 0, 0, 0)
 	}
 
-	/** Post-consequence checkpoint markers (unlike `renderEnd`, which fires before
+	/**
+	 * Post-consequence checkpoint markers (unlike `renderEnd`, which fires before
 	 * the end's consequences so they can cite it as cause): these record after
 	 * every retirement fold / lock-in / drain / fixup of the render end landed —
-	 * the stream position the reference model emits its render events at. */
+	 * the stream position the reference model emits its render events at.
+	 */
 	renderCommitted(p: RenderPass): void {
 		this.rec(K.renderCommitted, p.id, this.label(p.root), 0, 0, 0)
 	}
@@ -711,10 +723,12 @@ export class Tracer implements TraceHooks {
 		this.rec(K.batchSettle, t.id, 0, 0, 0, 0)
 	}
 
-	/** The bindings' committed/abandoned report, created at its source (the
+	/**
+	 * The bindings' committed/abandoned report, created at its source (the
 	 * protocol handler that received it) — the engine never calls this hook.
 	 * Not a cause-claiming kind: the retirement operation it precedes roots
-	 * its own chain, exactly as it did when the flag rode the engine call. */
+	 * its own chain, exactly as it did when the flag rode the engine call.
+	 */
 	batchDisposition(batch: BatchId, committed: boolean): void {
 		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), batch, 0, 0, 0, 0)
 	}
@@ -1156,8 +1170,10 @@ export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Trac
 
 // ---- human formatting ---------------------------------------------------------------
 
-/** One value formatter, two faces: subjects render unquoted (they are
- * labels); data values quote strings that would not scan as one word. */
+/**
+ * One value formatter, two faces: subjects render unquoted (they are
+ * labels); data values quote strings that would not scan as one word.
+ */
 function formatValue(v: unknown, subject = false): string {
 	if (v === REF_DROPPED) {
 		return '«dropped»'

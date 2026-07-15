@@ -73,8 +73,10 @@ function subLine(n: NodeDetails): string {
 	return ''
 }
 
-/** Walk `depth` levels out from `focusId` in one direction, one column per level.
- * Returns columns nearest-focus-first; caps each column and reports overflow. */
+/**
+ * Walk `depth` levels out from `focusId` in one direction, one column per level.
+ * Returns columns nearest-focus-first; caps each column and reports overflow.
+ */
 function walk(
 	backend: Backend,
 	focusId: number,

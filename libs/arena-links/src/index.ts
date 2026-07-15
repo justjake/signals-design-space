@@ -98,13 +98,17 @@ const F_NEXT_SUB = 4
 const F_PREV_DEP = 5
 const F_NEXT_DEP = 6
 
-/** VERSION value marking a freed/unlinked record. `cycle` wraps as int32 and
+/**
+ * VERSION value marking a freed/unlinked record. `cycle` wraps as int32 and
  * passes -1 only once per 2^32 updates; the dedup that reads VERSION also
- * matches dep/sub ids, so a collision cannot produce a false positive link. */
+ * matches dep/sub ids, so a collision cannot produce a false positive link.
+ */
 const TOMBSTONE = -1
 
-/** Initial arena capacity in records. Overridable via env so the growth +
- * epoch-restart machinery can be stress-tested (e.g. conformance with 2). */
+/**
+ * Initial arena capacity in records. Overridable via env so the growth +
+ * epoch-restart machinery can be stress-tested (e.g. conformance with 2).
+ */
 const INITIAL_LINK_RECORDS = (() => {
 	const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
 		?.env?.ARENA_LINKS_INITIAL_RECORDS
@@ -117,8 +121,10 @@ const INITIAL_LINK_RECORDS = (() => {
 // (growth) only has to copy the Int32Array itself.
 // ---------------------------------------------------------------------------
 
-/** id -> node. Index 0 burned. Entries are cleared (set undefined, stays
- * PACKED) when a node's id is recycled. */
+/**
+ * id -> node. Index 0 burned. Entries are cleared (set undefined, stays
+ * PACKED) when a node's id is recycled.
+ */
 const nodesById: (ReactiveNode | undefined)[] = [undefined]
 const nodeFree: number[] = []
 let nodeFreeTop = 0
@@ -128,9 +134,11 @@ let linkTop = 8 // record 0 burned
 let linkFreeHead = 0
 let linkRecordCap = INITIAL_LINK_RECORDS
 
-/** Deferred frees while a guarded walk (checkDirty/purge/dispose) is active:
+/**
+ * Deferred frees while a guarded walk (checkDirty/purge/dispose) is active:
  * records/ids must stay frozen so stale traversals behave like upstream's
- * stale-but-intact Link objects. Drained when guardDepth returns to 0. */
+ * stale-but-intact Link objects. Drained when guardDepth returns to 0.
+ */
 let guardDepth = 0
 const pendingLinks: number[] = []
 let pendingLinkTop = 0
@@ -179,8 +187,10 @@ function registerNode(node: ReactiveNode): number {
 	return id
 }
 
-/** Recycle a node's id once it is fully unlinked. Deferred while a guarded
- * walk is active (stale link records may still name this id). */
+/**
+ * Recycle a node's id once it is fully unlinked. Deferred while a guarded
+ * walk is active (stale link records may still name this id).
+ */
 function maybeFreeNodeId(node: ReactiveNode): void {
 	if (node.id === 0 || node.subs !== 0 || node.deps !== 0 || node.depsTail !== 0) {
 		return
@@ -262,9 +272,11 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		purgeChildDeps,
 	}
 
-	/** Recycle or thread a freed record. Deferred while a guarded walk is
+	/**
+	 * Recycle or thread a freed record. Deferred while a guarded walk is
 	 * active so stale traversals see frozen fields. VERSION is already
-	 * TOMBSTONE (set by unlink) by the time this runs. */
+	 * TOMBSTONE (set by unlink) by the time this runs.
+	 */
 	function freeLink(link: number): void {
 		if (guardDepth > 0) {
 			pendingLinks[pendingLinkTop++] = link
@@ -517,8 +529,10 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		}
 	}
 
-	/** Restart glue for growth-during-checkDirty; always entered through the
-	 * CURRENT engine reference. */
+	/**
+	 * Restart glue for growth-during-checkDirty; always entered through the
+	 * CURRENT engine reference.
+	 */
 	function checkDirtyRestart(sub: ReactiveNode): boolean {
 		const deps = sub.deps
 		return deps !== 0 && checkDirty(deps, sub)
@@ -548,10 +562,12 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		return false
 	}
 
-	/** Upstream purgeDeps: trim every dep past the depsTail cursor. Guarded +
+	/**
+	 * Upstream purgeDeps: trim every dep past the depsTail cursor. Guarded +
 	 * epoch-resumable (unlink -> unwatched can run user cleanup that grows the
 	 * arena; the cursor re-derives from node fields, so resuming through the
-	 * current engine continues exactly where this one stopped). */
+	 * current engine continues exactly where this one stopped).
+	 */
 	function purgeDeps(sub: ReactiveNode): void {
 		const depsTail = sub.depsTail
 		let dep = depsTail !== 0 ? L[depsTail + F_NEXT_DEP] : sub.deps
@@ -576,8 +592,10 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		}
 	}
 
-	/** Upstream disposeAllDepsInReverse. Same guard + resume discipline;
-	 * unlinking the tail keeps sub.depsTail as the resume cursor. */
+	/**
+	 * Upstream disposeAllDepsInReverse. Same guard + resume discipline;
+	 * unlinking the tail keeps sub.depsTail as the resume cursor.
+	 */
 	function disposeAllDepsInReverse(sub: ReactiveNode): void {
 		let link = sub.depsTail
 		if (link === 0) {
@@ -602,9 +620,11 @@ function createEngine(recordCap: number, old: Int32Array | undefined) {
 		}
 	}
 
-	/** The HasChildEffect pre-walk from upstream updateComputed/run: unlink
+	/**
+	 * The HasChildEffect pre-walk from upstream updateComputed/run: unlink
 	 * every dep that is neither a computed nor a signal (i.e. child effects/
-	 * scopes), in reverse. Restart-from-tail is idempotent. */
+	 * scopes), in reverse. Restart-from-tail is idempotent.
+	 */
 	function purgeChildDeps(sub: ReactiveNode): void {
 		const epoch = arenaEpoch
 		++guardDepth

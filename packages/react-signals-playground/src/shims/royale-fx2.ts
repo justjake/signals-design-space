@@ -57,8 +57,10 @@ export function useSignal<T>(signal: ReadableSignal<T>): T {
 	return useValue((signal as RoyaleAtom<T> | RoyaleComputed<T>).signal)
 }
 
-/** The interface's split (compute, handler, deps) shape desugars to fx2's
- * factory form: one spec object per deps window. */
+/**
+ * The interface's split (compute, handler, deps) shape desugars to fx2's
+ * factory form: one spec object per deps window.
+ */
 export function useSignalEffect<T>(
 	compute: () => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),

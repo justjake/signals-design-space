@@ -1,5 +1,7 @@
-/** Public policy and default-instance surface. The semantic engine and the
- * per-instance factory live together in CosignalEngine.ts. */
+/**
+ * Public policy and default-instance surface. The semantic engine and the
+ * per-instance factory live together in CosignalEngine.ts.
+ */
 export {
 	Atom,
 	ReducerAtom,

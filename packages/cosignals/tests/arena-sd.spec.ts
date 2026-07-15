@@ -80,8 +80,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 	return { promise, resolve }
 }
 
-/** The shim-wrapper analog: a background suspension folds to the thenable's
- * stable sentinel VALUE instead of unwinding (battery 16d's rule). */
+/**
+ * The shim-wrapper analog: a background suspension folds to the thenable's
+ * stable sentinel VALUE instead of unwinding (battery 16d's rule).
+ */
 function suspendingUse(
 	b: CosignalEngine,
 	name: string,
@@ -100,9 +102,11 @@ function suspendingUse(
 	return node
 }
 
-/** Length of a sub's deps chain counted from its FIRST dep's link (the fn
+/**
+ * Length of a sub's deps chain counted from its FIRST dep's link (the fn
  * must read that dep first, making its link the chain head). A same-eval
- * dedup miss would create a duplicate link and lengthen the chain. */
+ * dedup miss would create a duplicate link and lengthen the chain.
+ */
 function depsChainLen(
 	b: CosignalEngine,
 	root: string,

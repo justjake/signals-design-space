@@ -85,9 +85,11 @@ export type TraceKindClass =
 	| 'error' // *-error
 	| 'system' // anything else
 
-/** Classify a kind for the UI. Pure; no mapping of the kind itself — just a
+/**
+ * Classify a kind for the UI. Pure; no mapping of the kind itself — just a
  * coarse bucket for color/filter. Unknown kinds fall through to 'system' so
- * the log still renders a future kind the panel hasn't seen. */
+ * the log still renders a future kind the panel hasn't seen.
+ */
 export function kindClass(kind: TraceKind | string): TraceKindClass {
 	switch (kind) {
 		case 'dom-event':

@@ -51,24 +51,30 @@ const README_INTERNAL_REFS: RegExp[] = [
 	/plans\/2026-/, // the repo's planning-document paths
 ]
 
-/** Source-wide patterns: internal-document references never belong in a
- * shipped source file (comments or otherwise; `§` cannot occur in code). */
+/**
+ * Source-wide patterns: internal-document references never belong in a
+ * shipped source file (comments or otherwise; `§` cannot occur in code).
+ */
 const SRC_INTERNAL_REFS: RegExp[] = [
 	/§\d?/, // section-sign references into internal documents
 	/\bplans\//, // the repo's planning-document paths
 	/\bresearch\//, // the repo's research-notes paths
 ]
 
-/** Comment-text-only patterns: research-stage shorthand (the low-collision
- * subset — see the module header for what is deliberately not checked). */
+/**
+ * Comment-text-only patterns: research-stage shorthand (the low-collision
+ * subset — see the module header for what is deliberately not checked).
+ */
 const COMMENT_STAGE_CODES: RegExp[] = [
 	/\b(?:NF2|RCC|CR5|OL[12]|S5R|RT6|EF2|W9)\b/,
 	/\bSPK-?[A-Za-z0-9]+\b/,
 	/\bS-[ABCD]\b/,
 ]
 
-/** Every .ts source under `dir`, subdirectories included; asserts the scan
- * found something, so a moved directory can never silently empty the gate. */
+/**
+ * Every .ts source under `dir`, subdirectories included; asserts the scan
+ * found something, so a moved directory can never silently empty the gate.
+ */
 function sourceFiles(dir: string): string[] {
 	const out: string[] = []
 	for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
@@ -80,10 +86,12 @@ function sourceFiles(dir: string): string[] {
 	return out
 }
 
-/** The comment text of a TS source, line-aligned with the original (code
+/**
+ * The comment text of a TS source, line-aligned with the original (code
  * stripped, so identifier hits can never trip a comment-only pattern; string
  * contents are not parsed — a `//` inside a string over-approximates, which
- * only errs toward strictness). */
+ * only errs toward strictness).
+ */
 function commentTextByLine(text: string): string[] {
 	const out: string[] = []
 	let inBlock = false
@@ -120,9 +128,11 @@ function commentTextByLine(text: string): string[] {
 	return out
 }
 
-/** The cosignals-react allowance: drop React's own `unstable_*` protocol
+/**
+ * The cosignals-react allowance: drop React's own `unstable_*` protocol
  * entry-point names before scanning, so a banned fragment inside one of
- * React's names can never trip the gate (nothing else is exempt). */
+ * React's names can never trip the gate (nothing else is exempt).
+ */
 function stripUnstableNames(text: string): string {
 	return text.replace(/unstable_[A-Za-z0-9_]*/g, 'unstable_')
 }
@@ -160,12 +170,14 @@ describe('docs gate: banned vocabulary in shipped sources', () => {
 describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
 	const srcDirs = [join(pkgDir, 'src'), join(reactPkgDir, 'src')]
 
-	/** Production seams that legitimately carry a __ prefix without being
+	/**
+	 * Production seams that legitimately carry a __ prefix without being
 	 * test-only (each is consumed by the package's own runtime paths):
 	 * the policy layer's plain write tail and lifecycle write path, the
 	 * standalone fast-arm flag's setter, and the engine's handle-free
 	 * write-path resolution pair. Everything else exported with a __ prefix
-	 * must be a __TEST__-prefixed test seam. */
+	 * must be a __TEST__-prefixed test seam.
+	 */
 	const PRODUCTION_DUNDER_EXPORTS = new Set([
 		'__plainAtomWrite',
 		'__lifecycleWrite',
@@ -174,8 +186,10 @@ describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
 		'__engineWriteNode',
 	])
 
-	/** Exported identifiers of a TS source: declaration exports and export
-	 * lists (aliases count by their EXPORTED name). */
+	/**
+	 * Exported identifiers of a TS source: declaration exports and export
+	 * lists (aliases count by their EXPORTED name).
+	 */
 	function exportedNames(text: string): string[] {
 		const out: string[] = []
 		for (const m of text.matchAll(

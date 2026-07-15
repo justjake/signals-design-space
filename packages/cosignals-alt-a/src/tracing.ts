@@ -215,8 +215,10 @@ export function createTracer(opts: TracerMode) {
 			}
 			return truncatedAtId >= 0 ? Math.max(0, nextId - chunkSize - truncatedAtId) : 0
 		},
-		/** SESSION: sealed (immutable, streamable) chunks — all but the one
-		 * being written, while lossless. */
+		/**
+		 * SESSION: sealed (immutable, streamable) chunks — all but the one
+		 * being written, while lossless.
+		 */
 		sealedChunks(): Int32Array[] {
 			if (!isSession || truncatedAtId >= 0) {
 				return []
@@ -224,8 +226,10 @@ export function createTracer(opts: TracerMode) {
 			const writing = nextId >> chunkShift
 			return chunks.slice(0, Math.min(writing, chunks.length))
 		},
-		/** §16.2/G-21: losslessness is provable — one gap-free id range with
-		 * no truncation-marker inside it. */
+		/**
+		 * §16.2/G-21: losslessness is provable — one gap-free id range with
+		 * no truncation-marker inside it.
+		 */
 		verifyLossless(): { lossless: boolean; from: number; to: number; truncatedAtId: number } {
 			if (!isSession) {
 				const from = Math.max(0, nextId - capacity)

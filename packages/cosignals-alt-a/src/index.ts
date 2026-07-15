@@ -70,9 +70,11 @@ export const startBatch = defaultEngine.startBatch
 export const endBatch = defaultEngine.endBatch
 export const untracked = defaultAPI.untracked
 export const configure = defaultAPI.configure
-/** The READ FAMILY (alt-family visibility rule, SPEC-RESOLUTIONS):
+/**
+ * The READ FAMILY (alt-family visibility rule, SPEC-RESOLUTIONS):
  * `.state` = real (W0), latest() = intent (Wn incl. drafts),
- * committed() = on screen, isPending() = loading. */
+ * committed() = on screen, isPending() = loading.
+ */
 export const latest = defaultAPI.latest
 export const committed = defaultAPI.committed
 export const isPending = defaultAPI.isPending

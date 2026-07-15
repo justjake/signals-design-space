@@ -55,9 +55,11 @@ export function assertForkPresent(): void {
 
 // ---- shim types ------------------------------------------------------------------
 
-/** A live delivery target: the shim-side handle for one watcher (the
+/**
+ * A live delivery target: the shim-side handle for one watcher (the
  * engine's record of one subscribed component instance) that can re-render
- * the owning component. */
+ * the owning component.
+ */
 export type WatcherTarget = {
 	/** Schedules a re-render of the owning component (a setState bump). */
 	bump: () => void
@@ -72,9 +74,11 @@ type RootRec = {
 	created: Set<number>
 }
 
-/** Fallback root id for effects/watchers created outside any tracked
+/**
+ * Fallback root id for effects/watchers created outside any tracked
  * render (defensive paths; both packages name it through this one
- * constant). */
+ * constant).
+ */
 export const ROOT_UNKNOWN: RootId = 'root-unknown'
 
 let nextRootSerial = 1
@@ -86,18 +90,22 @@ export function setActiveShim(shim: Shim): void {
 	activeShim = shim
 }
 
-/** Clears the active-shim slot only if it still points at `shim` — a
+/**
+ * Clears the active-shim slot only if it still points at `shim` — a
  * disposed predecessor's late unregister must never clobber a successor's
- * registration. */
+ * registration.
+ */
 export function unregisterShim(shim: Shim): void {
 	if (activeShim === shim) {
 		activeShim = undefined
 	}
 }
 
-/** The active shim if it is still live. (A shim disposed directly — without
+/**
+ * The active shim if it is still live. (A shim disposed directly — without
  * its handle's dispose, which unregisters it — can linger in the slot; the
- * liveness filter keeps it from being served or from blocking re-registration.) */
+ * liveness filter keeps it from being served or from blocking re-registration.)
+ */
 export function getActiveShim(): Shim | undefined {
 	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined
 }
@@ -105,15 +113,19 @@ export function getActiveShim(): Shim | undefined {
 // ---- the shim --------------------------------------------------------------------
 
 export class Shim {
-	/** The engine surface this shim is bound to — the default browser instance,
+	/**
+	 * The engine surface this shim is bound to — the default browser instance,
 	 * or the per-request instance passed to registerCosignalReact() for
 	 * synchronous SSR. The field keeps the bindings' historical name to spare
-	 * every call site. */
+	 * every call site.
+	 */
 	readonly bridge: CosignalEngine
-	/** The bound instance's public Computed/ReducerAtom classes (the default
+	/**
+	 * The bound instance's public Computed/ReducerAtom classes (the default
 	 * instance's when none was passed). The creating hooks (useComputed,
 	 * useReducerAtom) create handles from THESE so a per-instance-bound shim never
-	 * produces a handle owned by a different engine than it routes through. */
+	 * produces a handle owned by a different engine than it routes through.
+	 */
 	readonly Computed: typeof Computed
 	readonly ReducerAtom: typeof ReducerAtom
 	/** Enables unreachable-state checks and the post-await write warning. */
@@ -472,7 +484,8 @@ export class Shim {
 
 	// ---- the write context ----------------------------------------------------
 
-	/** The batch context for the public write executing NOW — the driver's
+	/**
+	 * The batch context for the public write executing NOW — the driver's
 	 * `currentBatch`, consulted by the engine once per classified write (the
 	 * write itself — whole (kind, payload) operations for worlds to replay —
 	 * is dispatched engine-internally after this answer). Returns the engine
@@ -481,7 +494,8 @@ export class Shim {
 	 * ambient batch) — the same defined fall-through a bare non-React write
 	 * takes. Effects stay BOUNDARY consumers of such writes: the engine
 	 * validates their dirty graph edges at the next boundary (retirement, settlement,
-	 * per-root commit), never mid-write. */
+	 * per-root commit), never mid-write.
+	 */
 	currentBatch(): BatchId {
 		if (this.registry.getRenderContext() !== null) {
 			throw new Error(
@@ -579,11 +593,13 @@ export class Shim {
 	// background-suspension fold. What stays here is exactly the React-phase
 	// knowledge: hook-initiated evaluations may legally suspend the render.)
 
-	/** Hook-initiated evaluation — the one "a hook read may legally suspend"
+	/**
+	 * Hook-initiated evaluation — the one "a hook read may legally suspend"
 	 * translation (both halves): the bridge counter tells the engine's ctx
 	 * adapter and newest read tail to RETHROW a pending suspension instead of
 	 * folding it to a sentinel value, and a SuspendedRead carrier unwraps to
-	 * its thenable so React suspends the component. */
+	 * its thenable so React suspends the component.
+	 */
 	hookRead(fn: () => Value): Value {
 		this.bridge.suspendDepth++
 		try {
@@ -684,7 +700,9 @@ export class Shim {
 	}
 }
 
-/** The evaluation context bound computed functions receive — the core's
+/**
+ * The evaluation context bound computed functions receive — the core's
  * ComputedCtx verbatim (`previous` hint + the two-form `ctx.use`), served
- * over the bound node's own state. */
+ * over the bound node's own state.
+ */
 export type BoundCtx<T> = ComputedCtx<T>

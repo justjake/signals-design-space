@@ -87,11 +87,13 @@ interface UseValueState {
 	/** What the hook's most recent render resolved (committed or not). */
 	rendered: RenderedResolution
 	repairPending: boolean
-	/** What the committed tree shows for this hook. Advances only in the
+	/**
+	 * What the committed tree shows for this hook. Advances only in the
 	 * layout effect, so a transition's speculative values never enter it
 	 * while the transition is held. The notify predicate compares against
 	 * this, which keeps folds silent when the committed tree already shows
-	 * their values and keeps live appends from double-dispatching repairs. */
+	 * their values and keeps live appends from double-dispatching repairs.
+	 */
 	committed: RenderedResolution
 }
 
@@ -100,9 +102,11 @@ const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
 const NO_IDS: readonly DraftId[] = []
 
-/** These hooks cannot work without a SignalsFrameworkProvider. The root
+/**
+ * These hooks cannot work without a SignalsFrameworkProvider. The root
  * connection carries transition worlds, and a subscriber without one has
- * no channel for them. Fail at the hook and name both supported fixes. */
+ * no channel for them. Fail at the hook and name both supported fixes.
+ */
 function requireRootConnection(hook: string): ReactRootConnection {
 	const connection = useContext(ReactRootConnectionContext)
 	if (connection === null) {
@@ -285,9 +289,11 @@ export function useValue<T>(x: Signal<T>): T {
 	return value as T
 }
 
-/** A component-owned computed. No explicit disposal: an unwatched
+/**
+ * A component-owned computed. No explicit disposal: an unwatched
  * computed only holds references toward its dependencies, so dropping it
- * at unmount makes it garbage-collectible. */
+ * at unmount makes it garbage-collectible.
+ */
 export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	requireRootConnection('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,9 +301,11 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	return useValue(c)
 }
 
-/** Everything a spec's `watch` can be: a compute function, a signal, a
+/**
+ * Everything a spec's `watch` can be: a compute function, a signal, a
  * tuple of signals, or a record of signals — the same shapes
- * {@link effect} accepts as its first argument. */
+ * {@link effect} accepts as its first argument.
+ */
 export type WatchSource =
 	| ((use: UseFn, previous: any) => unknown)
 	| Signal<any>
@@ -313,25 +321,33 @@ export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
 			? SignalValues<S>
 			: never
 
-/** One component-owned signal effect, as built by the factory passed to
+/**
+ * One component-owned signal effect, as built by the factory passed to
  * useSignalEffect or useSignalLayoutEffect. Which hook runs the factory
- * decides the schedule; everything else is described per field. */
+ * decides the schedule; everything else is described per field.
+ */
 export interface SignalEffectSpec<S extends WatchSource> {
-	/** What the effect reacts to. One of:
+	/**
+	 * What the effect reacts to. One of:
 	 * - a compute function: tracked while it runs, so the signals it read
 	 *   — and only those — become dependencies, branch by branch;
 	 * - a signal: shorthand for a compute that reads it;
 	 * - a tuple or record of signals: shorthand for a compute that reads
 	 *   each one into a same-shaped tuple or record of values.
 	 * These are the same shapes {@link effect} accepts as its first
-	 * argument. */
+	 * argument.
+	 */
 	watch: S
-	/** What the effect does: runs untracked with the settled
+	/**
+	 * What the effect does: runs untracked with the settled
 	 * (value, previous) pair when the watched value changes, and may
-	 * return a cleanup that runs before the next run and at disposal. */
+	 * return a cleanup that runs before the next run and at disposal.
+	 */
 	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
-	/** Delivery cutoff; defaults to Object.is, or the package's
-	 * `shallowEquals` for tuple and record watches. */
+	/**
+	 * Delivery cutoff; defaults to Object.is, or the package's
+	 * `shallowEquals` for tuple and record watches.
+	 */
 	equals?: EqualsFn<WatchValue<S>>
 	/** Debug name shown in trace output. */
 	label?: string
@@ -359,11 +375,13 @@ function useSignalPhaseEffect(
 	}, deps)
 }
 
-/** A signal effect owned by this component: the factory builds a
+/**
+ * A signal effect owned by this component: the factory builds a
  * {@link SignalEffectSpec} on mount and again on every `deps` change,
  * disposing the previous effect first, in React's passive phase.
  * Signal-triggered re-runs drain in the passive phase of the pass the
- * write produced. */
+ * write produced.
+ */
 export function useSignalEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
@@ -371,11 +389,13 @@ export function useSignalEffect<const S extends WatchSource>(
 	useSignalPhaseEffect(useEffect, 'useEffect', create, deps)
 }
 
-/** A signal effect owned by this component: the factory builds a
+/**
+ * A signal effect owned by this component: the factory builds a
  * {@link SignalEffectSpec} on mount and again on every `deps` change,
  * disposing the previous effect first, in React's layout phase.
  * Signal-triggered re-runs drain in the layout phase of the pass the
- * write produced — after its DOM mutations, before it paints. */
+ * write produced — after its DOM mutations, before it paints.
+ */
 export function useSignalLayoutEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,
 	deps: React.DependencyList,
@@ -383,10 +403,12 @@ export function useSignalLayoutEffect<const S extends WatchSource>(
 	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', create, deps)
 }
 
-/** True while newer data exists behind the committed value of x:
+/**
+ * True while newer data exists behind the committed value of x:
  * - a transition draft with writes over x is still pending, or
  * - an async computed is loading again while its previous settled value
- *   keeps serving. */
+ *   keeps serving.
+ */
 export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireRootConnection('useIsPending'), null)
@@ -405,8 +427,10 @@ export function useIsPending(x: Signal<any>): boolean {
 	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
-/** A component-owned atom: created once on mount, garbage-collected after
- * unmount when the component's references to it drop. */
+/**
+ * A component-owned atom: created once on mount, garbage-collected after
+ * unmount when the component's references to it drop.
+ */
 export function useAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
 	const atomRef = useRef<Atom<T> | null>(null)
 	atomRef.current ??= createAtom(initial, opts)

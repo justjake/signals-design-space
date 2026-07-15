@@ -109,9 +109,11 @@ type EntityRegistry = {
 	writerEffects: Set<number>
 }
 
-/** Keyed by ENGINE EPOCH (one schedule = one reset = one epoch): the engine
+/**
+ * Keyed by ENGINE EPOCH (one schedule = one reset = one epoch): the engine
  * surface is a singleton, so object keying would leak the previous
- * schedule's registry into the next. */
+ * schedule's registry into the next.
+ */
 const registries = new Map<number, EntityRegistry>()
 
 function registryOf(_b: CosignalEngine): EntityRegistry {
@@ -147,11 +149,13 @@ function watcherAt(b: CosignalEngine, index: number): number {
 	return ids[index % ids.length]
 }
 
-/** Mirrors the model's `effectAt`: index over react-effect ids in creation
+/**
+ * Mirrors the model's `effectAt`: index over react-effect ids in creation
  * order (the engine's SignalEffect store holds ONLY committed observers — core
  * effects are kernel `effect()`s, not engine records — so its key sequence
  * is exactly the model's reactEffects key sequence, by INDEX; the id VALUES
- * diverge once a core effect mounts, which is why resolution is positional). */
+ * diverge once a core effect mounts, which is why resolution is positional).
+ */
 function effectAt(b: CosignalEngine, index: number): number {
 	const ids: number[] = []
 	for (const effect of b.idToSignalEffect.values()) {
@@ -163,19 +167,23 @@ function effectAt(b: CosignalEngine, index: number): number {
 	return ids[index % ids.length]
 }
 
-/** Per-engine count of applyEngineOp calls: the tracer-independent uniq
+/**
+ * Per-engine count of applyEngineOp calls: the tracer-independent uniq
  * component that replaced the retained log's `b.events.length` when the
  * object channel died. Only per-engine uniqueness and run-to-run determinism
  * matter here — when NAME PARITY with the model matters (lockstep), the
- * differ supplies the model's own event count as `namingEvents`. */
+ * differ supplies the model's own event count as `namingEvents`.
+ */
 const appliedOps = new Map<number, number>()
 
-/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+/**
+ * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
  * Per-schedule ordinal for the terminal band's react-effect mounts — the
  * model's `terminalReactMounts` twin. Ticked per APPLIED
  * mountTermReader/mountSibWriter (same order), so the `E${uniq}#T${k}` names
  * agree even when terminals mount at rest (no seq/event/epoch advance to make
- * the uniq unique). Keyed by engine epoch (one per schedule reset). */
+ * the uniq unique). Keyed by engine epoch (one per schedule reset).
+ */
 const terminalReactMounts = new Map<number, number>()
 function nextTerminalMount(): number {
 	const k = terminalReactMounts.get(engineEpoch) ?? 0
@@ -183,19 +191,23 @@ function nextTerminalMount(): number {
 	return k
 }
 
-/** Apply ONE schedule op to an engine holding the fixed topology (applyOneOp twin).
+/**
+ * Apply ONE schedule op to an engine holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
  * `${events}.${seq}.${epoch}` uniq: the model creates names off ITS stream
  * length, and since S-B the engine legitimately delivers FEWER deliveryish
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
- * so name parity requires the MODEL's count — the differ supplies it. */
+ * so name parity requires the MODEL's count — the differ supplies it.
+ */
 export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: number): boolean {
 	const allNodes = __TEST__eachInternals()
 	const atoms = allNodes.filter((n): n is AtomInternals => n.kind === 'atom').slice(0, 4)
 	const nodes = allNodes.slice(0, 8)
-	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
+	/**
+	 * The schedule's write vocabulary → the engine's scalar (kind, payload)
 	 * pair (0 = set, 1 = update) — the adapter's op-literal twin of the
-	 * model-side writeOp in the oracle's schedule.ts. */
+	 * model-side writeOp in the oracle's schedule.ts.
+	 */
 	const writeScalarsFor = (kind: WriteKind, value: number): [0 | 1, unknown] => {
 		switch (kind) {
 			case 'set':
@@ -476,8 +488,10 @@ export function engineAsAdapter(): EngineAdapter & {
 	let namingEvents: number | undefined
 	return {
 		engine: b,
-		/** Name parity under the ⊆ delivery bound: the differ reports the
-		 * model's pre-op event count so `${events}.…` names match its. */
+		/**
+		 * Name parity under the ⊆ delivery bound: the differ reports the
+		 * model's pre-op event count so `${events}.…` names match its.
+		 */
 		__syncNamingEvents(n: number): void {
 			namingEvents = n
 		},
@@ -620,14 +634,16 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 	return out
 }
 
-/** Delivery-DECISION counts, pooled across the family's three modes per
+/**
+ * Delivery-DECISION counts, pooled across the family's three modes per
  * (watcher, batch, slot). The bound is "fewer decisions, never more":
  * current-structure routing legitimately shifts modes
  * within the family — a mount join the accumulated model schedules as a
  * corrective (arming its dedup, so its write logs 'suppressed') may not
  * exist in any live arena, in which case the engine's write-time walk is
  * the first notification and logs 'delivery'. One notification either way;
- * pooling keys the invariant on the decision, not its mode. */
+ * pooling keys the invariant on the decision, not its mode.
+ */
 function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>()
 	for (const e of events) {
@@ -758,8 +774,10 @@ class DeliveryPrecedesCorrection {
 		return mk
 	}
 
-	/** Resolve the retiring batch's last write seq BEFORE the op applies
-	 * (retirement can reclaim the record). */
+	/**
+	 * Resolve the retiring batch's last write seq BEFORE the op applies
+	 * (retirement can reclaim the record).
+	 */
 	beforeOp(op: ScheduleOp): void {
 		this.preOpBatchWriteSeq = 0
 		if (op.t === 'retire' || op.t === 'settle') {

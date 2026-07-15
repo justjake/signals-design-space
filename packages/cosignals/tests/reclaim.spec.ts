@@ -33,8 +33,10 @@ import {
 const hasGC = typeof globalThis.gc === 'function'
 const gcNow = (): void => (globalThis.gc as () => void)()
 
-/** Let GC + FinalizationRegistry callbacks (task-scheduled) + the reclaim
- * nudge microtask run. */
+/**
+ * Let GC + FinalizationRegistry callbacks (task-scheduled) + the reclaim
+ * nudge microtask run.
+ */
 async function gcSettle(rounds = 8): Promise<void> {
 	for (let i = 0; i < rounds; ++i) {
 		gcNow()

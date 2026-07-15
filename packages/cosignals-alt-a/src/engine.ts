@@ -226,8 +226,10 @@ export type BroadcastEvent = {
 	token: number
 	/** The value the watched node had in the decision world. */
 	value: unknown
-	/** Token the fork reported as current write batch inside the callback —
-	 * lane-parity evidence for tests (equals `token` when entangled). */
+	/**
+	 * Token the fork reported as current write batch inside the callback —
+	 * lane-parity evidence for tests (equals `token` when entangled).
+	 */
 	forkBatchDuringCallback: number
 }
 
@@ -244,7 +246,8 @@ export type EngineOptions = {
 	initialRecords?: number // main-plane records (default 8192)
 	initialLogRecords?: number // log-plane records (default 1024)
 	initialMemoRecords?: number // memo-plane records (default 1024)
-	/** §14.2: register atom/computed handles with a FinalizationRegistry that
+	/**
+	 * §14.2: register atom/computed handles with a FinalizationRegistry that
 	 * reclaims their records when the handles are garbage-collected.
 	 * ON BY DEFAULT ("we should never leak"). Pass `false` to opt out for
 	 * zero FR overhead, accepting the bounded leak: each dropped unwatched
@@ -252,7 +255,8 @@ export type EngineOptions = {
 	 * CAVEAT (inherent to JS, both modes): a computed whose fn closure was
 	 * created in a scope that also captures the handle keeps the handle
 	 * reachable through the shared closure context — create the fn in its
-	 * own scope (e.g. a factory function) if you rely on GC reclamation. */
+	 * own scope (e.g. a factory function) if you rely on GC reclamation.
+	 */
 	finalization?: boolean
 }
 
@@ -3193,10 +3197,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 		opts?: {
 			isEqual?: Equality<T>
 			label?: string
-			/** Policy-supplied fused kernel wrapper (§11.2): receives the
+			/**
+			 * Policy-supplied fused kernel wrapper (§11.2): receives the
 			 * previous cached value and owns equality/box stability itself —
 			 * saves a call frame per recomputation. `fn` remains the raw
-			 * overlay-evaluation function. */
+			 * overlay-evaluation function.
+			 */
 			kernelFn?: (prev?: unknown) => unknown
 		},
 	): ComputedHandle<T> {
@@ -3686,9 +3692,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 		// getter chain was ~28% of the effect-heavy kairo tick.
 		readAtomById: readAtomPublic,
 		readComputedById: readComputedPublic,
-		/** Raw box-shape read for the isPending probe: tracked like any read
+		/**
+		 * Raw box-shape read for the isPending probe: tracked like any read
 		 * (canonical link inside kernel evals, world-resolved in overlay
-		 * frames), but the caller receives the box unforwarded. */
+		 * frames), but the caller receives the box unforwarded.
+		 */
 		readComputedRaw(id: number): unknown {
 			if (canonicalEvalDepth > 0) {
 				return kernelComputedRead(id)
@@ -3698,7 +3706,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 			return readComputedPublic(id)
 		},
-		/** Solid's latest(): sample without pending registration; tracked
+		/**
+		 * Solid's latest(): sample without pending registration; tracked
 		 * callers still subscribe. PER-CONTEXT TABLE (family convergence,
 		 * alt-b adjudicated — sampling Wn inside a committed replay is a
 		 * tear by definition, and inside a memoized eval it would poison
@@ -3706,7 +3715,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 		 *  - inside an EVAL frame → the frame's world (a normal read);
 		 *  - inside RENDER → the pass world (never ahead of the pin;
 		 *    render-time loading indicators are useIsPending's job);
-		 *  - top-level / handlers / effects → Wn (drafts included). */
+		 *  - top-level / handlers / effects → Wn (drafts included).
+		 */
 		latestValue(id: number): unknown {
 			let v: unknown
 			if (frameWorlds.length > 0) {
@@ -3725,9 +3735,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 		trackCommitted,
 		committedEffect,
 		subscribeWithFixup,
-		/** The open pass's fixup-relevant identity: pin + included tokens
+		/**
+		 * The open pass's fixup-relevant identity: pin + included tokens
 		 * (interned slots only — never-interned tokens carry no entries and
-		 * cannot affect any re-resolution). undefined outside passes. */
+		 * cannot affect any re-resolution). undefined outside passes.
+		 */
 		renderInfo(): { pin: number; tokens: number[]; container: Container } | undefined {
 			if (passOpen === 0) {
 				return undefined
@@ -3740,8 +3752,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 			return { pin: passPin, tokens, container: passContainer }
 		},
-		/** §14.2 deterministic disposal of an atom/computed record (the same
-		 * path the FinalizationRegistry takes for collected handles). */
+		/**
+		 * §14.2 deterministic disposal of an atom/computed record (the same
+		 * path the FinalizationRegistry takes for collected handles).
+		 */
 		reclaim(h: SignalHandle): void {
 			reclaimNode(h.id, M[h.id + C.GEN])
 		},
@@ -3770,10 +3784,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 			canonicalValue(h: SignalHandle): unknown {
 				return values[h.id >> 2]
 			},
-			/** Context sensitivity for the two-level suspense rule (owner
+			/**
+			 * Context sensitivity for the two-level suspense rule (owner
 			 * amendment): true while EXECUTING a render pass that includes at
 			 * least one deferred (transition) batch. Cold path — consulted only
-			 * when unboxing a pending box during render. */
+			 * when unboxing a pending box during render.
+			 */
 			inTransitionRender(): boolean {
 				if (passOpen === 0 || passExecuting === 0 || readCtx !== C.CTX_RENDER) {
 					return false
@@ -3789,12 +3805,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 				}
 				return false
 			},
-			/** The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
+			/**
+			 * The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
 			 * Canonical evaluations share one key; pass-world evaluations key on
 			 * the pass's INCLUDE MASK — the stable identity across restarts and
 			 * Suspense retries of one logical work (two interleaved works on one
 			 * root differ in batch sets, so they never alias; identical batch
-			 * sets ARE the same world, where sharing is correct). */
+			 * sets ARE the same world, where sharing is correct).
+			 */
 			useCacheKey(): string {
 				if (frameWorlds.length === 0) {
 					return 'canon'
@@ -3814,11 +3832,13 @@ export function createCosignalEngine(options?: EngineOptions) {
 			isLive(h: SignalHandle): boolean {
 				return isLiveNode(h.id)
 			},
-			/** Lazy state initializer evaluation (policy feature): UNTRACKED
+			/**
+			 * Lazy state initializer evaluation (policy feature): UNTRACKED
 			 * (no dep links, certs rolled back — safe inside any evaluation
 			 * or render context) and PURE w.r.t. the graph (writes throw;
 			 * always-on — the guard is one predictable-false compare on the
-			 * write path). */
+			 * write path).
+			 */
 			runInitializer<T>(fn: () => T): T {
 				++initDepth
 				try {
@@ -3859,14 +3879,18 @@ export function createCosignalEngine(options?: EngineOptions) {
 			forceSeqCounter: (n: number): void => {
 				seqCounter = n
 			},
-			/** Run the GC finalization path for a handle's record — the same
+			/**
+			 * Run the GC finalization path for a handle's record — the same
 			 * call the FinalizationRegistry makes (deterministic stand-in for
-			 * GC timing; a guarded skip registers the reclaim retry). */
+			 * GC timing; a guarded skip registers the reclaim retry).
+			 */
 			simulateFinalize: (h: SignalHandle): void => {
 				reclaimNode(h.id, M[h.id + C.GEN], true)
 			},
-			/** Number of per-world baseline entries a watcher holds (leak
-			 * tests: must not grow with retired batches). */
+			/**
+			 * Number of per-world baseline entries a watcher holds (leak
+			 * tests: must not grow with retired batches).
+			 */
 			watcherBaselineCount: (h: { id: number }): number =>
 				metas[h.id >> 3]?.lastBroadcast?.size ?? 0,
 			stats: (): Record<string, number> => ({

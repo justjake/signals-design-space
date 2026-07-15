@@ -74,8 +74,10 @@ afterAll(() => {
 	}
 })
 
-/** Emit FX2 with the same explicit TypeScript 7 invocation used by its
- * performance probes. */
+/**
+ * Emit FX2 with the same explicit TypeScript 7 invocation used by its
+ * performance probes.
+ */
 function emitFx2Smoke(dir: string, entry = 'fx2-smoke'): string {
 	writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n')
 	const config = path.join(dir, 'tsconfig.json')

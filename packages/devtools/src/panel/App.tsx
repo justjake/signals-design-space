@@ -6,9 +6,11 @@ import { ThemeDialog } from './ThemeDialog.tsx'
 import { GraphView } from './GraphView.tsx'
 import { LogView } from './LogView.tsx'
 
-/** The devtools panel: chrome (brand · Graph/Log tabs · theme · recording),
+/**
+ * The devtools panel: chrome (brand · Graph/Log tabs · theme · recording),
  * then the active view. Selecting a node anywhere focuses the Graph tab on it;
- * a node's "Open in Log" jumps to the Log filtered to it. */
+ * a node's "Open in Log" jumps to the Log filtered to it.
+ */
 export function App({ backend }: { backend: Backend }) {
 	const events = useBackend(backend) // re-render on each collector flush
 	const rootRef = useRef<HTMLDivElement>(null)

@@ -36,25 +36,35 @@ import {
 } from '../worlds.ts'
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
 
-/** One registered SignalScope instance (one per SignalScopeProvider in
+/**
+ * One registered SignalScope instance (one per SignalScopeProvider in
  * practice). The record is identity-stable for the scope's lifetime: it
  * serves as the ScopeContext value (so context changes never re-render
- * consumers) and as the key that render-world notes are validated against. */
+ * consumers) and as the key that render-world notes are validated against.
+ */
 export interface SignalScope {
-	/** The scope's reducer dispatch; draft ids delivered here become part
-	 * of the worlds its render passes carry. */
+	/**
+	 * The scope's reducer dispatch; draft ids delivered here become part
+	 * of the worlds its render passes carry.
+	 */
 	dispatch: (id: DraftId) => void
-	/** Keys this root's committed world (see
+	/**
+	 * Keys this root's committed world (see
 	 * SignalScopeProviderProps.container); null when the scope was mounted
-	 * without one. */
+	 * without one.
+	 */
 	container: object | null
-	/** True only while this scope's first-child commit marker confirms its
-	 * current render, before descendant layout effects advance hook stashes. */
+	/**
+	 * True only while this scope's first-child commit marker confirms its
+	 * current render, before descendant layout effects advance hook stashes.
+	 */
 	committing: boolean
 }
 
-/** Returned by registerReactSignals(): exposes captured errors and tears
- * the registration down. */
+/**
+ * Returned by registerReactSignals(): exposes captured errors and tears
+ * the registration down.
+ */
 export interface ReactSignalsHandle {
 	/** Errors captured from user callbacks and React roots; tests assert []. */
 	errors: unknown[]
@@ -64,16 +74,22 @@ export interface ReactSignalsHandle {
 const providers = new Set<SignalScope>()
 interface HostedDraft {
 	draft: Draft
-	/** The React transition object that owns this draft. Late deliveries
+	/**
+	 * The React transition object that owns this draft. Late deliveries
 	 * restore it so their dispatches join the original transition's
-	 * updates. */
+	 * updates.
+	 */
 	owner: object | null
-	/** Providers that received the draft and have not committed it yet;
-	 * the draft retires when this empties. */
+	/**
+	 * Providers that received the draft and have not committed it yet;
+	 * the draft retires when this empties.
+	 */
 	recipients: Set<SignalScope>
-	/** Every provider that received the draft at broadcast time. A scope
+	/**
+	 * Every provider that received the draft at broadcast time. A scope
 	 * mounted later is absent, and its subscribers rely on the retirement
-	 * fold notifying them, since none of their passes carried the draft. */
+	 * fold notifying them, since none of their passes carried the draft.
+	 */
 	audience: Set<SignalScope>
 }
 
@@ -93,18 +109,22 @@ function sharedInternals(): SharedInternals {
 	return secret ?? {}
 }
 
-/** Hook dispatchers observed during renders. React exposes its current
+/**
+ * Hook dispatchers observed during renders. React exposes its current
  * hooks dispatcher in the internals object's H slot, but H is non-null
  * even between renders (React parks a context-only dispatcher there), so
  * "H is set" alone cannot detect rendering. Instead, dispatchers are
  * captured while one of our hooks is executing — which only happens
  * inside a component body — and membership in this set identifies a live
  * component render. Dispatchers are per-React-build singletons, so one
- * capture covers every later render. */
+ * capture covers every later render.
+ */
 const renderDispatchers = new WeakSet<object>()
 
-/** Record "we are rendering under this dispatcher" — called from every
- * scope and hook render. */
+/**
+ * Record "we are rendering under this dispatcher" — called from every
+ * scope and hook render.
+ */
 function captureRenderDispatcher(): void {
 	const H = sharedInternals().H
 	if (H != null) {
@@ -131,7 +151,8 @@ function renderWriteGuard(): void {
 // Render-world notes: how a render pass declares which world it is.
 // ---------------------------------------------------------------------------
 
-/** A render pass's own declaration of which world it is executing in:
+/**
+ * A render pass's own declaration of which world it is executing in:
  * written by the pass's SignalScopeProvider render (whose reducer state
  * is the pass's world) and refreshed by every one of our hooks the pass
  * renders. Consumed by plain latest()/isPending() calls in render bodies, and by
@@ -151,7 +172,8 @@ function renderWriteGuard(): void {
  * - consuming a note requires a live hooks dispatcher, i.e. a render body.
  * When no valid note exists during a render, reads fall back to base
  * state. Wrong-toward-base is the safe direction; serving a stale world,
- * or leaking drafts into an urgent pass, is never acceptable. */
+ * or leaking drafts into an urgent pass, is never acceptable.
+ */
 interface RenderWorldNote {
 	scope: SignalScope | null
 	ids: readonly DraftId[]
@@ -181,10 +203,12 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 	}
 }
 
-/** Called by the scope's own render: authoritative for its pass, always
+/**
+ * Called by the scope's own render: authoritative for its pass, always
  * overwrites. An empty world clears the note instead of installing one —
  * a null note already means base state to every consumer, and steady-
- * state renders stay allocation-free. */
+ * state renders stay allocation-free.
+ */
 export function noteRenderWorld(scope: SignalScope, ids: readonly DraftId[]): void {
 	captureRenderDispatcher()
 	if (ids.length === 0) {
@@ -198,11 +222,13 @@ export function noteRenderWorld(scope: SignalScope, ids: readonly DraftId[]): vo
 	armNoteExpiry(note)
 }
 
-/** Called by every hook render: kills a foreign scope's leftover note,
+/**
+ * Called by every hook render: kills a foreign scope's leftover note,
  * and — when the hook carries world state of its own — re-establishes a
  * note for passes the scope itself did not render. The hook's ids come
  * from React's update queues for this very pass, so they can never run
- * ahead of it. */
+ * ahead of it.
+ */
 export function noteHookRender(scope: SignalScope | null, ids: readonly DraftId[] | null): void {
 	captureRenderDispatcher()
 	if (note !== null && note.scope !== scope) {
@@ -214,9 +240,11 @@ export function noteHookRender(scope: SignalScope | null, ids: readonly DraftId[
 	}
 }
 
-/** The valid note's ids for a scope, or null. Hooks resolve their render
+/**
+ * The valid note's ids for a scope, or null. Hooks resolve their render
  * value against this when present; it covers components mounting inside a
- * transition pass, whose own reducers never received the dispatch. */
+ * transition pass, whose own reducers never received the dispatch.
+ */
 export function renderPassIds(scope: SignalScope | null): readonly DraftId[] | null {
 	return note !== null && note.scope === scope ? note.ids : null
 }
@@ -232,9 +260,11 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
 // Draft wake dispatch
 // ---------------------------------------------------------------------------
 
-/** Test-only counter of draft-wake dispatches that actually reached a
+/**
+ * Test-only counter of draft-wake dispatches that actually reached a
  * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads
- * it. */
+ * it.
+ */
 export const draftWakeStats = { dispatches: 0 }
 
 /**
@@ -290,15 +320,19 @@ export function dispatchUrgent(dispatch: () => void): void {
 	}
 }
 
-/** A wake meaning "re-render against current state". Zero is never a
+/**
+ * A wake meaning "re-render against current state". Zero is never a
  * live draft id (they start at 1), so the reducer leaves it out of the id
  * set while still returning a fresh state object — producing a re-render
- * against whatever the queues say the world is now. */
+ * against whatever the queues say the world is now.
+ */
 export const REPAIR_WAKE: DraftId = 0
 
-/** What a hook last rendered: the world ids it resolved in and the value
+/**
+ * What a hook last rendered: the world ids it resolved in and the value
  * it showed. Late-subscription repair (correctSubscription) and the
- * notify predicate (resolutionDiffers) compare current state against it. */
+ * notify predicate (resolutionDiffers) compare current state against it.
+ */
 export interface RenderedResolution {
 	ids: readonly DraftId[]
 	value: unknown
@@ -378,10 +412,12 @@ export function resolutionDiffers(node: ReactiveNode, rendered: RenderedResoluti
 // Draft broadcast and per-root commit bookkeeping
 // ---------------------------------------------------------------------------
 
-/** Drafts created for React transition scopes, including the convenience
+/**
+ * Drafts created for React transition scopes, including the convenience
  * helpers. The values are Draft records, not ids: an entry dies with its
  * transition object (WeakMap), and handing the record straight to write
- * classification spares every drafted write an id lookup. */
+ * classification spares every drafted write an id lookup.
+ */
 const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
@@ -402,11 +438,13 @@ function ambientClassifier(): Draft | null {
 	return draft.state === 'open' ? draft : null
 }
 
-/** Send a new draft's id to every scope, dispatched inside the current
+/**
+ * Send a new draft's id to every scope, dispatched inside the current
  * React context so the updates join the transition. Scopes are the only
  * broadcast audience: value subscribers are woken per drafted atom
  * instead (see dispatchDraftWake), so a transition re-renders each root's
- * scope plus exactly the subscribers its writes touch. */
+ * scope plus exactly the subscribers its writes touch.
+ */
 export function broadcastDraft(draft: Draft): void {
 	// Prune finished drafts: an engine-side discard can finish a draft
 	// without ever visiting the host's bookkeeping.

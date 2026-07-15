@@ -17,18 +17,22 @@ export type ErrorBox = { kind: 'error'; error: unknown }
 export type SuspendedBox = {
 	kind: 'suspended'
 	thenable: PromiseLike<unknown>
-	/** Solid's STATUS_UNINITIALIZED analog, inverted: true once a real value
+	/**
+	 * Solid's STATUS_UNINITIALIZED analog, inverted: true once a real value
 	 * has ever committed for this node — refresh-pending boxes carry it so
-	 * boundaries can serve stale content instead of falling back. */
+	 * boundaries can serve stale content instead of falling back.
+	 */
 	hasLatest: boolean
 	/** The last committed value (meaningful iff hasLatest). */
 	latest: unknown
-	/** What the REACT BOUNDARY throws: a per-box cached gate chained AFTER
+	/**
+	 * What the REACT BOUNDARY throws: a per-box cached gate chained AFTER
 	 * the engine's settlement handler, so React's retry render is always
 	 * ordered after the settlement invalidate has landed (throwing the raw
 	 * thenable races: React can retry between resolution and the invalidate
 	 * microtask, re-suspend on an already-resolved thenable, and never
-	 * retry again). Identity-stable across retries (cached on the box). */
+	 * retry again). Identity-stable across retries (cached on the box).
+	 */
 	gate: PromiseLike<unknown>
 }
 
@@ -219,10 +223,12 @@ export function createAPI(engine: CosignalEngine) {
 		get materialized(): boolean {
 			return this._handle !== undefined
 		}
-		/** §13.8 SSR install: counts as materialization, the initializer is
+		/**
+		 * §13.8 SSR install: counts as materialization, the initializer is
 		 * SKIPPED — install transplants committed state, it is not a write
 		 * (deliberate asymmetry with set(), which RUNS the initializer for
-		 * the equality-drop contract; SPEC-RESOLUTIONS). */
+		 * the equality-drop contract; SPEC-RESOLUTIONS).
+		 */
 		installState(v: T): void {
 			if (this._handle === undefined && this._init !== undefined) {
 				this.mint(v, this._opts!)
@@ -343,8 +349,10 @@ export function createAPI(engine: CosignalEngine) {
 	// broadcast).
 	const joinSources = new WeakMap<PromiseLike<unknown>, PromiseLike<unknown>[]>()
 
-	/** Forward a pending dep into the active evaluation, if one is open.
-	 * Returns true when forwarded (the reader continues with undefined). */
+	/**
+	 * Forward a pending dep into the active evaluation, if one is open.
+	 * Returns true when forwarded (the reader continues with undefined).
+	 */
 	function forwardPending(th: PromiseLike<unknown>): boolean {
 		if (frameSp === 0) {
 			return false
@@ -499,19 +507,23 @@ export function createAPI(engine: CosignalEngine) {
 			instancesByHandle.set(this.handle, this)
 		}
 
-		/** refresh() support: drop every world's thenable slots so the next
+		/**
+		 * refresh() support: drop every world's thenable slots so the next
 		 * evaluation re-registers fresh fetches. The pendingJoins cache is
 		 * deliberately KEPT — it is identity infrastructure (same pending
 		 * source set ⇒ same joined thenable, forever); clearing it would mint
 		 * a new join for an identical set, a pending→pending identity change
-		 * that would spuriously re-broadcast (caught by the oracle fuzz). */
+		 * that would spuriously re-broadcast (caught by the oracle fuzz).
+		 */
 		clearUseSlots(): void {
 			this.useSlots = undefined
 		}
 
-		/** One thenable identity per evaluation outcome: the single pending
+		/**
+		 * One thenable identity per evaluation outcome: the single pending
 		 * source, or a node-cached join of the set (so retries re-see the same
-		 * object even with parallel fetches). */
+		 * object even with parallel fetches).
+		 */
 		private joinPending(parts: PromiseLike<unknown>[]): PromiseLike<unknown> {
 			// FLATTEN to the ultimate source set (see joinSources).
 			let flat: PromiseLike<unknown>[]
@@ -559,9 +571,11 @@ export function createAPI(engine: CosignalEngine) {
 			return joined
 		}
 
-		/** §12.3 (adapted): record-pending-and-return. Never throws mid-eval
+		/**
+		 * §12.3 (adapted): record-pending-and-return. Never throws mid-eval
 		 * for pending — parallel ctx.use calls all register their fetches
-		 * before pending surfaces on the node. */
+		 * before pending surfaces on the node.
+		 */
 		private useThenable<U>(thenable: PromiseLike<U>): U {
 			if (frameSp === 0) {
 				throw new Error('cosignal: ctx.use may only run inside a computed evaluation')
@@ -716,8 +730,10 @@ export function createAPI(engine: CosignalEngine) {
 	 * computeds this API did not create (Solid: refresh no-ops on plain
 	 * signals).
 	 */
-	/** The node's isPending probe computed (created if needed) — hooks
-	 * subscribe to it like any signal. */
+	/**
+	 * The node's isPending probe computed (created if needed) — hooks
+	 * subscribe to it like any signal.
+	 */
 	function pendingProbe(source: { handle: SignalHandle } | SignalHandle): Computed<boolean> {
 		const h = handleOfSource(source)
 		let probe = pendingProbes.get(h)
@@ -806,8 +822,10 @@ export function createAPI(engine: CosignalEngine) {
 	type Serializable = { handle: SignalHandle } | SignalHandle
 	const handleOf = (x: Serializable): SignalHandle => ('handle' in x ? x.handle : x)
 
-	/** §13.8 Server: capture committed leaf values. Keys are app-supplied
-	 * strings — debug labels are not identity, creation order is not stable. */
+	/**
+	 * §13.8 Server: capture committed leaf values. Keys are app-supplied
+	 * strings — debug labels are not identity, creation order is not stable.
+	 */
 	function serializeAtomState(
 		atoms: Record<string, Serializable>,
 		replacer?: (key: string, value: unknown) => unknown,
@@ -820,9 +838,11 @@ export function createAPI(engine: CosignalEngine) {
 		return JSON.stringify(out)
 	}
 
-	/** §13.8 Client: install serialized values into matching atoms. MUST run
+	/**
+	 * §13.8 Client: install serialized values into matching atoms. MUST run
 	 * before hydration so the first client render reads identical committed
-	 * values. Unknown keys warn; missing keys leave the constructor default. */
+	 * values. Unknown keys warn; missing keys leave the constructor default.
+	 */
 	function initializeAtomState(
 		json: string,
 		atoms: Record<string, { handle: { set(v: unknown): void } } | { set(v: unknown): void }>,

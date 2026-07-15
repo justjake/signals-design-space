@@ -93,10 +93,12 @@ function isWatched(n: ProducerNode): boolean {
 	return (n.flags & Flag.Watched) !== 0
 }
 
-/** The tier invariant promote/demote must maintain: for atoms and computeds
+/**
+ * The tier invariant promote/demote must maintain: for atoms and computeds
  * the Watched bit mirrors observerCount (watchers own their bit through
  * create/dispose). A path that set Watched without promote-validation would
- * resurrect the stale-Clean serve that promote exists to prevent. */
+ * resurrect the stale-Clean serve that promote exists to prevent.
+ */
 function expectTierInvariant(nodes: ProducerNode[]): void {
 	for (const n of nodes) {
 		if ((n.flags & Flag.Watching) !== 0) {
@@ -961,11 +963,13 @@ describe('watermark validation ordering (the changedAt/validAt discipline)', () 
 })
 
 describe('deps-from-eval invariant (test-side check, was a shipped dev assertion)', () => {
-	/** The invariant: a computed's deps list is exactly what its last
+	/**
+	 * The invariant: a computed's deps list is exactly what its last
 	 * evaluation read, in read order — evaluation is the only site that
 	 * creates or keeps dep edges. Checked from the test by walking the list,
 	 * per the owner's rule that invariant nets live in tests, not the
-	 * library. */
+	 * library.
+	 */
 	const depsOf = (node: { deps?: unknown }) => {
 		const out: unknown[] = []
 		type L = { dep: { label?: string }; nextDep?: L }

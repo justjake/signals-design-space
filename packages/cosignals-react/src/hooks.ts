@@ -41,8 +41,10 @@ import {
 // ---- activation -------------------------------------------------------------------
 
 export type CosignalReactHandle = {
-	/** The default browser instance's engine surface; the field keeps the
-	 * bindings' historical name. */
+	/**
+	 * The default browser instance's engine surface; the field keeps the
+	 * bindings' historical name.
+	 */
 	bridge: CosignalEngine
 	shim: Shim
 	dispose: () => void

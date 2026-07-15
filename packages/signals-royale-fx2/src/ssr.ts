@@ -24,8 +24,10 @@ export function serializeAtomState(
 	return JSON.stringify(out, replacer)
 }
 
-/** Install a value without running lazy initializers and without counting
- * as a write: no propagation, no equality check, no effects. */
+/**
+ * Install a value without running lazy initializers and without counting
+ * as a write: no propagation, no equality check, no effects.
+ */
 export function installState<T>(atom: Atom<T>, value: T): void {
 	assertSignalWriteAllowed()
 	const node = atom as unknown as AtomNode<T>

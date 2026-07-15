@@ -53,8 +53,10 @@ function stateIn(x: Signal<any> | Computed<any>, ids: readonly DraftId[]): unkno
 	return resolveState(nodeOf(x), worldOf(ids))
 }
 
-/** A drafted world's memo record for a plain value (the ResolvedState shape:
- * async flag bits clear, no throwable). */
+/**
+ * A drafted world's memo record for a plain value (the ResolvedState shape:
+ * async flag bits clear, no throwable).
+ */
 function valueState(value: unknown): { flags: number; value: unknown; throwable: null } {
 	return { flags: 0, value, throwable: null }
 }

@@ -92,11 +92,13 @@ interface UseValueState {
 	/** What the hook's most recent render resolved (committed or not). */
 	rendered: RenderedResolution
 	repairPending: boolean
-	/** What the committed tree shows for this hook. Advances only in the
+	/**
+	 * What the committed tree shows for this hook. Advances only in the
 	 * layout effect, so a transition's speculative values never enter it
 	 * while the transition is held. The notify predicate compares against
 	 * this, which keeps folds silent when the committed tree already shows
-	 * their values and keeps live appends from double-dispatching repairs. */
+	 * their values and keeps live appends from double-dispatching repairs.
+	 */
 	committed: RenderedResolution
 }
 
@@ -104,8 +106,10 @@ interface SignalEffectState {
 	effect: ScheduledEffect | null
 	/** The scope whose committed world the installed watcher currently uses. */
 	scope: SignalScope | null
-	/** The watcher owns dependency identity and edges. This is only its
-	 * current link head plus parallel per-root committed values. */
+	/**
+	 * The watcher owns dependency identity and edges. This is only its
+	 * current link head plus parallel per-root committed values.
+	 */
 	dependencies: Link | undefined
 	dependencyValues: unknown[]
 	dependencyCount: number
@@ -145,9 +149,11 @@ function signalEffectDependenciesChanged(state: SignalEffectState, world: World)
 	return false
 }
 
-/** Dispose a scheduled effect and release every hook-side reference it
+/**
+ * Dispose a scheduled effect and release every hook-side reference it
  * retained. Used both by React unmount and by the setup-throw path, where a
- * later cleanup hook in the same commit would never get a chance to mount. */
+ * later cleanup hook in the same commit would never get a chance to mount.
+ */
 function disposeSignalEffect(state: SignalEffectState): void {
 	const effect = state.effect
 	const scope = state.scope
@@ -174,10 +180,12 @@ function disposeSignalEffect(state: SignalEffectState): void {
 	}
 }
 
-/** These hooks cannot work without a SignalScopeProvider: the scope carries
+/**
+ * These hooks cannot work without a SignalScopeProvider: the scope carries
  * transition worlds, and a subscriber without one would have no channel
  * for them at all. Rendering a scope-consuming hook outside a scope is a
- * wiring error — fail loudly, at the hook, naming the fixes. */
+ * wiring error — fail loudly, at the hook, naming the fixes.
+ */
 function requireScope(hook: string): SignalScope {
 	const scope = useContext(ScopeContext)
 	if (scope === null) {
@@ -338,9 +346,11 @@ export function useValue<T>(x: Signal<T>): T {
 	return value as T
 }
 
-/** A component-scoped computed. No explicit disposal: an unwatched
+/**
+ * A component-scoped computed. No explicit disposal: an unwatched
  * computed only holds references toward its dependencies, so dropping it
- * at unmount makes it garbage-collectible. */
+ * at unmount makes it garbage-collectible.
+ */
 export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	requireScope('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -452,9 +462,11 @@ export function useSignalLayoutEffect(fn: () => void | (() => void)): void {
 	useSignalEffectImpl(fn, useLayoutEffect)
 }
 
-/** True while newer data exists behind the committed value of x: a
+/**
+ * True while newer data exists behind the committed value of x: a
  * pending transition draft on it, or an async refetch loading behind a
- * stale value. */
+ * stale value.
+ */
 export function useIsPending(x: Signal<any>): boolean {
 	const node = nodeOf(x)
 	noteHookRender(requireScope('useIsPending'), null)
@@ -500,8 +512,10 @@ export function useCommitted<T>(x: Signal<T>): T {
 	return snap as T
 }
 
-/** A component-owned atom: created once on mount, garbage-collected after
- * unmount when the component's references to it drop. */
+/**
+ * A component-owned atom: created once on mount, garbage-collected after
+ * unmount when the component's references to it drop.
+ */
 export function useAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
 	const atomRef = useRef<Atom<T> | null>(null)
 	atomRef.current ??= createAtom(initial, opts)

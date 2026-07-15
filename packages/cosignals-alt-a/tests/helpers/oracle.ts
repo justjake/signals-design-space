@@ -59,9 +59,11 @@ export type ComputedSpec = {
 	eqMod?: number
 }
 
-/** Oracle pending values carry their SOURCE SET (mirroring the engine's
+/**
+ * Oracle pending values carry their SOURCE SET (mirroring the engine's
  * set-keyed joined thenables): `pending:<sorted asyncgate node indexes>`.
- * Engine SuspendedBox ⇔ oracle pending; broadcast equality keys on the set. */
+ * Engine SuspendedBox ⇔ oracle pending; broadcast equality keys on the set.
+ */
 export const PENDING_PREFIX = 'oracle-pending:'
 export type OracleValue = number | string
 export function pendingOf(sources: Iterable<number>): string {
@@ -310,8 +312,10 @@ export class Oracle {
 		this.watchers.delete(id)
 	}
 
-	/** Derive the expected (watcher, token, value) broadcast set for a drain
-	 * whose relevant worlds are `relevantTokens` (0 = W0). Purely value-based. */
+	/**
+	 * Derive the expected (watcher, token, value) broadcast set for a drain
+	 * whose relevant worlds are `relevantTokens` (0 = W0). Purely value-based.
+	 */
 	expectedBroadcasts(
 		relevantTokens: number[],
 	): Array<{ watcher: number; token: number; value: unknown }> {

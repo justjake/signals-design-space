@@ -303,8 +303,10 @@ describe('ctx.use', () => {
 // still resolves to the same pending suspension is NOT a flip. Engine-direct — the reference
 // model deliberately models no suspense (declared in the oracle README).
 
-/** Fresh engine for the engine-direct tests: finish any leftover episode,
- * then reset (one fresh engine per test). */
+/**
+ * Fresh engine for the engine-direct tests: finish any leftover episode,
+ * then reset (one fresh engine per test).
+ */
 function freshEngine() {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {

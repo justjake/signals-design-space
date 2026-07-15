@@ -174,8 +174,10 @@ export class PackedTracer {
 		return 0
 	}
 
-	/** Lazy decoder view (§16.2): one object materialized on demand; returns
-	 * undefined for ids that were overwritten or never emitted. */
+	/**
+	 * Lazy decoder view (§16.2): one object materialized on demand; returns
+	 * undefined for ids that were overwritten or never emitted.
+	 */
 	decode(id: number): TraceEvent | undefined {
 		if (id < 1 || id >= this.nextId) {
 			return undefined
@@ -227,8 +229,10 @@ export class PackedTracer {
 		return out
 	}
 
-	/** Sealed chunks (SESSION): immutable once full — safe to stream or
-	 * serialize while recording continues. */
+	/**
+	 * Sealed chunks (SESSION): immutable once full — safe to stream or
+	 * serialize while recording continues.
+	 */
 	sealedChunks(): readonly Int32Array[] {
 		if (this.mode !== 'session') {
 			return []
@@ -238,15 +242,19 @@ export class PackedTracer {
 		return this.chunks.slice(0, this.chunks.length - 1)
 	}
 
-	/** First id that is no longer overwrite-stable after a degrade: the start
-	 * of the final (now ring) chunk. Sealed chunks below it never move. */
+	/**
+	 * First id that is no longer overwrite-stable after a degrade: the start
+	 * of the final (now ring) chunk. Sealed chunks below it never move.
+	 */
 	private lossBoundary(): number {
 		return (this.chunks.length - 1) * this.chunkSize
 	}
 
-	/** G-21 — losslessness is provable, not promised: a SESSION capture is
+	/**
+	 * G-21 — losslessness is provable, not promised: a SESSION capture is
 	 * complete iff its ids form one gap-free range up to the loss boundary
-	 * announced by the truncation-marker (or the whole capture when none). */
+	 * announced by the truncation-marker (or the whole capture when none).
+	 */
 	verifyComplete(): {
 		complete: boolean
 		from: number
@@ -274,8 +282,10 @@ export class PackedTracer {
 		return { complete, from: 1, to, truncatedAt }
 	}
 
-	/** Walk CAUSE edges from an event back to its root cause (§16.2's
-	 * cause-chain queries, as a decoder view over the packed records). */
+	/**
+	 * Walk CAUSE edges from an event back to its root cause (§16.2's
+	 * cause-chain queries, as a decoder view over the packed records).
+	 */
 	causeChain(id: number): TraceEvent[] {
 		const chain: TraceEvent[] = []
 		let cur = this.decode(id)
@@ -308,8 +318,10 @@ export class PackedTracer {
 
 let installed: PackedTracer | undefined
 
-/** Install a recorder into the core's tracer slot. Whole-boot captures must
- * call this before the engine's first operation (§16.2 recipe). */
+/**
+ * Install a recorder into the core's tracer slot. Whole-boot captures must
+ * call this before the engine's first operation (§16.2 recipe).
+ */
 export function startTracing(options: TraceOptions): PackedTracer {
 	installed = new PackedTracer(options)
 	__setTracer(installed)

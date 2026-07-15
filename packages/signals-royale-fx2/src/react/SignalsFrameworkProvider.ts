@@ -38,20 +38,24 @@ import {
 	type ReactRootConnection,
 } from './host.ts'
 
-/** Reducer state for a connection or hook: the live draft ids delivered to it
- * so far, i.e. the world its render passes carry. */
+/**
+ * Reducer state for a connection or hook: the live draft ids delivered to it
+ * so far, i.e. the world its render passes carry.
+ */
 export interface WorldState {
 	ids: readonly DraftId[]
 }
 
 export const EMPTY_WORLD: WorldState = { ids: [] }
 
-/** Shared by the connection and every useValue hook: accumulate live draft
+/**
+ * Shared by the connection and every useValue hook: accumulate live draft
  * ids and prune dead ones — retired and discarded drafts resolve to base
  * state anyway, and a long-lived subscriber must not grow history
  * forever. The ids array changes only with membership, but the wrapper is
  * always fresh so a re-dispatched id still restarts the pass (see the
- * header). */
+ * header).
+ */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	let live: DraftId[] | undefined
 	let add = isLiveDraft(id)
@@ -81,18 +85,22 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	return { ids: live ?? prev.ids }
 }
 
-/** The nearest root connection, or null outside a provider. Hooks consume
- * it, and providers use it to detect an ancestor provider. */
+/**
+ * The nearest root connection, or null outside a provider. Hooks consume
+ * it, and providers use it to detect an ancestor provider.
+ */
 export const ReactRootConnectionContext = React.createContext<ReactRootConnection | null>(null)
 
 export interface SignalsFrameworkProviderProps {
 	children?: React.ReactNode
 }
 
-/** A separate first-child fiber gives this layout effect commit order
+/**
+ * A separate first-child fiber gives this layout effect commit order
  * before the application subtree. Registration lives on the same stable
  * marker so the connection is registered before its first confirmation
- * and is unregistered when the provider unmounts. */
+ * and is unregistered when the provider unmounts.
+ */
 function ReactRootCommit({
 	connection,
 	world,
@@ -112,7 +120,8 @@ function bumpWake(n: number): number {
 	return (n + 1) | 0
 }
 
-/** Null-rendering last child of the provider: hosts the engine's deferred
+/**
+ * Null-rendering last child of the provider: hosts the engine's deferred
  * effect drains in this root's own commit phases. A lane pump request
  * re-renders this component (registerEffectHost), at the same ambient
  * priority as the subscriber wakes from the same write, so React batches
@@ -122,7 +131,8 @@ function bumpWake(n: number): number {
  * child it also renders in every pass the provider renders, so effects
  * queued by a retirement fold (the first-child marker's layout effect)
  * drain in that very commit. Not memoized: a spurious re-render costs two
- * empty drain calls. */
+ * empty drain calls.
+ */
 function DeferredEffectHost(): null {
 	const [, wake] = React.useReducer(bumpWake, 0)
 	React.useLayoutEffect(() => registerEffectHost(wake), [wake])
@@ -131,8 +141,10 @@ function DeferredEffectHost(): null {
 	return null
 }
 
-/** Connect a React subtree to the signals runtime. A descendant provider
- * would replace this connection for part of the subtree, so nesting throws. */
+/**
+ * Connect a React subtree to the signals runtime. A descendant provider
+ * would replace this connection for part of the subtree, so nesting throws.
+ */
 export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
 	if (React.useContext(ReactRootConnectionContext) !== null) {
 		const error = new Error(
@@ -165,8 +177,10 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
 	)
 }
 
-/** A React root whose render() wraps the tree in a
- * SignalsFrameworkProvider. */
+/**
+ * A React root whose render() wraps the tree in a
+ * SignalsFrameworkProvider.
+ */
 export interface WrappedRoot {
 	render(node: React.ReactNode): void
 	unmount(): void

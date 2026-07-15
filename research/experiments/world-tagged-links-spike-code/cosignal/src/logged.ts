@@ -171,20 +171,26 @@ export type RootId = string;
 export type PassId = number;
 export type WatcherId = number;
 export type EffectId = number;
-/** A point on the one global sequence line (receipt seqs, pins, retirement
- * stamps, write clocks, the committed-advance counter). */
+/**
+ * A point on the one global sequence line (receipt seqs, pins, retirement
+ * stamps, write clocks, the committed-advance counter).
+ */
 export type Seq = number;
 /** Episode counter: bumped at quiescence when the overlay planes bulk-reset. */
 export type Epoch = number;
 /** A root's commit generation (bumped at every per-root commit). */
 export type CommitGen = number;
-/** A 31-bit slot set: bit i = slot i. In per-node touched words bit 31 is
- * the taint bit (see SlotBits). */
+/**
+ * A 31-bit slot set: bit i = slot i. In per-node touched words bit 31 is
+ * the taint bit (see SlotBits).
+ */
 export type SlotSet = number;
-/** A premultiplied kernel record id — already multiplied by the kernel's
+/**
+ * A premultiplied kernel record id — already multiplied by the kernel's
  * record stride so it indexes the kernel's arrays directly (index.ts
  * vocabulary). The base kernel's node id currency (`Atom._id`); distinct
- * from the overlay's dense `NodeId`. */
+ * from the overlay's dense `NodeId`.
+ */
 export type KernelId = number;
 /** Per-walk visited generation (walk termination without Set allocations). */
 type WalkGen = number;
@@ -216,8 +222,10 @@ export type Receipt = {
 	retiredSeq: Seq | undefined;
 };
 
-/** Op-kind tags for the packed receipt column. Same-file const enum so every
- * esbuild-based toolchain inlines the codes as literals. */
+/**
+ * Op-kind tags for the packed receipt column. Same-file const enum so every
+ * esbuild-based toolchain inlines the codes as literals.
+ */
 const enum OpKind {
 	SET = 0,
 	UPDATE = 1,
@@ -232,11 +240,13 @@ const enum OpKind {
  * path.
  */
 export class Tape {
-	/** Live window: entries [start, n). Compaction advances `start`; the
+	/**
+	 * Live window: entries [start, n). Compaction advances `start`; the
 	 * arrays rebase (fresh packed slices) only when the dead prefix crosses
 	 * the amortization threshold — never a per-retirement memmove
 	 * (shrink-in-place cycling drops V8 arrays into dictionary mode, its
-	 * slow hash-map representation; measured at ~10µs per drop). */
+	 * slow hash-map representation; measured at ~10µs per drop).
+	 */
 	start = 0;
 	n = 0;
 	kinds: OpKind[] = [];
@@ -317,17 +327,21 @@ export class AtomNode {
 	/** The folded floor of the tape: retired, compacted history every world sees. */
 	base: Value;
 	baseSeq: Seq = 0;
-	/** Packed receipt columns (the engine truth; tests/diagnostics materialize
+	/**
+	 * Packed receipt columns (the engine truth; tests/diagnostics materialize
 	 * them via `tp.materialize()`; the referee's model-shaped view lives in
-	 * tests/model-view.ts). */
+	 * tests/model-view.ts).
+	 */
 	tp = new Tape();
 	equals: Equals;
 	/** True iff `equals` is the default Object.is (write fast path). */
 	eqIsDefault: boolean;
 	reducer: Reducer | undefined = undefined;
-	/** Per-atom retirement stamp, minted at every retirement fold touching it
+	/**
+	 * Per-atom retirement stamp, minted at every retirement fold touching it
 	 * (a retirement changes visibility without minting new receipts, so memo
-	 * fingerprints must incorporate it). */
+	 * fingerprints must incorporate it).
+	 */
 	retirementStamp: Seq = 0;
 	/** The kernel-backed newest-world storage this overlay rides. */
 	handle: Atom<Value>;
@@ -364,15 +378,19 @@ export type Token = {
 	committedFlag: boolean | undefined;
 	slot: SlotId | undefined;
 	retiredSeq: Seq | undefined;
-	/** Sequence of this token's last receipt (0 = none). The mount fixup's
+	/**
+	 * Sequence of this token's last receipt (0 = none). The mount fixup's
 	 * fast-path clock check reads this per committing-pass member token,
 	 * because a token whose first write landed mid-render has no slot in the
-	 * pass's captured slot sets (see mountFixup). */
+	 * pass's captured slot sets (see mountFixup).
+	 */
 	lastWriteSeq: Seq;
 	/** Atoms this token appended to (may hold benign duplicates; deduped at retirement). */
 	atomsTouched: AtomNode[];
-	/** Un-compacted receipts still on tapes. Receipts reference tokens by id,
-	 * so the token record must outlive them (reclamation gate). */
+	/**
+	 * Un-compacted receipts still on tapes. Receipts reference tokens by id,
+	 * so the token record must outlive them (reclamation gate).
+	 */
 	liveReceipts: number;
 	ambient: boolean;
 };
@@ -397,22 +415,30 @@ export type WorldMemo = {
 	compValues: Value[];
 };
 
-/** One entry of the 31-slot recycling table a written batch occupies (see
- * the header's SLOT/INTERN/TENANT definitions). */
+/**
+ * One entry of the 31-slot recycling table a written batch occupies (see
+ * the header's SLOT/INTERN/TENANT definitions).
+ */
 export type SlotMeta = {
 	id: SlotId;
 	tenant: TokenId | undefined;
-	/** Claim sequence — a point on the shared timeline minted at every
+	/**
+	 * Claim sequence — a point on the shared timeline minted at every
 	 * intern (the mint itself is load-bearing for model parity: both sides
 	 * spend one sequence per claim). The engine never reads the stored
 	 * value; the oracle's `checkInvariants` tenancy orderings consult it
-	 * through the test-side model view. */
+	 * through the test-side model view.
+	 */
 	claimSeq: Seq;
-	/** Sequence of the last write under this slot; zeroed when a new tenant
-	 * claims it (memo validation compares it against evaluation stamps). */
+	/**
+	 * Sequence of the last write under this slot; zeroed when a new tenant
+	 * claims it (memo validation compares it against evaluation stamps).
+	 */
 	writeClock: Seq;
-	/** Dirt watermark carried across tenants: touched bits for this slot may
-	 * only be cleared once every live pin postdates this retirement. */
+	/**
+	 * Dirt watermark carried across tenants: touched bits for this slot may
+	 * only be cleared once every live pin postdates this retirement.
+	 */
 	carriedMaxRetiredSeq: Seq;
 	releasePending: boolean;
 };
@@ -422,9 +448,11 @@ export type PassState = 'open' | 'yielded' | 'ended';
 export type Pass = {
 	id: PassId;
 	root: RootId;
-	/** The pin — the timeline position frozen at pass start; observed for the
+	/**
+	 * The pin — the timeline position frozen at pass start; observed for the
 	 * pass's whole life, across yields, so a paused-and-resumed render never
-	 * drifts. */
+	 * drifts.
+	 */
 	pin: Seq;
 	maskTokens: Set<TokenId>;
 	maskSlots: Set<SlotId>;
@@ -442,18 +470,22 @@ export type Pass = {
 
 export type RootState = {
 	id: RootId;
-	/** Per-root lock-in rows: batches this root has committed but that are
+	/**
+	 * Per-root lock-in rows: batches this root has committed but that are
 	 * still live elsewhere (cleared at retirement, when the retired clause
-	 * subsumes membership). */
+	 * subsumes membership).
+	 */
 	committedTokens: Set<TokenId>;
 	commitGen: CommitGen;
 	/** Bit form of committedSlotsNow (maintained at commit/retire). */
 	committedBits: SlotSet;
-	/** Member slots written since the last drain. A write into a slot that is
+	/**
+	 * Member slots written since the last drain. A write into a slot that is
 	 * already a committed member changes committed truth immediately, so the
 	 * next durable drain must reconcile everything downstream of it (the
 	 * reference model's full observer scan catches this at any
-	 * retirement/commit; the engine keeps the precise dirty set instead). */
+	 * retirement/commit; the engine keeps the precise dirty set instead).
+	 */
 	committedDirtySlots: SlotSet;
 	/** Committed-for-root memo plane (re-keyed by commitGen). */
 	memos: Map<NodeId, WorldMemo>;
@@ -473,16 +505,20 @@ export class Watcher {
 	name: string;
 	readonly root: RootId;
 	readonly node: NodeId;
-	/** Kernel record id of the watched ATOM node (0 for computed-node
+	/**
+	 * Kernel record id of the watched ATOM node (0 for computed-node
 	 * watchers): the observation-union retain target for the `live` setter.
-	 * The kernel side no-ops for atoms carrying no observed-lifecycle effect. */
+	 * The kernel side no-ops for atoms carrying no observed-lifecycle effect.
+	 */
 	readonly kernelAtom: number;
 	private _live = false;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
-	/** Per-(watcher, slot) delivery dedup bits, one int word: a second write
+	/**
+	 * Per-(watcher, slot) delivery dedup bits, one int word: a second write
 	 * in the same slot delivers again only if no scheduled-but-unstarted
-	 * render will fold it anyway. */
+	 * render will fold it anyway.
+	 */
 	dedupBits: SlotSet = 0;
 
 	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, kernelAtom: number, value: Value, snapshot: WatcherSnapshot) {
@@ -544,8 +580,10 @@ export type CoreEffect = {
 	queuedWalk: WalkGen;
 };
 
-/** A world: one self-consistent assignment of values to all atoms, computed
- * by replaying exactly the receipts that world may see, in timeline order. */
+/**
+ * A world: one self-consistent assignment of values to all atoms, computed
+ * by replaying exactly the receipts that world may see, in timeline order.
+ */
 export type World =
 	| { kind: 'newest' }
 	| { kind: 'pass'; pass: Pass }
@@ -554,9 +592,11 @@ export type World =
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
-/** Bit constants for slot bit-sets (mask/included/committed/dedup words) and
+/**
+ * Bit constants for slot bit-sets (mask/included/committed/dedup words) and
  * per-node touched words: bit i (0–30) = slot i; in touched words bit 31 is
- * the taint bit. Same-file const enum so the masks inline as literals. */
+ * the taint bit. Same-file const enum so the masks inline as literals.
+ */
 const enum SlotBits {
 	/** Mask of all 31 slot bits (bits 0–30): strips the taint bit from a touched word. */
 	SLOT_MASK = 0x7fffffff,
@@ -568,8 +608,10 @@ const enum SlotBits {
 	MSB_INDEX = 31,
 }
 
-/** The observable event stream (same shapes as the reference model's events,
- * so the two can be compared entry by entry). */
+/**
+ * The observable event stream (same shapes as the reference model's events,
+ * so the two can be compared entry by entry).
+ */
 export type BridgeEvent =
 	| { type: 'write'; node: string; token: TokenId; slot: SlotId; seq: Seq }
 	| { type: 'write-dropped'; node: string; token: TokenId }
@@ -649,8 +691,10 @@ const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and sl
 
 /** The bridge whose registered atoms the host hooks route for (one active). */
 let activeBridge: CosignalBridge | undefined;
-/** True while the bridge itself is applying a logged write to the kernel
- * (the host write hook's recursion guard: the apply re-enters `Atom.set`). */
+/**
+ * True while the bridge itself is applying a logged write to the kernel
+ * (the host write hook's recursion guard: the apply re-enters `Atom.set`).
+ */
 let bridgeApplying = false;
 /** The public registerReactBridge() has been consumed (it may run only once). */
 let publiclyRegistered = false;
@@ -778,11 +822,13 @@ export class CosignalBridge {
 	watchers = new Map<WatcherId, Watcher>();
 	reactEffects = new Map<EffectId, ReactEffect>();
 	coreEffects = new Map<EffectId, CoreEffect>();
-	/** The retained BridgeEvent log. Populated only while a referee retains
+	/**
+	 * The retained BridgeEvent log. Populated only while a referee retains
 	 * events (`setRetainEvents(true)`); a tracer attached without a referee
 	 * mints events but consumes them live at the `log()` waist, retaining
 	 * nothing here (fixed memory — the tracer's ring/session buffers hold the
-	 * capture). */
+	 * capture).
+	 */
 	events: BridgeEvent[] = [];
 
 	/**
@@ -853,9 +899,11 @@ export class CosignalBridge {
 		this.notifyMsgs[i] = msg;
 	}
 
-	/** Invokes queued listeners at the end of the public operation. A nested
+	/**
+	 * Invokes queued listeners at the end of the public operation. A nested
 	 * public operation started BY a listener appends behind the live bound
-	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
+	 * and drains in the same sweep (the flushing flag stops nested sweeps).
+	 */
 	private flushNotify(): void {
 		if (this.notifyN === 0 || this.notifyFlushing) return;
 		this.notifyFlushing = true;
@@ -892,8 +940,10 @@ export class CosignalBridge {
 	mode: 'direct' | 'logged' = 'direct';
 	/** The one global sequence line every receipt/pin/stamp is a point on. */
 	seq: Seq = 0;
-	/** Committed-advance counter, in sequence units: bumped whenever committed
-	 * truth moves (per-root commit, or a retirement that changed history). */
+	/**
+	 * Committed-advance counter, in sequence units: bumped whenever committed
+	 * truth moves (per-root commit, or a retirement that changed history).
+	 */
 	cas: Seq = 0;
 	/** Episode counter; bumped at quiescence when the planes bulk-reset. */
 	epoch: Epoch = 0;
@@ -905,18 +955,22 @@ export class CosignalBridge {
 	private outList: (NodeId[] | undefined)[] = [];
 	/** Reverse adjacency (mount-fixup dependency closures). */
 	private inList: (NodeId[] | undefined)[] = [];
-	/** The touched word per node: bits 0–30 = "a live write in this slot can
+	/**
+	 * The touched word per node: bits 0–30 = "a live write in this slot can
 	 * reach this node", bit 31 = taint (an untracked read of pending state —
-	 * conservatively poisons the fast paths). */
+	 * conservatively poisons the fast paths).
+	 */
 	private touched: SlotSet[] = [0];
 	/** Per-walk visited generation column (walk termination without Sets). */
 	private lastWalk: WalkGen[] = [0];
 	private walkGen: WalkGen = 0;
-	/** Per-slot touched lists (node ids). "Dirt" = a slot's conservative
+	/**
+	 * Per-slot touched lists (node ids). "Dirt" = a slot's conservative
 	 * touched bits and lists; the KEEP-THE-DIRT discipline (referenced
 	 * wherever dirt could be cleared): dirt may only be cleared once it is
 	 * provably irrelevant to every live pin — some paused render may still
-	 * depend on the conservative coverage. */
+	 * depend on the conservative coverage.
+	 */
 	private slotTouched: NodeId[][] = [];
 	/** Nodes by id (dense array twin of `nodes`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
@@ -927,20 +981,24 @@ export class CosignalBridge {
 	private effectQueue: CoreEffect[] = [];
 	/** Atoms with a non-empty tape (compaction candidates). */
 	private dirtyAtoms = new Set<AtomNode>();
-	/** The one open (non-ended) pass per root — React renders one tree per
-	 * root at a time; a same-root restart is a new pass. */
+	/**
+	 * The one open (non-ended) pass per root — React renders one tree per
+	 * root at a time; a same-root restart is a new pass.
+	 */
 	private openPassByRoot = new Map<RootId, Pass>();
 	private liveTokenCount = 0;
 	private parkedCount = 0;
 	/** Last-token cache (windowed writes hit one token repeatedly). */
 	private lastTokenId = 0;
 	private lastTokenRef: Token | undefined = undefined;
-	/** Optional compaction observer (referee/diagnostics seam): called once
+	/**
+	 * Optional compaction observer (referee/diagnostics seam): called once
 	 * per receipt as it folds into base and leaves the tape. The oracle's
 	 * retention invariant needs the full history; its archive mirror lives
 	 * OUTSIDE the engine (tests/model-view.ts), fed by this hook — keeping
 	 * every compacted receipt in-engine would grow without bound. Production
-	 * bridges leave it undefined and retain nothing. */
+	 * bridges leave it undefined and retain nothing.
+	 */
 	onCompact: ((atom: AtomNode, entry: Receipt) => void) | undefined = undefined;
 
 	// ---- quiet mode (Phase 1b) --------------------------------------------------
@@ -1043,8 +1101,10 @@ export class CosignalBridge {
 	writeClassifier: ((atom: Atom<unknown>, op: Op) => void) | undefined;
 	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
 	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
-	/** Observes every routed public read (node, world value) — the bindings
-	 * feed evaluation read-logs / effect dependency snapshots from it. */
+	/**
+	 * Observes every routed public read (node, world value) — the bindings
+	 * feed evaluation read-logs / effect dependency snapshots from it.
+	 */
 	readObserver: ((node: AtomNode, value: Value) => void) | undefined;
 
 	private nextNode = 1;
@@ -1079,17 +1139,21 @@ export class CosignalBridge {
 		this.syncReadRouting();
 	}
 
-	/** Arms/disarms the core's host read hook: armed while an evaluation
+	/**
+	 * Arms/disarms the core's host read hook: armed while an evaluation
 	 * world is on stack OR a provider could answer — so a provider-less
-	 * quiet host costs reads exactly one undefined-check. */
+	 * quiet host costs reads exactly one undefined-check.
+	 */
 	private syncReadRouting(): void {
 		if (activeBridge !== this) return;
 		const armed = this.activeWorld !== undefined || this.worldProvider !== undefined;
 		__setHostRead(armed ? hostReadImpl : undefined);
 	}
 
-	/** The world a routed read resolves in RIGHT NOW: the evaluation world on
-	 * stack, else whatever the provider derives from the live call context. */
+	/**
+	 * The world a routed read resolves in RIGHT NOW: the evaluation world on
+	 * stack, else whatever the provider derives from the live call context.
+	 */
 	private effectiveWorld(): World | undefined {
 		if (this.activeWorld !== undefined) return this.activeWorld;
 		const p = this.worldProvider;
@@ -1242,8 +1306,10 @@ export class CosignalBridge {
 		return node;
 	}
 
-	/** The reducer is fixed at creation: dispatched actions are replayed
-	 * through it per world, so a swappable reducer would make worlds disagree. */
+	/**
+	 * The reducer is fixed at creation: dispatched actions are replayed
+	 * through it per world, so a swappable reducer would make worlds disagree.
+	 */
 	reducerAtom(name: string, reducer: Reducer, initial: Value): AtomNode {
 		const node = this.atom(name, initial);
 		node.reducer = reducer;
@@ -1267,8 +1333,10 @@ export class CosignalBridge {
 
 	// ---------------------------------------------------- worlds and folds
 
-	/** The pass's included set = its render mask ∪ the committed slots it
-	 * captured at start: the batches this render is allowed to see. */
+	/**
+	 * The pass's included set = its render mask ∪ the committed slots it
+	 * captured at start: the batches this render is allowed to see.
+	 */
 	includedSet(pass: Pass): Set<SlotId> {
 		return new Set([...pass.maskSlots, ...pass.capturedCommittedSlots]);
 	}
@@ -1283,9 +1351,11 @@ export class CosignalBridge {
 		return out;
 	}
 
-	/** Runs an updater/reducer/equals under the fold-purity guard: signal
+	/**
+	 * Runs an updater/reducer/equals under the fold-purity guard: signal
 	 * reads and writes inside these callbacks throw, because they are
-	 * replayed per world and must stay pure. */
+	 * replayed per world and must stay pure.
+	 */
 	private inCallback<T>(fn: () => T): T {
 		const prev = this.inFoldCallback;
 		this.inFoldCallback = true;
@@ -1413,9 +1483,11 @@ export class CosignalBridge {
 		return this.inCallback(() => __hostRunFold(() => reducer(prev, payload)));
 	}
 
-	/** Reads an atom's newest value straight from the kernel — the core's
+	/**
+	 * Reads an atom's newest value straight from the kernel — the core's
 	 * host-side read seam, which the world-routing hook can never intercept
-	 * (no seam toggling around the call). */
+	 * (no seam toggling around the call).
+	 */
 	private kernelValueOf(handle: Atom<Value>): Value {
 		return __hostReadNewest(handle);
 	}
@@ -1453,8 +1525,10 @@ export class CosignalBridge {
 		return undefined; // mountFix worlds are one-shot
 	}
 
-	/** Quiet check for pass worlds: every included slot's write clock ≤
-	 * memo.seq means nothing this world can see was written since the memo. */
+	/**
+	 * Quiet check for pass worlds: every included slot's write clock ≤
+	 * memo.seq means nothing this world can see was written since the memo.
+	 */
 	private passClocksQuiet(pass: Pass, memoSeq: Seq): boolean {
 		let bits = pass.includedBits;
 		while (bits !== 0) {
@@ -1465,8 +1539,10 @@ export class CosignalBridge {
 		return true;
 	}
 
-	/** Quiet check for committed worlds: no committed-truth advance AND no
-	 * member-slot write since the memo was stamped. */
+	/**
+	 * Quiet check for committed worlds: no committed-truth advance AND no
+	 * member-slot write since the memo was stamped.
+	 */
 	private committedClocksQuiet(root: RootState, memoSeq: Seq): boolean {
 		if (this.cas > memoSeq) return false;
 		let bits = root.committedBits;
@@ -1878,9 +1954,11 @@ export class CosignalBridge {
 		this.weakOutList[dep]!.push(dependent);
 	}
 
-	/** Marking walk scratch. The walk visits a node only for bits it does not
+	/**
+	 * Marking walk scratch. The walk visits a node only for bits it does not
 	 * already have (`newBits & ~touched(n)`); bits only ever turn on within an
-	 * episode (monotone), so the walk terminates without a visited set. */
+	 * episode (monotone), so the walk terminates without a visited set.
+	 */
 	private markStackN: NodeId[] = [];
 	private markStackB: SlotSet[] = [];
 
@@ -2005,10 +2083,12 @@ export class CosignalBridge {
 		return min;
 	}
 
-	/** Mint a batch token. At most 31 live at once — React schedules each
+	/**
+	 * Mint a batch token. At most 31 live at once — React schedules each
 	 * batch on one of its 31 lanes, so more can never be in flight. (The
 	 * lane/priority itself stays React's: the engine never consults it —
-	 * scheduling decisions ride the shim's forkToken map.) */
+	 * scheduling decisions ride the shim's forkToken map.)
+	 */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
 		if (this.mode !== 'logged') throw new BridgeScheduleError('batches exist only in logged mode — register the React bridge first');
 		if (this.liveTokenCount >= SLOT_COUNT) {
@@ -2151,10 +2231,12 @@ export class CosignalBridge {
 		if (this.notifyN !== 0) this.flushNotify();
 	}
 
-	/** Value-gated observer reconciliation for a quiet fold: committed truth
+	/**
+	 * Value-gated observer reconciliation for a quiet fold: committed truth
 	 * moved for every root, and no slot/walk state exists to scope candidates,
 	 * so every live watcher and committed React effect re-checks directly —
-	 * the same compare-and-correct blocks as drainCommittedObservers. */
+	 * the same compare-and-correct blocks as drainCommittedObservers.
+	 */
 	private quietDrain(): void {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
@@ -2174,10 +2256,12 @@ export class CosignalBridge {
 		}
 	}
 
-	/** A write belongs to the batch context it executes in; a bare write has
+	/**
+	 * A write belongs to the batch context it executes in; a bare write has
 	 * none, so it joins the ambient default batch — unless the bridge is
 	 * QUIET, in which case the write folds directly (no ambient batch is
-	 * minted while nothing is pending). */
+	 * minted while nothing is pending).
+	 */
 	bareWrite(node: AtomNode, op: Op): void {
 		if (this.quiet) {
 			this.__quietWrite(
@@ -2202,8 +2286,10 @@ export class CosignalBridge {
 		this.write(ambient.id, node, op);
 	}
 
-	/** Action-scope write: classifies into the action's batch explicitly
-	 * (usable after an await); throws once the action has settled. */
+	/**
+	 * Action-scope write: classifies into the action's batch explicitly
+	 * (usable after an await); throws once the action has settled.
+	 */
 	scopeWrite(tokenId: TokenId, node: AtomNode, op: Op): void {
 		const t = this.token(tokenId);
 		if (!t.action) throw new BridgeScheduleError('scope writes require an action token');
@@ -2327,9 +2413,11 @@ export class CosignalBridge {
 		this.flushNotify();
 	}
 
-	/** The one K0 write site: routes through the core's public write path
+	/**
+	 * The one K0 write site: routes through the core's public write path
 	 * (index.ts's policy layer), so equality drop and effect flush apply; the
-	 * bridgeApplying guard makes the host write hook wave it through. */
+	 * bridgeApplying guard makes the host write hook wave it through.
+	 */
 	private applyToKernel(node: AtomNode, value: Value): void {
 		const saved = bridgeApplying;
 		bridgeApplying = true;
@@ -2451,8 +2539,10 @@ export class CosignalBridge {
 		return p;
 	}
 
-	/** Yield/resume edges: while yielded, code that runs in the gap (event
-	 * handlers, other passes) is "not in render" for this pass. */
+	/**
+	 * Yield/resume edges: while yielded, code that runs in the gap (event
+	 * handlers, other passes) is "not in render" for this pass.
+	 */
 	passYield(id: PassId): void {
 		const p = this.pass(id);
 		if (p.state !== 'open') throw new BridgeScheduleError('yield requires an open (running) pass');
@@ -2524,8 +2614,10 @@ export class CosignalBridge {
 		adopter.mounted.push(watcherId);
 	}
 
-	/** An existing live watcher re-rendered by a pass: dedup bits re-arm at
-	 * render (the queued work the bits stood for has now started). */
+	/**
+	 * An existing live watcher re-rendered by a pass: dedup bits re-arm at
+	 * render (the queued work the bits stood for has now started).
+	 */
 	renderWatcher(passId: PassId, watcherId: WatcherId): void {
 		const p = this.pass(passId);
 		if (p.state === 'ended') throw new BridgeScheduleError('render requires an open pass');
@@ -2574,9 +2666,11 @@ export class CosignalBridge {
 		}
 	}
 
-	/** A committed-for-root observer (the useSignalEffect shape): evaluates
+	/**
+	 * A committed-for-root observer (the useSignalEffect shape): evaluates
 	 * in the root's committed world, because side effects must track what
-	 * the user actually sees — a pending batch may still be discarded. */
+	 * the user actually sees — a pending batch may still be discarded.
+	 */
 	mountReactEffect(rootId: RootId, node: AnyNode, name: string): ReactEffect {
 		const e: ReactEffect = {
 			id: this.nextEffect++, name, root: rootId, node: node.id,
@@ -2796,8 +2890,10 @@ export class CosignalBridge {
 
 	// ---------------------------------------------------------- retirement
 
-	/** Retirement fires exactly once per batch; parked async actions retire
-	 * only at settlement (their pending state must stay pending until then). */
+	/**
+	 * Retirement fires exactly once per batch; parked async actions retire
+	 * only at settlement (their pending state must stay pending until then).
+	 */
 	retire(tokenId: TokenId, committed: boolean): void {
 		const t = this.token(tokenId);
 		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per token');
@@ -3364,8 +3460,10 @@ export class CosignalBridge {
 		return this.evaluate(node, { kind: 'pass', pass });
 	}
 
-	/** Referee surface — read by twin tests and trace.spec; engine logic and
-	 * the shim consume `eventsSince`/`eventCursor` instead. */
+	/**
+	 * Referee surface — read by twin tests and trace.spec; engine logic and
+	 * the shim consume `eventsSince`/`eventCursor` instead.
+	 */
 	eventsOfType<T extends BridgeEvent['type']>(type: T): Extract<BridgeEvent, { type: T }>[] {
 		return this.events.filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
 	}

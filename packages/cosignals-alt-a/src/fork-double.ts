@@ -25,11 +25,15 @@
 export type Container = unknown
 
 export type ExternalRuntimeListener = {
-	/** §6.1: fired once per root, before any of its render work can be
-	 * scheduled. The write gate's activation edge (§9.1). */
+	/**
+	 * §6.1: fired once per root, before any of its render work can be
+	 * scheduled. The write gate's activation edge (§9.1).
+	 */
 	onRootRegistered?: (container: Container) => void
-	/** Coordinator resolution #6: a batch token was minted (first identity
-	 * crossing the boundary). Not present in §6.1 as written. */
+	/**
+	 * Coordinator resolution #6: a batch token was minted (first identity
+	 * crossing the boundary). Not present in §6.1 as written.
+	 */
 	onBatchOpened?: (token: number, deferred: boolean) => void
 	onRenderPassStart?: (
 		container: Container,
@@ -78,9 +82,11 @@ export type PassScript = {
 	yield(): void
 	resume(): void
 	end(): void
-	/** Restart: ends this pass and starts a new one with the SAME lineage
+	/**
+	 * Restart: ends this pass and starts a new one with the SAME lineage
 	 * (fresh includedBatches may be supplied — a restarted pass may
-	 * legitimately see newer state, §6.3). */
+	 * legitimately see newer state, §6.3).
+	 */
 	restart(include?: readonly (BatchScript | number)[]): PassScript
 }
 
@@ -96,11 +102,15 @@ export type ForkDouble = ForkAdapter & {
 	): PassScript
 	/** Script: mint a fresh lineage id (for suspense-retry scripting). */
 	mintLineage(): number
-	/** The lazily-minted urgent batch that bare (scope-less) writes attribute
-	 * to; undefined if no bare write asked yet. */
+	/**
+	 * The lazily-minted urgent batch that bare (scope-less) writes attribute
+	 * to; undefined if no bare write asked yet.
+	 */
 	currentEventBatch(): BatchScript | undefined
-	/** Script: close the current bare-write event batch (the §6.2 "close"
-	 * edge). Retires it, committed=false by default (store-only batch). */
+	/**
+	 * Script: close the current bare-write event batch (the §6.2 "close"
+	 * edge). Retires it, committed=false by default (store-only batch).
+	 */
 	closeEvent(committed?: boolean): void
 	/** Script: bracket a DOM mutation window (§6.6). */
 	mutationWindow(container: Container, fn?: () => void): void

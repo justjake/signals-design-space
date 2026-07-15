@@ -156,8 +156,10 @@ function createTracer(opts) {
       }
       return truncatedAtId >= 0 ? Math.max(0, nextId - chunkSize - truncatedAtId) : 0;
     },
-    /** SESSION: sealed (immutable, streamable) chunks — all but the one
-     * being written, while lossless. */
+    /**
+     * SESSION: sealed (immutable, streamable) chunks — all but the one
+     * being written, while lossless.
+     */
     sealedChunks() {
       if (!isSession || truncatedAtId >= 0) {
         return [];
@@ -165,8 +167,10 @@ function createTracer(opts) {
       const writing = nextId >> chunkShift;
       return chunks.slice(0, Math.min(writing, chunks.length));
     },
-    /** §16.2/G-21: losslessness is provable — one gap-free id range with
-     * no truncation-marker inside it. */
+    /**
+     * §16.2/G-21: losslessness is provable — one gap-free id range with
+     * no truncation-marker inside it.
+     */
     verifyLossless() {
       if (!isSession) {
         const from = Math.max(0, nextId - capacity);
@@ -2667,8 +2671,10 @@ function createCosignalEngine(options) {
     trackCommitted,
     committedEffect,
     subscribeWithFixup,
-    /** §14.2 deterministic disposal of an atom/computed record (the same
-     * path the FinalizationRegistry takes for collected handles). */
+    /**
+     * §14.2 deterministic disposal of an atom/computed record (the same
+     * path the FinalizationRegistry takes for collected handles).
+     */
     reclaim(h) {
       reclaimNode(h.id, M[h.id + 5 /* GEN */]);
     },

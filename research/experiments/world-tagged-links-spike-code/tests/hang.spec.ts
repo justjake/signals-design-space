@@ -28,8 +28,10 @@ import {
 	__spikeGraphCheck,
 } from '../cosignal/src/index.js';
 
-/** The NF2 graph: c = flag ? a : b through a middle computed layer, watched
- * by a kernel effect so unwatched/dispose cascades engage. */
+/**
+ * The NF2 graph: c = flag ? a : b through a middle computed layer, watched
+ * by a kernel effect so unwatched/dispose cascades engage.
+ */
 function buildGraph() {
 	const flag = new Atom(true);
 	const a = new Atom(10);

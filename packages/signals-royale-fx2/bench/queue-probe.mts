@@ -26,8 +26,10 @@ const SUBS = 2000
 const WAVES = 50
 const WARMUP = 5
 
-/** Disposers must stay referenced: dropped handles arm a reclamation
- * registry, and this probe forces GC every wave. */
+/**
+ * Disposers must stay referenced: dropped handles arm a reclamation
+ * registry, and this probe forces GC every wave.
+ */
 const held: Array<() => void> = []
 
 function measure(label: string, setup: () => (i: number) => void): void {

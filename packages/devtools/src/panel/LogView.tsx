@@ -5,9 +5,11 @@ import { copyText, logMarkdown } from './markdown.ts'
 
 const LIMIT = 1000
 
-/** Filter chips. Each toggles the kind-classes it names; origin/error/batch/
+/**
+ * Filter chips. Each toggles the kind-classes it names; origin/error/batch/
  * async are structural and always shown. Internals (bookkeeping) is off by
- * default. */
+ * default.
+ */
 const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip: string }[] = [
 	{ key: 'write', label: 'set/update', sw: 'var(--atom)', classes: ['write'], tip: 'Changes to atoms: set (assigned a value) and update (computed from the previous value) — where every change starts.' },
 	{ key: 'compute', label: 'recompute', sw: 'var(--computed)', classes: ['compute'], tip: 'Recompute: a computed re-ran its function.' },

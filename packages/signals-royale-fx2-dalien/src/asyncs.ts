@@ -50,8 +50,10 @@ export interface ThenableBox {
 	parkedSuspensions: Set<Suspension>
 }
 
-/** One pending span: a stable promise that resolves when the span makes
- * progress, so a suspended React render retries exactly then. */
+/**
+ * One pending span: a stable promise that resolves when the span makes
+ * progress, so a suspended React render retries exactly then.
+ */
 export interface Suspension {
 	promise: Promise<void>
 	resolve: () => void
@@ -62,12 +64,14 @@ export interface ErrorBox {
 	error: unknown
 }
 
-/** Box identity is the rethrow-same-reference contract: every read of an
+/**
+ * Box identity is the rethrow-same-reference contract: every read of an
  * erroring computed rethrows the same reason, and identity-comparing
  * consumers (snapshot equality, memo reconciliation) rely on the box staying
  * the same object for the whole error span. Boxes are registered so value
  * channels that hand a box to a caller (committedSnapshot) can be told apart
- * from user values without a marker allocation. */
+ * from user values without a marker allocation.
+ */
 const errorBoxes = new WeakSet<object>()
 
 export function makeErrorBox(error: unknown): ErrorBox {
@@ -155,11 +159,13 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	return fresh
 }
 
-/** Settlement is a write: invalidate parked computeds and eagerly bring
+/**
+ * Settlement is a write: invalidate parked computeds and eagerly bring
  * them up to date (progressive evaluations park on their NEXT thenable
  * without waiting for a reader, and passive probes observe final state when
  * the wave's notifications run), then release the suspensions so suspended
- * renders retry against the settled graph. */
+ * renders retry against the settled graph.
+ */
 function settle(box: ThenableBox): void {
 	const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT
 	onSettlement?.()
@@ -188,10 +194,12 @@ function settle(box: ThenableBox): void {
 	}
 }
 
-/** Whether ANY node ever entered the async value plane (parked or errored).
+/**
+ * Whether ANY node ever entered the async value plane (parked or errored).
  * False in a fully-synchronous app, which lets the computed read path skip
  * its per-read async-state probe: AsyncError/AsyncSuspended can only be set
- * by the two sites that flip this. Never reset — a heuristic, not state. */
+ * by the two sites that flip this. Never reset — a heuristic, not state.
+ */
 export let asyncPlaneUsed = false
 
 /** use(t) inside a base-state evaluation. */

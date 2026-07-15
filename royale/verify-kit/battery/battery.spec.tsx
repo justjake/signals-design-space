@@ -548,11 +548,13 @@ describe('scenario 10 — write-during-render fails loudly', () => {
 })
 
 describe('scenario 11 — Suspense: first load, refresh, settlement-in-transition', () => {
-	/** Resource idiom over the adapter surface: one request per (param, epoch)
+	/**
+	 * Resource idiom over the adapter surface: one request per (param, epoch)
 	 * key. `epoch` lives outside the graph — the refresh helper bumps it and
 	 * calls adapter.refresh, so a refresh with unchanged signal inputs still
 	 * creates a fresh request. fetchCount counts REQUESTS (map misses), which
-	 * is what "no refetch loop across Suspense retries" pins. */
+	 * is what "no refetch loop across Suspense retries" pins.
+	 */
 	function makeResource(param: unknown) {
 		let epoch = 0
 		let fetchCount = 0

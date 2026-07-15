@@ -36,12 +36,16 @@ import {
 } from '../src/worlds.ts'
 import { observeNode } from '../src/graph.ts'
 
-/** The engine touch points the sabotage canaries below override, so the
- * oracle is proven to catch a broken engine rather than a broken harness. */
+/**
+ * The engine touch points the sabotage canaries below override, so the
+ * oracle is proven to catch a broken engine rather than a broken harness.
+ */
 interface EngineSeams {
 	retire(draft: Draft): void
-	/** The draft-lane reducer channel: every wake a scoped subscriber receives
-	 * (write-time pokes and attach-time joins alike) flows through here. */
+	/**
+	 * The draft-lane reducer channel: every wake a scoped subscriber receives
+	 * (write-time pokes and attach-time joins alike) flows through here.
+	 */
 	deliverWake(join: (id: DraftId) => void, id: DraftId): void
 }
 
@@ -263,13 +267,15 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 		/** The reducer world: engine ids of drafts delivered to this sub. */
 		ids: Set<DraftId>
 		view: unknown
-		/** Strong subs additionally carry model-side wake bookkeeping: the
+		/**
+		 * Strong subs additionally carry model-side wake bookkeeping: the
 		 * model knows exactly which drafts wrote their cell, so a dropped wake
 		 * is a failure, not a smaller world. Cell subscribers are strong (a
 		 * cell's poke audience is total); computed subscribers are not (their
 		 * watched dep set is the last base-state evaluation's reads, so a draft
 		 * write to a branch only a draft world reads legitimately never wakes
-		 * them). */
+		 * them).
+		 */
 		modelIds: Set<number> | null
 		failure: string | null
 		unsub: () => void
@@ -560,11 +566,13 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 	}
 }
 
-/** Greedy shrink: drop one step at a time while the failure reproduces.
+/**
+ * Greedy shrink: drop one step at a time while the failure reproduces.
  * A candidate that THROWS inside runSchedule (dropping a creation step
  * leaves later steps referencing cells or drafts that never exist) is not
  * a valid reproduction of the returned-string failure — treat it as
- * non-reproducing and move on, never crash the shrink loop. */
+ * non-reproducing and move on, never crash the shrink loop.
+ */
 function reproduces(candidate: Step[]): boolean {
 	try {
 		return runSchedule(candidate) !== null

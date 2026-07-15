@@ -67,8 +67,10 @@ interface SelectorEntry {
 	disposed: boolean
 }
 
-/** Evaluate `selector` in `world` for comparison purposes: pending collapses
- * to the PENDING sentinel, a thrown error to the error value itself. */
+/**
+ * Evaluate `selector` in `world` for comparison purposes: pending collapses
+ * to the PENDING sentinel, a thrown error to the error value itself.
+ */
 function probeValueInWorld(selector: () => unknown, world: Transition | null): unknown {
 	const prev = activeTransition
 	setActiveTransition(world ? currentTransition(world) : null)
@@ -204,14 +206,18 @@ export function useSignal<T>(accessor: Accessor<T>): T {
 	return useSelector(accessor)
 }
 
-/** Reactive "is this expression showing stale data while newer async is in
- * flight?" — false on first load, true during refetches (Solid's isPending). */
+/**
+ * Reactive "is this expression showing stale data while newer async is in
+ * flight?" — false on first load, true during refetches (Solid's isPending).
+ */
 export function useIsPending(fn: () => unknown): boolean {
 	return useSelector(() => solidIsPending(fn))
 }
 
-/** Read through the in-flight overlay (Solid's latest): never suspends after
- * first load. */
+/**
+ * Read through the in-flight overlay (Solid's latest): never suspends after
+ * first load.
+ */
 export function useLatest<T>(fn: () => T): T {
 	return useSelector(() => solidLatest(fn))
 }
@@ -286,8 +292,10 @@ export function useComputed<T>(
 	return useSelector(holder.accessor)
 }
 
-/** A component-owned signal, read reactively. Returns [value, setter]; the
- * setter participates in write classification like any signal write. */
+/**
+ * A component-owned signal, read reactively. Returns [value, setter]; the
+ * setter participates in write classification like any signal write.
+ */
 export function useSignalState<T>(initial: T): [T, Setter<T>] {
 	const [holder] = React.useState(() => {
 		const [get, set] = createSignal<T>(initial as Exclude<T, Function>)
@@ -315,8 +323,10 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 	}, [])
 }
 
-/** React.useTransition, for symmetry: signal writes inside the callback are
- * classified into the transition automatically (write-time batch probing). */
+/**
+ * React.useTransition, for symmetry: signal writes inside the callback are
+ * classified into the transition automatically (write-time batch probing).
+ */
 export function useSignalTransition(): [boolean, (scope: () => void) => void] {
 	const [pending, start] = React.useTransition()
 	return [pending, start]

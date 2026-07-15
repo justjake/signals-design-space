@@ -39,8 +39,10 @@ export type { ProducerNode, ReactiveNode } from '../graph.ts'
  */
 export type NodeId = number & { readonly __nodeId: unique symbol }
 
-/** Unpacked from the node-kind bits of `Flag` (KindAtom / KindComputed /
- * Watching + WatchRender vs WatchRunEffect). */
+/**
+ * Unpacked from the node-kind bits of `Flag` (KindAtom / KindComputed /
+ * Watching + WatchRender vs WatchRunEffect).
+ */
 export type NodeKind = 'atom' | 'computed' | 'watcher' | 'effect'
 
 /** Unpacked from the async bits of `Flag` (AsyncError / AsyncSuspended). */
@@ -127,9 +129,11 @@ export function inspect(node: ProducerNode): Inspected {
 	}
 }
 
-/** Inert staleness for a computed: the eager flag (set on observed nodes at
+/**
+ * Inert staleness for a computed: the eager flag (set on observed nodes at
  * write time) OR the lazy clock comparison fx2 uses internally — a dependency
- * changed more recently than this node last validated. Both are field reads. */
+ * changed more recently than this node last validated. Both are field reads.
+ */
 function computedStale(node: ComputedNode<unknown>): boolean {
 	if (((node.flags as number) & Flag.StaleMask) !== 0) return true
 	const validAt = node.validAtGraphChange as unknown as number

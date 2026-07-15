@@ -31,8 +31,10 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log }
 }
 
-/** A fresh engine reset (production posture — the only posture: no
- * event objects exist; quiet arming follows the production derivation). */
+/**
+ * A fresh engine reset (production posture — the only posture: no
+ * event objects exist; quiet arming follows the production derivation).
+ */
 function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip()

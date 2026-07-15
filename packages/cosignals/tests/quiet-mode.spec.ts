@@ -27,9 +27,11 @@ import {
 	type CosignalEngine,
 } from '../src/index.js'
 
-/** A fresh engine in PRODUCTION posture — which is the only posture now: no
+/**
+ * A fresh engine in PRODUCTION posture — which is the only posture now: no
  * driver, no tracer (quiet arms by derivation alone — there is no semantic
- * switch to flip; always-concurrent means composition IS activation). */
+ * switch to flip; always-concurrent means composition IS activation).
+ */
 function quietBridge(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {

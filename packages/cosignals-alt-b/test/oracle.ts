@@ -104,24 +104,30 @@ export class Oracle {
 		return idx
 	}
 
-	/** The origin serial of an async node's CURRENT request (the driver keys
-	 * thenable identity on this — refresh mints a new one). */
+	/**
+	 * The origin serial of an async node's CURRENT request (the driver keys
+	 * thenable identity on this — refresh mints a new one).
+	 */
 	asyncSerial(idx: number): number {
 		return this.asyncStates.get(idx)!.serial
 	}
 
-	/** §7 refresh on an async node: a NEW request begins (fresh serial —
+	/**
+	 * §7 refresh on an async node: a NEW request begins (fresh serial —
 	 * fresh thenable identity), status returns to pending. GLOBAL-instant
-	 * like settlement (the engine's refresh drain re-derives every world). */
+	 * like settlement (the engine's refresh drain re-derives every world).
+	 */
 	refreshAsync(idx: number): void {
 		const st = this.asyncStates.get(idx)!
 		st.status = 'pending'
 		st.serial = ++this.originSerialCounter
 	}
 
-	/** Settlement is GLOBAL-instant (a thenable resolves once for every
+	/**
+	 * Settlement is GLOBAL-instant (a thenable resolves once for every
 	 * world); the engine invalidates + re-derives, so even pass-pinned worlds
-	 * see the settled value on their next read. */
+	 * see the settled value on their next read.
+	 */
 	settleAsync(idx: number, value: number): void {
 		const st = this.asyncStates.get(idx)!
 		st.status = 'resolved'

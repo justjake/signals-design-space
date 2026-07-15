@@ -19,8 +19,10 @@ import {
 } from '../src/schedule.js'
 import frozen from './frozen-schedules.json'
 
-/** Frozen finding-seed schedules (captured before the writing-core-effect /
- * custom-equals generator bands landed — see the engine-side fuzz spec). */
+/**
+ * Frozen finding-seed schedules (captured before the writing-core-effect /
+ * custom-equals generator bands landed — see the engine-side fuzz spec).
+ */
 const FROZEN = frozen as Record<string, ScheduleOp[]>
 
 const CI_SEEDS = 300

@@ -32,19 +32,23 @@ import { isLiveDraft, type DraftId } from '../worlds.ts'
 import { getActiveTracer } from '../tracer.ts'
 import { confirmCommit, noteRenderWorld, registerProvider, type SignalScope } from './host.ts'
 
-/** Reducer state for a scope or hook: the live draft ids delivered to it
- * so far, i.e. the world its render passes carry. */
+/**
+ * Reducer state for a scope or hook: the live draft ids delivered to it
+ * so far, i.e. the world its render passes carry.
+ */
 export interface WorldState {
 	ids: readonly DraftId[]
 }
 
 export const EMPTY_WORLD: WorldState = { ids: [] }
 
-/** Shared by the scope and every useValue hook: accumulate live draft
+/**
+ * Shared by the scope and every useValue hook: accumulate live draft
  * ids and prune dead ones — retired and discarded drafts resolve to base
  * state anyway, and a long-lived subscriber must not grow history
  * forever. Always returns a fresh object so a re-dispatched id still
- * restarts the pass (see the header). */
+ * restarts the pass (see the header).
+ */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	const live: DraftId[] = []
 	let add = isLiveDraft(id)
@@ -61,24 +65,30 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 	return { ids }
 }
 
-/** The scope's identity-stable record, or null outside any
+/**
+ * The scope's identity-stable record, or null outside any
  * SignalScopeProvider. Scope-consuming hooks throw on null (see
- * requireScope in hooks.ts). */
+ * requireScope in hooks.ts).
+ */
 export const ScopeContext = React.createContext<SignalScope | null>(null)
 
 export interface SignalScopeProviderProps {
-	/** Keys this root's committed world for committed(x, container) reads;
+	/**
+	 * Keys this root's committed world for committed(x, container) reads;
 	 * wrapCreateRoot passes the root's DOM element. Hooks always use the
 	 * provider record itself as their committed-world key, so this is needed
-	 * only by reads outside React. */
+	 * only by reads outside React.
+	 */
 	container?: object
 	children?: React.ReactNode
 }
 
-/** A separate first-child fiber gives this layout effect commit order
+/**
+ * A separate first-child fiber gives this layout effect commit order
  * before the application subtree. Registration lives on the same stable
  * marker so the scope is registered before its first confirmation and is
- * unregistered when the provider unmounts. */
+ * unregistered when the provider unmounts.
+ */
 function SignalScopeCommit({ scope, world }: { scope: SignalScope; world: WorldState }): null {
 	React.useLayoutEffect(() => registerProvider(scope), [scope])
 	React.useLayoutEffect(() => {
@@ -108,8 +118,10 @@ export function SignalScopeProvider(props: SignalScopeProviderProps): React.Reac
 	)
 }
 
-/** A React root whose render() wraps the tree in that root's own
- * SignalScopeProvider. */
+/**
+ * A React root whose render() wraps the tree in that root's own
+ * SignalScopeProvider.
+ */
 export interface WrappedRoot {
 	render(node: React.ReactNode): void
 	unmount(): void

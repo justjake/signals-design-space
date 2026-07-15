@@ -74,9 +74,11 @@ type Handle = Atom<number> | ReducerAtom<number, number> | Computed<number>
 /** The one rejection reason the fuzz vocabulary produces. */
 const FUZZ_REJECT = new Error('fuzz: rejected thenable')
 
-/** A thenable whose settlement flushes callbacks SYNCHRONOUSLY, keeping
+/**
+ * A thenable whose settlement flushes callbacks SYNCHRONOUSLY, keeping
  * runScript synchronous: the engine's settlement write (invalidate →
- * propagate → drain) completes inside the settle op. */
+ * propagate → drain) completes inside the settle op.
+ */
 type SyncThenable = PromiseLike<number> & {
 	settleNow(v: number): void
 	rejectNow(e: unknown): void
@@ -159,8 +161,10 @@ function sortPairs(pairs: Array<[number, number]>): string {
 		.join(',')
 }
 
-/** Map a raw engine value (status boxes included) onto the oracle's number
- * codomain: SuspendedBox → PENDING_BASE + origin, ErrorBox → ERRORED. */
+/**
+ * Map a raw engine value (status boxes included) onto the oracle's number
+ * codomain: SuspendedBox → PENDING_BASE + origin, ErrorBox → ERRORED.
+ */
 function mapRaw(s: RunState, v: unknown): number {
 	if (isSuspendedBox(v)) {
 		const origin = s.thenableOrigin.get(v.thenable)
@@ -178,8 +182,10 @@ function mapRaw(s: RunState, v: unknown): number {
 	return v as number
 }
 
-/** Top-level getter read: pending THROWS the node-held thenable, errors
- * rethrow — map both back to sentinels. */
+/**
+ * Top-level getter read: pending THROWS the node-held thenable, errors
+ * rethrow — map both back to sentinels.
+ */
 function nodeValue(s: RunState, node: number): number {
 	try {
 		return (s.handles[node] as { state: number }).state
@@ -195,8 +201,10 @@ function nodeValue(s: RunState, node: number): number {
 	}
 }
 
-/** Execute one op against engine + oracle. Returns false if preconditions
- * fail (op skipped — keeps shrinking simple). Throws on divergence. */
+/**
+ * Execute one op against engine + oracle. Returns false if preconditions
+ * fail (op skipped — keeps shrinking simple). Throws on divergence.
+ */
 function applyOp(s: RunState, op: Op): boolean {
 	const o = s.oracle
 	switch (op.t) {
@@ -733,9 +741,11 @@ function applyWrites(s: RunState, writes: WriteSpec[]): boolean {
 	return true
 }
 
-/** Affected worlds for one drain (§17.2): the writing batch's writer's world
+/**
+ * Affected worlds for one drain (§17.2): the writing batch's writer's world
  * per deferred token; the W0 world plus every live deferred writer's world
- * when any write was urgent. */
+ * when any write was urgent.
+ */
 function affectedFor(s: RunState, writes: WriteSpec[]): number[] {
 	const affected = new Set<number>()
 	let anyUrgent = false

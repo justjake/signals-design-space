@@ -28,25 +28,33 @@ import {
 import { SuspendedRead } from '../src/index.js'
 import { engineEpoch } from '../src/CosignalEngine.js'
 
-/** One memoized naive outcome (thrown outcomes memoize and rethrow,
- * identity-stable — same payload object every consult within a check). */
+/**
+ * One memoized naive outcome (thrown outcomes memoize and rethrow,
+ * identity-stable — same payload object every consult within a check).
+ */
 type NaiveOutcome = { threw: boolean; v: Value }
 
 /** Per-composition checker state, held OUTSIDE the engine. */
 type CheckerState = {
 	readonly engine: CosignalEngine
 	readonly views: ArenaCheckerInternals
-	/** The engine epoch this state was built against — `__TEST__resetEngine`
+	/**
+	 * The engine epoch this state was built against — `__TEST__resetEngine`
 	 * re-composes the engine, so cached internals (the old core's brackets)
-	 * must rebuild when the epoch moves. */
+	 * must rebuild when the epoch moves.
+	 */
 	readonly epoch: number
-	/** Re-entry latch (one check at a time; a serve inside the check can
-	 * run user fns, and nothing they reach may start a nested check). */
+	/**
+	 * Re-entry latch (one check at a time; a serve inside the check can
+	 * run user fns, and nothing they reach may start a nested check).
+	 */
 	checking: boolean
-	/** Naive-evaluation stack for per-check cycle detection. Keyed by node
+	/**
+	 * Naive-evaluation stack for per-check cycle detection. Keyed by node
 	 * OBJECT: NodeIds are kernel record ids and recycle, so a dead tenant's
 	 * fn (reachable through a stale reference) must not collide with the
-	 * record's new tenant. */
+	 * record's new tenant.
+	 */
 	readonly naiveStack: Set<AnyInternals>
 }
 
@@ -77,9 +85,11 @@ export function armArenaCheck(b: CosignalEngine): void {
 	st.views.armEpilogueCheck(() => runCheck(st))
 }
 
-/** One immediate check pass (the twin driver's per-op referee call site).
+/**
+ * One immediate check pass (the twin driver's per-op referee call site).
  * A no-op inside an open evaluation frame or fold callback, exactly like
- * the armed epilogue form. */
+ * the armed epilogue form.
+ */
 export function checkArenas(b: CosignalEngine): void {
 	runCheck(stateFor(b))
 }

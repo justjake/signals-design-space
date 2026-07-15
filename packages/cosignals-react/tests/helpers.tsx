@@ -24,12 +24,16 @@ export type Harness = {
 	handle: CosignalReactHandle
 	/** The default engine surface; the name is historical. */
 	bridge: CosignalEngine
-	/** The decoded event stream (lossless session tracer attached at bridge
-	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
+	/**
+	 * The decoded event stream (lossless session tracer attached at bridge
+	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads).
+	 */
 	events: RefereeStream
-	/** Log entries as they dropped from the write logs — sealed-chunk folds
+	/**
+	 * Log entries as they dropped from the write logs — sealed-chunk folds
 	 * and episode drops (op-replay-fidelity
-	 * assertions; fed by the engine's onLogEntryDrop referee seam). */
+	 * assertions; fed by the engine's onLogEntryDrop referee seam).
+	 */
 	compacted: Array<{ atom: AtomInternals; entry: WriteLogEntry }>
 	roots: Root[]
 	containers: HTMLElement[]

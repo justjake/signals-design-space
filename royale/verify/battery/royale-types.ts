@@ -9,8 +9,10 @@ export interface RoyaleHandle {
 }
 
 export interface RoyaleTraceView {
-	/** Formatted causal chain from the most recent component delivery caused by
-	 * this signal/computed, back to its originating write or retirement. */
+	/**
+	 * Formatted causal chain from the most recent component delivery caused by
+	 * this signal/computed, back to its originating write or retirement.
+	 */
 	whyLastDelivery(x: unknown): string[]
 	events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>
 	dropped(): number

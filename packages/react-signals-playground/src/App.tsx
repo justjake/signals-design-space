@@ -309,8 +309,10 @@ const CPU_WORK: readonly { rounds: number; label: string }[] = [
 ]
 const cpuRounds = createAtom(64, 'cpuRounds')
 
-/** Deterministic per-row hash: every seed change visibly changes every row,
- * so one reseed re-derives the whole table. `rounds` is the CPU-work knob. */
+/**
+ * Deterministic per-row hash: every seed change visibly changes every row,
+ * so one reseed re-derives the whole table. `rounds` is the CPU-work knob.
+ */
 function rowValue(seed: number, index: number, rounds: number): number {
 	let h = Math.imul(seed ^ 0x9e3779b1, 0x85ebca6b) ^ Math.imul(index + 1, 0xc2b2ae35)
 	for (let round = 0; round < rounds; round++) {
@@ -319,8 +321,10 @@ function rowValue(seed: number, index: number, rounds: number): number {
 	return (h >>> 0) % 100000
 }
 
-/** Fixed-width row text: filtering matches what the chip displays, and equal
- * widths keep the table grid from shifting as values change. */
+/**
+ * Fixed-width row text: filtering matches what the chip displays, and equal
+ * widths keep the table grid from shifting as values change.
+ */
 function rowText(value: number): string {
 	return String(value).padStart(5, '0')
 }
@@ -418,9 +422,11 @@ function useCommittedRenderTally(): void {
 	})
 }
 
-/** Drops a tick on the live timeline bar when a commit lands while a
+/**
+ * Drops a tick on the live timeline bar when a commit lands while a
  * navigation is pending and any of `deps` changed in it — called by the
- * interactive urgent widgets, so the ticks are the interleaving evidence. */
+ * interactive urgent widgets, so the ticks are the interleaving evidence.
+ */
 function useUrgentCommitTick(deps: readonly unknown[]): void {
 	const first = React.useRef(true)
 	// eslint-disable-next-line react-hooks/exhaustive-deps

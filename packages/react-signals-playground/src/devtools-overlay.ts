@@ -18,8 +18,10 @@ const OVERLAY_CSS =
 let collector: ReturnType<typeof attachFx2Devtools>['collector'] | null = null
 let handle: { unmount(): void } | null = null
 
-/** Open the panel if closed, close it if open. Updates the trigger button's
- * label when one is passed. */
+/**
+ * Open the panel if closed, close it if open. Updates the trigger button's
+ * label when one is passed.
+ */
 export function toggleFx2Devtools(button?: HTMLButtonElement): void {
 	const existing = document.getElementById('fx2-devtools')
 	if (existing !== null) {

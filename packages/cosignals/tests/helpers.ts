@@ -49,10 +49,12 @@ import { effect, type Atom } from '../src/index.js'
 import { modelView, RefereeMirror } from './model-view.js'
 import { attachRefereeStream } from './trace-events.js'
 
-/** Scenario annotation only: the specs name each batch's React lane priority
+/**
+ * Scenario annotation only: the specs name each batch's React lane priority
  * for the reader; neither the engine nor the model consults it (the model's
  * Priority dimension was deleted — the annotation survives so the ~230
- * transcribed scenarios keep reading like the React schedules they mirror). */
+ * transcribed scenarios keep reading like the React schedules they mirror).
+ */
 type Priority = 'urgent' | 'default' | 'deferred'
 
 type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown }
@@ -71,13 +73,15 @@ function isDeliveryish(e: ModelEvent): boolean {
 	return e.type === 'delivery' || e.type === 'suppressed' || e.type === 'mount-corrective'
 }
 
-/** Delivery-DECISION counts, pooled across the family's three modes per
+/**
+ * Delivery-DECISION counts, pooled across the family's three modes per
  * (watcher, batch, slot): "fewer decisions, never more".
  * Current-structure routing shifts modes within the family — a mount join
  * the accumulated model schedules as a corrective (arming its dedup, so
  * its later write logs 'suppressed') may not exist in any live arena; the
  * engine's write-time walk is then the first notification and logs
- * 'delivery'. One notification either way. */
+ * 'delivery'. One notification either way.
+ */
 function deliveryCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>()
 	for (const e of events) {
@@ -103,8 +107,10 @@ function capture(fn: () => unknown): Thrown {
 // mechanism: mountSignalEffect + a `body` + captureSignalEffectRun; the body path is
 // the engine's inline-run + event-creation machinery lockstep compares) ----------
 
-/** Effect configuration — a single-node body (the engine counterpart of the
- * model's mountReactEffect). */
+/**
+ * Effect configuration — a single-node body (the engine counterpart of the
+ * model's mountReactEffect).
+ */
 export function mountEngineReactEffect(
 	b: CosignalEngine,
 	rootId: string,
@@ -117,8 +123,10 @@ export function mountEngineReactEffect(
 	return e
 }
 
-/** Referee configuration — a body that re-chooses deps CAUSALLY:
- * readSignalEffectDep(sel) ? readSignalEffectDep(a) : readSignalEffectDep(b). */
+/**
+ * Referee configuration — a body that re-chooses deps CAUSALLY:
+ * readSignalEffectDep(sel) ? readSignalEffectDep(a) : readSignalEffectDep(b).
+ */
 export function mountEngineReactEffectPick(
 	b: CosignalEngine,
 	rootId: string,
@@ -134,13 +142,15 @@ export function mountEngineReactEffectPick(
 	return e
 }
 
-/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+/**
+ * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
  * A committed terminal whose BODY WRITES (the engine counterpart of the
  * model's mountReactEffectWrite): it reads `readNode` committed and writes a
  * bounded payload (min(read, 3)) to `writeAtom` through the PUBLIC atom path.
  * That write lands while the terminal is active (activeSignalEffect set), so
  * it must schedule the sibling terminal at the boundary, never nest — bug 2's
- * exact shape, refereed against the model's deferred drain. */
+ * exact shape, refereed against the model's deferred drain.
+ */
 export function mountEngineReactEffectWrite(
 	b: CosignalEngine,
 	rootId: string,
@@ -165,8 +175,10 @@ export function mountEngineReactEffectWrite(
 	return e
 }
 
-/** The record `mountEngineCoreEffect` returns — the model CoreEffect's
- * engine counterpart (specs read `runs`/`lastValue`; the stream comparison reads the trace). */
+/**
+ * The record `mountEngineCoreEffect` returns — the model CoreEffect's
+ * engine counterpart (specs read `runs`/`lastValue`; the stream comparison reads the trace).
+ */
 export type EngineCoreEffect = {
 	name: string
 	runs: number
@@ -174,9 +186,11 @@ export type EngineCoreEffect = {
 	dispose: () => void
 }
 
-/** Per-composition core-effect mount ordinal (keyed by the ENGINE EPOCH —
+/**
+ * Per-composition core-effect mount ordinal (keyed by the ENGINE EPOCH —
  * one test = one epoch; mirrors the model's `coreEffectMounts`: both sides
- * tick once per mount in lockstep, so created names agree). */
+ * tick once per mount in lockstep, so created names agree).
+ */
 const coreEffectMounts = new Map<number, number>()
 
 /**
@@ -237,43 +251,55 @@ export function mountEngineCoreEffect(
 
 export class TwinDriver {
 	readonly model = new CosignalModel()
-	/** THE ONE ENGINE, reset per driver (the fresh-model analog): devChecks
+	/**
+	 * THE ONE ENGINE, reset per driver (the fresh-model analog): devChecks
 	 * armed — the switch must be engine-inert, and the whole lockstep suite
 	 * running with it on proves the flag itself perturbs nothing. A minimal
 	 * driver attaches (R-5: devChecks harnesses that open batches must
 	 * attach first); its batch context is always BATCH_NONE — the harness
-	 * passes explicit batch ids through the engine write surface. */
+	 * passes explicit batch ids through the engine write surface.
+	 */
 	readonly engine: CosignalEngine = (() => {
 		drainLeftoverEpisode()
 		__TEST__resetEngine({ devChecks: true })
 		attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined })
 		return engine
 	})()
-	/** BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
+	/**
+	 * BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
 	 * `__TEST__resetEngine`); the model's restart at 1 — so the harness
 	 * rebases: engine id = model id + base, and engine events normalize by
-	 * subtracting it before comparison. */
+	 * subtracting it before comparison.
+	 */
 	private readonly batchIdBase = __TEST__peekNextBatchId() - 1
-	/** The engine's event stream: a lossless session tracer attached at
+	/**
+	 * The engine's event stream: a lossless session tracer attached at
 	 * engine reset, decoded to TraceEvents on demand (the engine creates no
-	 * event objects — tests/trace-events.ts). */
+	 * event objects — tests/trace-events.ts).
+	 */
 	readonly engineEvents = attachRefereeStream(this.engine)
-	/** Full-history mirror (archives via onLogEntryDrop + origins) — the model comparison
-	 * retains it OUTSIDE the engine; see tests/model-view.ts. */
+	/**
+	 * Full-history mirror (archives via onLogEntryDrop + origins) — the model comparison
+	 * retains it OUTSIDE the engine; see tests/model-view.ts.
+	 */
 	readonly mirror = new RefereeMirror()
 	/** The engine presented in the model's shape for the oracle's checkers. */
 	private readonly view = modelView(this.engine, this.mirror) as unknown as CosignalModel
-	/** THE model→engine node mapping, registered at creation and resolved by
+	/**
+	 * THE model→engine node mapping, registered at creation and resolved by
 	 * `toEngine` on every op. The two id spaces are unrelated: the model
 	 * allocates dense ids; the engine's NodeId is the kernel record id
 	 * (sparse — node and link records share one allocator, and freed record
-	 * ids recycle). Snapshots/events compare by NAME, never by id. */
+	 * ids recycle). Snapshots/events compare by NAME, never by id.
+	 */
 	private nodeMap = new Map<AnyNode, EInternals>()
 	private idToEngineRenderPass = new Map<number, ERenderPass>()
-	/** Model react-effect id → engine SignalEffect id. The id spaces diverge
+	/**
+	 * Model react-effect id → engine SignalEffect id. The id spaces diverge
 	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
 	 * effect kinds, the engine's only for committed observers (core effects
-	 * are kernel `effect()`s, not engine records). */
+	 * are kernel `effect()`s, not engine records).
+	 */
 	private effectMap = new Map<number, number>()
 
 	constructor() {
@@ -388,8 +414,10 @@ export class TwinDriver {
 	 * snapshots, reconcile corrections, effect runs, and counters stay
 	 * exact.
 	 */
-	/** Engine-decoded events with batch ids rebased into the model's space
-	 * (BatchIds are monotonic across resets engine-side; see batchIdBase). */
+	/**
+	 * Engine-decoded events with batch ids rebased into the model's space
+	 * (BatchIds are monotonic across resets engine-side; see batchIdBase).
+	 */
 	private normalizedEngineEvents(): ModelEvent[] {
 		const base = this.batchIdBase
 		const events = this.engineEvents.events as ModelEvent[]
@@ -518,13 +546,15 @@ export class TwinDriver {
 		this.mirrorQuietFold(node, op, mark)
 	}
 
-	/** A quiet fold advances the engine's base with no log entry, so the
+	/**
+	 * A quiet fold advances the engine's base with no log entry, so the
 	 * mirror's `onLogEntryDrop` feed never sees it. The driver
 	 * appends the fold's ledger entry to the mirror archive itself — exactly
 	 * what the model's quietWrite does to ITS archive — so the view's
 	 * full-history shadow fold (retention invariant) keeps reconstructing
 	 * every world. Detection is by the model's own 'quiet-write' event
-	 * (compareStreams already proved the engine created the same one). */
+	 * (compareStreams already proved the engine created the same one).
+	 */
 	private mirrorQuietFold(node: AtomNode, op: Op, mark: number): void {
 		for (const e of this.model.events.slice(mark)) {
 			if (e.type !== 'quiet-write') {
@@ -832,9 +862,11 @@ function drainLeftoverEpisode(): void {
 	}
 }
 
-/** A fresh lockstep harness (always-concurrent: construction is activation — the
+/**
+ * A fresh lockstep harness (always-concurrent: construction is activation — the
  * engine resets and re-attaches its minimal driver; the model is live from
- * construction). */
+ * construction).
+ */
 export function concurrent(): TwinDriver {
 	return new TwinDriver()
 }
@@ -885,10 +917,12 @@ export function update(fn: (p: unknown) => unknown): {
 	return { kind: 'update', fn }
 }
 
-/** The comparison boundary's op conversion: specs and the model speak op
+/**
+ * The comparison boundary's op conversion: specs and the model speak op
  * literals (`set`/`update` above — the reference model's vocabulary); the
  * ENGINE's write surface takes the scalar (kind, payload) pair (0 = set,
- * 1 = update), so the harness converts exactly here, at the engine dispatch. */
+ * 1 = update), so the harness converts exactly here, at the engine dispatch.
+ */
 export function opScalars(op: Op): [0 | 1, unknown] {
 	return op.kind === 'set' ? [0, op.value] : [1, op.fn]
 }

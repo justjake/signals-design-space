@@ -68,9 +68,11 @@ import {
 
 export type DraftId = Brand<number, 'DraftId'>
 export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded'
-/** Monotone logical clock: ticks on any draft activity — opens, intents,
+/**
+ * Monotone logical clock: ticks on any draft activity — opens, intents,
  * retires, discards, and thenable settlement (see setOnSettlement). World
- * memos and the world cache hold validAtDraftChange readings of it. */
+ * memos and the world cache hold validAtDraftChange readings of it.
+ */
 export type DraftChangeClock = Brand<number, 'DraftChangeClock'>
 
 export type OpKind = 'set' | 'update'
@@ -91,11 +93,15 @@ export interface RebaseLog {
 export interface Draft {
 	id: DraftId
 	state: DraftState
-	/** The base clock at which this draft opened alone. Zero permanently
-	 * disables producer-side wake cutoffs after overlap. */
+	/**
+	 * The base clock at which this draft opened alone. Zero permanently
+	 * disables producer-side wake cutoffs after overlap.
+	 */
 	cutoffAtGraphChange: GraphChangeClock
-	/** Stable single-draft world shared by the notification cutoff and ambient
-	 * latest reads when this is the only live draft. */
+	/**
+	 * Stable single-draft world shared by the notification cutoff and ambient
+	 * latest reads when this is the only live draft.
+	 */
 	world: World
 	/** Cells this draft wrote (for fold, poke, and log teardown). */
 	cells: Set<CellNode<unknown>>
@@ -111,16 +117,20 @@ const liveDrafts = new Map<DraftId, Draft>()
 setHasLiveDrafts(() => liveDrafts.size > 0)
 /** Cells with at least one live draft intent. */
 const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>()
-/** Per-cell replay revision. Weak and lazy: untouched cells pay nothing, and
- * certificates never retain deleted logs or their intent payloads. */
+/**
+ * Per-cell replay revision. Weak and lazy: untouched cells pay nothing, and
+ * certificates never retain deleted logs or their intent payloads.
+ */
 const draftRevisionByCell = new WeakMap<CellNode<unknown>, DraftChangeClock>()
 let draftChangeClock: DraftChangeClock = 1
 /** Nodes holding world memos, for sweeping at quiescence. */
 const memoNodes = new Set<ReactiveNode>()
 /** Per-root committed draft sets, recorded by the bindings at root commits. */
 const committedWorlds = new WeakMap<object, readonly DraftId[]>()
-/** Set only around the synchronous one-live-draft poke. The stable callback
- * avoids allocating one closure per intent. */
+/**
+ * Set only around the synchronous one-live-draft poke. The stable callback
+ * avoids allocating one closure per intent.
+ */
 let cutoffWorld: World | null = null
 
 setOnSettlement(() => {
@@ -165,12 +175,14 @@ export function sealDraft(draft: Draft): void {
 	}
 }
 
-/** Record a drafted write intent. Draft watchers (isPending probes, latest()
+/**
+ * Record a drafted write intent. Draft watchers (isPending probes, latest()
  * viewers) get poked; base values do not move. Subscribers of the cell
  * — and of watched computeds over it — additionally receive the draft id on
  * their draft-lane channel, so exactly the affected components join the
  * transition's render passes (write-time dispatch runs inside the
- * transition scope; late appends re-dispatch to the same audience). */
+ * transition scope; late appends re-dispatch to the same audience).
+ */
 export function appendDraftIntent(
 	draft: Draft,
 	cell: CellNode<unknown>,
@@ -210,9 +222,11 @@ export function appendDraftIntent(
 	}
 }
 
-/** Record an urgent intent on a cell that currently has a rebase log, so
+/**
+ * Record an urgent intent on a cell that currently has a rebase log, so
  * pending worlds replay it in dispatch order. The base-state write itself is
- * performed by the caller. */
+ * performed by the caller.
+ */
 export function appendUrgentIntent(
 	cell: CellNode<unknown>,
 	kind: OpKind,
@@ -230,7 +244,8 @@ export function appendUrgentIntent(
 	return true
 }
 
-/** An urgent intent on a drafted cell rebases every pending world over the
+/**
+ * An urgent intent on a drafted cell rebases every pending world over the
  * new base value. When the base-state write itself cuts off on equality,
  * nothing propagates — yet the drafted replays changed
  * (valueBeforeDrafts…draft…urgent lands differently than
@@ -238,7 +253,8 @@ export function appendUrgentIntent(
  * poked AND woken or its transition commits the pre-rebase value. The
  * changed-write path needs none of this: the wave re-renders subscribers
  * urgently, and React restarts in-progress transition work after an
- * interleaved urgent commit, so those passes re-resolve their worlds live. */
+ * interleaved urgent commit, so those passes re-resolve their worlds live.
+ */
 export function pokeRebasedCell(cell: CellNode<unknown>): void {
 	const log = rebaseLogs.get(cell)
 	if (log === undefined) {
@@ -260,9 +276,11 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
 	}
 }
 
-/** Replay a cell's log for a world (or for base state, when `world` is
+/**
+ * Replay a cell's log for a world (or for base state, when `world` is
  * null): urgent and retired intents always apply; drafted intents apply
- * only when the world includes their draft. */
+ * only when the world includes their draft.
+ */
 function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 	const log = rebaseLogs.get(cell)
 	if (log === undefined) {
@@ -290,7 +308,8 @@ function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): u
 	return cell.equals(value, next) ? value : next
 }
 
-/** Fold a draft into base state through the normal write path, then
+/**
+ * Fold a draft into base state through the normal write path, then
  * let stale world sets resolve it as a no-op.
  *
  * There is no silent/loud switch here: whether a subscriber re-renders is
@@ -298,7 +317,8 @@ function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): u
  * compares what it rendered against what it would resolve now). A
  * subscriber whose render passes already delivered the draft's values
  * compares equal and stays quiet; one that never carried the draft sees the
- * folded values as new and re-renders. */
+ * folded values as new and re-renders.
+ */
 export function retireDraft(id: DraftId): void {
 	const draft = liveDrafts.get(id)
 	if (draft === undefined) {
@@ -337,10 +357,12 @@ export function retireDraft(id: DraftId): void {
 	maybeQuiesce()
 }
 
-/** Roll back an abandoned draft: anyone who saw it re-resolves without it.
+/**
+ * Roll back an abandoned draft: anyone who saw it re-resolves without it.
  * The poke reaches every subscriber over the draft's cells; those that
  * rendered the draft's values now resolve base values, compare different,
- * and re-render — the rollback is new information no render pass shows. */
+ * and re-render — the rollback is new information no render pass shows.
+ */
 export function discardDraft(id: DraftId): void {
 	const draft = liveDrafts.get(id)
 	if (draft === undefined) {
@@ -358,9 +380,11 @@ export function discardDraft(id: DraftId): void {
 	maybeQuiesce()
 }
 
-/** Drop finished logs; otherwise fold their globally-dead leading run into
+/**
+ * Drop finished logs; otherwise fold their globally-dead leading run into
  * valueBeforeDrafts. Folding stops at the first live intent because later
- * updater results may depend on that intent's world-specific value. */
+ * updater results may depend on that intent's world-specific value.
+ */
 function releaseLogs(dead: Draft): void {
 	for (const cell of dead.cells) {
 		const log = rebaseLogs.get(cell)
@@ -407,18 +431,22 @@ function maybeQuiesce(): void {
 	memoNodes.clear()
 }
 
-/** True while the draft is open or sealed (retired/discarded ids are dead:
- * their effects are already folded into base state or rolled back). */
+/**
+ * True while the draft is open or sealed (retired/discarded ids are dead:
+ * their effects are already folded into base state or rolled back).
+ */
 export function isLiveDraft(id: DraftId): boolean {
 	return liveDrafts.has(id)
 }
 
 const NO_IDS: readonly DraftId[] = []
 
-/** Live drafts holding intents against this node's base-state sources (the
+/**
+ * Live drafts holding intents against this node's base-state sources (the
  * node itself for a cell; its transitive dependency cells for a derived).
  * Serves late-subscription repair: a subscriber that mounted after the
- * write-time wakes asks which transitions it missed. */
+ * write-time wakes asks which transitions it missed.
+ */
 export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
 	if (liveDrafts.size === 0) {
 		return NO_IDS
@@ -477,11 +505,15 @@ export function discardAllDrafts(): void {
 // Write classification
 // ---------------------------------------------------------------------------
 
-/** Explicit write target used by engine tests and non-React integrations.
- * It affects write classification only; reads remain in their current world. */
+/**
+ * Explicit write target used by engine tests and non-React integrations.
+ * It affects write classification only; reads remain in their current world.
+ */
 let currentDraftWriteTarget: Draft | null = null
-/** Ambient classifier installed by the React bindings: detects writes issued
- * inside React.startTransition without our helper. */
+/**
+ * Ambient classifier installed by the React bindings: detects writes issued
+ * inside React.startTransition without our helper.
+ */
 let ambientClassifier: (() => Draft | null) | null = null
 
 export function setAmbientClassifier(fn: (() => Draft | null) | null): void {
@@ -512,8 +544,10 @@ export function classifyWrite(): Draft | null {
 // World resolution
 // ---------------------------------------------------------------------------
 
-/** The draft selection visible to one read, render pass, or committed root.
- * It is a replay filter, not a graph copy or a React lane. */
+/**
+ * The draft selection visible to one read, render pass, or committed root.
+ * It is a replay filter, not a graph copy or a React lane.
+ */
 export interface World {
 	/** Live drafts, in creation order. */
 	drafts: readonly Draft[]
@@ -539,8 +573,10 @@ export function withWorld<T>(world: World | null, fn: () => T): T {
 	}
 }
 
-/** World objects per id-array identity (React state arrays are stable
- * across renders, so this makes repeated resolves allocation-free). */
+/**
+ * World objects per id-array identity (React state arrays are stable
+ * across renders, so this makes repeated resolves allocation-free).
+ */
 const worldCache = new WeakMap<
 	readonly DraftId[],
 	{ validAtDraftChange: DraftChangeClock; world: World }
@@ -588,8 +624,10 @@ interface WorldMemo {
 	state: ResolvedState
 }
 
-/** The certificate currently being collected by a draft-world computed.
- * Arrays and entry objects are reused when a memo re-evaluates. */
+/**
+ * The certificate currently being collected by a draft-world computed.
+ * Arrays and entry objects are reused when a memo re-evaluates.
+ */
 let activeCertificate: Certificate | null = null
 
 function appendCertificate(
@@ -696,9 +734,11 @@ function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedSta
 	return (left.throwable as ErrorBox).error === (right.throwable as ErrorBox).error
 }
 
-/** Single-live-draft cutoff. The previous world memo is the last value this
+/**
+ * Single-live-draft cutoff. The previous world memo is the last value this
  * write path resolved for the draft; before the first touch, the draft world
- * is identical to base. The graph calls this once per reached node. */
+ * is identical to base. The graph calls this once per reached node.
+ */
 function changedInCutoffWorld(node: ReactiveNode): boolean {
 	const world = cutoffWorld!
 	try {
@@ -713,11 +753,13 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
 	}
 }
 
-/** Resolve a node's value as seen by a world. The base world hits the
+/**
+ * Resolve a node's value as seen by a world. The base world hits the
  * ordinary graph and returns the NODE ITSELF as the state view (cells and
  * deriveds carry the ResolvedState shape; the trivial read allocates
  * nothing); drafted worlds replay intents (cells) or draft-evaluate
- * (deriveds) into memo records per (node, world signature). */
+ * (deriveds) into memo records per (node, world signature).
+ */
 export function resolveState(node: ReactiveNode, world: World): ResolvedState {
 	assertSignalReadAllowed()
 	if ((node.flags & Flag.ComputingMask) !== 0) {
@@ -801,8 +843,10 @@ export function resolveStateUntracked(node: ReactiveNode, world: World): Resolve
 	}
 }
 
-/** Give a scheduled effect wake-only edges to the actual sources used by a
- * computed's current draft-world memo. */
+/**
+ * Give a scheduled effect wake-only edges to the actual sources used by a
+ * computed's current draft-world memo.
+ */
 export function trackWorldSources(node: ReactiveNode, world: World): void {
 	if (world.drafts.length === 0) {
 		return
@@ -882,18 +926,22 @@ function draftEvaluate(
 
 const WORLD_PARKED = Symbol('world-parked')
 
-/** The park function of the draft evaluation in progress (if any); reads of
- * pending values inside that evaluation forward through it. */
+/**
+ * The park function of the draft evaluation in progress (if any); reads of
+ * pending values inside that evaluation forward through it.
+ */
 let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
 
 export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null {
 	return currentPark
 }
 
-/** Unwrap a resolved state from inside another evaluation: values flow,
+/**
+ * Unwrap a resolved state from inside another evaluation: values flow,
  * errors rethrow their stable reason, suspended forwards by parking the
  * reader (no stale serve here — a world evaluation must not fold a stale
- * base value into a draft-world result). */
+ * base value into a draft-world result).
+ */
 export function unwrapForEval(
 	st: ResolvedState,
 	park: (t: PromiseLike<unknown>) => unknown,

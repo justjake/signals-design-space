@@ -7,16 +7,20 @@
 import * as React from 'react'
 import { batch } from '../graph.ts'
 
-/** Run writes as one transition batch: invisible to base-state readers and
- * the committed DOM until React commits the transition. */
+/**
+ * Run writes as one transition batch: invisible to base-state readers and
+ * the committed DOM until React commits the transition.
+ */
 export function startSignalTransition(scope: () => void): void {
 	React.startTransition(() => {
 		batch(scope)
 	})
 }
 
-/** useTransition married to an engine batch: isPending covers the batch's
- * whole lifetime, including renders it holds open. */
+/**
+ * useTransition married to an engine batch: isPending covers the batch's
+ * whole lifetime, including renders it holds open.
+ */
 export function useSignalTransition(): [boolean, (scope: () => void) => void] {
 	const [isPending, startTransition] = React.useTransition()
 	const startRef = React.useRef<((scope: () => void) => void) | null>(null)

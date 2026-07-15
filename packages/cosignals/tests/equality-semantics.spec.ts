@@ -58,10 +58,12 @@ import type { Equals, Value } from '../src/index.js'
 
 type Pair = [Value, Value]
 
-/** An asymmetric, counting comparator: records every (a, b) argument pair
+/**
+ * An asymmetric, counting comparator: records every (a, b) argument pair
  * and answers `false` unless BOTH halves match a designated "equal" pair —
  * asymmetry means a flipped invocation records a flipped pair and (for the
- * order pins) would also flip the equal answer. */
+ * order pins) would also flip the equal answer.
+ */
 function probeComparator(): { eq: Equals; calls: Pair[]; reset(): void } {
 	const calls: Pair[] = []
 	return {

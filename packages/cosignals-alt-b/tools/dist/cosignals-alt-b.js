@@ -3006,8 +3006,10 @@ function createWatcher(signal, cb) {
   };
 }
 var __debug = {
-  /** Run fn with reads resolving in COMMITTED context (per §10.1;
-   * useSignalEffect's context — the global retired-only form). */
+  /**
+   * Run fn with reads resolving in COMMITTED context (per §10.1;
+   * useSignalEffect's context — the global retired-only form).
+   */
   committed(fn) {
     const prev = currentCtx;
     currentCtx = 2 /* COMMITTED */;
@@ -3069,20 +3071,26 @@ var __debug = {
       })()
     };
   },
-  /** Run the finalization path for a handle's record as the GC would
+  /**
+   * Run the finalization path for a handle's record as the GC would
    * (FinalizationRegistry timing is untestable without --expose-gc).
-   * Like the GC path, a guarded skip registers the reclaim retry. */
+   * Like the GC path, a guarded skip registers the reclaim retry.
+   */
   simulateFinalize(signal, gen) {
     enter(() => E.finalizeRecord({ id: signal.id, gen: gen ?? E.gen(signal.id) }, true));
     boundary();
   },
-  /** Number of per-world baseline entries a watcher holds (leak tests:
-   * must not grow with retired batches). */
+  /**
+   * Number of per-world baseline entries a watcher holds (leak tests:
+   * must not grow with retired batches).
+   */
   watcherBaselineCount(watcher) {
     return metaCol[watcher.id >> 3]?.lastBroadcast?.size ?? 0;
   },
-  /** Lineage keys held by a computed's thenable cache (leak tests: retired
-   * lineages must be pruned at quiescence; key 0 is the canonical slot). */
+  /**
+   * Lineage keys held by a computed's thenable cache (leak tests: retired
+   * lineages must be pruned at quiescence; key 0 is the canonical slot).
+   */
   thenableLineageKeys(signal) {
     return [...metaCol[signal.id >> 3]?.thenableCache?.keys() ?? []];
   },
@@ -3111,8 +3119,10 @@ var __debug = {
       seqCounter = opts.seqCounter;
     }
   },
-  /** Invariant sweeper (verifyArena-lite): throws on the first violation
-   * with a description; run by the oracle after every step. */
+  /**
+   * Invariant sweeper (verifyArena-lite): throws on the first violation
+   * with a description; run by the oracle after every step.
+   */
   verify() {
     enter(() => E.verify());
   }
@@ -3124,8 +3134,10 @@ var ForkDouble = class {
   serial = 0;
   lineageSerial = 0;
   batches = /* @__PURE__ */ new Map();
-  /** Live (unretired) tokens — O(1) liveness bookkeeping so long sessions
-   * do not degrade quadratically scanning every batch ever created. */
+  /**
+   * Live (unretired) tokens — O(1) liveness bookkeeping so long sessions
+   * do not degrade quadratically scanning every batch ever created.
+   */
   live = /* @__PURE__ */ new Set();
   /** Batch context stack for write attribution (innermost wins, §6.5). */
   contextStack = [];
@@ -3134,8 +3146,10 @@ var ForkDouble = class {
   pass;
   /** Record of every runInBatch call, for test assertions. */
   entangleLog = [];
-  /** Cap on live tokens; §6.2 invariant is 31. Tests may raise it to force
-   * the engine's slot-exhaustion fallback. */
+  /**
+   * Cap on live tokens; §6.2 invariant is 31. Tests may raise it to force
+   * the engine's slot-exhaustion fallback.
+   */
   maxLiveTokens = 31;
   // ---- §6.1 isomorphic API -------------------------------------------------
   subscribeToExternalRuntime(l) {
@@ -3152,9 +3166,11 @@ var ForkDouble = class {
     }
     return false;
   }
-  /** §6.1 — token of the batch a write issued right now belongs to, minting
+  /**
+   * §6.1 — token of the batch a write issued right now belongs to, minting
    * lazily. The double mints an ambient urgent token when no scripted batch
-   * context is live (the real fork's per-event batch). */
+   * context is live (the real fork's per-event batch).
+   */
   getCurrentWriteBatch() {
     const token = this.currentContextToken();
     if (token !== 0) {
@@ -3165,17 +3181,21 @@ var ForkDouble = class {
     }
     return this.ambientToken;
   }
-  /** §6.1 — defined only while React is *executing* render code. The double
-   * mirrors that: undefined inside yield gaps. */
+  /**
+   * §6.1 — defined only while React is *executing* render code. The double
+   * mirrors that: undefined inside yield gaps.
+   */
   getRenderContext() {
     if (this.pass !== void 0 && !this.pass.yielded) {
       return { container: this.pass.container };
     }
     return void 0;
   }
-  /** §6.5 — batch entanglement. Token live: run fn in that batch's context
+  /**
+   * §6.5 — batch entanglement. Token live: run fn in that batch's context
    * (write classification included) and return true. Retired: return false
-   * without running fn. Nesting uses the innermost override. */
+   * without running fn. Nesting uses the innermost override.
+   */
   runInBatch(token, fn) {
     const b = this.batches.get(token);
     if (b === void 0 || b.retired) {
@@ -3210,8 +3230,10 @@ var ForkDouble = class {
     this.emit((l) => l.onBatchOpened?.(token));
     return token;
   }
-  /** Run fn with writes attributed to `token` (like code inside a
-   * startTransition scope, or an event handler for an urgent batch). */
+  /**
+   * Run fn with writes attributed to `token` (like code inside a
+   * startTransition scope, or an event handler for an urgent batch).
+   */
   inBatch(token, fn) {
     const b = this.batches.get(token);
     if (b === void 0) {
@@ -3227,8 +3249,10 @@ var ForkDouble = class {
       this.contextStack.pop();
     }
   }
-  /** Convenience: open a deferred batch, run scope inside it (a
-   * startTransition analogue). Returns the token; caller retires it. */
+  /**
+   * Convenience: open a deferred batch, run scope inside it (a
+   * startTransition analogue). Returns the token; caller retires it.
+   */
   startTransition(scope) {
     const token = this.openBatch(true);
     this.inBatch(token, scope);
@@ -3273,8 +3297,10 @@ var ForkDouble = class {
     this.pass = void 0;
     this.emit((l) => l.onRenderPassEnd?.(p.container));
   }
-  /** Restart: end the old pass, start a new one with the SAME lineage,
-   * re-delivering (possibly newer) includedBatches. */
+  /**
+   * Restart: end the old pass, start a new one with the SAME lineage,
+   * re-delivering (possibly newer) includedBatches.
+   */
   restartRenderPass(includedBatches) {
     const p = this.requirePass("restartRenderPass");
     const { container, lineage } = p;

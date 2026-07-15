@@ -140,8 +140,10 @@ export type ErrorBox = { kind: 'error'; error: unknown }
 export type SuspendedBox = {
 	kind: 'suspended'
 	thenable: PromiseLike<unknown>
-	/** The node's latest SETTLED value (undefined = uninitialized): pending
-	 * forwards downstream while the last good value stays available. */
+	/**
+	 * The node's latest SETTLED value (undefined = uninitialized): pending
+	 * forwards downstream while the last good value stays available.
+	 */
 	latest?: unknown
 }
 export function isErrorBox(v: unknown): v is ErrorBox {
@@ -162,21 +164,27 @@ export function isSuspendedBox(v: unknown): v is SuspendedBox {
 // activeSub for nesting.
 let evalPending: PromiseLike<unknown> | undefined
 
-/** Is a computed evaluation frame active (canonical or overlay)? Pending dep
- * reads forward inside frames; top-level consumers get the throw/suspend. */
-/** §lazy-init: the not-yet-materialized marker occupying a lazy atom's value
+/**
+ * Is a computed evaluation frame active (canonical or overlay)? Pending dep
+ * reads forward inside frames; top-level consumers get the throw/suspend.
+ */
+/**
+ * §lazy-init: the not-yet-materialized marker occupying a lazy atom's value
  * slots. A unique module singleton: one identity compare on the atom-value
- * base accessors is the entire hot-path cost. */
+ * base accessors is the entire hot-path cost.
+ */
 const LAZY_UNMATERIALIZED: unique symbol = Symbol('cosignals-alt-b.lazy')
 
 let initDepth = 0
 
-/** Run a lazy atom's initializer ONCE: untracked (no dep links), graph-pure
+/**
+ * Run a lazy atom's initializer ONCE: untracked (no dep links), graph-pure
  * (writes rejected in debug), render-safe (a pure slot fill — no write path,
  * no propagation, no watchers; nothing can have observed the atom yet). Both
  * value slots fill with the result, so it is the CANONICAL base state — a
  * draft-world first touch (createTape's base snapshot reads through here)
- * bases the tape on the initializer result, never on draft-scoped state. */
+ * bases the tape on the initializer result, never on draft-scoped state.
+ */
 function materializeAtom(a: number): unknown {
 	const m = metaCol[a >> 3]
 	const init = m?.lazyInit
@@ -211,10 +219,12 @@ function inEvalFrame(): boolean {
 	return ovDepth !== 0 || (activeSub !== 0 && (E.nodeFlags(activeSub) & 2048) !== 0) // C.K_COMPUTED
 }
 
-/** Fold an evaluation's outcome with the ambient pending frame: pending is a
+/**
+ * Fold an evaluation's outcome with the ambient pending frame: pending is a
  * RESULT (a node-held box carrying the latest settled value), never control
  * flow. Box identity is stable while the thenable and latest are unchanged —
- * that is what React use() retries key on. */
+ * that is what React use() retries key on.
+ */
 function foldEvalResult(
 	prev: unknown,
 	next: unknown,
@@ -246,8 +256,10 @@ type NodeMeta = {
 	refreshEpoch?: number
 	/** fn declares a ctx parameter (arity > 0): build the ComputedCtx. */
 	wantsCtx?: boolean
-	/** Lazy state initializer (§lazy-init): pending until first
-	 * materialization; cleared once run (or skipped by SSR install). */
+	/**
+	 * Lazy state initializer (§lazy-init): pending until first
+	 * materialization; cleared once run (or skipped by SSR install).
+	 */
 	lazyInit?: () => unknown
 	// atom observed-lifecycle (§12.4):
 	observeEffect?: (ctx: AtomCtx<unknown>) => (() => void) | void
@@ -264,8 +276,10 @@ type NodeMeta = {
 export type ComputedCtxImpl = {
 	use<U>(thenable: PromiseLike<U>): U
 	previous: unknown
-	/** Bumped by refresh(); resource fns key their request cache on
-	 * (params, refreshEpoch) so a refresh mints a fresh thenable. */
+	/**
+	 * Bumped by refresh(); resource fns key their request cache on
+	 * (params, refreshEpoch) so a refresh mints a fresh thenable.
+	 */
 	refreshEpoch: number
 }
 
@@ -450,17 +464,21 @@ let rootCommittedMask = 0
 // Read capture for useSignalEffect dependency tracking (bindings-only).
 let captureList: number[] | undefined
 
-/** True iff render code is executing RIGHT NOW. The real fork parks
+/**
+ * True iff render code is executing RIGHT NOW. The real fork parks
  * suspended work with its pass frame open and emits NO yield event (a §6.3
  * deviation of the build we ship against), so an open pass alone does not
  * mean rendering: consult the fork's render context, but only when the
- * event-driven scalar says RENDER (zero cost otherwise). */
+ * event-driven scalar says RENDER (zero cost otherwise).
+ */
 function forkRenderingNow(): boolean {
 	return fork === undefined || fork.getRenderContext() !== undefined
 }
 
-/** The effective read context: RENDER downgraded to NEWEST inside the real
- * fork's suspension gaps (open pass, not executing). */
+/**
+ * The effective read context: RENDER downgraded to NEWEST inside the real
+ * fork's suspension gaps (open pass, not executing).
+ */
 function ctxNow(): Ctx {
 	if (currentCtx === Ctx.RENDER && !forkRenderingNow()) {
 		return Ctx.NEWEST
@@ -783,8 +801,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §8.6 — liveness refcount. Born-live kinds (effects, scopes, watchers)
-	 * never cross; everything else is live iff some live subscriber holds it. */
+	/**
+	 * §8.6 — liveness refcount. Born-live kinds (effects, scopes, watchers)
+	 * never cross; everything else is live iff some live subscriber holds it.
+	 */
 	function isLiveNode(n: number): boolean {
 		return liveCount[n >> 3] > 0 || (M[n + C.FLAGS] & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0
 	}
@@ -841,9 +861,11 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		propSp = stackBase
 	}
 
-	/** §12.4 — atom observed-lifecycle: LIVE transitions on atoms carrying an
+	/**
+	 * §12.4 — atom observed-lifecycle: LIVE transitions on atoms carrying an
 	 * observeEffect schedule a microtask-debounced reconcile, so an
-	 * observe/unobserve flap within one tick nets to no churn. */
+	 * observe/unobserve flap within one tick nets to no churn.
+	 */
 	function onLiveChanged(node: number): void {
 		const m = metaCol[node >> 3]
 		if (m !== undefined && m.observeEffect !== undefined) {
@@ -851,8 +873,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** Stamp `node` and its transitive subscribers with `ticket` (mark-only);
-	 * optionally flow the unapplied-cone stamp too (§17.5(b) precision). */
+	/**
+	 * Stamp `node` and its transitive subscribers with `ticket` (mark-only);
+	 * optionally flow the unapplied-cone stamp too (§17.5(b) precision).
+	 */
 	function markCone(node: number, ticket: number, unapplied = false): void {
 		const stackBase = propSp
 		let cur = node
@@ -1097,8 +1121,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		return false
 	}
 
-	/** §8.7.2 — notify walk: stamp overlay marks; optionally collect IMMEDIATE
-	 * watchers onto the broadcast queue tagged with the write's token. */
+	/**
+	 * §8.7.2 — notify walk: stamp overlay marks; optionally collect IMMEDIATE
+	 * watchers onto the broadcast queue tagged with the write's token.
+	 */
 	function notifyWalk(atom: number, ticket: number, token: number, collect: boolean): void {
 		if (tracer !== undefined) {
 			tracer.emit(TK.NOTIFY_WALK, currentCause, atom, token, ticket, collect ? 1 : 0, 0)
@@ -1439,8 +1465,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §9.3 — first entry: create the tape (base record) and mark the cone,
-	 * flowing the unapplied-cone stamp when the creating write is deferred. */
+	/**
+	 * §9.3 — first entry: create the tape (base record) and mark the cone,
+	 * flowing the unapplied-cone stamp when the creating write is deferred.
+	 */
 	function createTape(a: number, unapplied: boolean): void {
 		const base = allocLog()
 		const t = ticket()
@@ -1541,12 +1569,14 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 
 	// ---- kernel value access ----------------------------------------------------------
 
-	/** The atom's newest kernel value WITHOUT promoting it: the pending slot is
+	/**
+	 * The atom's newest kernel value WITHOUT promoting it: the pending slot is
 	 * authoritative after any unflushed write. Write paths must use this, never
 	 * kernelAtomValue — promotion mid-batch runs updateAtom + shallowPropagate,
 	 * which upgrades subscribers to DIRTY and destroys the donor's settle-back
 	 * cutoff (batch { set(5); set(0) } must recompute NOTHING — conformance
-	 * #123/#132/#147). */
+	 * #123/#132/#147).
+	 */
 	function pendingAtomValue(a: number): unknown {
 		const v = values[(a >> 2) + 1]
 		return v === LAZY_UNMATERIALIZED ? materializeAtom(a) : v
@@ -1685,8 +1715,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §10.3 — replay an atom's tape for a world. Fold starts at the base
-	 * snapshot; equality folds preserve reference stability. */
+	/**
+	 * §10.3 — replay an atom's tape for a world. Fold starts at the base
+	 * snapshot; equality folds preserve reference stability.
+	 */
 	function foldTape(a: number, world: World): unknown {
 		const head = M[a + C.LOG_HEAD]
 		let acc = logVals[head >> 2]
@@ -1814,9 +1846,11 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		return 0
 	}
 
-	/** Certificate scan (§10.5): every pair must still hold. The tapeStamp cache
+	/**
+	 * Certificate scan (§10.5): every pair must still hold. The tapeStamp cache
 	 * skips the scan entirely when no tape anywhere has mutated since this
-	 * record's last successful validation (see memoStamp above). */
+	 * record's last successful validation (see memoStamp above).
+	 */
 	function certValid(rec: number): boolean {
 		const vi = W[rec + C.W_VAL]
 		if (memoStamp[vi] === tapeStamp) {
@@ -2145,8 +2179,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		drainAll()
 	}
 
-	/** Run a computed's user fn; returns a value or a sentinel box. Boxes are
-	 * reference-stable while the state is unchanged (§11.2). */
+	/**
+	 * Run a computed's user fn; returns a value or a sentinel box. Boxes are
+	 * reference-stable while the state is unchanged (§11.2).
+	 */
 	function runComputedFn(c: number, prev: unknown): unknown {
 		const m = metaCol[c >> 3]
 		const rawFn = m?.rawFn
@@ -2588,8 +2624,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §10.6 — per-watcher cutoff: broadcast iff the watched node's value in the
-	 * writer's world differs from the last value broadcast for that world. */
+	/**
+	 * §10.6 — per-watcher cutoff: broadcast iff the watched node's value in the
+	 * writer's world differs from the last value broadcast for that world.
+	 */
 	function broadcastDecide(w: number, token: number): void {
 		if ((M[w + C.FLAGS] & C.K_WATCHER) === 0) {
 			return // disposed since enqueue
@@ -2783,8 +2821,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		return false
 	}
 
-	/** §9.6 — fold each tape's leading run of dead entries into its base record;
-	 * free base-only tapes once no live batch could still write. */
+	/**
+	 * §9.6 — fold each tape's leading run of dead entries into its base record;
+	 * free base-only tapes once no live batch could still write.
+	 */
 	function sweepTapes(): void {
 		++tapeStamp
 		++worldStamp // folds move base seqs and can free tapes (clearing LOGGED)
@@ -2833,10 +2873,12 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §9.6 — truncation: unlink a batch's unretired entries without folding.
+	/**
+	 * §9.6 — truncation: unlink a batch's unretired entries without folding.
 	 * The truncated batch's watchers are re-notified (its world's values just
 	 * rolled back — an optimistic rollback that never rebroadcast would leave
-	 * that lane's UI stale until an unrelated drain exposed it). */
+	 * that lane's UI stale until an unrelated drain exposed it).
+	 */
 	function truncateBatchBySlot(s: number): void {
 		++overlayEpoch
 		++worldStamp
@@ -3313,8 +3355,10 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		return { id: e, gen: M[e + C.GEN] }
 	}
 
-	/** §13.1 watcher core: kind K_WATCHER, WATCHING|IMMEDIATE|LIVE, subscription-
-	 * time world seeding (see createWatcher docs). */
+	/**
+	 * §13.1 watcher core: kind K_WATCHER, WATCHING|IMMEDIATE|LIVE, subscription-
+	 * time world seeding (see createWatcher docs).
+	 */
 	function makeWatcher(watched: number, cb: (token: number) => void): { id: number; gen: number } {
 		const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE)
 		const lastBroadcast = new Map<number, unknown>()
@@ -3332,11 +3376,13 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		return { id: w, gen: M[w + C.GEN] }
 	}
 
-	/** Drop per-watcher broadcast baselines whose batch token is dead: keys are
+	/**
+	 * Drop per-watcher broadcast baselines whose batch token is dead: keys are
 	 * minted per batch, so without this a long-lived watcher's lastBroadcast Map
 	 * grows by one pinned value per broadcast-reaching batch, forever. Key 0
 	 * (the W0 baseline) is permanent; a key survives while its token still
-	 * occupies a slot (including retired-but-unswept) or is live on the fork. */
+	 * occupies a slot (including retired-but-unswept) or is live on the fork.
+	 */
 	function pruneWatcherBaselines(): void {
 		if (liveWatcherIds.size === 0) {
 			return
@@ -3358,7 +3404,8 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		}
 	}
 
-	/** §14.2 registration. The handle instances here are LEAN (an id field;
+	/**
+	 * §14.2 registration. The handle instances here are LEAN (an id field;
 	 * methods live on the prototype), so registering the instance directly is
 	 * as cheap as V8 FR registration gets — V8's weak-target processing of a
 	 * dying registered object scales with the target's shape (closure-rich
@@ -3371,7 +3418,8 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 	 * batched microtask flush was measured SLOWER for create-and-drop bursts
 	 * (+15ns vs +12.8ns per handle) — the queue's strong pin makes burst
 	 * handles survive scavenges they would otherwise die young in, costing
-	 * more than the saved register calls. */
+	 * more than the saved register calls.
+	 */
 	function registerHandle(handle: object, id: number): void {
 		if (!finalizationEnabled) {
 			return
@@ -3386,14 +3434,16 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		)
 	}
 
-	/** Free a handle-owned record once its handle is unreachable. Skips records
+	/**
+	 * Free a handle-owned record once its handle is unreachable. Skips records
 	 * that are still subscribed-to or carry a live tape; the GEN check defuses
 	 * stale finalizations. `retryIfBusy` marks GC-driven calls (the handle is
 	 * provably unreachable): a guarded skip is recorded and retried when the
 	 * blocking reference drops (last subscriber unlinks / tape sweeps away) —
 	 * the registry fires once per handle, so a skipped callback would otherwise
 	 * leak the record forever. Deterministic disposeSignal() never registers a
-	 * retry: its caller may legitimately keep using the handle after a skip. */
+	 * retry: its caller may legitimately keep using the handle after a skip.
+	 */
 	function finalizeRecord(held: { id: number; gen: number }, retryIfBusy = false): void {
 		const { id, gen } = held
 		if (M[id + C.GEN] !== gen) {
@@ -3495,13 +3545,15 @@ function createEngineCore(M: Int32Array, G: Int32Array, W: Int32Array, CERT: Int
 		},
 		onThenableSettled,
 		ctxNow: () => ctxNow(),
-		/** §7 refresh: write-like invalidation of ONE computed — forces its fn
+		/**
+		 * §7 refresh: write-like invalidation of ONE computed — forces its fn
 		 * to re-run (ctx.use re-registers fresh thenables) without touching
 		 * upstream. Shaped like the settlement write: worlds re-derive, and
 		 * with live overlay state every writer's world re-decides. prev is
 		 * threaded through the ordinary eval path, so a re-run that lands
 		 * pending folds the last settled value into box.latest
-		 * (= refresh-pending, never uninitialized). No-op on atoms. */
+		 * (= refresh-pending, never uninitialized). No-op on atoms.
+		 */
 		refreshNode: (id: number) => {
 			if ((M[id + C.FLAGS] & C.K_COMPUTED) === 0) {
 				return
@@ -3582,9 +3634,11 @@ function growBuf(buf: Int32Array, bump: number, slackUnits: number): Int32Array 
 	return bigger
 }
 
-/** Rebuild the engine closure over doubled buffers. Runs only at a true
+/**
+ * Rebuild the engine closure over doubled buffers. Runs only at a true
  * operation boundary (enterDepth === 0): no live engine frame captured the
- * old buffers, so ids (plain indices) survive the copy unchanged (§14.1). */
+ * old buffers, so ids (plain indices) survive the copy unchanged (§14.1).
+ */
 function boundaryWork(): void {
 	growPending = false
 	const b = E.buffers()
@@ -3609,10 +3663,12 @@ function boundary(): void {
 	}
 }
 
-/** Sweep dispose()d records into the free list at a true operation boundary.
+/**
+ * Sweep dispose()d records into the free list at a true operation boundary.
  * Without this, a create→dispose loop that never writes (nothing calls
  * flush) grows the main plane and pendingFree forever: dispose() only
- * queues the record, and the queue was drained solely at flush time. */
+ * queues the record, and the queue was drained solely at flush time.
+ */
 function reclaimBoundary(): void {
 	if (enterDepth === 0 && drainDepth === 0) {
 		E.sweepPendingFree()
@@ -3648,8 +3704,10 @@ function peekEntry(node: number): unknown {
 	}
 }
 
-/** Thenable settlement runs at microtask time, possibly after a rebuild:
- * always route through the CURRENT engine closure. */
+/**
+ * Thenable settlement runs at microtask time, possibly after a rebuild:
+ * always route through the CURRENT engine closure.
+ */
 function settleTrampoline(t: PromiseLike<unknown>, st: ThenableState): void {
 	++enterDepth
 	try {
@@ -3660,9 +3718,11 @@ function settleTrampoline(t: PromiseLike<unknown>, st: ThenableState): void {
 	boundary()
 }
 
-/** FinalizationRegistry callbacks fire at GC time: late-bind through E.
+/**
+ * FinalizationRegistry callbacks fire at GC time: late-bind through E.
  * held is the packed number gen * 2^32 + id (object form past the packing
- * range — see registerToken). */
+ * range — see registerToken).
+ */
 function finalizeTrampoline(held: number | { id: number; gen: number }): void {
 	++enterDepth
 	try {
@@ -3680,8 +3740,10 @@ function finalizeTrampoline(held: number | { id: number; gen: number }): void {
 	boundary()
 }
 
-/** §12.4 microtask-debounced observed-lifecycle reconcile (module-level so
- * the deferred callback never captures a stale engine closure). */
+/**
+ * §12.4 microtask-debounced observed-lifecycle reconcile (module-level so
+ * the deferred callback never captures a stale engine closure).
+ */
 function scheduleObserveReconcile(node: number, m: NodeMeta): void {
 	if (m.observeScheduled === true || m.observeEffect === undefined) {
 		return
@@ -3901,7 +3963,8 @@ export function configure(options: {
 	strictLanes?: boolean
 	/** Debug assertions (default true): the §12.2 replay-purity check. */
 	debugChecks?: boolean
-	/** Reclaim Atom/Computed records when their handles are GC'd (§14.2).
+	/**
+	 * Reclaim Atom/Computed records when their handles are GC'd (§14.2).
 	 * ON BY DEFAULT ("we should never leak"); pass `false` to opt out for
 	 * zero FinalizationRegistry overhead, accepting the bounded leak: each
 	 * dropped unwatched handle then pins exactly its own record + side
@@ -3909,7 +3972,8 @@ export function configure(options: {
 	 * CAVEAT (inherent to JS, both modes): a computed whose fn closure was
 	 * created in a scope that also captures the handle keeps the handle
 	 * reachable through the shared closure context — create the fn in its
-	 * own scope (e.g. a factory function) if you rely on GC reclamation. */
+	 * own scope (e.g. a factory function) if you rely on GC reclamation.
+	 */
 	finalization?: boolean
 	initialRecords?: number
 	initialLogRecords?: number
@@ -3962,9 +4026,11 @@ export type AtomOptions<T> = {
 	 * ```
 	 */
 	state: T | (() => T)
-	/** Observed-lifecycle hook (§12.4): runs when the atom becomes observed
+	/**
+	 * Observed-lifecycle hook (§12.4): runs when the atom becomes observed
 	 * (transitively LIVE); the returned cleanup runs when it no longer is.
-	 * Delivery is debounced to a microtask. */
+	 * Delivery is debounced to a microtask.
+	 */
 	effect?: (ctx: AtomCtx<T>) => (() => void) | void
 	isEqual?: (a: T, b: T) => boolean
 	label?: string
@@ -4016,8 +4082,10 @@ export class Atom<T> {
 }
 
 export type ReducerAtomOptions<S, A> = {
-	/** Initial state, or a lazy initializer (function-valued; §lazy-init —
-	 * wrap function states as `() => fn`). */
+	/**
+	 * Initial state, or a lazy initializer (function-valued; §lazy-init —
+	 * wrap function states as `() => fn`).
+	 */
 	state: S | (() => S)
 	reducer: (state: S, action: A) => S
 	isEqual?: (a: S, b: S) => boolean
@@ -4118,10 +4186,12 @@ export class Computed<T> {
 		}
 		E.registerHandle(this, id)
 	}
-	/** Inside an evaluation frame, pending/error FORWARD (status is graph
+	/**
+	 * Inside an evaluation frame, pending/error FORWARD (status is graph
 	 * state: the reader notes the dep's thenable and continues over the
 	 * dep's latest settled value). Top-level: rethrows cached errors, throws
-	 * the thenable while suspended (§11.3). */
+	 * the thenable while suspended (§11.3).
+	 */
 	get state(): T {
 		const v = hotReadComputed(this.id)
 		if (isErrorBox(v)) {
@@ -4180,11 +4250,13 @@ export function effectScope(fn: () => void): () => void {
 
 const pendingProbes = new WeakMap<SignalLike, Computed<boolean>>()
 
-/** Lazily-created cached probe computed over the node's box SHAPE. Boolean
+/**
+ * Lazily-created cached probe computed over the node's box SHAPE. Boolean
  * equality is the flip-only cutoff: upstream value churn re-evaluates the
  * probe but only pending↔settled transitions propagate to its observers.
  * Raw reads keep the probe from suspending or registering pending itself
- * (Solid's "probes never refetch/suspend" stance, §2.3 adapted). */
+ * (Solid's "probes never refetch/suspend" stance, §2.3 adapted).
+ */
 export function pendingComputedOf(signal: SignalLike): Computed<boolean> {
 	let probe = pendingProbes.get(signal)
 	if (probe === undefined) {
@@ -4202,24 +4274,29 @@ export function pendingComputedOf(signal: SignalLike): Computed<boolean> {
 	return probe
 }
 
-/** §7 isPending: reactive boolean — is `signal` showing stale data while a
+/**
+ * §7 isPending: reactive boolean — is `signal` showing stale data while a
  * refetch is in flight? Reactive when read from a tracked scope (it is an
  * ordinary computed read); per-world correct (the probe evaluates in the
- * ambient world like any node). False on first load and on errors. */
+ * ambient world like any node). False on first load and on errors.
+ */
 export function isPending(signal: SignalLike): boolean {
 	return pendingComputedOf(signal).state
 }
 
-/** §7 refresh: re-run a computed's fn so ctx.use re-registers (a resource-
+/**
+ * §7 refresh: re-run a computed's fn so ctx.use re-registers (a resource-
  * style fn mints a fresh thenable → refresh-pending with latest preserved).
  * Latest-wins under races: a superseded settlement re-runs the fn, which
- * registers the CURRENT thenable again. No-op on atoms/plain signals. */
+ * registers the CURRENT thenable again. No-op on atoms/plain signals.
+ */
 export function refresh(signal: SignalLike): void {
 	boundary()
 	enter(() => E.refreshNode(signal.id))
 }
 
-/** §7 latest: read current-or-stale — never suspends, never registers
+/**
+ * §7 latest: read current-or-stale — never suspends, never registers
  * pending (raw read; no evalPending touch). Errors rethrow.
  *
  * Per-context world choice (documented contract):
@@ -4236,7 +4313,8 @@ export function refresh(signal: SignalLike): void {
  * - inside withRootCommitted (useSignalEffect bodies): the root's committed
  *   view.
  * For the async node itself, pending unwraps to box.latest (the last value
- * that settled in the reading world); uninitialized reads as undefined. */
+ * that settled in the reading world); uninitialized reads as undefined.
+ */
 export function latest<T>(signal: SignalLike & { state: T }): T | undefined {
 	// Under ambient-W0 semantics latest() is THE explicit Wn read — drafts
 	// included (see the per-context table in SPEC-RESOLUTIONS §ambient-W0):
@@ -4259,10 +4337,12 @@ export function latest<T>(signal: SignalLike & { state: T }): T | undefined {
 	return raw as T
 }
 
-/** §ambient-W0 companion: read the COMMITTED world explicitly (per-root view
+/**
+ * §ambient-W0 companion: read the COMMITTED world explicitly (per-root view
  * inside withRootCommitted, global otherwise). Box handling mirrors .state
  * with the two-level rule: errors throw; refresh-pending serves latest;
- * never-settled throws the thenable. */
+ * never-settled throws the thenable.
+ */
 export function committed<T>(signal: SignalLike & { state: T }): T {
 	// Inside withRootCommitted the ambient ctx is already the (root-refined)
 	// committed view — the plain read IS the per-root committed read.
@@ -4319,9 +4399,11 @@ export function untracked<T>(fn: () => T): T {
 	}
 }
 
-/** §13.6 — startTransition + engine batch(): N writes in the scope coalesce
+/**
+ * §13.6 — startTransition + engine batch(): N writes in the scope coalesce
  * to one notify walk and one drain. Returns the batch token (double-driven).
- * Not required for correctness — a throughput helper. */
+ * Not required for correctness — a throughput helper.
+ */
 export function startSignalTransition(scope: () => void): number {
 	const f = fork
 	if (f === undefined) {
@@ -4381,8 +4463,10 @@ export type WorldSpec =
 
 // ---- bindings support surface (used by src/react.ts; not general API) ----------------
 
-/** Run fn with Ctx.COMMITTED reads refined to a per-root committed view
- * (§13.4): pin + lock-in tokens supplied by the bindings' root table. */
+/**
+ * Run fn with Ctx.COMMITTED reads refined to a per-root committed view
+ * (§13.4): pin + lock-in tokens supplied by the bindings' root table.
+ */
 export function withRootCommitted<T>(pin: number, tokens: readonly number[], fn: () => T): T {
 	const prevActive = rootCommittedActive
 	const prevPin = rootCommittedPin
@@ -4402,9 +4486,11 @@ export function withRootCommitted<T>(pin: number, tokens: readonly number[], fn:
 	}
 }
 
-/** Tracked read by node id (bindings' effect-tracker bodies): dispatches on
+/**
+ * Tracked read by node id (bindings' effect-tracker bodies): dispatches on
  * the node's kind through the ordinary read paths, so an enclosing engine
- * effect links real dependencies. */
+ * effect links real dependencies.
+ */
 export function readById(id: number): unknown {
 	return (M_kindIsAtom(id) ? hotReadAtom : hotReadComputed)(id)
 }
@@ -4426,15 +4512,19 @@ export function captureReads<T>(fn: () => T): { result: T; reads: number[] } {
 	}
 }
 
-/** Deterministic disposal for component-owned atoms/computeds (§13.5): frees
- * the record unless graph edges or a live tape still reference it. */
+/**
+ * Deterministic disposal for component-owned atoms/computeds (§13.5): frees
+ * the record unless graph edges or a live tape still reference it.
+ */
 export function disposeSignal(signal: SignalLike): void {
 	enter(() => E.finalizeRecord({ id: signal.id, gen: E.gen(signal.id) }))
 	boundary()
 }
 
-/** SSR hydration install (§13.8): write a serialized committed value into an
- * atom before hydration. An ordinary kernel write; must run before any pass. */
+/**
+ * SSR hydration install (§13.8): write a serialized committed value into an
+ * atom before hydration. An ordinary kernel write; must run before any pass.
+ */
 export function installState(signal: SignalLike, value: unknown): void {
 	boundary()
 	enter(() => E.kernelSet(signal.id, value))
@@ -4442,8 +4532,10 @@ export function installState(signal: SignalLike, value: unknown): void {
 }
 
 export const __debug = {
-	/** Run fn with reads resolving in COMMITTED context (per §10.1;
-	 * useSignalEffect's context — the global retired-only form). */
+	/**
+	 * Run fn with reads resolving in COMMITTED context (per §10.1;
+	 * useSignalEffect's context — the global retired-only form).
+	 */
 	committed<T>(fn: () => T): T {
 		const prev = currentCtx
 		currentCtx = Ctx.COMMITTED
@@ -4505,20 +4597,26 @@ export const __debug = {
 			})(),
 		}
 	},
-	/** Run the finalization path for a handle's record as the GC would
+	/**
+	 * Run the finalization path for a handle's record as the GC would
 	 * (FinalizationRegistry timing is untestable without --expose-gc).
-	 * Like the GC path, a guarded skip registers the reclaim retry. */
+	 * Like the GC path, a guarded skip registers the reclaim retry.
+	 */
 	simulateFinalize(signal: SignalLike, gen?: number): void {
 		enter(() => E.finalizeRecord({ id: signal.id, gen: gen ?? E.gen(signal.id) }, true))
 		boundary()
 	},
-	/** Number of per-world baseline entries a watcher holds (leak tests:
-	 * must not grow with retired batches). */
+	/**
+	 * Number of per-world baseline entries a watcher holds (leak tests:
+	 * must not grow with retired batches).
+	 */
 	watcherBaselineCount(watcher: { id: number }): number {
 		return metaCol[watcher.id >> 3]?.lastBroadcast?.size ?? 0
 	},
-	/** Positional thenable caches no longer exist (the node-held pending box
-	 * is the only holder); always empty — kept for leak-test source compat. */
+	/**
+	 * Positional thenable caches no longer exist (the node-held pending box
+	 * is the only holder); always empty — kept for leak-test source compat.
+	 */
 	thenableLineageKeys(_signal: SignalLike): number[] {
 		return []
 	},
@@ -4547,8 +4645,10 @@ export const __debug = {
 			seqCounter = opts.seqCounter
 		}
 	},
-	/** Invariant sweeper (verifyArena-lite): throws on the first violation
-	 * with a description; run by the oracle after every step. */
+	/**
+	 * Invariant sweeper (verifyArena-lite): throws on the first violation
+	 * with a description; run by the oracle after every step.
+	 */
 	verify(): void {
 		enter(() => E.verify())
 	},

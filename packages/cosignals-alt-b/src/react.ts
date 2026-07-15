@@ -133,11 +133,13 @@ export function createReactBindings(fork: ForkLike) {
 			this.onSetState?.(rec)
 		}
 
-		/** Render phase (pure): read the pass's world Wp and remember it.
+		/**
+		 * Render phase (pure): read the pass's world Wp and remember it.
 		 * Returns the RAW value — status boxes (SuspendedBox/ErrorBox) ride
 		 * along as values; the hook layer unboxes (pending hands the node-held
 		 * thenable to React use(); errors rethrow). Raw is required: throwing
-		 * here would hide the node-held box the retry identity depends on. */
+		 * here would hide the node-held box the retry identity depends on.
+		 */
 		renderRead(): T {
 			const value = readById(this.signal.id) as T // engine resolves RENDER ctx
 			this.rendered =
@@ -147,8 +149,10 @@ export function createReactBindings(fork: ForkLike) {
 			return value
 		}
 
-		/** Commit phase (layout effect): subscribe, then run the world-aware
-		 * post-subscribe fixup for writes that raced into the gap (§13.2). */
+		/**
+		 * Commit phase (layout effect): subscribe, then run the world-aware
+		 * post-subscribe fixup for writes that raced into the gap (§13.2).
+		 */
 		commit(): void {
 			if (this.watcher === undefined) {
 				this.watcher = createWatcher(this.signal, (token) => {
@@ -228,9 +232,11 @@ export function createReactBindings(fork: ForkLike) {
 		private cleanup: (() => void) | undefined
 		private tracked: Array<{ id: number; value: unknown }> = []
 		private mounted = false
-		/** Kernel-side tracker: loose-mode DIRECT writes commit with NO React
+		/**
+		 * Kernel-side tracker: loose-mode DIRECT writes commit with NO React
 		 * batch lifecycle (no onRootCommitted), so committed-value changes
-		 * must also arrive through the engine's own effect machinery. */
+		 * must also arrive through the engine's own effect machinery.
+		 */
 		private tracker: (() => void) | undefined
 		runs = 0
 
@@ -277,8 +283,10 @@ export function createReactBindings(fork: ForkLike) {
 			})
 		}
 
-		/** Engine pathway: after the owning root's commit, re-run iff the
-		 * committed value of anything tracked changed (per-root view). */
+		/**
+		 * Engine pathway: after the owning root's commit, re-run iff the
+		 * committed value of anything tracked changed (per-root view).
+		 */
 		maybeRerun(): void {
 			if (!this.mounted) {
 				return
@@ -361,9 +369,11 @@ export function createReactBindings(fork: ForkLike) {
 		): SignalHook<T> {
 			return new SignalHook(signal, onSetState)
 		},
-		/** Is the currently-executing render pass a TRANSITION pass (any
+		/**
+		 * Is the currently-executing render pass a TRANSITION pass (any
 		 * included batch deferred)? Drives the context-sensitive half of the
-		 * two-level suspense rule. */
+		 * two-level suspense rule.
+		 */
 		renderingDeferredPass(): boolean {
 			return currentPass !== undefined && currentPass.tokens.some((t) => (t & 1) === 1)
 		},
@@ -402,9 +412,11 @@ export function serializeAtomState(
 	return JSON.stringify(out)
 }
 
-/** Client: install serialized values into matching atoms. MUST run before
+/**
+ * Client: install serialized values into matching atoms. MUST run before
  * hydration so the first client render reads identical committed values.
- * Unknown keys warn (dev); missing keys leave the constructor default. */
+ * Unknown keys warn (dev); missing keys leave the constructor default.
+ */
 export function initializeAtomState(
 	json: string,
 	atoms: Record<string, Atom<unknown> | ReducerAtom<unknown, unknown>>,
@@ -506,8 +518,10 @@ export class ReactFork implements ForkLike {
 		return t !== null && !t.gesture
 	}
 
-	/** The transition-scope object whose batch we last created, for the
-	 * read-your-own-draft probe (ambient-W0 semantics). */
+	/**
+	 * The transition-scope object whose batch we last created, for the
+	 * read-your-own-draft probe (ambient-W0 semantics).
+	 */
 	private lastScopeT: unknown = null
 	private lastScopeToken = 0
 
@@ -534,11 +548,13 @@ export class ReactFork implements ForkLike {
 		return token
 	}
 
-	/** The deferred
+	/**
+	 * The deferred
 	 * batch whose write scope is executing NOW, or 0. Identity-keyed on the
 	 * reconciler's current-transition slot: created at the scope's first
 	 * write; reads before any write correctly see W0 (no draft exists). A
-	 * different transition or plain handler has a different (or null) T. */
+	 * different transition or plain handler has a different (or null) T.
+	 */
 	getAmbientReadToken(): number {
 		if (this.lastScopeToken === 0) {
 			return 0
@@ -746,18 +762,22 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
 	return value as T
 }
 
-/** §7 isPending as a hook: reactive "stale data while newer loads" boolean.
+/**
+ * §7 isPending as a hook: reactive "stale data while newer loads" boolean.
  * Flip-only re-renders — the probe computed's boolean equality suppresses
- * upstream value churn; first load and errors read false. */
+ * upstream value churn; first load and errors read false.
+ */
 export function useIsPending(signal: SignalLike): boolean {
 	return useSignal(pendingComputedOf(signal))
 }
 
-/** §ambient-W0 companion hook: subscribe like useSignal but read the
+/**
+ * §ambient-W0 companion hook: subscribe like useSignal but read the
  * COMMITTED world (global committed view — the hook does not know its root;
  * per-root refinement is the kernel-side effects' job via withRootCommitted).
  * Never suspends: pending unwraps to box.latest (undefined while the
- * committed world never had a value), errors rethrow. */
+ * committed world never had a value), errors rethrow.
+ */
 export function useCommitted<T>(signal: SignalLike & { state: T }): T | undefined {
 	useSignalRaw(signal) // subscription: re-render on broadcasts
 	const raw = __debug.readInWorld(signal, { kind: 'committed' })
@@ -770,9 +790,11 @@ export function useCommitted<T>(signal: SignalLike & { state: T }): T | undefine
 	return raw as T
 }
 
-/** §7 latest as a hook: subscribe like useSignal but NEVER suspend — pending
+/**
+ * §7 latest as a hook: subscribe like useSignal but NEVER suspend — pending
  * unwraps to box.latest (undefined while uninitialized), errors rethrow.
- * World choice follows the render pass like useSignal (purity/replay). */
+ * World choice follows the render pass like useSignal (purity/replay).
+ */
 export function useLatest<T>(signal: SignalLike & { state: T }): T | undefined {
 	const raw = useSignalRaw(signal)
 	if (isErrorBox(raw)) {
@@ -784,8 +806,10 @@ export function useLatest<T>(signal: SignalLike & { state: T }): T | undefined {
 	return raw as T
 }
 
-/** Holder pattern (§13.5): component-owned nodes survive StrictMode's
- * simulated unmount by re-creating on the post-remount effect. */
+/**
+ * Holder pattern (§13.5): component-owned nodes survive StrictMode's
+ * simulated unmount by re-creating on the post-remount effect.
+ */
 function useOwned<H extends SignalLike>(make: () => H): H {
 	const [holder, setHolder] = ReactNS.useState(() => ({ node: make(), disposed: false }))
 	ReactNS.useEffect(() => {

@@ -42,31 +42,41 @@ import {
 /** Settlement state recorded for a tracked thenable. */
 export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected'
 
-/** Per-thenable tracking record: its settlement state plus everything
- * currently parked on it. */
+/**
+ * Per-thenable tracking record: its settlement state plus everything
+ * currently parked on it.
+ */
 export interface ThenableBox {
 	status: ThenableStatus
 	/** Fulfillment value or rejection reason, selected by status. */
 	result: unknown
-	/** Computeds whose latest base-state evaluation parked on this thenable,
-	 * or null after settlement releases the membership owner. */
+	/**
+	 * Computeds whose latest base-state evaluation parked on this thenable,
+	 * or null after settlement releases the membership owner.
+	 */
 	parkedNodes: Set<EvaluatedNode<unknown>> | null
-	/** Suspensions (base-state or per-world) waiting on this thenable, or
-	 * null after settlement releases the membership owner. */
+	/**
+	 * Suspensions (base-state or per-world) waiting on this thenable, or
+	 * null after settlement releases the membership owner.
+	 */
 	parkedSuspensions: Set<Suspension> | null
 }
 
-/** One pending span: a stable promise that resolves when the span makes
+/**
+ * One pending span: a stable promise that resolves when the span makes
  * progress, so a suspended React render retries exactly then and not
- * before. */
+ * before.
+ */
 export interface Suspension {
 	promise: Promise<void>
 	resolve: ((cause?: TraceEventId) => void) | null
 }
 
-/** A thrown error, boxed so an erroring evaluation has one stable result
+/**
+ * A thrown error, boxed so an erroring evaluation has one stable result
  * object to compare and rethrow (see the header on stability). The class
- * identity distinguishes engine errors from error-shaped user values. */
+ * identity distinguishes engine errors from error-shaped user values.
+ */
 export class ErrorBox {
 	constructor(public error: unknown) {}
 }
@@ -169,12 +179,14 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	return fresh
 }
 
-/** A thenable settled. Treat it like a write: invalidate the parked
+/**
+ * A thenable settled. Treat it like a write: invalidate the parked
  * computeds and eagerly re-evaluate them — eagerly, so a computed that
  * awaits several thenables in sequence parks on the next one without
  * waiting for a reader, and so passive probes observe the final state when
  * the wave's notifications run. Then release the suspensions, so suspended
- * renders retry against the already-settled graph. */
+ * renders retry against the already-settled graph.
+ */
 function settle(
 	box: ThenableBox,
 	status: 'fulfilled' | 'rejected',

@@ -3,8 +3,10 @@ import 'react-dom/client'
 import { __TEST__resetEngine } from 'cosignals'
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js'
 
-/** The shim's protocol listeners, driven directly (TypeScript-private only;
- * the protocol host is what normally calls these). */
+/**
+ * The shim's protocol listeners, driven directly (TypeScript-private only;
+ * the protocol host is what normally calls these).
+ */
 type ShimListeners = {
 	handleRenderStart(container: unknown, includedBatches: readonly number[]): void
 	handleRenderEnd(container: unknown, committed: boolean): void

@@ -45,16 +45,22 @@ import {
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
 import { getActiveTracer } from '../tracer.ts'
 
-/** One registered connection per SignalsFrameworkProvider. The record is
+/**
+ * One registered connection per SignalsFrameworkProvider. The record is
  * identity-stable for the root's lifetime. It is the context value, so
  * publishing it does not re-render consumers, and the key used to
- * validate render-world notes. */
+ * validate render-world notes.
+ */
 export interface ReactRootConnection {
-	/** Draft ids delivered here become part of the worlds this root's
-	 * render passes carry. */
+	/**
+	 * Draft ids delivered here become part of the worlds this root's
+	 * render passes carry.
+	 */
 	dispatch: (id: DraftId) => void
-	/** True only while the first-child commit marker confirms this root's
-	 * current render, before descendant layout effects advance hook stashes. */
+	/**
+	 * True only while the first-child commit marker confirms this root's
+	 * current render, before descendant layout effects advance hook stashes.
+	 */
 	committing: boolean
 }
 
@@ -66,16 +72,22 @@ export interface ReactSignalsHandle {
 const rootConnections = new Set<ReactRootConnection>()
 interface HostedDraft {
 	draft: Draft
-	/** The React transition object that owns this draft. Late deliveries
+	/**
+	 * The React transition object that owns this draft. Late deliveries
 	 * restore it so their dispatches join the original transition's
-	 * updates. */
+	 * updates.
+	 */
 	owner: object | null
-	/** Root connections that received the draft and have not committed it;
-	 * the draft retires when this empties. */
+	/**
+	 * Root connections that received the draft and have not committed it;
+	 * the draft retires when this empties.
+	 */
 	recipients: Set<ReactRootConnection>
-	/** Every connection that received the draft at broadcast time. A root
+	/**
+	 * Every connection that received the draft at broadcast time. A root
 	 * mounted later is absent, and its subscribers rely on the retirement
-	 * fold notifying them, since none of their passes carried the draft. */
+	 * fold notifying them, since none of their passes carried the draft.
+	 */
 	audience: Set<ReactRootConnection>
 }
 
@@ -93,11 +105,13 @@ const reactInternals: SharedInternals =
 		'__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE'
 	] as SharedInternals | undefined) ?? {}
 
-/** React parks a context-only dispatcher between renders. All of its hooks
+/**
+ * React parks a context-only dispatcher between renders. All of its hooks
  * point to the same invalid-hook function; live render dispatchers install
  * distinct implementations. This detects a render before the component
  * calls its first hook, which is required to reject an immediate signal
- * write without letting it mutate state first. */
+ * write without letting it mutate state first.
+ */
 function isRendering(): boolean {
 	const H = reactInternals.H
 	return H != null && H.useState !== H.useEffect
@@ -133,7 +147,8 @@ function renderWriteGuard(): void {
 // Render-world notes: how a render pass declares which world it is.
 // ---------------------------------------------------------------------------
 
-/** A render pass's own declaration of which world it is executing in:
+/**
+ * A render pass's own declaration of which world it is executing in:
  * written by the pass's SignalsFrameworkProvider render (whose reducer state
  * is the pass's world) and refreshed by every one of our hooks the pass
  * renders. Consumed by plain latest()/isPending() calls in render bodies, and by
@@ -153,7 +168,8 @@ function renderWriteGuard(): void {
  * - consuming a note requires a live hooks dispatcher, i.e. a render body.
  * When no valid note exists during a render, reads fall back to base
  * state. Wrong-toward-base is the safe direction; serving a stale world,
- * or leaking drafts into an urgent pass, is never acceptable. */
+ * or leaking drafts into an urgent pass, is never acceptable.
+ */
 interface RenderWorldNote {
 	connection: ReactRootConnection | null
 	ids: readonly DraftId[]
@@ -188,10 +204,12 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 	}
 }
 
-/** Called by the connection's own render: authoritative for its pass, always
+/**
+ * Called by the connection's own render: authoritative for its pass, always
  * overwrites. An empty world clears the note instead of installing one —
  * a null note already means base state to every consumer, and steady-
- * state renders stay allocation-free. */
+ * state renders stay allocation-free.
+ */
 export function noteRenderWorld(connection: ReactRootConnection, ids: readonly DraftId[]): void {
 	if (ids.length === 0) {
 		note = null
@@ -204,11 +222,13 @@ export function noteRenderWorld(connection: ReactRootConnection, ids: readonly D
 	armNoteExpiry(note)
 }
 
-/** Called by every hook render: kills a foreign connection's leftover note,
+/**
+ * Called by every hook render: kills a foreign connection's leftover note,
  * and — when the hook carries world state of its own — re-establishes a
  * note for passes the connection itself did not render. The hook's ids come
  * from React's update queues for this very pass, so they can never run
- * ahead of it. */
+ * ahead of it.
+ */
 export function noteHookRender(
 	connection: ReactRootConnection | null,
 	ids: readonly DraftId[] | null,
@@ -222,9 +242,11 @@ export function noteHookRender(
 	}
 }
 
-/** The valid note's ids for a connection, or null. Hooks resolve their render
+/**
+ * The valid note's ids for a connection, or null. Hooks resolve their render
  * value against this when present; it covers components mounting inside a
- * transition pass, whose own reducers never received the dispatch. */
+ * transition pass, whose own reducers never received the dispatch.
+ */
 export function renderPassIds(connection: ReactRootConnection | null): readonly DraftId[] | null {
 	return note !== null && note.connection === connection ? note.ids : null
 }
@@ -290,15 +312,19 @@ export function dispatchUrgent(dispatch: () => void): void {
 	}
 }
 
-/** A wake meaning "re-render against current state". Zero is never a
+/**
+ * A wake meaning "re-render against current state". Zero is never a
  * live draft id (they start at 1), so the reducer leaves it out of the id
  * set while still returning a fresh state object — producing a re-render
- * against whatever the queues say the world is now. */
+ * against whatever the queues say the world is now.
+ */
 export const REPAIR_WAKE: DraftId = 0
 
-/** What a hook last rendered: the world ids it resolved in and the value
+/**
+ * What a hook last rendered: the world ids it resolved in and the value
  * it showed. Late-subscription repair (correctSubscription) and the
- * notify predicate (resolutionDiffers) compare current state against it. */
+ * notify predicate (resolutionDiffers) compare current state against it.
+ */
 export interface RenderedResolution {
 	ids: readonly DraftId[]
 	value: unknown
@@ -378,10 +404,12 @@ export function resolutionDiffers(node: ProducerNode, rendered: RenderedResoluti
 // Draft broadcast and per-root commit bookkeeping
 // ---------------------------------------------------------------------------
 
-/** Drafts created for React transition contexts, including the convenience
+/**
+ * Drafts created for React transition contexts, including the convenience
  * helpers. The values are Draft records, not ids: an entry dies with its
  * transition object (WeakMap), and handing the record straight to write
- * classification spares every drafted write an id lookup. */
+ * classification spares every drafted write an id lookup.
+ */
 const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
@@ -402,11 +430,13 @@ function ambientClassifier(): Draft | null {
 	return draft.state === 'open' ? draft : null
 }
 
-/** Send a new draft's id to every connection, dispatched inside the current
+/**
+ * Send a new draft's id to every connection, dispatched inside the current
  * React context so the updates join the transition. Connections are the only
  * broadcast audience: value subscribers are woken per drafted atom
  * instead (see dispatchDraftWake), so a transition re-renders each root's
- * connection plus exactly the subscribers its writes touch. */
+ * connection plus exactly the subscribers its writes touch.
+ */
 export function broadcastDraft(draft: Draft): void {
 	// Prune finished drafts: an engine-side discard can finish a draft
 	// without ever visiting the host's bookkeeping.
@@ -527,9 +557,11 @@ function laneWakePump(): boolean {
 	return true
 }
 
-/** Register a sentinel's wake; the returned cleanup unregisters it and
+/**
+ * Register a sentinel's wake; the returned cleanup unregisters it and
  * re-arms the built-in pumps for requests this sentinel accepted but will
- * never commit. */
+ * never commit.
+ */
 export function registerEffectHost(wake: () => void): () => void {
 	effectHostWakes.add(wake)
 	return () => {

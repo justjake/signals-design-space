@@ -75,8 +75,10 @@ for (const { section, cases } of testSuite) {
 }
 
 describe('fx2 :: Computed Evaluation', () => {
-	/** No read occurs between the two writes. FX2 may conservatively
-	 * recompute afterward; skipping that work is permitted, not required. */
+	/**
+	 * No read occurs between the two writes. FX2 may conservatively
+	 * recompute afterward; skipping that work is permitted, not required.
+	 */
 	test('#147 computed reads the final value after an unobserved batch revert', () => {
 		framework.run(() => {
 			const a = framework.signal(0)
@@ -94,8 +96,10 @@ describe('fx2 :: Computed Evaluation', () => {
 })
 
 describe('fx2 :: Batching / Transaction', () => {
-	/** A direct subscriber may run once after each completed batch, but it
-	 * must never observe an intermediate value from inside the batch. */
+	/**
+	 * A direct subscriber may run once after each completed batch, but it
+	 * must never observe an intermediate value from inside the batch.
+	 */
 	test('#123 repeated net-revert batches expose only the final value', () => {
 		framework.run(() => {
 			const a = framework.signal(0)
@@ -117,8 +121,10 @@ describe('fx2 :: Batching / Transaction', () => {
 		})
 	})
 
-	/** A watched computed may recompute to prove that its value is still
-	 * equal. Its subscriber must still resolve the batch's final value. */
+	/**
+	 * A watched computed may recompute to prove that its value is still
+	 * equal. Its subscriber must still resolve the batch's final value.
+	 */
 	test('#132 watched computed resolves the final value after its dependency reverts', () => {
 		framework.run(() => {
 			const a = framework.signal(0)
@@ -140,8 +146,10 @@ describe('fx2 :: Batching / Transaction', () => {
 })
 
 describe('fx2 :: Effect Lifecycle (split-effect contract)', () => {
-	/** Replaces #38: the cleanup pairs with the handler — before each
-	 * delivered re-run and at disposal. */
+	/**
+	 * Replaces #38: the cleanup pairs with the handler — before each
+	 * delivered re-run and at disposal.
+	 */
 	test('#38 cleanup runs before each handler re-run', () => {
 		const a = createAtom(0)
 		const log: string[] = []
@@ -161,9 +169,11 @@ describe('fx2 :: Effect Lifecycle (split-effect contract)', () => {
 		expect(log).toEqual(['run:0', 'cleanup:0', 'run:1', 'cleanup:1', 'run:2', 'cleanup:2'])
 	})
 
-	/** Replaces #89: a throwing pull never reaches the handler, so the
+	/**
+	 * Replaces #89: a throwing pull never reaches the handler, so the
 	 * previous cleanup stays installed and pairs with the next delivered
-	 * run. */
+	 * run.
+	 */
 	test('#89 a compute error leaves the previous cleanup paired', () => {
 		const a = createAtom(1)
 		const log: string[] = []
@@ -188,8 +198,10 @@ describe('fx2 :: Effect Lifecycle (split-effect contract)', () => {
 		dispose()
 	})
 
-	/** Replaces #201: a computed that disposes an effect mid-pull skips that
-	 * effect's handler, and disposal releases every subscriber edge. */
+	/**
+	 * Replaces #201: a computed that disposes an effect mid-pull skips that
+	 * effect's handler, and disposal releases every subscriber edge.
+	 */
 	test('#201 dispose during the pull skips the handler and leaks nothing', () => {
 		const s = createAtom(0)
 		let dispose1!: () => void
@@ -219,8 +231,10 @@ describe('fx2 :: Effect Lifecycle (split-effect contract)', () => {
 		expect(nodeOf(s).observerCount).toBe(0)
 	})
 
-	/** Replaces #209/#210: effects created inside a handler belong to that
-	 * run and are disposed — transitively — before the next handler run. */
+	/**
+	 * Replaces #209/#210: effects created inside a handler belong to that
+	 * run and are disposed — transitively — before the next handler run.
+	 */
 	test('#209/#210 handler-created effects cascade-dispose on re-run', () => {
 		const a = createAtom(0)
 		const b = createAtom(0)

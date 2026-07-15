@@ -23,12 +23,14 @@ export type CreateCosignalsOptions = {
 	arenaInitInts?: number
 	/** Arms development-time checks (see EngineResetOptions). */
 	devChecks?: boolean
-	/** Initial kernel-arena capacity floor, in units (one node plus two dependency
+	/**
+	 * Initial kernel-arena capacity floor, in units (one node plus two dependency
 	 * edges each). Defaults SMALL — the arena grows on demand (grow-by-copy), so
 	 * a server creating one instance per request does not reserve the maximum up
 	 * front. Raise it before building a large graph to avoid growth pauses; the
 	 * arena never shrinks. `configure({ initialRecords })` and the
-	 * COSIGNAL_INITIAL_RECORDS env var raise it too. */
+	 * COSIGNAL_INITIAL_RECORDS env var raise it too.
+	 */
 	initialRecords?: number
 }
 
@@ -43,17 +45,23 @@ declare const IdOf: unique symbol
 
 type IdBrand<P extends string> = { [IdOf]?: P }
 
-/** Premultiplied node record id: the Int32 arena index of the record's field 0
- * (id = record ordinal × ArenaShape.STRIDE). 0 = "none" (record 0 is burned). */
+/**
+ * Premultiplied node record id: the Int32 arena index of the record's field 0
+ * (id = record ordinal × ArenaShape.STRIDE). 0 = "none" (record 0 is burned).
+ */
 export type NodeId = number & IdBrand<'node'>
 /** Premultiplied link record id (links share the arena and stride with nodes). 0 = "none". */
 type LinkId = number & IdBrand<'link'>
-/** A premultiplied record id of either kind: nodes and links draw from one
- * bump pointer (`recNext`); {@link allocNode}/allocLink cast into an id space. */
+/**
+ * A premultiplied record id of either kind: nodes and links draw from one
+ * bump pointer (`recNext`); {@link allocNode}/allocLink cast into an id space.
+ */
 type RecordId = NodeId | LinkId
-/** Dense per-node ordinal ({@link NodeField.NODE_INDEX}): assigned to a slot
+/**
+ * Dense per-node ordinal ({@link NodeField.NODE_INDEX}): assigned to a slot
  * once, kept across tenants, never an identity. Dense per-node side tables
- * key by it — record-id keys would go holey (links share the allocator). */
+ * key by it — record-id keys would go holey (links share the allocator).
+ */
 type NodeIndex = number & IdBrand<'nodeIndex'>
 /** An updated-at clock stamp: an instance-monotone float64 from {@link clockSource} (see the UpdatedAt clocks section); 0 = "never". */
 type Clock = number & IdBrand<'clock'>
@@ -74,12 +82,14 @@ export type ValueIndex = number & IdBrand<'valueIndex'>
 // rule: a layout edit — new field, flag bit, column, or record family —
 // updates the matching grow, scrub, and reset functions in the SAME edit, or
 // a freed slot's next tenant observes the dead tenant's state.
-/** Field offsets within a node arena record. A NodeId points at the record's
+/**
+ * Field offsets within a node arena record. A NodeId points at the record's
  * field 0; a field read is plain addition: `memory[nodeId + NodeField.DEPS]`.
  * `const enum` members inline as number literals the JIT can constant-fold —
  * bundlers can demote module consts to `var`, blocking that folding (measured
  * 15-21% on benchmark workloads). Exported for diagnostics and structural
- * tests; the engine's own hot paths are all same-file. */
+ * tests; the engine's own hot paths are all same-file.
+ */
 export const enum NodeField {
 	/** State machine + kind bits (see NodeFlag). */
 	FLAGS = 0,
@@ -93,16 +103,20 @@ export const enum NodeField {
 	SUBS_TAIL = 4,
 	/** Tenancy generation: bumped on free; disposers and finalizers capture it to defuse stale ids. */
 	GEN = 5,
-	/** 1 iff the node is an atom with an observed-lifecycle effect
+	/**
+	 * 1 iff the node is an atom with an observed-lifecycle effect
 	 * (AtomOptions.effect: a callback runs at its first observer, a cleanup at
 	 * its last); gates the per-link retain/release in {@link linkInsert}/unlink.
 	 * A field, not a FLAGS bit: preserving a bit turns write()'s constant flag
 	 * store into a read-modify-write — measured +0.2 ns per bare write, +3-4%
-	 * on write-storm composites — and stride-8 records make the field free. */
+	 * on write-storm composites — and stride-8 records make the field free.
+	 */
 	LIFECYCLE = 6,
-	/** The record's {@link NodeIndex}. freeNode threads the free list through
+	/**
+	 * The record's {@link NodeIndex}. freeNode threads the free list through
 	 * DEPS and leaves this field untouched, so a slot keeps its index across
-	 * tenants. Node records only — link records use slot 7 as FREE_NEXT. */
+	 * tenants. Node records only — link records use slot 7 as FREE_NEXT.
+	 */
 	NODE_INDEX = 7,
 }
 
@@ -122,15 +136,19 @@ export const enum LinkField {
 	PREV_DEP = 5,
 	/** Next link in the consumer's dependency list. */
 	NEXT_DEP = 6,
-	/** The free list threads through the spare field so a freed link keeps
+	/**
+	 * The free list threads through the spare field so a freed link keeps
 	 * every real field intact: walks deliberately read stale nextDep/nextSub
 	 * off links unlinked earlier in the same walk (conformance case 203;
-	 * tests/freelist.spec.ts), and those must name former neighbors. */
+	 * tests/freelist.spec.ts), and those must name former neighbors.
+	 */
 	FREE_NEXT = 7,
 }
 
-/** Field offsets within a component WATCHER record. It has no kernel links;
- * slots 1/5/7 retain their allocator meanings. */
+/**
+ * Field offsets within a component WATCHER record. It has no kernel links;
+ * slots 1/5/7 retain their allocator meanings.
+ */
 const enum ObserverField {
 	/** Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE). */
 	FLAGS = 0,
@@ -150,8 +168,10 @@ const enum ObserverField {
 	NODE_INDEX = 7,
 }
 
-/** Kernel observer record backing one committed SignalEffect terminal. Its
- * dependency links live canonically on the root arena's terminal shadow. */
+/**
+ * Kernel observer record backing one committed SignalEffect terminal. Its
+ * dependency links live canonically on the root arena's terminal shadow.
+ */
 const enum SignalEffectField {
 	FLAGS = 0,
 	FREE_NEXT = 1,
@@ -183,28 +203,36 @@ export const enum NodeFlag {
 	K_EFFECT = 0b00000001000000000,
 	/** Kind: effect scope. */
 	K_SCOPE = 0b00000010000000000,
-	/** The computed's cached value is an exceptional outcome — the raw thrown
+	/**
+	 * The computed's cached value is an exceptional outcome — the raw thrown
 	 * value (HAS_BOX alone) or the pending thenable (HAS_BOX | BOX_SUSPENDED).
 	 * Set only at the kernel's two catch sites, cleared only by a successful
 	 * evaluation; every other flag site ORs bits or forces a recompute, so a
-	 * stale clear never serves a payload unwrapped. */
+	 * stale clear never serves a payload unwrapped.
+	 */
 	HAS_BOX = 0b00000100000000000,
 	/** Refines HAS_BOX (never set without it): the payload is a pending thenable, not a thrown error. */
 	BOX_SUSPENDED = 0b00001000000000000,
-	/** Marks engine-created reader records (the markMachineryOwned op; never
+	/**
+	 * Marks engine-created reader records (the markMachineryOwned op; never
 	 * user nodes). Observed-lifecycle refcounts follow kernel dependency
 	 * links, but the engine itself reads user atoms as bookkeeping (world
 	 * folds, committed-world validation, tests) — a websocket-connecting effect
 	 * must not fire because a render folded its atom. Refcount sites skip
-	 * marked readers; real consumers report through the observation index. Every flag-word rewrite preserves the bit. */
+	 * marked readers; real consumers report through the observation index. Every flag-word rewrite preserves the bit.
+	 */
 	MACHINERY_OWNED = 0b00010000000000000,
-	/** Engine observer records: K_WATCHER is one component watcher;
+	/**
+	 * Engine observer records: K_WATCHER is one component watcher;
 	 * K_SIGNAL_EFFECT is one committed effect terminal.
-	 * Outside KIND_MASK: the kernel's kind dispatch never sees observer records. */
+	 * Outside KIND_MASK: the kernel's kind dispatch never sees observer records.
+	 */
 	K_WATCHER = 0b00100000000000000,
 	K_SIGNAL_EFFECT = 0b01000000000000000,
-	/** Observer records only: subscribed for delivery. A watcher holds one
-	 * observed-consumer ref; a SignalEffect uses this as its teardown gate. */
+	/**
+	 * Observer records only: subscribed for delivery. A watcher holds one
+	 * observed-consumer ref; a SignalEffect uses this as its teardown gate.
+	 */
 	OBSERVER_LIVE = 0b10000000000000000,
 	/** The kind bits together (exactly one is set on a live kernel record). */
 	KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE, // 0b00000011110000000
@@ -224,18 +252,22 @@ export const enum ArenaShape {
 	ID_TO_CLOCK_SHIFT = 3,
 	/** id >> ID_TO_ORDINAL_SHIFT: premultiplied id → the record ordinal (log2 of STRIDE; a stride change updates both). */
 	ID_TO_ORDINAL_SHIFT = 3,
-	/** valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
+	/**
+	 * valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
 	 * signal's pending value or an effect's cleanup fn. Computeds leave it
 	 * empty: nothing kernel-side may pin the public handle, or a dropped
-	 * handle's record could never be reclaimed. */
+	 * handle's record could never be reclaimed.
+	 */
 	AUX_VALUE_OFFSET = 1,
 	/** length >> HALF_ARENA_SHIFT: the "keep at least half the arena free" watermark term. */
 	HALF_ARENA_SHIFT = 1,
 	/** Records budgeted per configured capacity unit: one node + two links. */
 	RECORDS_PER_UNIT = 3,
-	/** Min free records guaranteed at each op boundary: the sum of per-kind
+	/**
+	 * Min free records guaranteed at each op boundary: the sum of per-kind
 	 * floors (256 node + 1024 link records), so any allocation pattern that
-	 * fit those floors separately still fits the merged slack. */
+	 * fit those floors separately still fits the merged slack.
+	 */
 	REC_SLACK = 1280,
 }
 
@@ -278,14 +310,18 @@ const COMPUTED_BRAND: unique symbol = Symbol.for('cosignals.handle.computed')
 // reservation, never a ceiling.
 /** Smallest legal floor; the option/env/configure() paths all enforce it. */
 const MIN_INITIAL_RECORDS = 2
-/** The DEFAULT browser instance's floor — the historical reservation, kept so
+/**
+ * The DEFAULT browser instance's floor — the historical reservation, kept so
  * its behavior is unchanged. `createCosignals()` for user code defaults SMALL
- * instead (see {@link SMALL_INITIAL_RECORDS}). */
+ * instead (see {@link SMALL_INITIAL_RECORDS}).
+ */
 const DEFAULT_INITIAL_RECORDS = 1 << 20
-/** `createCosignals()`'s default floor: small enough that many instances (e.g.
+/**
+ * `createCosignals()`'s default floor: small enough that many instances (e.g.
  * one per server request) cost kilobytes each, not the ~120MB the max reserves;
  * still above the op-boundary slack watermark so a fresh instance does not grow
- * on its first write. */
+ * on its first write.
+ */
 const SMALL_INITIAL_RECORDS = 1 << 10
 
 /** COSIGNAL_INITIAL_RECORDS parsed to units, or undefined when unset/invalid. */
@@ -314,10 +350,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		},
 	}
 
-	/** Scrub a freed record's side columns on the node allocator's free path
+	/**
+	 * Scrub a freed record's side columns on the node allocator's free path
 	 * (every family it serves; new columns join this scrub): the next tenant
 	 * must never observe dead values, closures, or clock stamps. The clock
-	 * buffer is closure-owned, so the caller passes it. */
+	 * buffer is closure-owned, so the caller passes it.
+	 */
 	function scrubNodeColumnsOnFree(id: NodeId, clocks: Float64Array): void {
 		const base: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT
 		values[base] = undefined // current/computed value; watcher records use it for last rendered value
@@ -327,15 +365,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0 // signal/computed: updatedAt; watcher: lastValidatedAt
 	}
 
-	/** Scrub a freed link record's side columns on the link allocator's free
-	 * path (new columns join this scrub) — {@link scrubNodeColumnsOnFree}'s link twin. */
+	/**
+	 * Scrub a freed link record's side columns on the link allocator's free
+	 * path (new columns join this scrub) — {@link scrubNodeColumnsOnFree}'s link twin.
+	 */
 	function scrubLinkColumnsOnFree(id: LinkId, clocks: Float64Array): void {
 		clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0
 	}
 
-	/** Grow the kernel's grown-together side columns to cover one record id (new
+	/**
+	 * Grow the kernel's grown-together side columns to cover one record id (new
 	 * grow-array columns join this loop); record-buffer columns are
-	 * factory-carried and grow by kernel rebuild instead. */
+	 * factory-carried and grow by kernel rebuild instead.
+	 */
 	function growNodeSideColumns(id: RecordId): void {
 		while (values.length <= (id >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET) {
 			values.push(undefined)
@@ -348,8 +390,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Reset every kernel side column to its record-zero seed (the test reset's
-	 * column half): grow-arrays truncate; record buffers zero-fill in place. */
+	/**
+	 * Reset every kernel side column to its record-zero seed (the test reset's
+	 * column half): grow-arrays truncate; record buffers zero-fill in place.
+	 */
 	function resetSideColumns(clocks: Float64Array): void {
 		values.length = 2
 		values[0] = undefined
@@ -361,12 +405,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		clocks.fill(0)
 	}
 
-	/** World-arena shadow-record fields. A shadow record is a world's stand-in
+	/**
+	 * World-arena shadow-record fields. A shadow record is a world's stand-in
 	 * for one kernel node (keyed by node index, stamped with the node's GEN);
 	 * shadow and link records share a stride-8 pool, and FLAGS bits are
 	 * {@link ArenaFlag}. Names keep the kernel's numbering so arena walks read
 	 * beside the kernel family, but nothing couples the layouts. Module-local:
-	 * hot walks are same-file; the test checker reads via arenaCheckerLayout(). */
+	 * hot walks are same-file; the test checker reads via arenaCheckerLayout().
+	 */
 	const enum ArenaField {
 		FLAGS = 0,
 		/** First dependency link; doubles as the dead-shadow free-list next pointer. */
@@ -383,9 +429,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		MARK = 7,
 	}
 
-	/** World-arena link-record fields: {@link LinkField} meanings over shadow
+	/**
+	 * World-arena link-record fields: {@link LinkField} meanings over shadow
 	 * record ids (subscriber lists are per-mode), plus MODE. Links share
-	 * ArenaField's pool and stride; offsets overlay the shadow-record fields. */
+	 * ArenaField's pool and stride; offsets overlay the shadow-record fields.
+	 */
 	const enum ArenaLinkField {
 		VERSION = 0,
 		DEP = 1,
@@ -396,11 +444,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		NEXT_DEP = 6,
 		/** ArenaLinkMode bits (strong/weak — see the weak-link rules at the arena walks). */
 		MODE = 7,
-		/** The free list aliases VERSION (the kernel {@link LinkField.FREE_NEXT}
+		/**
+		 * The free list aliases VERSION (the kernel {@link LinkField.FREE_NEXT}
 		 * discipline: freed links keep every field a walk still reads — arena
 		 * walks read NEXT_DEP/NEXT_SUB off mid-walk-freed links). VERSION is dead
 		 * on freed links: every allocation path rewrites it before any read.
-		 * Pinned by tests/arena-freelist.spec.ts. */
+		 * Pinned by tests/arena-freelist.spec.ts.
+		 */
 		FREE_NEXT = 0,
 	}
 
@@ -409,8 +459,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		WEAK = 0b1,
 	}
 
-	/** Shadow flag bits: kernel {@link NodeFlag} meanings over shadows (names
-	 * keep its numbering); VALID and BOX_THROWN are arena-only. */
+	/**
+	 * Shadow flag bits: kernel {@link NodeFlag} meanings over shadows (names
+	 * keep its numbering); VALID and BOX_THROWN are arena-only.
+	 */
 	const enum ArenaFlag {
 		/** Can produce new values (evaluated at least once for computeds). */
 		MUTABLE = 0b000000000000001,
@@ -430,10 +482,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		BOX_SUSPENDED = 0b001000000000000,
 		/** The value column holds a folded value (cold shadow when unset). */
 		VALID = 0b010000000000000,
-		/** Refines HAS_BOX: the payload was thrown by the fn (render-path
+		/**
+		 * Refines HAS_BOX: the payload was thrown by the fn (render-path
 		 * suspension or plain error) — serving rethrows it. Clear means a returned
 		 * sentinel (background suspensions fold to it), served as a value. No
-		 * kernel NodeFlag counterpart. */
+		 * kernel NodeFlag counterpart.
+		 */
 		BOX_THROWN = 0b100000000000000,
 	}
 
@@ -443,26 +497,32 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		STRIDE = 8,
 		/** record id >> ID_TO_COLUMN_SHIFT = the record's slot in every per-record side column (one slot per record). */
 		ID_TO_COLUMN_SHIFT = 3,
-		/** Int32 stamp ceiling: `readClock`/`cycle` stamps store into Int32Array
+		/**
+		 * Int32 stamp ceiling: `readClock`/`cycle` stamps store into Int32Array
 		 * fields, which truncate past 2^31-1 — a wrapped store could collide with
 		 * a live stamp and false-positive a dedup (a skipped propagation: the
 		 * dangerous direction). The bump helpers renumber before any store can
-		 * wrap: stamps reset to 0 (= stale) and the next walk conservatively re-marks. */
+		 * wrap: stamps reset to 0 (= stale) and the next walk conservatively re-marks.
+		 */
 		CLOCK_LIMIT = 2147418112,
-		/** 2^26 — the default initial per-arena reservation (64MiB of Int32: 2M
+		/**
+		 * 2^26 — the default initial per-arena reservation (64MiB of Int32: 2M
 		 * stride-8 records plus a float64 clock slot each): zeroed pages are
 		 * demand-paged, so resident memory tracks only records actually touched.
 		 * Not a ceiling — {@link growWorldArenaBuffers} doubles past it; EngineResetOptions.arenaInitInts
-		 * overrides. Fixed-length views only: resizable-buffer views measured a +56% walk regression. */
+		 * overrides. Fixed-length views only: resizable-buffer views measured a +56% walk regression.
+		 */
 		INIT_BUFFER_BYTES = 67108864,
 	}
 
-	/** Grow one world arena's record store and every record-keyed buffer column
+	/**
+	 * Grow one world arena's record store and every record-keyed buffer column
 	 * by doubling copy (new record-keyed columns join this growth; exhaustion is
 	 * never fatal). Safe mid-operation — only the buffer OBJECTS change, record
 	 * ids and every structure holding them stay stable, and replacements are
 	 * zeroed past the copied prefix — provided every site that can allocate
-	 * re-reads `a.memory` afterward; each allocating site notes this where it re-reads. */
+	 * re-reads `a.memory` afterward; each allocating site notes this where it re-reads.
+	 */
 	function growWorldArenaBuffers(a: WorldArena, needInts: number): void {
 		let len = a.memory.length
 		while (len < needInts) {
@@ -490,9 +550,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Grow the world arena's grown-together per-record columns to cover one
+	/**
+	 * Grow the world arena's grown-together per-record columns to cover one
 	 * column index (new grow-array columns join this loop); record-buffer
-	 * columns grow with the record store in {@link growWorldArenaBuffers}. */
+	 * columns grow with the record store in {@link growWorldArenaBuffers}.
+	 */
 	function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
 		while (a.vals.length <= columnIndex) {
 			a.vals.push(undefined)
@@ -505,9 +567,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Scrub an evicted shadow record's column slots (new columns join this
+	/**
+	 * Scrub an evicted shadow record's column slots (new columns join this
 	 * scrub): no dead value or clock stamp for the next tenant. List-coupled
-	 * columns clear through their list operations; walk stamps are inert by generation monotonicity. */
+	 * columns clear through their list operations; walk stamps are inert by generation monotonicity.
+	 */
 	function scrubWorldShadowColumnsOnEvict(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT
 		a.vals[vi] = undefined
@@ -516,17 +580,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.signalEffects[vi] = undefined
 	}
 
-	/** Scrub a freed world-arena link record's column slots (new columns join
+	/**
+	 * Scrub a freed world-arena link record's column slots (new columns join
 	 * this scrub): only SignalEffect dependency links write clocks, but every
-	 * free path scrubs, so a reused link never carries a dead tenancy's stamp. */
+	 * free path scrubs, so a reused link never carries a dead tenancy's stamp.
+	 */
 	function scrubWorldLinkColumnsOnFree(a: WorldArena, id: number): void {
 		a.clocks[id >> ArenaGeom.ID_TO_COLUMN_SHIFT] = 0
 	}
 
-	/** Reset every world-arena side column at pool release, keeping each
+	/**
+	 * Reset every world-arena side column at pool release, keeping each
 	 * column's CAPACITY across tenancies (truncating to 0 forced re-pushing
 	 * every element per claim — ~2k pushes per cold render): fill() releases
-	 * value refs, stale ids read as "none", clocks zero their written prefix. */
+	 * value refs, stale ids read as "none", clocks zero their written prefix.
+	 */
 	function resetWorldArenaColumnsOnRelease(a: WorldArena): void {
 		a.nodeToShadow.fill(0)
 		a.vals.fill(undefined)
@@ -539,9 +607,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.signalEffects.fill(undefined)
 	}
 
-	/** Mass-teardown bounds for the boundary sweep. Free lists are LIFO: a huge
+	/**
+	 * Mass-teardown bounds for the boundary sweep. Free lists are LIFO: a huge
 	 * teardown hands ids back highest-first and the next build scatters across the
-	 * arena; a batch crossing both bounds pays a sort to restore ascending reuse. */
+	 * arena; a batch crossing both bounds pays a sort to restore ascending reuse.
+	 */
 	const enum MassTeardown {
 		/** Pending node frees must exceed this count (absolute floor). */
 		MIN_BATCH = 4096,
@@ -566,17 +636,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let activeSub: NodeId = 0
 	let enterDepth = 0 // live kernel frames that captured memory; 0 = op boundary (the test reset's idle precondition)
 
-	/** Read routing, armed: true while the concurrent machinery has a context
+	/**
+	 * Read routing, armed: true while the concurrent machinery has a context
 	 * that could answer a public read — an evaluation world on stack or an
 	 * attached driver's ambient-world provider. The public
 	 * `.state` getters take the routed read path only when it is set;
-	 * the worlds section's syncReadRouting is the only writer. */
+	 * the worlds section's syncReadRouting is the only writer.
+	 */
 	let routingActive = false
 
-	/** The reset epoch: bumped once per `__TEST__resetEngine`, never in
+	/**
+	 * The reset epoch: bumped once per `__TEST__resetEngine`, never in
 	 * production. Cross-reset microtasks capture it at schedule time and no-op
 	 * if it moved — a dead test's microtask must never touch the next test's
-	 * state. Reclamation keys its per-epoch registry by it. */
+	 * state. Reclamation keys its per-epoch registry by it.
+	 */
 	let engineEpoch = 0
 
 	const queued: NodeId[] = []
@@ -603,24 +677,32 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- the kernel op table -----------------------------------------------------
 
-	/** The kernel op table: its function fields are the kernel's operations.
+	/**
+	 * The kernel op table: its function fields are the kernel's operations.
 	 * Consumers dispatch through the instance-local slot {@link E}, re-linked
-	 * to a fresh table only at growth boundaries ({@link createKernel}). */
+	 * to a fresh table only at growth boundaries ({@link createKernel}).
+	 */
 	interface Kernel {
 		records: RecordCount
 		buffer(): Int32Array
-		/** The clock column (see {@link clockSource}): growth carry + cold
-		 * consumers only — hot code uses the factory's closure constant. */
+		/**
+		 * The clock column (see {@link clockSource}): growth carry + cold
+		 * consumers only — hot code uses the factory's closure constant.
+		 */
 		clocks(): Float64Array
 		newSignal(value: unknown, target: object): NodeId
 		newComputed(getter: (ctx: unknown) => unknown, target: object): NodeId
 		newEffect(fn: () => (() => void) | void): NodeId
 		newScope(fn: () => void): NodeId
-		/** Allocate an observer record (see {@link ObserverField}): no kernel
-		 * links, no reclamation registration; freed via {@link Kernel.disposeObserver}. */
+		/**
+		 * Allocate an observer record (see {@link ObserverField}): no kernel
+		 * links, no reclamation registration; freed via {@link Kernel.disposeObserver}.
+		 */
 		newObserver(flags: NodeFlags): NodeId
-		/** Dispose an observer record: flags zero at once (probes read it dead);
-		 * the free defers to the boundary sweep ({@link Kernel.sweepPendingFree}). */
+		/**
+		 * Dispose an observer record: flags zero at once (probes read it dead);
+		 * the free defers to the boundary sweep ({@link Kernel.sweepPendingFree}).
+		 */
 		disposeObserver(id: NodeId): void
 		gen(id: NodeId): Generation
 		/** Read an atom record (computeds go through {@link computedRead}). */
@@ -647,10 +729,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		activeIsComputed(): boolean
 	}
 
-	/** Builds the kernel op table over a fresh arena of `records` records,
+	/**
+	 * Builds the kernel op table over a fresh arena of `records` records,
 	 * optionally carrying the old arena's contents — growth is
 	 * `E = createKernel(records * 2, E.buffer(), E.clocks())`; the instance
-	 * header's "Closure rebuild" note covers what rebuilds vs. what survives. */
+	 * header's "Closure rebuild" note covers what rebuilds vs. what survives.
+	 */
 	function createKernel(
 		records: RecordCount,
 		carry?: Int32Array,
@@ -757,11 +841,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			__onRecordFree(id, memory[id + NodeField.NODE_INDEX])
 		}
 
-		/** Threads every pending disposed record onto the node free list (the
+		/**
+		 * Threads every pending disposed record onto the node free list (the
 		 * boundary sweep's free phase; cold). A batch crossing both
 		 * {@link MassTeardown} bounds frees in descending id order so pops come
 		 * off ascending — dense reuse (measured: a 2M-node rebuild went from ~30s
-		 * to build-from-fresh speed) — then {@link sortLinkFreeList} runs. */
+		 * to build-from-fresh speed) — then {@link sortLinkFreeList} runs.
+		 */
 		function sweepPendingFree(): void {
 			const n = pendingFree.length
 			if (n > MassTeardown.MIN_BATCH && n * MassTeardown.MIN_ARENA_FRACTION >= recNext) {
@@ -782,10 +868,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			pendingFree.length = 0
 		}
 
-		/** Rethreads the link free list into ascending order after a mass teardown
+		/**
+		 * Rethreads the link free list into ascending order after a mass teardown
 		 * (cold; {@link sweepPendingFree}'s sorted branch only). One pass marks
 		 * members in a bitmap; an ascending bitmap scan rethreads FREE_NEXT — no
-		 * comparison sort, and the scan and stores ascend for hardware prefetch. */
+		 * comparison sort, and the scan and stores ascend for hardware prefetch.
+		 */
 		function sortLinkFreeList(): void {
 			let n = 0
 			const words = new Uint32Array(((recNext >> ArenaShape.ID_TO_ORDINAL_SHIFT) + 32) >> 5)
@@ -851,11 +939,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// The world-arena sections re-derive these walks over their own layout on
 		// purpose; suites, not prose, keep the twins in step — port rules, not text.
 
-		/** Registers `sub`'s dependency on `dep` for this evaluation cycle. On
+		/**
+		 * Registers `sub`'s dependency on `dep` for this evaluation cycle. On
 		 * re-track over unchanged deps this stays fast: the DEPS_TAIL cursor sits
 		 * on `dep`, or its successor names `dep` and one write re-validates it.
 		 * Link creation is out of line ({@link linkInsert}) to keep this body
-		 * under V8's inlining bytecode budget; deps rarely change. */
+		 * under V8's inlining bytecode budget; deps rarely change.
+		 */
 		function link(dep: NodeId, sub: NodeId, version: Version): void {
 			const prevDep = memory[sub + NodeField.DEPS_TAIL]
 			if (prevDep !== 0 && memory[prevDep + LinkField.DEP] === dep) {
@@ -871,11 +961,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			linkInsert(dep, sub, version, prevDep, nextDep)
 		}
 
-		/** Insertion tail of {@link link}: splices a new link record into the
+		/**
+		 * Insertion tail of {@link link}: splices a new link record into the
 		 * sub's dep list and the dep's subscriber list; out of line so the
 		 * re-track fast path stays inlinable (upstream's monolithic link() was
 		 * 475 bytecodes — never inlined into the read paths). The opening probe
-		 * asks a different question than link: same dep read twice this run? */
+		 * asks a different question than link: same dep read twice this run?
+		 */
 		function linkInsert(
 			dep: NodeId,
 			sub: NodeId,
@@ -924,10 +1016,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Removes one link record from both lists it threads and frees it;
+		/**
+		 * Removes one link record from both lists it threads and frees it;
 		 * returns the next dep link so purge loops can walk while unlinking. A
 		 * dep losing its last subscriber runs {@link unwatched}; a lifecycle dep
-		 * releases one ref per removed non-machinery link ({@link releaseLifecycle}). */
+		 * releases one ref per removed non-machinery link ({@link releaseLifecycle}).
+		 */
 		function unlink(id: LinkId, sub: NodeId = memory[id + LinkField.SUB]): LinkId {
 			const dep = memory[id + LinkField.DEP]
 			const prevDep = memory[id + LinkField.PREV_DEP]
@@ -964,12 +1058,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return nextDep
 		}
 
-		/** Pushes staleness down a written node's subscriber list: subscribers go
+		/**
+		 * Pushes staleness down a written node's subscriber list: subscribers go
 		 * Pending (checkDirty later verifies and upgrades to Dirty), watching
 		 * effects queue via {@link notify}, mutable subscribers with their own
 		 * subscribers descend on the scratch stack; `innerWrite` marks writes made
 		 * during an effect run (upstream's Recursed). No try/finally: notify only
-		 * queues, so nothing here can throw. */
+		 * queues, so nothing here can throw.
+		 */
 		function propagate(startLink: LinkId, innerWrite: boolean): void {
 			let cur = startLink
 			let next = memory[cur + LinkField.NEXT_SUB]
@@ -1039,12 +1135,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			} while (true)
 		}
 
-		/** Answers "is this Pending sub actually stale?" by descending dep links
+		/**
+		 * Answers "is this Pending sub actually stale?" by descending dep links
 		 * and recomputing directly-dirty deps found (lazy pull). Entry wrapper:
 		 * owns the scratch-stack restore (user getters can throw mid-walk) and
 		 * the shallow/two-level/chain fast paths; {@link checkDirtyLoop} is the
 		 * general walk. Split to keep each piece under V8's 460-bytecode inlining
-		 * budget (the monolith was 537; small cones went 1.05-1.3x → 0.9-1.1x). */
+		 * budget (the monolith was 537; small cones went 1.05-1.3x → 0.9-1.1x).
+		 */
 		function checkDirty(startLink: LinkId, startSub: NodeId): boolean {
 			// Shallow fast path: the sub is already dirty, or its first dep is a
 			// directly-dirty mutable (an effect one link from a written signal).
@@ -1114,8 +1212,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** update() plus the sibling Pending→Dirty upgrade. `subs` is captured
-		 * before update() runs: re-track may rebuild the subscriber list mid-call. */
+		/**
+		 * update() plus the sibling Pending→Dirty upgrade. `subs` is captured
+		 * before update() runs: re-track may rebuild the subscriber list mid-call.
+		 */
 		function updateAndShallow(node: NodeId, subs: LinkId): boolean {
 			if (update(node)) {
 				if (memory[subs + LinkField.NEXT_SUB] !== 0) {
@@ -1126,11 +1226,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return false
 		}
 
-		/** Stackless {@link checkDirty} walk for pure chains — nodes with exactly
+		/**
+		 * Stackless {@link checkDirty} walk for pure chains — nodes with exactly
 		 * one dep and one subscriber each. Descend while that holds; on finding a
 		 * directly-dirty base, update back up by climbing each node's unique
 		 * subscriber link. Returns 1 (dirty), 0 (resolved clean), -1 (not a
-		 * chain; nothing mutated — the caller falls to the general loop). */
+		 * chain; nothing mutated — the caller falls to the general loop).
+		 */
 		function chainCheck(startLink: LinkId): number {
 			let link = startLink
 			let depth = 0
@@ -1176,8 +1278,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return changed ? 1 : 0
 		}
 
-		/** The general {@link checkDirty} walk, out of line (the wrapper owns the
-		 * checkSp restore, so a throwing getter unwinds through it). */
+		/**
+		 * The general {@link checkDirty} walk, out of line (the wrapper owns the
+		 * checkSp restore, so a throwing getter unwinds through it).
+		 */
 		function checkDirtyLoop(cur: LinkId, sub: NodeId): boolean {
 			let checkDepth = 0
 			let dirty = false
@@ -1244,8 +1348,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			} while (true)
 		}
 
-		/** One-level Pending→Dirty upgrade along a subscriber list after a node's
-		 * value actually changed; watching subscribers queue via {@link notify}. */
+		/**
+		 * One-level Pending→Dirty upgrade along a subscriber list after a node's
+		 * value actually changed; watching subscribers queue via {@link notify}.
+		 */
 		function shallowPropagate(startLink: LinkId): void {
 			let cur = startLink
 			do {
@@ -1260,8 +1366,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			} while ((cur = memory[cur + LinkField.NEXT_SUB]) !== 0)
 		}
 
-		/** True iff `checkLink` still sits on `sub`'s dep list (propagate's guard
-		 * against acting on a link a re-track already replaced). */
+		/**
+		 * True iff `checkLink` still sits on `sub`'s dep list (propagate's guard
+		 * against acting on a link a re-track already replaced).
+		 */
 		function isValidLink(checkLink: LinkId, sub: NodeId): boolean {
 			let cur = memory[sub + NodeField.DEPS_TAIL]
 			while (cur !== 0) {
@@ -1288,8 +1396,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return true
 		}
 
-		/** Queues a watching effect and its still-watching ancestor chain for the
-		 * next flush; the inserted segment reverses so outer effects run first. */
+		/**
+		 * Queues a watching effect and its still-watching ancestor chain for the
+		 * next flush; the inserted segment reverses so outer effects run first.
+		 */
 		function notify(e: NodeId): void {
 			let insertIndex = queuedLength
 			const firstInsertedIndex = insertIndex
@@ -1314,12 +1424,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** A node just lost its last subscriber: computeds strip (deps disposed,
+		/**
+		 * A node just lost its last subscriber: computeds strip (deps disposed,
 		 * marked dirty — an unobserved cache is dead weight), signals re-poke a
 		 * skipped reclamation ({@link noteReclaimRetry}), effects/scopes dispose.
 		 * A mid-evaluation record (RECURSED_CHECK) never strips: DEPS_TAIL is its
 		 * live re-track cursor, and freeing that link cycles the dep list (a hung
-		 * walk); a truly-dead record strips at its next unwatched edge instead. */
+		 * walk); a truly-dead record strips at its next unwatched edge instead.
+		 */
 		function unwatched(node: NodeId): void {
 			const flags = memory[node + NodeField.FLAGS]
 			if (flags & NodeFlag.K_COMPUTED) {
@@ -1344,8 +1456,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Upstream's HasChildEffect slow path in updateComputed/run: unlink every
-		 * dep that is not a signal/computed (i.e. child effects/scopes), in reverse. */
+		/**
+		 * Upstream's HasChildEffect slow path in updateComputed/run: unlink every
+		 * dep that is not a signal/computed (i.e. child effects/scopes), in reverse.
+		 */
 		function unlinkChildEffects(sub: NodeId): void {
 			let cur = memory[sub + NodeField.DEPS_TAIL]
 			while (cur !== 0) {
@@ -1358,10 +1472,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Re-runs a computed's getter with tracking; returns true iff the cached
+		/**
+		 * Re-runs a computed's getter with tracking; returns true iff the cached
 		 * outcome changed. The getter receives {@link POLICY_CTX}; a throw never
 		 * corrupts graph state — the raw thrown value or pending thenable becomes
-		 * the cached payload via the cold {@link storeThrown} hook. */
+		 * the cached payload via the cold {@link storeThrown} hook.
+		 */
 		function updateComputed(c: NodeId): boolean {
 			const oldFlags = memory[c + NodeField.FLAGS]
 			if (oldFlags & NodeFlag.HAS_CHILD_EFFECT) {
@@ -1417,17 +1533,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Promotes a dirty signal's pending value to current; returns true iff
+		/**
+		 * Promotes a dirty signal's pending value to current; returns true iff
 		 * it differs. The flag store is the constant signal word — a live
-		 * signal's flags are exactly K_SIGNAL|MUTABLE (±DIRTY) — no load needed. */
+		 * signal's flags are exactly K_SIGNAL|MUTABLE (±DIRTY) — no load needed.
+		 */
 		function updateSignal(s: NodeId): boolean {
 			memory[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE
 			const v: ValueIndex = s >> ArenaShape.ID_TO_VALUE_SHIFT
 			return vals[v] !== (vals[v] = vals[v + ArenaShape.AUX_VALUE_OFFSET])
 		}
 
-		/** Runs a queued effect if actually stale ({@link checkDirty} verifies
-		 * Pending), re-arming its Watching bit either way; prior cleanup runs first. */
+		/**
+		 * Runs a queued effect if actually stale ({@link checkDirty} verifies
+		 * Pending), re-arming its Watching bit either way; prior cleanup runs first.
+		 */
 		function run(e: NodeId): void {
 			const flags = memory[e + NodeField.FLAGS]
 			if (
@@ -1490,10 +1610,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Disposes an effect or effect scope: deps unlink in reverse, the parent
+		/**
+		 * Disposes an effect or effect scope: deps unlink in reverse, the parent
 		 * edge detaches (one unlink suffices — effects are unreadable, so SUBS
 		 * holds at most that edge), pending cleanup runs, and the free defers to
-		 * the boundary sweep. */
+		 * the boundary sweep.
+		 */
 		function disposeEffect(e: NodeId): void {
 			const flags = memory[e + NodeField.FLAGS]
 			if (!(flags & NodeFlag.KIND_MASK)) {
@@ -1525,8 +1647,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Evaluation epilogue: unlinks every dep the re-track did not re-visit
-		 * (everything past the DEPS_TAIL cursor is last run's leftovers). */
+		/**
+		 * Evaluation epilogue: unlinks every dep the re-track did not re-visit
+		 * (everything past the DEPS_TAIL cursor is last run's leftovers).
+		 */
 		function purgeDeps(sub: NodeId): void {
 			const depsTail = memory[sub + NodeField.DEPS_TAIL]
 			let dep =
@@ -1538,9 +1662,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 		// ---- operations dispatched from the public wrappers ------------------------
 
-		/** Registers a public handle with the reclamation registry so its record
+		/**
+		 * Registers a public handle with the reclamation registry so its record
 		 * can be recovered if the handle is garbage-collected ({@link reclaimNode});
-		 * the heldValue packs id and generation per {@link HeldValue}. */
+		 * the heldValue packs id and generation per {@link HeldValue}.
+		 */
 		function registerReclaim(target: object, id: NodeId): void {
 			const reg = reclaimRegistry
 			if (reg !== undefined) {
@@ -1572,8 +1698,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return id
 		}
 
-		/** Creates an effect record and runs `fn` at once with tracking; an open
-		 * parent frame gains the child-ownership edge (the effect links as its dep). */
+		/**
+		 * Creates an effect record and runs `fn` at once with tracking; an open
+		 * parent frame gains the child-ownership edge (the effect links as its dep).
+		 */
 		function newEffect(fn: () => (() => void) | void): NodeId {
 			const e = allocNode(NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK)
 			fnTab[e >> ArenaShape.ID_TO_FN_SHIFT] = fn
@@ -1596,8 +1724,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return e
 		}
 
-		/** Creates an effect-scope record and runs `fn` inside it, so effects
-		 * created during the call link as the scope's deps and dispose with it. */
+		/**
+		 * Creates an effect-scope record and runs `fn` inside it, so effects
+		 * created during the call link as the scope's deps and dispose with it.
+		 */
 		function newScope(fn: () => void): NodeId {
 			const e = allocNode(NodeFlag.K_SCOPE | NodeFlag.MUTABLE)
 			const prevSub = activeSub
@@ -1616,8 +1746,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return e
 		}
 
-		/** Reads an atom record: promote a dirty pending value, register the
-		 * dependency link when a tracking frame is open, serve the value slot. */
+		/**
+		 * Reads an atom record: promote a dirty pending value, register the
+		 * dependency link when a tracking frame is open, serve the value slot.
+		 */
 		function readAtom(s: NodeId): unknown {
 			if (memory[s + NodeField.FLAGS] & NodeFlag.DIRTY) {
 				if (updateSignal(s)) {
@@ -1633,10 +1765,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return vals[s >> ArenaShape.ID_TO_VALUE_SHIFT]
 		}
 
-		/** Writes an atom record's pending value and propagates staleness; returns
+		/**
+		 * Writes an atom record's pending value and propagates staleness; returns
 		 * true iff subscribers were notified (the wrapper then flushes, so growth
 		 * can run between queued effects; upstream flushes inline here). The flag
-		 * store is the constant signal word ({@link updateSignal}'s rule). */
+		 * store is the constant signal word ({@link updateSignal}'s rule).
+		 */
 		function write(s: NodeId, value: unknown): boolean {
 			const p: ValueIndex = (s >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET
 			if (vals[p] !== (vals[p] = value)) {
@@ -1653,10 +1787,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return false
 		}
 
-		/** Reads a computed record — the clean-read fast path, split like
+		/**
+		 * Reads a computed record — the clean-read fast path, split like
 		 * {@link link}/{@link linkInsert}: the monolith sat past V8's 460-bytecode
 		 * inline cliff (measured ~2.5ns extra per clean read). One mask test
-		 * routes every non-trivial case to {@link computedReadSlow}. */
+		 * routes every non-trivial case to {@link computedReadSlow}.
+		 */
 		function computedRead(c: NodeId): unknown {
 			const flags = memory[c + NodeField.FLAGS]
 			if (
@@ -1671,8 +1807,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return vals[c >> ArenaShape.ID_TO_VALUE_SHIFT]
 		}
 
-		/** The full computedRead decision ladder, out of line — five stages marked
-		 * below: cycle, staleness, first evaluation, linking, boxed unwrap. */
+		/**
+		 * The full computedRead decision ladder, out of line — five stages marked
+		 * below: cycle, staleness, first evaluation, linking, boxed unwrap.
+		 */
 		function computedReadSlow(c: NodeId, flags: NodeFlags): unknown {
 			// Stage 1 — cycle fast-out (upstream returns the stale cache instead).
 			if (flags & NodeFlag.RECURSED_CHECK) {
@@ -1731,8 +1869,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return vals[c >> ArenaShape.ID_TO_VALUE_SHIFT]
 		}
 
-		/** Settlement-invalidate: marks the computed stale exactly as a dep write
-		 * would and propagates; the wrapper flushes. Cold. */
+		/**
+		 * Settlement-invalidate: marks the computed stale exactly as a dep write
+		 * would and propagates; the wrapper flushes. Cold.
+		 */
 		function invalidateComputed(c: NodeId): boolean {
 			const flags = memory[c + NodeField.FLAGS]
 			if (!(flags & NodeFlag.K_COMPUTED)) {
@@ -1747,10 +1887,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return false
 		}
 
-		/** Flags a computed {@link NodeFlag.MACHINERY_OWNED} and settles the
+		/**
+		 * Flags a computed {@link NodeFlag.MACHINERY_OWNED} and settles the
 		 * books: links made before the flag each retained a lifecycle ref at
 		 * insert, and their eventual unlinks will skip the release (the flag
-		 * reads at unlink time) — so release those refs here, once. */
+		 * reads at unlink time) — so release those refs here, once.
+		 */
 		function markMachineryOwnedOp(c: NodeId): void {
 			const flags = memory[c + NodeField.FLAGS]
 			if (!(flags & NodeFlag.K_COMPUTED) || flags & NodeFlag.MACHINERY_OWNED) {
@@ -1767,11 +1909,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Reclamation's structural phase: the caller ({@link reclaimNode})
+		/**
+		 * Reclamation's structural phase: the caller ({@link reclaimNode})
 		 * verified epoch, tenancy generation, every guard, and that no kernel
 		 * frame is open. Flags zero first (dead before any unlink probe sees the
 		 * record); a computed's deps dispose and residual subs detach defensively
-		 * (signals own no outgoing structure — their links live on subscribers). */
+		 * (signals own no outgoing structure — their links live on subscribers).
+		 */
 		function reclaimStructureOp(id: NodeId): void {
 			const flags = memory[id + NodeField.FLAGS]
 			memory[id + NodeField.FLAGS] = 0
@@ -1786,11 +1930,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** Computed disposal (the useComputed deps-change path; cold). Flags zero
+		/**
+		 * Computed disposal (the useComputed deps-change path; cold). Flags zero
 		 * first so the last unlink's {@link unwatched} probe sees a dead record;
 		 * remaining subscriber links detach (their subs simply lose the dep — the
 		 * caller guarantees the node is superseded); the free defers to the
-		 * boundary sweep, where freeNode bumps GEN. */
+		 * boundary sweep, where freeNode bumps GEN.
+		 */
 		function disposeComputedOp(c: NodeId): void {
 			if (!(memory[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED)) {
 				return // not a computed / already disposed
@@ -1822,10 +1968,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// value comparison — at-least-once by design (a net-no-change run settled
 	// midway by another consult re-fires spuriously).
 
-	/** The clock counter: the last stamp drawn; bump sites store `++clockSource`.
+	/**
+	 * The clock counter: the last stamp drawn; bump sites store `++clockSource`.
 	 * Module-level so a rebuilt kernel resumes the sequence. Float64 in its own
 	 * column: an observer can hold a stamp for the whole process, so a wrapping
-	 * u32 would collide; not FLAGS bits, whose hot stores must stay constants. */
+	 * u32 would collide; not FLAGS bits, whose hot stores must stay constants.
+	 */
 	let clockSource: Clock = 0
 
 	// ---- the live op table + growth ------------------------------------------------
@@ -1850,12 +1998,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// A configured unit budgets one node + two link records; configure({initialRecords}) raises this floor.
 	let desiredRecords: RecordCount = initialRecords * ArenaShape.RECORDS_PER_UNIT
 
-	/** The fold-purity table: every op throws the fold error ({@link throwFold});
+	/**
+	 * The fold-purity table: every op throws the fold error ({@link throwFold});
 	 * requeueAbort no-ops so {@link flush}'s finally can never mask one. Its shape
 	 * is deliberately distinct from {@link createKernel}'s: the live table must
 	 * stay the sole instance of its V8 hidden class (V8's layout record) so `E.op`
 	 * call targets stay constant and inlined — sharing one class cost +15-25% on
-	 * recompute/read-heavy workloads; only erroring folds ever dispatch through it. */
+	 * recompute/read-heavy workloads; only erroring folds ever dispatch through it.
+	 */
 	const POISON: Kernel = {
 		records: 2,
 		buffer: foldPoisonOp,
@@ -1882,8 +2032,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		activeIsComputed: foldPoisonOp,
 	}
 
-	/** The kernel op table — the one mutable slot every consumer dispatches
-	 * through; re-linked only by {@link boundaryWork}'s growth and the fold-guard pair. */
+	/**
+	 * The kernel op table — the one mutable slot every consumer dispatches
+	 * through; re-linked only by {@link boundaryWork}'s growth and the fold-guard pair.
+	 */
 	let E: Kernel = createKernel(initialRecords * ArenaShape.RECORDS_PER_UNIT)
 
 	/** Runs {@link boundaryWork} iff at an operation boundary with deferred work queued. */
@@ -1896,10 +2048,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The plain kernel write: the tail of every public write path whose atom has
+	/**
+	 * The plain kernel write: the tail of every public write path whose atom has
 	 * no concurrent content. `isEqual(current, incoming)` decides acceptance once,
 	 * here: this path has no write history, so a write equal to the atom's pending
-	 * value drops (atoms with concurrent content take {@link writeAtomConcurrent}). @internal */
+	 * value drops (atoms with concurrent content take {@link writeAtomConcurrent}). @internal
+	 */
 	function writeAtom(
 		id: NodeId,
 		isEqual: ((a: unknown, b: unknown) => boolean) | undefined,
@@ -1917,8 +2071,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The operation-boundary work: reclamation drain, the pending-free sweep,
-	 * then growth by closure rebuild. Only {@link maybeBoundary} calls this. */
+	/**
+	 * The operation-boundary work: reclamation drain, the pending-free sweep,
+	 * then growth by closure rebuild. Only {@link maybeBoundary} calls this.
+	 */
 	function boundaryWork(): void {
 		// Reclamation first: each drained entry ends with its record's free-list
 		// insertion, so the sweep below frees everything this boundary produced.
@@ -1949,12 +2105,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Drains the effect queue ({@link queued}), running each entry through the
+	/**
+	 * Drains the effect queue ({@link queued}), running each entry through the
 	 * op table; a throw re-arms the rest via requeueAbort so no entry is lost.
 	 * Deferred work runs only before the loop: user code inside holds enterDepth
 	 * >= 1, so E cannot swap mid-loop (the `kernel` alias is sound), and the
 	 * watermark leaves {@link ArenaShape.REC_SLACK} (1280) free records at start
-	 * (cascades measure ~tens of new records; overrunning the arena throws in the allocator). */
+	 * (cascades measure ~tens of new records; overrunning the arena throws in the allocator).
+	 */
 	function flush(): void {
 		maybeBoundary()
 		const kernel = E
@@ -1999,8 +2157,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	function foldNoop(): void {}
 
-	/** A batch groups the writes of one logical update: effects flush once, when
-	 * the outermost batch closes. Nothing else in the library groups implicitly. */
+	/**
+	 * A batch groups the writes of one logical update: effects flush once, when
+	 * the outermost batch closes. Nothing else in the library groups implicitly.
+	 */
 	function batch<T>(fn: () => T): T {
 		++batchDepth
 		try {
@@ -2044,8 +2204,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- mechanism halves of runFold and configure ------------------------------------
 
-	/** Swaps {@link E} to {@link POISON} for runFold's bracket; returns
-	 * the live table for the paired {@link foldGuardRestore}. */
+	/**
+	 * Swaps {@link E} to {@link POISON} for runFold's bracket; returns
+	 * the live table for the paired {@link foldGuardRestore}.
+	 */
 	function foldGuardSwap(): Kernel {
 		const saved = E
 		E = POISON
@@ -2056,8 +2218,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		E = saved
 	}
 
-	/** Raises the capacity floor to `units` configured units and schedules growth
-	 * at the next operation boundary — configure's kernel half. Never shrinks. */
+	/**
+	 * Raises the capacity floor to `units` configured units and schedules growth
+	 * at the next operation boundary — configure's kernel half. Never shrinks.
+	 */
 	function requestCapacity(units: RecordCount): void {
 		const target = units * ArenaShape.RECORDS_PER_UNIT
 		if (target > desiredRecords) {
@@ -2069,8 +2233,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The concurrent machinery's equality-free write tail: its callers already
-	 * decided acceptance, and re-running `isEqual` would double-invoke it. */
+	/**
+	 * The concurrent machinery's equality-free write tail: its callers already
+	 * decided acceptance, and re-running `isEqual` would double-invoke it.
+	 */
 	function writeNewest(id: NodeId, value: unknown): void {
 		maybeBoundary()
 		if (E.write(id, value) && batchDepth === 0) {
@@ -2101,15 +2267,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		status?: 'pending' | 'fulfilled' | 'rejected'
 		value?: unknown
 		reason?: unknown
-		/** The thenable's stable {@link SuspendedRead}, created lazily at first
-		 * pending read: every site throws this one instance (dedupe by identity). */
+		/**
+		 * The thenable's stable {@link SuspendedRead}, created lazily at first
+		 * pending read: every site throws this one instance (dedupe by identity).
+		 */
 		suspendSentinel?: SuspendedRead
 	}
 
-	/** `ctx.previous`: the evaluating computed's previous cached value. While
+	/**
+	 * `ctx.previous`: the evaluating computed's previous cached value. While
 	 * the getter runs, the value slot still holds it and any boxed-outcome bits
 	 * stay set ({@link updateComputed}'s eval-start rewrite), so one flag test
-	 * filters both "not a computed" and "residual boxed payload" as undefined. */
+	 * filters both "not a computed" and "residual boxed payload" as undefined.
+	 */
 	function ctxPrevious(): unknown {
 		const c = activeSub
 		if (c === 0) {
@@ -2124,10 +2294,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return values[c >> ArenaShape.ID_TO_VALUE_SHIFT]
 	}
 
-	/** The thenable protocol (mirrors React's trackUsedThenable): instrument
+	/**
+	 * The thenable protocol (mirrors React's trackUsedThenable): instrument
 	 * `status`/`value`/`reason` onto the thenable itself, once. Settled
 	 * thenables return their value or throw their reason synchronously;
-	 * pending ones throw the thenable's stable {@link SuspendedRead}. */
+	 * pending ones throw the thenable's stable {@link SuspendedRead}.
+	 */
 	function unwrapThenable(t: InstrumentedThenable): unknown {
 		switch (t.status) {
 			case 'fulfilled':
@@ -2162,8 +2334,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Stable serialization of a `ctx.use` key: scalars serialize with a type
-	 * discriminant (`1` vs `'1'` stay distinct), arrays recurse; anything else throws. */
+	/**
+	 * Stable serialization of a `ctx.use` key: scalars serialize with a type
+	 * discriminant (`1` vs `'1'` stay distinct), arrays recurse; anything else throws.
+	 */
 	function serializeUseKey(key: unknown): string {
 		if (typeof key === 'string') {
 			return JSON.stringify(key)
@@ -2187,10 +2361,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		)
 	}
 
-	/** The ctx.use request caches, keyed by node index — never by handle, so
+	/**
+	 * The ctx.use request caches, keyed by node index — never by handle, so
 	 * nothing here pins one — and scrubbed at record free so a slot's next
 	 * tenant never sees its predecessor's requests. A Map deliberately:
-	 * ctx.use is cold, and the map's delete is the scrub. */
+	 * ctx.use is cold, and the map's delete is the scrub.
+	 */
 	const useCaches = new Map<number, Map<string, PromiseLike<unknown>>>()
 
 	/** The record-free scrub's suspense half: drop the freed record's request cache. @internal */
@@ -2208,11 +2384,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return useCaches.get(nodeIndex)
 	}
 
-	/** The one ctx.use implementation (contract: {@link ComputedCtx.use}):
+	/**
+	 * The one ctx.use implementation (contract: {@link ComputedCtx.use}):
 	 * unwrap a thenable directly, or cache the factory's thenable per key.
 	 * World evaluation contexts share it, passing their node's index. The cache
 	 * is monotone — same key ⇒ same thenable for the record's life — safe
-	 * across worlds because the key carries the world-varying inputs. @internal */
+	 * across worlds because the key carries the world-varying inputs. @internal
+	 */
 	function ctxUseKeyed(
 		nodeIndex: number,
 		sourceOrKey: unknown,
@@ -2260,10 +2438,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// Test-only export: suites drive the request cache directly.
 	const __TEST__ctxUse = ctxUseKeyed
 
-	/** `ctx.use`: resolve the evaluating computed from the kernel's `activeSub`
+	/**
+	 * `ctx.use`: resolve the evaluating computed from the kernel's `activeSub`
 	 * and dispatch on its node index. The cache dies with the record — a
 	 * recreated computed refetches; callers needing dedup beyond that cache the
-	 * promise in their data layer and pass it via the one-arg form. */
+	 * promise in their data layer and pass it via the one-arg form.
+	 */
 	function ctxUse(
 		sourceOrKey: unknown,
 		factory: (() => PromiseLike<unknown>) | undefined,
@@ -2275,11 +2455,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return ctxUseKeyed(E.buffer()[c + NodeField.NODE_INDEX], sourceOrKey, factory)
 	}
 
-	/** The kernel's exception hook (cold): store what the evaluation threw —
+	/**
+	 * The kernel's exception hook (cold): store what the evaluation threw —
 	 * the thrown value, or a suspension's pending thenable — as the raw cached
 	 * payload, and return the outcome's flag bits for the caller to fold into
 	 * the node's flags and change cutoff. A settle listener attaches only on
-	 * transition, so re-suspending on the same pending thenable never stacks listeners. */
+	 * transition, so re-suspending on the same pending thenable never stacks listeners.
+	 */
 	function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
 		const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT
 		if (e instanceof SuspendedRead) {
@@ -2294,10 +2476,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return NodeFlag.HAS_BOX
 	}
 
-	/** When a suspended computed's pending thenable settles, mark the computed
+	/**
+	 * When a suspended computed's pending thenable settles, mark the computed
 	 * stale and propagate, so watchers re-run and readers recompute. The
 	 * listener is stale-guarded: unless the node still caches this exact
-	 * thenable as a suspension, a late settlement of superseded work is inert. */
+	 * thenable as a suspension, a late settlement of superseded work is inert.
+	 */
 	function attachSettleListener(c: NodeId, t: InstrumentedThenable): void {
 		// Capture the engine epoch: a settlement delivered after a test's engine
 		// reset must not touch the scrubbed arena (ids may have new tenants).
@@ -2333,12 +2517,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		t.then(onSettle, onSettle)
 	}
 
-	/** The kernel's read tail when HAS_BOX is set: the cached value is a raw
+	/**
+	 * The kernel's read tail when HAS_BOX is set: the cached value is a raw
 	 * boxed payload. Errors rethrow it; pending suspensions throw the thenable's
 	 * stable {@link SuspendedRead}; settled suspensions self-heal (invalidate +
 	 * recompute) so a read after `await` is deterministic even before the settle
 	 * listener's microtask runs. The self-heal recurses at most once: settlement
-	 * cannot occur mid-frame, so a re-stored payload is pending and throws. */
+	 * cannot occur mid-frame, so a re-stored payload is pending and throws.
+	 */
 	function boxedRead(c: NodeId, flags: NodeFlags): unknown {
 		const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT
 		if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
@@ -2441,8 +2627,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		})
 	}
 
-	/** Dormancy: no refs, not mounted, nothing scheduled — the active record
-	 * deletes; only the fns-slot callback remains. */
+	/**
+	 * Dormancy: no refs, not mounted, nothing scheduled — the active record
+	 * deletes; only the fns-slot callback remains.
+	 */
 	function maybeDropDormant(state: LifecycleState): void {
 		if (state.refs <= 0 && !state.isMounted && !state.scheduled) {
 			lifecycleStates.delete(state.id)
@@ -2453,8 +2641,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Dispatch one context write through the same policy path as the public
-	 * methods, over the id-resolved node. */
+	/**
+	 * Dispatch one context write through the same policy path as the public
+	 * methods, over the id-resolved node.
+	 */
 	function dispatchLifecycleWrite(id: NodeId, kind: 0 | 1, payload: unknown): void {
 		__lifecycleWrite(id, kind, payload)
 	}
@@ -2517,8 +2707,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The retain/release pair feeding the union refcount — once per non-machinery
-	 * kernel link ({@link linkInsert}/{@link unlink}), once per live watcher. */
+	/**
+	 * The retain/release pair feeding the union refcount — once per non-machinery
+	 * kernel link ({@link linkInsert}/{@link unlink}), once per live watcher.
+	 */
 	function retainLifecycle(id: NodeId): void {
 		shiftLifecycleCount(id, 1)
 	}
@@ -2595,8 +2787,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	type Value = unknown
 	type RootId = string
 	type RenderPassId = number
-	/** An observer's monotone mount/registration order within its role — never
-	 * a kernel record id (records recycle; these ids never do). */
+	/**
+	 * An observer's monotone mount/registration order within its role — never
+	 * a kernel record id (records recycle; these ids never do).
+	 */
 	type ObserverId = number
 	type WatcherId = number
 	/** Branded so SignalEffect ids cannot cross the kernel id spaces. */
@@ -2626,10 +2820,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		eqIsDefault: boolean
 		/** Stamp of the last retirement fold touching this atom (dedups duplicate touches). */
 		retirementStamp: Seq = 0
-		/** The public handle — strong for engine-created nodes, a WeakRef for
+		/**
+		 * The public handle — strong for engine-created nodes, a WeakRef for
 		 * handle-resolved ones ({@link internalsForAtom}): the handle pins the node,
 		 * never the reverse, or the record could never free. Warm paths use the
-		 * `id` copy; cold consumers go through the `handle` getter. @internal */
+		 * `id` copy; cold consumers go through the `handle` getter. @internal
+		 */
 		_h: Atom<Value> | WeakRef<Atom<Value>>
 		/** Last batch id that appended here (dedupe for batch.atomsTouched). */
 		lastTouchBatch: BatchId = 0
@@ -2662,9 +2858,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	type Reader = (node: AnyInternals) => Value
 	type ComputedFn = (read: Reader, untracked: Reader) => Value
 
-	/** The engine's computed node record. Every engine computed rides a kernel
+	/**
+	 * The engine's computed node record. Every engine computed rides a kernel
 	 * `Computed` record: the kernel serves the newest world; the engine
-	 * evaluates `fn` under render/committed worlds through the arena walks. */
+	 * evaluates `fn` under render/committed worlds through the arena walks.
+	 */
 	class ComputedInternals {
 		readonly kind = 'computed' as const
 		id: NodeId
@@ -2673,13 +2871,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		name: string
 		/** The world evaluation function (arena refolds, mount-fix folds). */
 		fn: ComputedFn
-		/** The public handle — strong for engine-created computeds, a WeakRef for
-		 * resolved ones; same reclamation rule as {@link AtomInternals._h}. @internal */
+		/**
+		 * The public handle — strong for engine-created computeds, a WeakRef for
+		 * resolved ones; same reclamation rule as {@link AtomInternals._h}. @internal
+		 */
 		_h: Computed<unknown> | WeakRef<Computed<unknown>>
 		/** True for handle-resolved public computeds: `fn` is the engine's ctx adapter around the raw fn. */
 		ctxShaped: boolean
-		/** The policy comparator `isEqual(prev, next)`, applied by arena refolds
-		 * against the arena-local previous value; undefined = Object.is. */
+		/**
+		 * The policy comparator `isEqual(prev, next)`, applied by arena refolds
+		 * against the arena-local previous value; undefined = Object.is.
+		 */
 		isEqual: Equals | undefined
 		/** ctx.previous: the node's last committed value (a best-effort hint), updated at render commits. */
 		prevCommitted: Value = undefined
@@ -2713,33 +2915,43 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	type RootState = {
 		id: RootId
-		/** Batches this root has committed that are still live elsewhere (cleared
-		 * at retirement, when the retired clause subsumes membership). */
+		/**
+		 * Batches this root has committed that are still live elsewhere (cleared
+		 * at retirement, when the retired clause subsumes membership).
+		 */
 		committedBatches: Set<BatchId>
 		commitGen: CommitGen
 		/** Slots of the root's live committed batches (maintained at commit, late intern, retirement). */
 		committedBits: BatchSlotSet
-		/** Member slots written since the last drain: such a write changes committed
-		 * truth immediately — the next durable drain reconciles downstream of it. */
+		/**
+		 * Member slots written since the last drain: such a write changes committed
+		 * truth immediately — the next durable drain reconciles downstream of it.
+		 */
 		committedDirtySlots: BatchSlotSet
 	}
 
-	/** Write-kind tags — the packed log entry column and the write surface's
+	/**
+	 * Write-kind tags — the packed log entry column and the write surface's
 	 * kind argument: 0 = set, 1 = update, the same codes the public
-	 * write dispatch carries end to end. Same-file const enum (inlines to 0/1). */
+	 * write dispatch carries end to end. Same-file const enum (inlines to 0/1).
+	 */
 	const enum WriteKind {
 		SET = 0,
 		UPDATE = 1,
 	}
 
-	/** Engine-activity counters (test surface): with no driver attached and no
+	/**
+	 * Engine-activity counters (test surface): with no driver attached and no
 	 * batch open, heavy signal traffic must leave every field at its baseline.
-	 * Engine logic never reads them; `__TEST__coreProbes()` snapshots them. */
+	 * Engine logic never reads them; `__TEST__coreProbes()` snapshots them.
+	 */
 	const probes = { logEntries: 0, batches: 0, worldEvals: 0, compositions: 0 }
 
-	/** The decoded shape of the engine's observable events. The engine never
+	/**
+	 * The decoded shape of the engine's observable events. The engine never
 	 * constructs these objects: instrumentation sites create packed trace
-	 * records ({@link TraceHooks}); a test-side decoder rebuilds this shape. */
+	 * records ({@link TraceHooks}); a test-side decoder rebuilds this shape.
+	 */
 	type TraceEvent =
 		| { type: 'write'; node: string; batch: BatchId; slot: BatchSlot; seq: Seq }
 		| { type: 'write-dropped'; node: string; batch: BatchId }
@@ -2776,12 +2988,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		| { type: 'render-discarded'; renderPass: RenderPassId; root: RootId }
 		| { type: 'epoch-reset'; epoch: Epoch }
 
-	/** The trace seam: an optional hook record (the `engine.trace` accessor
+	/**
+	 * The trace seam: an optional hook record (the `engine.trace` accessor
 	 * pair), `undefined` unless `cosignals/trace` has attached a recorder. This
 	 * engine never imports the trace module; every hook site pays exactly one
 	 * nullable-slot check when no tracer is attached; hooks receive live engine
 	 * objects and must not mutate them or allocate per event (one exception:
-	 * `reactEffectRun`'s dep-values array). Covers {@link TraceEvent} plus trace-only events. */
+	 * `reactEffectRun`'s dep-values array). Covers {@link TraceEvent} plus trace-only events.
+	 */
 	type TraceHooks = {
 		logEntry(node: AtomInternals, entry: WriteLogEntry): void
 		/** A write dropped without a log entry (empty write log + equal against base). */
@@ -2790,8 +3004,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		batchOpen(t: Batch): void
 		/** An async-action batch settled (its retirement follows). */
 		batchSettle(t: Batch): void
-		/** The host's committed/abandoned report for a batch (diagnostic only:
-		 * retirement is disposition-blind — recorded writes never revert). */
+		/**
+		 * The host's committed/abandoned report for a batch (diagnostic only:
+		 * retirement is disposition-blind — recorded writes never revert).
+		 */
 		batchDisposition(batch: BatchId, committed: boolean): void
 		/** RenderPass edges (end fires before retirements/commits/fixups). */
 		renderStart(p: RenderPass): void
@@ -2850,9 +3066,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** The attached driver, or undefined (host-agnostic embedding / tests). */
 	let driver: EngineDriver | undefined
 
-	/** The one boolean the write path branches on, recomputed only at pipeline
+	/**
+	 * The one boolean the write path branches on, recomputed only at pipeline
 	 * transitions: quiet ⇔ no live batches, no open renders, no episode write
-	 * records held. A quiet context-free write folds directly ({@link quietWrite}). */
+	 * records held. A quiet context-free write folds directly ({@link quietWrite}).
+	 */
 	let quiet = true
 	// (quiet with no driver = the public fast-arm flag `standaloneQuiet`.)
 
@@ -2870,11 +3088,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- the public write dispatch ----------------------------------------------------
 
-	/** The concurrent write dispatch (everything after the public policy assert
+	/**
+	 * The concurrent write dispatch (everything after the public policy assert
 	 * and its standalone fast arm). A driver's batch context wins: a recorded
 	 * write into that batch. Otherwise, context-free arms: while quiet, the
 	 * plain graph write (no engine content) or the quiet fold; else the
-	 * ambient default batch ({@link bareWrite}). */
+	 * ambient default batch ({@link bareWrite}).
+	 */
 	function writeAtomConcurrent(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
 		const d = driver
 		if (d !== undefined) {
@@ -2898,18 +3118,22 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		bareWrite(internalsForAtom(atom), kind, payload)
 	}
 
-	/** The id-resolved atom node, if it has engine content (the lifecycle write
-	 * path's handle-free resolution). @internal */
+	/**
+	 * The id-resolved atom node, if it has engine content (the lifecycle write
+	 * path's handle-free resolution). @internal
+	 */
 	function __engineAtomInternalsById(id: NodeId): AtomInternals | undefined {
 		const hit = getResidentInternals(id)
 		return hit !== undefined && hit.kind === 'atom' ? hit : undefined
 	}
 
-	/** The one id→node path: the dense row by the record's live kernel
+	/**
+	 * The one id→node path: the dense row by the record's live kernel
 	 * NODE_INDEX. Safe as the only registry: the record-free scrub
 	 * ({@link __onRecordFree}) clears a freed record's row, and id and index are
 	 * slot-tied — staleness-sensitive consumers add GEN checks, and callers
-	 * with unproven ids must identity-check `hit.id === id`. */
+	 * with unproven ids must identity-check `hit.id === id`.
+	 */
 	function getResidentInternals(id: NodeId): AnyInternals | undefined {
 		const ix = getKernelNodeIndex(id)
 		return ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined
@@ -2953,22 +3177,28 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	/** Engine tuning, accepted by `__TEST__resetEngine`; production runs the defaults. */
 	type EngineResetOptions = {
-		/** The world arenas' initial buffer reservation — default 64MiB of records
+		/**
+		 * The world arenas' initial buffer reservation — default 64MiB of records
 		 * (zero-fill demand-paged: untouched records cost no resident memory). An
-		 * arena that outgrows it doubles its buffers by copy; never fatal. */
+		 * arena that outgrows it doubles its buffers by copy; never fatal.
+		 */
 		arenaInitInts?: ArenaInitInts
-		/** Arms development-time checks: protocol-edge states the host contract
+		/**
+		 * Arms development-time checks: protocol-edge states the host contract
 		 * makes unreachable throw instead of taking their defined fall-through,
-		 * and dev-only diagnostics run. Default off: one branch per guarded site. */
+		 * and dev-only diagnostics run. Default off: one branch per guarded site.
+		 */
 		devChecks?: boolean
 	}
 
-	/** The driver seam — the one attachment record a host integration installs
+	/**
+	 * The driver seam — the one attachment record a host integration installs
 	 * ({@link attachDriver}): `currentBatch` answers the batch context once per
 	 * classified write (BATCH_NONE → the context-free arms); `worldFor` answers
 	 * the ambient world for routed reads; the listeners fire at operation
 	 * boundaries, never mid-operation. Hosts that open batches must retire
-	 * them; the driver only carries context and listeners. */
+	 * them; the driver only carries context and listeners.
+	 */
 	type EngineDriver = {
 		/** The host's batch context for the write executing now (BATCH_NONE = none). */
 		currentBatch(): BatchId
@@ -2986,8 +3216,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		protocolReset?: () => void
 	}
 
-	/** Installs the driver, exactly once per engine instance (a second attach throws;
-	 * test reset clears the slot). Throws inside an open evaluation/fold frame. */
+	/**
+	 * Installs the driver, exactly once per engine instance (a second attach throws;
+	 * test reset clears the slot). Throws inside an open evaluation/fold frame.
+	 */
 	function attachDriver(d: EngineDriver): void {
 		if (evalDepth > 0 || inFoldCallback) {
 			throw new ScheduleError(
@@ -3008,14 +3240,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		recomputeQuiet() // re-derives quiet and standaloneQuiet (now false: every write makes the one foreign call)
 	}
 
-	/** The armed checker's window into the engine (`__TEST__checkerInternals()`,
+	/**
+	 * The armed checker's window into the engine (`__TEST__checkerInternals()`,
 	 * test-side only): live state getters plus bracket methods that keep every
-	 * mutation's save/restore discipline engine-side. @internal */
+	 * mutation's save/restore discipline engine-side. @internal
+	 */
 	type ArenaCheckerInternals = {
-		/** Arena record layout as plain numbers, restricted to the fields the
+		/**
+		 * Arena record layout as plain numbers, restricted to the fields the
 		 * structural validator reads. The layout enums are same-file const enums,
 		 * inlined into this object at construction, so the view stays in sync
-		 * automatically. Field entries are Int32 word offsets; flags/modes are bits. */
+		 * automatically. Field entries are Int32 word offsets; flags/modes are bits.
+		 */
 		readonly layout: {
 			readonly ArenaGeom: { readonly ID_TO_COLUMN_SHIFT: number; readonly CLOCK_LIMIT: number }
 			readonly ArenaField: {
@@ -3044,18 +3280,24 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		eachArena(fn: (a: WorldArena) => void): void
 		/** The dense node row by NODE_INDEX, or undefined for a disposed index (skipped). */
 		internalsAt(ix: number): AnyInternals | undefined
-		/** `arenaServe` — the arena serving entry. The checker serves the arena side
-		 * before its naive recomputation, so a stale shadow is never refreshed first. */
+		/**
+		 * `arenaServe` — the arena serving entry. The checker serves the arena side
+		 * before its naive recomputation, so a stale shadow is never refreshed first.
+		 */
 		serve(a: WorldArena, node: AnyInternals): Value
-		/** One fold-truth fn run ({@link runInFoldTruthFrame}): world pinned, serve
-		 * override at FOLD_TRUTH, everything restored on the way out. */
+		/**
+		 * One fold-truth fn run ({@link runInFoldTruthFrame}): world pinned, serve
+		 * override at FOLD_TRUTH, everything restored on the way out.
+		 */
 		runInFoldTruthFrame<T>(world: World, fn: () => T): T
 		/** The engine's one cycle-error construction (both sides' throws must compare string-equal). */
 		createCycleError(name: string): ScheduleError
 		/** The fold-purity bracket, as every comparator call site uses it. */
 		runInFoldCallback<T>(fn: () => T): T
-		/** Op-depth bracket around one whole checker run: settle taps landing
-		 * mid-check enqueue for the epilogue's drain instead of draining re-entrantly. */
+		/**
+		 * Op-depth bracket around one whole checker run: settle taps landing
+		 * mid-check enqueue for the epilogue's drain instead of draining re-entrantly.
+		 */
 		holdOp<T>(fn: () => T): T
 		/** Install (or clear) the armed epilogue hook — fired after each operation's settlement. */
 		armEpilogueCheck(check: (() => void) | undefined): void
@@ -3078,11 +3320,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// Keyed by nodeIndex, never NodeId (nodes and links share one allocator, so
 	// id keying would go holey). A freed record's rows clear in __onRecordFree;
 	// columns gap-fill at content allocation ({@link indexInternals}).
-	/** Per-node visited generation, shared by the routing walks (delivery and
-	 * drain dedup); arena traversal termination uses the per-arena `walk` column. */
+	/**
+	 * Per-node visited generation, shared by the routing walks (delivery and
+	 * drain dedup); arena traversal termination uses the per-arena `walk` column.
+	 */
 	let lastWalk: WalkGen[]
-	/** The internals registry by nodeIndex — dense, gap-filled, scrubbed at
-	 * record free. Nodes appear on first content, never at handle creation. */
+	/**
+	 * The internals registry by nodeIndex — dense, gap-filled, scrubbed at
+	 * record free. Nodes appear on first content, never at handle creation.
+	 */
 	let nodeIndexToInternals: (AnyInternals | undefined)[]
 	/** Watchers by nodeIndex (the routing walks' collection rows). */
 	let nodeToWatchers: (Watcher[] | undefined)[]
@@ -3103,8 +3349,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let devChecks = false
 	/** The world arenas' initial buffer reservation ({@link EngineResetOptions} knob). */
 	let arenaInitInts: ArenaInitInts = 0
-	/** Optional log-entry drop observer (test/diagnostics seam): called once per
-	 * entry as it leaves the write log. Production leaves it undefined. */
+	/**
+	 * Optional log-entry drop observer (test/diagnostics seam): called once per
+	 * entry as it leaves the write log. Production leaves it undefined.
+	 */
 	let onLogEntryDrop: ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined = undefined
 
 	// ---- shared evaluation/operation state ----
@@ -3113,11 +3361,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let trace: TraceHooks | undefined
 	/** The world an open evaluation frame is folding in. (worlds) */
 	let activeWorld: World | undefined
-	/** The nodeIndex whose fold-through evaluation frame is open (sink 0 ⇔ weak;
-	 * the untracked reader clears it around the dep; index 0 is burned). (worlds) */
+	/**
+	 * The nodeIndex whose fold-through evaluation frame is open (sink 0 ⇔ weak;
+	 * the untracked reader clears it around the dep; index 0 is burned). (worlds)
+	 */
 	let currentSink: NodeIndex = 0
-	/** Strong-dep capture list of the innermost evaluation frame, undefined
-	 * unless that frame's node is observed. (worlds; kernel getters open it too) */
+	/**
+	 * Strong-dep capture list of the innermost evaluation frame, undefined
+	 * unless that frame's node is observed. (worlds; kernel getters open it too)
+	 */
 	let obsCapture: AnyInternals[] | undefined
 	/** >0 while a world evaluation is on stack (renders must not write). (worlds) */
 	let evalDepth = 0
@@ -3125,37 +3377,49 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let inFoldCallback = false
 	/** SignalEffect whose body is currently retracking in its committed world. */
 	let activeSignalEffect: SignalEffect | undefined
-	/** >0 while a hook-initiated evaluation may legally suspend the render;
-	 * background evaluations fold pending suspensions to sentinels instead. (worlds) */
+	/**
+	 * >0 while a hook-initiated evaluation may legally suspend the render;
+	 * background evaluations fold pending suspensions to sentinels instead. (worlds)
+	 */
 	let suspendDepth = 0
-	/** The one override the routed-read path tests (setters bracket
+	/**
+	 * The one override the routed-read path tests (setters bracket
 	 * save/restore; innermost wins): a WorldArena (its fn runs serve from it),
-	 * FOLD_TRUTH (the armed checker's plain folds), or undefined. (world arenas) */
+	 * FOLD_TRUTH (the armed checker's plain folds), or undefined. (world arenas)
+	 */
 	let serveOverride: WorldArena | typeof FOLD_TRUTH | undefined
 	/** Global count of box-suspended shadows (settle-tap fast-out). (world arenas) */
 	let suspendedCount = 0
-	/** The armed divergence-check hook (test-installed): fired at every public
-	 * operation's epilogue after the settlement fixed point; production pays one undefined test. */
+	/**
+	 * The armed divergence-check hook (test-installed): fired at every public
+	 * operation's epilogue after the settlement fixed point; production pays one undefined test.
+	 */
 	let epilogueCheck: (() => void) | undefined
 	/** Public-operation nesting (the settlement firing-context discriminant). */
 	let opDepth = 0
-	/** The render currently COMMITTING (renderEnd's commit half): a correction
+	/**
+	 * The render currently COMMITTING (renderEnd's commit half): a correction
 	 * candidate this render just re-rendered compares against committed truth
-	 * by value — a question per-root clocks cannot express. (render integration) */
+	 * by value — a question per-root clocks cannot express. (render integration)
+	 */
 	let committingRender: RenderPass | undefined
 	/** Per-walk visited generation source (delivery walk, drains, closures). */
 	let walkGen = 0
 	/** Live SignalEffect count (fast bail on dirty-cone collection). */
 	let signalEffectCount = 0
-	/** A quiet write marked committed truth but could not run the committed-world
+	/**
+	 * A quiet write marked committed truth but could not run the committed-world
 	 * boundary drain inline — it happened inside a kernel effect frame
 	 * (enterDepth > 0) or a running SignalEffect body (activeSignalEffect set),
 	 * where the SignalEffect runner's routed reads would record no dependency
-	 * links. The drain is owed at the next true boundary ({@link drainQuietBoundary}). */
+	 * links. The drain is owed at the next true boundary ({@link drainQuietBoundary}).
+	 */
 	let quietBoundaryOwed = false
-	/** Re-entrancy guard for {@link drainQuietBoundary}: a SignalEffect body run
+	/**
+	 * Re-entrancy guard for {@link drainQuietBoundary}: a SignalEffect body run
 	 * inside the drain may itself write, re-owing the drain; the active loop
-	 * picks that up rather than nesting. */
+	 * picks that up rather than nesting.
+	 */
 	let quietBoundaryActive = false
 	// ---- direct listeners (attachDriver copies them off the driver record; the
 	// delivery/fixup/correction sites read one direct slot each) ----
@@ -3167,10 +3431,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- handle resolution + the registry (content allocation on first participation) ----
 
-	/** Resolve a public Atom handle to its engine internals, allocating content
+	/**
+	 * Resolve a public Atom handle to its engine internals, allocating content
 	 * on first participation. Base seeds from kernel-current — the atom's full
 	 * committed history, since every accepted write of a content-less atom was
-	 * a quiet fold, visible to every world by construction. */
+	 * a quiet fold, visible to every world by construction.
+	 */
 	function internalsForAtom(atom: Atom<unknown>): AtomInternals {
 		const hit = atom._internals
 		if (hit !== undefined) {
@@ -3198,8 +3464,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return ++seq
 	}
 
-	/** Indexes a node into the dense side columns (keyed by nodeIndex); gap-fill
-	 * keeps columns packed (a write past a plain array's length would go holey). */
+	/**
+	 * Indexes a node into the dense side columns (keyed by nodeIndex); gap-fill
+	 * keeps columns packed (a write past a plain array's length would go holey).
+	 */
 	function indexInternals(node: AnyInternals): void {
 		const ix = node.ix
 		while (nodeIndexToInternals.length <= ix) {
@@ -3236,9 +3504,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return node
 	}
 
-	/** Embedding/test constructor: an engine computed riding a fresh kernel
+	/**
+	 * Embedding/test constructor: an engine computed riding a fresh kernel
 	 * `Computed` record — the kernel getter runs the authored fn with the kernel
-	 * readers under the engine's guards; world evaluations use the arena readers. */
+	 * readers under the engine's guards; world evaluations use the arena readers.
+	 */
 	function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedInternals {
 		// id/ix land after the kernel record exists (the getter closure needs the internals object first).
 		const node = new ComputedInternals(0, 0, name, fn, undefined as never, false, equals)
@@ -3255,11 +3525,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return node
 	}
 
-	/** Resolve a public `Computed` handle to its engine internals, allocating
+	/**
+	 * Resolve a public `Computed` handle to its engine internals, allocating
 	 * content on first participation: the kernel record keeps serving the
 	 * newest world; allocation wraps its kernel getter with the engine epilogue
 	 * (observation re-pointing per re-run) and builds the ctx-shaped world fn
-	 * (ctx.previous, the id-keyed ctx.use cache, background-suspension folding). */
+	 * (ctx.previous, the id-keyed ctx.use cache, background-suspension folding).
+	 */
 	function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 		const hit = c._internals
 		if (hit !== undefined) {
@@ -3329,11 +3601,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return node
 	}
 
-	/** Dispose a superseded computed: its kernel record frees and its id becomes
+	/**
+	 * Dispose a superseded computed: its kernel record frees and its id becomes
 	 * reusable (live watchers here throw). Order matters for id tenancy:
 	 * engine-side teardown first — arena shadows purge, the registry row
 	 * clears — then the kernel record disposes, firing the record-free scrub
-	 * ({@link __onRecordFree}) before the slot's index can be re-inherited. */
+	 * ({@link __onRecordFree}) before the slot's index can be re-inherited.
+	 */
 	function disposeComputed(handle: Computed<unknown>): void {
 		// `handle._internals === node` is the identity/liveness test (a re-tenanted id resolves elsewhere).
 		const node = getResidentInternals(handle._id)
@@ -3361,10 +3635,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		E.disposeComputed(handle._id)
 		maybeBoundary() // sweep now when possible, so the id-tenancy GEN moves at this boundary
 	}
-	/** The record-free scrub (registered kernel-side): a freed node record
+	/**
+	 * The record-free scrub (registered kernel-side): a freed node record
 	 * surrenders its slot — and NODE_INDEX — to a future tenant, so every
 	 * nodeIndex-keyed row clears immediately. Covers everything
-	 * {@link disposeComputed} does not (dormant rows, observation refs). @internal */
+	 * {@link disposeComputed} does not (dormant rows, observation refs). @internal
+	 */
 	function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 		if (ix < nodeIndexToInternals.length) {
 			// The row is the dying tenant's node (no staleness window): release
@@ -3387,8 +3663,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		purgeNodeFromArenas(ix)
 	}
 
-	/** Clear a freed record's `_internals` backlink while the handle is still
-	 * alive: a stale cached node would write through a re-tenanted id. */
+	/**
+	 * Clear a freed record's `_internals` backlink while the handle is still
+	 * alive: a stale cached node would write through a re-tenanted id.
+	 */
 	function clearHandleBacklink(node: AnyInternals): void {
 		const h = node._h
 		const live = h instanceof WeakRef ? h.deref() : h
@@ -3397,11 +3675,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Engine-side reclaim guards (installed kernel-side per composition): a
+	/**
+	 * Engine-side reclaim guards (installed kernel-side per composition): a
 	 * record must not free while it has watcher-index membership, observation
 	 * retains (obsRefs > 0), episode membership (its write log holds entries),
 	 * membership in an open render's arena, or membership in any arena's
-	 * suspended list. Cold: runs once per finalizer fire / retry. */
+	 * suspended list. Cold: runs once per finalizer fire / retry.
+	 */
 	function reclaimGuards(id: NodeId, ix: NodeIndex): boolean {
 		if (ix < nodeToWatchers.length) {
 			const ws = nodeToWatchers[ix]
@@ -3432,8 +3712,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return suspended
 	}
 
-	/** The kernel getter of an engine-created computed (see `computed`). The
-	 * returned closure reads the current core at call time (reset-safe). */
+	/**
+	 * The kernel getter of an engine-created computed (see `computed`). The
+	 * returned closure reads the current core at call time (reset-safe).
+	 */
 	function makeKernelGetter(node: ComputedInternals): () => Value {
 		return () => {
 			const savedCapture = obsCapture
@@ -3459,8 +3741,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The dep read both kernel-frame readers share: plain kernel reads (which
-	 * link the dep to any open kernel frame); kernel CycleErrors translate to the engine's. */
+	/**
+	 * The dep read both kernel-frame readers share: plain kernel reads (which
+	 * link the dep to any open kernel frame); kernel CycleErrors translate to the engine's.
+	 */
 	function readKernelValue(dep: AnyInternals): Value {
 		if (dep.kind === 'atom') {
 			return E.readAtom(dep.id)
@@ -3475,18 +3759,24 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Kernel-frame untracked reader: kernel `untracked()` clears the frame, so
-	 * the dep still serves (recompute-if-stale) but no link is ever recorded. */
+	/**
+	 * Kernel-frame untracked reader: kernel `untracked()` clears the frame, so
+	 * the dep still serves (recompute-if-stale) but no link is ever recorded.
+	 */
 	const kernelUntrackedReader: Reader = (dep) => untracked(() => readKernelValue(dep))
 
-	/** Observation re-point after a kernel re-run, inside the still-open kernel
-	 * frame: discovery reads must not link into it — `untracked()` clears it. */
+	/**
+	 * Observation re-point after a kernel re-run, inside the still-open kernel
+	 * frame: discovery reads must not link into it — `untracked()` clears it.
+	 */
 	function syncObservationAfterKernelRun(node: AnyInternals, captured: AnyInternals[]): void {
 		untracked(() => syncObservedDeps(node, captured))
 	}
 
-	/** The engine internals among a computed's current kernel deps (tracked-only
-	 * by construction: untracked reads leave no kernel link). */
+	/**
+	 * The engine internals among a computed's current kernel deps (tracked-only
+	 * by construction: untracked reads leave no kernel link).
+	 */
 	function getKernelStrongDeps(node: ComputedInternals): AnyInternals[] {
 		const memory = E.buffer()
 		const out: AnyInternals[] = []
@@ -3527,19 +3817,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// routes through the functions here. Observation is a property of live
 	// watchers, not of the episode, so the index survives quiescence.
 
-	/** Observed-consumer refcount per nodeIndex: +1 per live watcher on the
-	 * node, +1 per observed computed currently holding it in {@link obsDeps}. */
+	/**
+	 * Observed-consumer refcount per nodeIndex: +1 per live watcher on the
+	 * node, +1 per observed computed currently holding it in {@link obsDeps}.
+	 */
 	let obsRefs: number[]
-	/** Per observed computed (by nodeIndex): the retained direct strong-dep set
+	/**
+	 * Per observed computed (by nodeIndex): the retained direct strong-dep set
 	 * as of its last fn run; undefined while unobserved. Sets hold node OBJECTS
-	 * so {@link shiftObservedCount}'s identity guard can spot stale entries. */
+	 * so {@link shiftObservedCount}'s identity guard can spot stale entries.
+	 */
 	let obsDeps: (Set<AnyInternals> | undefined)[]
 
-	/** Shift a node's observed-consumer refcount; {@link enterObservation} and
+	/**
+	 * Shift a node's observed-consumer refcount; {@link enterObservation} and
 	 * {@link exitObservation} fire on the 0↔1 edges only, so shared consumers
 	 * hold one membership. Identity-guarded: record slots recycle, so a stale
 	 * shift (its dense row re-tenanted after a free) must not move the new
-	 * tenant's count — and stale is forever, so skipped shifts pair up. */
+	 * tenant's count — and stale is forever, so skipped shifts pair up.
+	 */
 	function shiftObservedCount(node: AnyInternals, delta: 1 | -1): void {
 		const ix = node.ix
 		if (nodeIndexToInternals[ix] !== node) {
@@ -3558,11 +3854,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** A node joined the observed closure. An atom retains its observed
+	/**
+	 * A node joined the observed closure. An atom retains its observed
 	 * lifecycle; a computed retains its current kernel dep links, forced to
 	 * exist by one {@link untracked} read (entry can fire inside an open kernel
 	 * evaluation frame, where a stray link would corrupt the frame's dep list).
-	 * A throwing getter still throws at reads; its partial deps are retained. */
+	 * A throwing getter still throws at reads; its partial deps are retained.
+	 */
 	function enterObservation(node: AnyInternals): void {
 		if (node.kind === 'atom') {
 			retainLifecycle(node.id)
@@ -3576,11 +3874,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		syncObservedDeps(node, getKernelStrongDeps(node))
 	}
 
-	/** The last observed consumer left: release the whole retained closure.
+	/**
+	 * The last observed consumer left: release the whole retained closure.
 	 * {@link obsDeps} clears before the child shifts so a cyclic dep record
 	 * (possible only via throwing getters) cannot re-release. The kernel record
 	 * keeps its links and cache: stripping them would force an eager untracked
-	 * re-sample — exactly what the untracked-sampling rule forbids. */
+	 * re-sample — exactly what the untracked-sampling rule forbids.
+	 */
 	function exitObservation(node: AnyInternals): void {
 		if (node.kind === 'atom') {
 			releaseLifecycle(node.id)
@@ -3596,8 +3896,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Re-point retains: retain-new before release-old, so deps present in both
-	 * sets never shift. Consumes `prev` destructively (callers replace it). */
+	/**
+	 * Re-point retains: retain-new before release-old, so deps present in both
+	 * sets never shift. Consumes `prev` destructively (callers replace it).
+	 */
 	function repointRetains(prev: Set<AnyInternals> | undefined, next: Set<AnyInternals>): void {
 		for (const dep of next) {
 			if (prev === undefined || !prev.delete(dep)) {
@@ -3611,9 +3913,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** An observed computed's fn just ran (fully, or up to a throw): re-point
+	/**
+	 * An observed computed's fn just ran (fully, or up to a throw): re-point
 	 * its retains at the strong deps this evaluation recorded. Skipped if
-	 * observation left mid-evaluation — installing a retained set now would leak. */
+	 * observation left mid-evaluation — installing a retained set now would leak.
+	 */
 	function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
 		if (obsRefs[node.ix] === 0) {
 			return
@@ -3639,9 +3943,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// can hold an episode open while writes keep landing, so a log's retired,
 	// unpinned prefix folds into base at {@link FOLD_VALVE_THRESHOLD} entries.
 
-	/** A log entry's materialized face, built on demand for the test/trace
+	/**
+	 * A log entry's materialized face, built on demand for the test/trace
 	 * surface ({@link WriteLog.materialize}, the trace `logEntry` hook,
-	 * {@link onLogEntryDrop}); storage keeps the scalar {@link WriteRecord}. */
+	 * {@link onLogEntryDrop}); storage keeps the scalar {@link WriteRecord}.
+	 */
 	type WriteLogEntry = {
 		op: { kind: 'set'; value: Value } | { kind: 'update'; fn: (prev: Value) => Value }
 		batch: BatchId
@@ -3650,11 +3956,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		retiredSeq: Seq | undefined
 	}
 
-	/** One stored write record. `kind`/`payload` are the scalar op pair (a SET's
+	/**
+	 * One stored write record. `kind`/`payload` are the scalar op pair (a SET's
 	 * payload is the value, an UPDATE's the updater); `retiredSeq` is stamped at
 	 * the batch's retirement. `slot` is denormalized at creation: slots recycle,
 	 * so visibility checks read the slot the write happened under, not the
-	 * batch's current one. */
+	 * batch's current one.
+	 */
 	type WriteRecord = {
 		kind: WriteKind
 		payload: unknown
@@ -3664,9 +3972,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		retiredSeq: Seq | undefined
 	}
 
-	/** Fold-valve trigger: big enough that episodes which quiesce normally never
+	/**
+	 * Fold-valve trigger: big enough that episodes which quiesce normally never
 	 * fold, small enough that a held-open episode's residue stays modest. The
-	 * write path files an atom with {@link foldCandidates} at exactly this length. */
+	 * write path files an atom with {@link foldCandidates} at exactly this length.
+	 */
 	const FOLD_VALVE_THRESHOLD = 1024
 
 	/** Build one stored record's {@link WriteLogEntry} face. */
@@ -3683,8 +3993,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		entries: WriteRecord[] = []
 		/** Count of live entries not yet retirement-stamped. */
 		unretired = 0
-		/** Newest retirement stamp over live entries — monotone, so stamping
-		 * assigns plainly; a valve fold recomputes it over the survivors. */
+		/**
+		 * Newest retirement stamp over live entries — monotone, so stamping
+		 * assigns plainly; a valve fold recomputes it over the survivors.
+		 */
 		maxRetiredSeq: Seq = 0
 
 		/** Live entry count. */
@@ -3711,8 +4023,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return out
 		}
 
-		/** Drop every entry (the episode close). Log identity is preserved:
-		 * holders keep a valid, empty log. */
+		/**
+		 * Drop every entry (the episode close). Log identity is preserved:
+		 * holders keep a valid, empty log.
+		 */
 		reset(): void {
 			this.entries = []
 			this.unretired = 0
@@ -3720,14 +4034,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Atoms whose write log currently holds entries — the episode's touched-atom
+	/**
+	 * Atoms whose write log currently holds entries — the episode's touched-atom
 	 * membership. Membership also blocks a member's record reclamation, so every
-	 * path that empties a log files a reclamation retry. */
+	 * path that empties a log files a reclamation retry.
+	 */
 	let episodeHolds: Set<AtomInternals>
-	/** The fold valve's candidates. Invariant: every atom whose log holds at
+	/**
+	 * The fold valve's candidates. Invariant: every atom whose log holds at
 	 * least {@link FOLD_VALVE_THRESHOLD} entries is a member — filed at each
 	 * threshold crossing, removed only once its log is back under, cleared at
-	 * the episode close. Usually empty, which keeps the valve one size check. */
+	 * the episode close. Usually empty, which keeps the valve one size check.
+	 */
 	let foldCandidates: Set<AtomInternals>
 
 	/**
@@ -3857,8 +4175,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// ordinal handed where a slot-set bit mask belongs is a compile error.
 
 	type BatchId = number & IdBrand<'batch'>
-	/** The reserved "no batch context" BatchId, never allocated (ids start at 1):
-	 * a write resolving to it joins no batch (React names the same sentinel). */
+	/**
+	 * The reserved "no batch context" BatchId, never allocated (ids start at 1):
+	 * a write resolving to it joins no batch (React names the same sentinel).
+	 */
 	const BATCH_NONE: BatchId = 0
 	/** A slot ordinal (0–30): the batch's position in the recycling table. */
 	type BatchSlot = number & IdBrand<'batchSlot'>
@@ -3869,14 +4189,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		id: BatchId
 		action: boolean
 		parked: boolean
-		/** React-side classification (true = transition-like), stored here so the
-		 * driver needs no side table; the engine never branches on it. */
+		/**
+		 * React-side classification (true = transition-like), stored here so the
+		 * driver needs no side table; the engine never branches on it.
+		 */
 		deferred: boolean
 		state: 'live' | 'retired'
 		slot: BatchSlot | undefined
 		retiredSeq: Seq | undefined
-		/** Sequence of this batch's last log entry (0 = none) — read by the mount
-		 * fixup's fast-path clock check ({@link runMountFixup}). */
+		/**
+		 * Sequence of this batch's last log entry (0 = none) — read by the mount
+		 * fixup's fast-path clock check ({@link runMountFixup}).
+		 */
 		lastWriteSeq: Seq
 		/** Atoms this batch appended to (may hold benign duplicates; deduped at retirement). */
 		atomsTouched: AtomInternals[]
@@ -3887,25 +4211,33 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	type BatchSlotMeta = {
 		id: BatchSlot
 		tenant: BatchId | undefined
-		/** Claim sequence, created at every intern — the engine never reads it; it
-		 * keeps model parity (both sides spend one sequence per claim). */
+		/**
+		 * Claim sequence, created at every intern — the engine never reads it; it
+		 * keeps model parity (both sides spend one sequence per claim).
+		 */
 		claimSeq: Seq
-		/** Sequence of the last write under this slot, zeroed at each new claim
-		 * (the mount fixup's clock conjunct compares it against snapshot pins). */
+		/**
+		 * Sequence of the last write under this slot, zeroed at each new claim
+		 * (the mount fixup's clock conjunct compares it against snapshot pins).
+		 */
 		writeClock: Seq
 		releasePending: boolean
 	}
 
 	const SLOT_COUNT = 31 // at most 31 live batches — one per React lane, and slot sets fit one int bit mask.
 
-	/** BatchId source — monotonic for the process's whole life, never reused or
+	/**
+	 * BatchId source — monotonic for the process's whole life, never reused or
 	 * rewound. React stores these ids verbatim, and the counter deliberately
 	 * survives `__TEST__resetEngine`: a host can legally hold an id across a
-	 * reset, and monotonicity keeps a stale id from colliding with a later batch. */
+	 * reset, and monotonicity keeps a stale id from colliding with a later batch.
+	 */
 	let nextBatchId = 1
 
-	/** The next id the allocator would hand out (test harnesses rebase their
-	 * model↔engine batch-id comparison on it across resets). @internal */
+	/**
+	 * The next id the allocator would hand out (test harnesses rebase their
+	 * model↔engine batch-id comparison on it across resets). @internal
+	 */
 	function __TEST__peekNextBatchId(): BatchId {
 		return nextBatchId
 	}
@@ -3919,11 +4251,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Ambient default batch for bare (context-free) writes; undefined while none is live. */
 	let ambientBatch: BatchId | undefined
 
-	/** Create a batch — at most 31 live at once (one per React lane; scheduling
+	/**
+	 * Create a batch — at most 31 live at once (one per React lane; scheduling
 	 * itself stays React's). Allocation-only, callable mid-render or mid-commit
 	 * (opDepth > 0): bookkeeping, no drains, no kernel mutation, no user code.
 	 * With devChecks armed, opening with no driver attached throws — hosts that
-	 * open batches must retire them, so a harness must attach its driver first. */
+	 * open batches must retire them, so a harness must attach its driver first.
+	 */
 	function openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
 		if (devChecks && driver === undefined) {
 			throw new ScheduleError(
@@ -4077,8 +4411,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---------------------------------------------------------- retirement
 
-	/** Retirement fires exactly once per batch; parked async actions retire
-	 * only at settlement (their pending state must stay pending until then). */
+	/**
+	 * Retirement fires exactly once per batch; parked async actions retire
+	 * only at settlement (their pending state must stay pending until then).
+	 */
 	function retire(batchId: BatchId): void {
 		const t = getBatchById(batchId)
 		if (t.state === 'retired') {
@@ -4125,12 +4461,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		runOperationEpilogue()
 	}
 
-	/** Retirement: the batch's writes become permanent history visible to every
+	/**
+	 * Retirement: the batch's writes become permanent history visible to every
 	 * world. Order matters — stamp log entries, run the fold valve, fan touched
 	 * atoms into committed arenas, drain observers, clear per-root membership,
 	 * release the slot (deferred while an open render's mask names it), close
 	 * the episode. Disposition-blind: a batch React abandoned retires the same
-	 * way — whether writes persist never depends on who was subscribed. */
+	 * way — whether writes persist never depends on who was subscribed.
+	 */
 	function retireInner(batch: Batch): void {
 		if (batch.state === 'live') {
 			liveBatchCount--
@@ -4231,8 +4569,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// values per world. Read routing decides which world a public `.state` read
 	// resolves to, armed through the one {@link routingActive} flag.
 
-	/** A world: one self-consistent assignment of values to every atom — the
-	 * fold, in timeline order, of exactly the log entries {@link isVisible} admits. */
+	/**
+	 * A world: one self-consistent assignment of values to every atom — the
+	 * fold, in timeline order, of exactly the log entries {@link isVisible} admits.
+	 */
 	type World =
 		| { kind: 'newest' }
 		| { kind: 'render'; render: RenderPass }
@@ -4242,18 +4582,22 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** The one newest-world singleton (hot paths never allocate world objects). */
 	const NEWEST: World = { kind: 'newest' }
 
-	/** Declined-read sentinel: a routed read returns it to mean "no routing
-	 * context answered — take the plain kernel path". Never user-observable. */
+	/**
+	 * Declined-read sentinel: a routed read returns it to mean "no routing
+	 * context answered — take the plain kernel path". Never user-observable.
+	 */
 	const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true }
 
 	/** Top-level generation for the per-world cycle-detection marks in {@link evalMark}. */
 	let evalGen: EvalGen = 0
 
-	/** The bindings' ambient-world provider, consulted per routed read when no
+	/**
+	 * The bindings' ambient-world provider, consulted per routed read when no
 	 * evaluation world is on stack: answers the live call context's world (the
 	 * render running right now; an effect fire's committed world) or undefined
 	 * for "route newest". A callback, not a flag, so a finished-but-uncommitted
-	 * render reads newest and interleaved renders each see their own. */
+	 * render reads newest and interleaved renders each see their own.
+	 */
 	let worldProvider: (() => World | undefined) | undefined
 
 	/** Installs/clears the ambient-world provider (bindings seam). */
@@ -4268,15 +4612,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		syncReadRouting()
 	}
 
-	/** Recomputes {@link routingActive} from the routing sources — reads
-	 * on a driver-less quiet engine stay one boolean check. */
+	/**
+	 * Recomputes {@link routingActive} from the routing sources — reads
+	 * on a driver-less quiet engine stay one boolean check.
+	 */
 	function syncReadRouting(): void {
 		routingActive = activeWorld !== undefined || worldProvider !== undefined
 	}
 
-	/** The read-routing resolution order, one copy: the fold-purity throw
+	/**
+	 * The read-routing resolution order, one copy: the fold-purity throw
 	 * (routing would otherwise serve a replayed updater's read silently) → the
-	 * evaluation world on stack → the driver's ambient provider. */
+	 * evaluation world on stack → the driver's ambient provider.
+	 */
 	function resolveRoutedWorld(): World | undefined {
 		if (inFoldCallback) {
 			throw new ScheduleError(
@@ -4291,9 +4639,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return p === undefined ? undefined : p()
 	}
 
-	/** Routes a public `Atom.state` read to the effective world, allocating
+	/**
+	 * Routes a public `Atom.state` read to the effective world, allocating
 	 * engine content on first sight; NOT_ROUTED means "take the plain kernel path".
-	 * @internal (reached only through `Atom.state`) */
+	 * @internal (reached only through `Atom.state`)
+	 */
 	function routedAtomRead(atom: Atom<unknown>): unknown {
 		const world = resolveRoutedWorld()
 		if (world === undefined) {
@@ -4303,9 +4653,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return routedRead(node, world)
 	}
 
-	/** The computed counterpart of {@link routedAtomRead}. Newest resolution
+	/**
+	 * The computed counterpart of {@link routedAtomRead}. Newest resolution
 	 * declines (NOT_ROUTED): the plain kernel path is newest serving.
-	 * @internal (reached only through `Computed.state`) */
+	 * @internal (reached only through `Computed.state`)
+	 */
 	function routedComputedRead(c: Computed<unknown>): unknown {
 		const world = resolveRoutedWorld()
 		if (world === undefined || world.kind === 'newest') {
@@ -4323,8 +4675,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return evaluate(node, world)
 	}
 
-	/** Runs an updater/reducer/equals under the fold-purity guard: these
-	 * callbacks replay per world, so signal reads and writes inside them throw. */
+	/**
+	 * Runs an updater/reducer/equals under the fold-purity guard: these
+	 * callbacks replay per world, so signal reads and writes inside them throw.
+	 */
 	function runInFoldCallback<T>(fn: () => T): T {
 		const prev = inFoldCallback
 		inFoldCallback = true
@@ -4335,9 +4689,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The fold — replay this atom's visible log entries over base with
+	/**
+	 * The fold — replay this atom's visible log entries over base with
 	 * stepwise equality (an equal step keeps the old reference); the entry
-	 * array is already in sequence order and folds cover whole prefixes. */
+	 * array is already in sequence order and folds cover whole prefixes.
+	 */
 	function foldAtom(atom: AtomInternals, world: World): Value {
 		const entries = atom.log.entries
 		let value = atom.base
@@ -4355,14 +4711,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return value
 	}
 
-	/** The visibility rule — which log entries each world's fold replays.
+	/**
+	 * The visibility rule — which log entries each world's fold replays.
 	 * Newest sees every entry (eager apply lets it read straight off the
 	 * kernel). A render sees entries retired at-or-before its pin, plus entries
 	 * up to the pin from the batches it includes — a paused-and-resumed render
 	 * never sees a later write. Committed-for-root sees retired entries plus
 	 * batches this root committed that are still live elsewhere. mountFix adds
 	 * the owning render's inclusions at its pin to committed truth (see
-	 * {@link runMountFixup}). The reference model's `visible` must mirror this. */
+	 * {@link runMountFixup}). The reference model's `visible` must mirror this.
+	 */
 	function isVisible(e: WriteRecord, world: World): boolean {
 		switch (world.kind) {
 			case 'newest':
@@ -4395,9 +4753,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Apply one op over `prev`: a SET's payload is the value, an UPDATE's is
+	/**
+	 * Apply one op over `prev`: a SET's payload is the value, an UPDATE's is
 	 * the updater (a ReducerAtom dispatch arrives as an update whose closure
-	 * carries the reducer and the captured action). */
+	 * carries the reducer and the captured action).
+	 */
 	function applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value {
 		if (kind === WriteKind.SET) {
 			return payload
@@ -4413,16 +4773,20 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		})
 	}
 
-	/** How this atom compares two values — the one equality rule, one copy for
+	/**
+	 * How this atom compares two values — the one equality rule, one copy for
 	 * every asking site: Object.is for the default, otherwise the atom's custom
-	 * comparator under the fold-purity guard (comparators replay per world). */
+	 * comparator under the fold-purity guard (comparators replay per world).
+	 */
 	function isAtomValueEqual(atom: AtomInternals, a: Value, b: Value): boolean {
 		return atom.eqIsDefault ? Object.is(a, b) : runInFoldCallback(() => atom.equals(a, b))
 	}
 
-	/** The value-change gate for compare-and-correct sites: refolding can create
+	/**
+	 * The value-change gate for compare-and-correct sites: refolding can create
 	 * fresh references for comparator-equal values, so a custom-equality computed
-	 * asks its policy comparator; sentinels and everything else use identity. */
+	 * asks its policy comparator; sentinels and everything else use identity.
+	 */
 	function isValueChanged(node: AnyInternals, prev: Value, next: Value): boolean {
 		if (
 			node.kind === 'computed' &&
@@ -4443,9 +4807,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		)
 	}
 
-	/** A raw-handle atom read while a world evaluation frame is open: the open
+	/**
+	 * A raw-handle atom read while a world evaluation frame is open: the open
 	 * frame's sink gates observation capture, then the read serves in its world.
-	 * @internal (called from the concurrent table wrapper) */
+	 * @internal (called from the concurrent table wrapper)
+	 */
 	function routedRead(atom: AtomInternals, world: World): Value {
 		if (currentSink !== 0) {
 			const oc = obsCapture
@@ -4456,8 +4822,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return readAtomValue(atom, world)
 	}
 
-	/** Atom value in a world: kernel for newest, the world's arena for
-	 * render/committed, a plain fold for mountFix and unmaterialized roots. */
+	/**
+	 * Atom value in a world: kernel for newest, the world's arena for
+	 * render/committed, a plain fold for mountFix and unmaterialized roots.
+	 */
 	function readAtomValue(atom: AtomInternals, world: World): Value {
 		const route = serveOverride // one override test on the routed-read path
 		if (route !== undefined) {
@@ -4480,12 +4848,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return foldAtom(atom, world)
 	}
 
-	/** A node's value in a world. Render/committed worlds serve from the world's
+	/**
+	 * A node's value in a world. Render/committed worlds serve from the world's
 	 * arena — values, invalidation, and routing structure live there, and the
 	 * cold in-arena fn run records the links routing coverage stands on. Newest
 	 * serves from the kernel: atoms directly, computeds via
 	 * {@link readKernelComputed}. mountFix worlds and unmaterialized roots take
-	 * the memo-free fold-through below, with per-world cycle detection. */
+	 * the memo-free fold-through below, with per-world cycle detection.
+	 */
 	function evaluate(node: AnyInternals, world: World): Value {
 		probes.worldEvals++ // engine-activity counter (tests/one-spec.ts's zero-cost check)
 		if (inFoldCallback) {
@@ -4551,11 +4921,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Newest computed serving — the kernel's `computedRead`, with read-site
+	/**
+	 * Newest computed serving — the kernel's `computedRead`, with read-site
 	 * translations: a kernel CycleError becomes the engine's cycle error; a
 	 * PENDING suspension of a ctx-shaped computed rethrows for hook-initiated
 	 * reads but serves as its stable sentinel value for background ones; settled
-	 * suspensions self-heal kernel-side before this frame ever sees them. */
+	 * suspensions self-heal kernel-side before this frame ever sees them.
+	 */
 	function readKernelComputed(node: ComputedInternals): Value {
 		try {
 			return E.computedRead(node.id)
@@ -4570,8 +4942,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The fold-through frames' tracked reader (arena and kernel runs have their
-	 * own): capture the observation, then evaluate the dep in the frame's world. */
+	/**
+	 * The fold-through frames' tracked reader (arena and kernel runs have their
+	 * own): capture the observation, then evaluate the dep in the frame's world.
+	 */
 	const trackedReader: Reader = (dep) => {
 		const oc = obsCapture
 		if (oc !== undefined) {
@@ -4580,9 +4954,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return evaluate(dep, activeWorld!)
 	}
 
-	/** The fold-through frames' untracked reader: capture-free, not input-free —
+	/**
+	 * The fold-through frames' untracked reader: capture-free, not input-free —
 	 * the dep still evaluates in the frame's world, but it never joins the
-	 * observation capture (strong-only) and no notification fires through it. */
+	 * observation capture (strong-only) and no notification fires through it.
+	 */
 	const untrackedReader: Reader = (dep) => {
 		const sink = currentSink
 		currentSink = 0
@@ -4608,13 +4984,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * claim/release, fanout, decay, routing walks); cycles resolve by hoisting.
 	 */
 
-	/** A shadow record id: the premultiplied index of a record in one arena's own
+	/**
+	 * A shadow record id: the premultiplied index of a record in one arena's own
 	 * buffer — a third id space (arena walks consult kernel memory mid-walk, where
-	 * mixing NodeIds would corrupt). Branded; 0 = none; link ids stay plain. */
+	 * mixing NodeIds would corrupt). Branded; 0 = none; link ids stay plain.
+	 */
 	type ShadowId = number & IdBrand<'arenaShadow'>
 
-	/** A node record's tenancy generation, read live from kernel memory (the
-	 * buffer is re-fetched per read: growth rebuilds swap it mid-operation). */
+	/**
+	 * A node record's tenancy generation, read live from kernel memory (the
+	 * buffer is re-fetched per read: growth rebuilds swap it mid-operation).
+	 */
 	function getKernelGeneration(id: NodeId): Generation {
 		return E.buffer()[id + NodeField.GEN]
 	}
@@ -4631,19 +5011,25 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// checker (tests/arena-checker.ts) compares every arena serve against a
 	// naive cache-free re-fold at each public operation's epilogue and throws.
 
-	/** Bounds the arena pool: {@link releaseArena} keeps at most this many
-	 * scrubbed shells (address space only — untouched pages never commit). */
+	/**
+	 * Bounds the arena pool: {@link releaseArena} keeps at most this many
+	 * scrubbed shells (address space only — untouched pages never commit).
+	 */
 	const ARENA_POOL_CAP = 8
 
-	/** Default arena reservation in Int32 slots (see
-	 * {@link ArenaGeom.INIT_BUFFER_BYTES}); EngineResetOptions.arenaInitInts overrides. */
+	/**
+	 * Default arena reservation in Int32 slots (see
+	 * {@link ArenaGeom.INIT_BUFFER_BYTES}); EngineResetOptions.arenaInitInts overrides.
+	 */
 	const WORLD_ARENA_INIT_INTS: ArenaInitInts = ArenaGeom.INIT_BUFFER_BYTES >> 2
 	const EMPTY_I32 = new Int32Array(0)
 
-	/** One world's arena: packed records, value/suspension side columns, a dirty
+	/**
+	 * One world's arena: packed records, value/suspension side columns, a dirty
 	 * list, and a read clock. Pooled: {@link releaseArena}'s full scrub is what
 	 * makes dead-tenancy residue unable to validate; `claimGen` (bumped at claim
-	 * and release; float64, so no wrap) is the tenancy diagnostic. */
+	 * and release; float64, so no wrap) is the tenancy diagnostic.
+	 */
 	class WorldArena {
 		kind: 'render' | 'committed'
 		storage: 'arena' | 'js'
@@ -4653,39 +5039,53 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		alive = true
 		/** Pool claim generation (bumped at claim and release). */
 		claimGen = 0
-		/** The arena's records: a plain fixed-length Int32Array (resizable-buffer
+		/**
+		 * The arena's records: a plain fixed-length Int32Array (resizable-buffer
 		 * views measured +56% on cold renders; banned). Starts at the zero-fill
 		 * demand-paged reservation {@link ArenaGeom.INIT_BUFFER_BYTES} and grows BY
 		 * COPY: record ids never change, and callers re-load cached views after
-		 * allocating calls ({@link growWorldArenaBuffers} enumerates the sites). */
+		 * allocating calls ({@link growWorldArenaBuffers} enumerates the sites).
+		 */
 		memory: Int32Array | number[]
-		/** Per-world updated-at clock column: one float64 slot per record, grown
-		 * beside {@link memory} by {@link growWorldArenaBuffers}. */
+		/**
+		 * Per-world updated-at clock column: one float64 slot per record, grown
+		 * beside {@link memory} by {@link growWorldArenaBuffers}.
+		 */
 		clocks: Float64Array | number[]
-		/** Whether observer consults settle the clock column: committed arenas only
-		 * (render-world values are pin-frozen; set per tenancy at claim). */
+		/**
+		 * Whether observer consults settle the clock column: committed arenas only
+		 * (render-world values are pin-frozen; set per tenancy at claim).
+		 */
 		bumpsClocks: boolean
 		vals: Value[] = []
-		/** The folded value as of the shadow's last observer consult — the compare
-		 * basis {@link settleObserverClock} moves the clock against (valid iff the clock is non-zero). */
+		/**
+		 * The folded value as of the shadow's last observer consult — the compare
+		 * basis {@link settleObserverClock} moves the clock against (valid iff the clock is non-zero).
+		 */
 		cutoffVals: Value[] = []
 		/** SignalEffect terminal occupying a shadow slot. */
 		signalEffects: (SignalEffect | undefined)[] = []
 		/** Per-record suspended-list index + 1 (0 = not suspended; swap-remove compaction). */
 		suspIdx: number[] = []
-		/** Per-record walk-generation stamps for the routing walks — termination and
-		 * O(V+E) without allocation; scrubbed at release like every side column. */
+		/**
+		 * Per-record walk-generation stamps for the routing walks — termination and
+		 * O(V+E) without allocation; scrubbed at release like every side column.
+		 */
 		walk: number[] = []
-		/** Segregated weak-link subs list (per-shadow second head; same link layout):
+		/**
+		 * Segregated weak-link subs list (per-shadow second head; same link layout):
 		 * a combined-list walk measured 4.9× the write cost under hundreds of weak
-		 * links per node. Delivery walks strong only; marks and drains walk both. */
+		 * links per node. Delivery walks strong only; marks and drains walk both.
+		 */
 		weakSubs: number[] = []
 		weakSubsTail: number[] = []
 		next = ArenaGeom.STRIDE // bump pointer (record 0 burned: 0 = null)
 		linkFree = 0
-		/** Dead-shadow free list (leak audit), threaded through ArenaField.DEPS of
+		/**
+		 * Dead-shadow free list (leak audit), threaded through ArenaField.DEPS of
 		 * records {@link purgeNodeFromArenas} orphaned; members join fully zeroed.
-		 * Without reuse, useComputed churn grew arenas forever (tests/leak-audit.spec.ts). */
+		 * Without reuse, useComputed churn grew arenas forever (tests/leak-audit.spec.ts).
+		 */
 		shadowFree: ShadowId = 0
 		links = 0
 		/** nodeIndex → shadow record id (0 = none; index 0 is burned). */
@@ -4722,21 +5122,27 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Reclamation guard probe: whether this arena's suspended list holds the
-	 * node's shadow. Cold — one probe per arena per finalizer fire/retry. */
+	/**
+	 * Reclamation guard probe: whether this arena's suspended list holds the
+	 * node's shadow. Cold — one probe per arena per finalizer fire/retry.
+	 */
 	function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
 		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 		return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0
 	}
 
-	/** Membership probe: whether this arena holds a shadow for the node index.
-	 * Cold — reclamation guards, a render-lifecycle dev assert, diagnostics. */
+	/**
+	 * Membership probe: whether this arena holds a shadow for the node index.
+	 * Cold — reclamation guards, a render-lifecycle dev assert, diagnostics.
+	 */
 	function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
 		return (ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0) !== 0
 	}
 
-	/** Renumber the read clock: MARK → 0 on every live shadow, clock restarts at 0
-	 * (quiesce-duty state; PENDING persists). Link records skipped (slot 7 = MODE). */
+	/**
+	 * Renumber the read clock: MARK → 0 on every live shadow, clock restarts at 0
+	 * (quiesce-duty state; PENDING persists). Link records skipped (slot 7 = MODE).
+	 */
 	function arenaRenumberMarks(a: WorldArena): void {
 		for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
 			if (
@@ -4756,9 +5162,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.readClock++
 	}
 
-	/** Renumber evaluation-cycle stamps: VERSION → 0 on every live link, cycle
+	/**
+	 * Renumber evaluation-cycle stamps: VERSION → 0 on every live link, cycle
 	 * restarts at 0 (a zeroed stamp just reads as stale). Freed links stay
-	 * untouched (VERSION aliases FREE_NEXT); open outer frames cannot collide. */
+	 * untouched (VERSION aliases FREE_NEXT); open outer frames cannot collide.
+	 */
 	function arenaRenumberLinkVersions(a: WorldArena): void {
 		const memory = a.memory
 		for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
@@ -4837,8 +5245,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.links--
 	}
 
-	/** Detach a link from its dep's mode-matching subs list, fixing neighbors and
-	 * head/tail only — the link's own prev/next stay stale for mid-walk readers. */
+	/**
+	 * Detach a link from its dep's mode-matching subs list, fixing neighbors and
+	 * head/tail only — the link's own prev/next stay stale for mid-walk readers.
+	 */
 	function arenaSubsDetach(a: WorldArena, id: number): void {
 		const memory = a.memory
 		const dep = memory[id + ArenaLinkField.DEP]
@@ -4893,13 +5303,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		arenaSubsAppend(a, id, weak)
 	}
 
-	/** Kernel correspondence, an obligation: these `arena`-prefixed walks
+	/**
+	 * Kernel correspondence, an obligation: these `arena`-prefixed walks
 	 * re-state the kernel's push-pull algorithms over the arena layout — two
 	 * expressions of one algorithm; a semantic change on either side is
 	 * re-derived, never copied, on the other. The one addition, the mode
 	 * discipline: a dep's first occurrence in an evaluation sets the link's mode
 	 * from that read's kind; later occurrences only upgrade weak→strong, through
-	 * {@link arenaSetLinkWeak} (a mode change moves subs lists). */
+	 * {@link arenaSetLinkWeak} (a mode change moves subs lists).
+	 */
 	function arenaLink(
 		a: WorldArena,
 		dep: number,
@@ -5047,8 +5459,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Bounds every arena walk's step count — longer can only be a corrupted-list
-	 * cycle, so the guards throw. Const enum: must inline as a literal in hot loops. */
+	/**
+	 * Bounds every arena walk's step count — longer can only be a corrupted-list
+	 * cycle, so the guards throw. Const enum: must inline as a literal in hot loops.
+	 */
 	const enum ArenaWalk {
 		CYCLE_CAP = 1_000_000,
 	}
@@ -5084,8 +5498,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		)
 	}
 
-	/** Propagate PENDING over strong and weak links (only write-time delivery
-	 * skips weak); a descended sub's weak head parks as a stack continuation. */
+	/**
+	 * Propagate PENDING over strong and weak links (only write-time delivery
+	 * skips weak); a descended sub's weak head parks as a stack continuation.
+	 */
 	function arenaPropagate(a: WorldArena, startLink: number): void {
 		const memory = a.memory // never allocates: safe to cache
 		let cur = startLink
@@ -5165,8 +5581,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		} while (true)
 	}
 
-	/** Head of a shadow's subs list by index: 0 = strong, 1 = weak — where the
-	 * `for (list 0..1)` walk sites learn the two lists' homes (hot fanout reads direct). */
+	/**
+	 * Head of a shadow's subs list by index: 0 = strong, 1 = weak — where the
+	 * `for (list 0..1)` walk sites learn the two lists' homes (hot fanout reads direct).
+	 */
 	function arenaSubsHead(a: WorldArena, sh: number, list: number): number {
 		return list === 0
 			? a.memory[sh + ArenaField.SUBS]
@@ -5231,15 +5649,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return false
 	}
 
-	/** The serve-override slot's non-arena occupant: while it holds this marker,
+	/**
+	 * The serve-override slot's non-arena occupant: while it holds this marker,
 	 * routed atom reads fold plain from their write logs — no arena, no kernel
 	 * shortcut. Only the armed divergence checker sets it (checker reads must
 	 * never consult the state under check); it exists so the routed-read hot
-	 * path tests one override slot instead of two. */
+	 * path tests one override slot instead of two.
+	 */
 	const FOLD_TRUTH = Symbol('cosignals.foldTruth')
 
-	/** The arena record layout as plain numbers, restricted to what the test-side
-	 * validator reads; built beside the enums, in sync by construction. */
+	/**
+	 * The arena record layout as plain numbers, restricted to what the test-side
+	 * validator reads; built beside the enums, in sync by construction.
+	 */
 	function arenaCheckerLayout(): {
 		readonly ArenaGeom: { readonly ID_TO_COLUMN_SHIFT: number; readonly CLOCK_LIMIT: number }
 		readonly ArenaField: {
@@ -5294,13 +5716,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let rootToArena: Map<RootId, WorldArena>
 	/** Pooled released arena shells (capped at {@link ARENA_POOL_CAP}). */
 	let arenaPool: WorldArena[]
-	/** Watchers re-staled by their own commit, per root (render lifecycle writes;
-	 * durable drains consume; retirement and lock-in gate on the size). */
+	/**
+	 * Watchers re-staled by their own commit, per root (render lifecycle writes;
+	 * durable drains consume; retirement and lock-in gate on the size).
+	 */
 	let restaled: Map<RootId, Set<Watcher>>
 
-	/** Open arena evaluation frame: links record into arenaFrame at
+	/**
+	 * Open arena evaluation frame: links record into arenaFrame at
 	 * arenaFrameCycle; flattened to scalars (a per-evaluation object showed in
-	 * the cold-render gate). undefined arena ⇔ no frame. */
+	 * the cold-render gate). undefined arena ⇔ no frame.
+	 */
 	let arenaFrame: WorldArena | undefined = undefined
 	let arenaFrameShadow = 0
 	let arenaFrameCycle = 0
@@ -5344,8 +5770,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return a
 	}
 
-	/** Release an arena: scrub every column and the written record prefix, then
-	 * pool the shell (dirty + suspended cones die unobserved with the tenancy). */
+	/**
+	 * Release an arena: scrub every column and the written record prefix, then
+	 * pool the shell (dirty + suspended cones die unobserved with the tenancy).
+	 */
 	function releaseArena(a: WorldArena): void {
 		for (let i = 0; i < a.suspended.length; i++) {
 			suspendedCount--
@@ -5399,8 +5827,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return (a.clocks[vi] = ++clockSource)
 	}
 
-	/** The arena of a world: render arenas ride the render record; committed ones
-	 * materialize lazily and persist for the root's consumer-populated life. */
+	/**
+	 * The arena of a world: render arenas ride the render record; committed ones
+	 * materialize lazily and persist for the root's consumer-populated life.
+	 */
 	function getArena(world: World): WorldArena | undefined {
 		if (world.kind === 'render') {
 			const a = world.render.arena
@@ -5437,8 +5867,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Shadow lookup/create with GEN id-tenancy validation: a dead-GEN shadow
-	 * never serves — it is reset cold and re-tenanted. */
+	/**
+	 * Shadow lookup/create with GEN id-tenancy validation: a dead-GEN shadow
+	 * never serves — it is reset cold and re-tenanted.
+	 */
 	function resolveShadow(a: WorldArena, node: AnyInternals, kindFlags: number): number {
 		const ix = node.ix
 		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
@@ -5458,8 +5890,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return sh
 	}
 
-	/** Detach a shadow wholesale: deps in reverse, both subs lists, the suspended
-	 * set, the cached value. Shared by dead-tenancy re-key and dispose purge. */
+	/**
+	 * Detach a shadow wholesale: deps in reverse, both subs lists, the suspended
+	 * set, the cached value. Shared by dead-tenancy re-key and dispose purge.
+	 */
 	function arenaEvictShadow(a: WorldArena, sh: number): void {
 		arenaDisposeAllDepsInReverse(a, sh)
 		for (let list = 0; list < 2; list++) {
@@ -5476,8 +5910,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		scrubWorldShadowColumnsOnEvict(a, sh) // value + clock slots clear together
 	}
 
-	/** Arena dep recording (arena fn-reader hook). The pre-dedup observation
-	 * capture rides the strong arm only (the observation union is strong-only). */
+	/**
+	 * Arena dep recording (arena fn-reader hook). The pre-dedup observation
+	 * capture rides the strong arm only (the observation union is strong-only).
+	 */
 	function arenaRecordDep(dep: AnyInternals, weak: boolean): void {
 		const a = arenaFrame
 		if (a === undefined) {
@@ -5496,9 +5932,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		arenaLink(a, sh, arenaFrameShadow, arenaFrameCycle, weak)
 	}
 
-	/** The arena atom-propagation gate is Object.is over fold outputs: the atom's
+	/**
+	 * The arena atom-propagation gate is Object.is over fold outputs: the atom's
 	 * own `equals` already ran inside the fold's stepwise equality — a custom
-	 * comparator here could suppress propagation the fold performs. */
+	 * comparator here could suppress propagation the fold performs.
+	 */
 	function arenaIsValueEqual(prev: Value, next: Value): boolean {
 		return Object.is(prev, next)
 	}
@@ -5537,9 +5975,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Exceptional outcome of an arena fn run: cache the thrown payload into the
+	/**
+	 * Exceptional outcome of an arena fn run: cache the thrown payload into the
 	 * shadow (BOX_THROWN) — later serves rethrow it; a thrown suspension re-runs
-	 * once its thenable settles (the serve-site probe marks it DIRTY). */
+	 * once its thenable settles (the serve-site probe marks it DIRTY).
+	 */
 	function arenaNoteThrow(a: WorldArena, sh: number, err: unknown): void {
 		const memory = a.memory
 		const flags = memory[sh + ArenaField.FLAGS]
@@ -5569,9 +6009,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- arena serving (world reads, checks, settlement refolds) ----
 
-	/** Serve a node from an arena — the render/committed read path — refolding
+	/**
+	 * Serve a node from an arena — the render/committed read path — refolding
 	 * through the arena's own walks when marks or cold bases demand it. Refolds
-	 * run under the arena-only routing override so raw-handle reads route here. */
+	 * run under the arena-only routing override so raw-handle reads route here.
+	 */
 	function arenaServe(a: WorldArena, node: AnyInternals): Value {
 		if (node.kind === 'atom') {
 			const sh = resolveShadow(a, node, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE)
@@ -5675,8 +6117,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return value
 	}
 
-	/** Refold a shadow (atom fold or computed fn run);
-	 * returns whether the world's value changed (the value cutoff). */
+	/**
+	 * Refold a shadow (atom fold or computed fn run);
+	 * returns whether the world's value changed (the value cutoff).
+	 */
 	function arenaUpdateShadow(a: WorldArena, sh: number): boolean {
 		const flags = a.memory[sh + ArenaField.FLAGS]
 		if ((flags & ArenaFlag.K_COMPUTED) !== 0) {
@@ -5700,9 +6144,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return true
 	}
 
-	/** Arena computed refold: the fn runs with the arena readers, the arena-only
+	/**
+	 * Arena computed refold: the fn runs with the arena readers, the arena-only
 	 * routing override, and the world set; observed nodes capture the run's
-	 * strong deps and re-point their retains after ({@link syncObservedDeps}). */
+	 * strong deps and re-point their retains after ({@link syncObservedDeps}).
+	 */
 	function arenaUpdateComputed(a: WorldArena, sh: number): boolean {
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]
 		const node = nodeIndexToInternals[nid] as ComputedInternals
@@ -5761,8 +6207,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Observed-closure sync after an arena refold, out of line (V8 inline
-	 * budget); serveOverride clears so discovery evaluations route newest. */
+	/**
+	 * Observed-closure sync after an arena refold, out of line (V8 inline
+	 * budget); serveOverride clears so discovery evaluations route newest.
+	 */
 	function arenaSyncObservationAfterRefold(node: AnyInternals, captured: AnyInternals[]): void {
 		const so = serveOverride
 		serveOverride = undefined
@@ -5773,14 +6221,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Fold epilogue of an arena computed refold, out of line (keeps the caller
+	/**
+	 * Fold epilogue of an arena computed refold, out of line (keeps the caller
 	 * under V8's 460-bytecode inline budget): classify the fn's outcome —
 	 * suspension sentinel or plain value — into the value column and outcome
 	 * bits; returns the value cutoff. A returned sentinel serves as a value (same
 	 * box by identity = unchanged). Custom equality runs `isEqual(prev, next)` —
 	 * previous first; comparators need not be symmetric — against the arena-local
 	 * previous value; unchanged keeps the previous reference, and equality never
-	 * bridges an exceptional boundary (`prevValid` demands a plain value). */
+	 * bridges an exceptional boundary (`prevValid` demands a plain value).
+	 */
 	function arenaFoldOutcome(
 		a: WorldArena,
 		sh: number,
@@ -5857,8 +6307,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return sh
 	}
 
-	/** Retrack one SignalEffect directly into its committed arena. Its links are
-	 * the notification state; link clock slots hold the last consult stamp. */
+	/**
+	 * Retrack one SignalEffect directly into its committed arena. Its links are
+	 * the notification state; link clock slots hold the last consult stamp.
+	 */
 	function runSignalEffectFrame(effect: SignalEffect, body: () => void): void {
 		if (activeSignalEffect !== undefined) {
 			throw new ScheduleError('SignalEffect runs do not nest')
@@ -6025,9 +6477,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Kernel `checkDirty` transliteration; refolds can run getters (allocation,
+	/**
+	 * Kernel `checkDirty` transliteration; refolds can run getters (allocation,
 	 * arena growth), so the walk re-loads `a.memory` after every update call.
-	 * Entry wrapper owns the scratch-stack base restore (V8 inline budget). */
+	 * Entry wrapper owns the scratch-stack base restore (V8 inline budget).
+	 */
 	function arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {
 		if (startLink === 0) {
 			return false
@@ -6040,11 +6494,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** arenaUpdateShadow + sibling PENDING→DIRTY upgrade (both subs lists; heads
+	/**
+	 * arenaUpdateShadow + sibling PENDING→DIRTY upgrade (both subs lists; heads
 	 * captured before the refold, which can rebuild the lists). The kernel's
 	 * single-sub skip is unsound under segregated lists — fuzzing found a
 	 * weak-side validation stranding a lone strong sub PENDING — so both lists
-	 * propagate unconditionally; the walker's own re-upgrade is a no-op. */
+	 * propagate unconditionally; the walker's own re-upgrade is a no-op.
+	 */
 	function arenaUpdateAndShallow(a: WorldArena, node: number): boolean {
 		const subs = a.memory[node + ArenaField.SUBS]
 		const weak = a.weakSubs[node >> ArenaGeom.ID_TO_COLUMN_SHIFT]
@@ -6130,10 +6586,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- fanout at the four flip sites + mark decay ----
 
-	/** Mark flipped atoms' shadows in one arena, propagating PENDING over strong
+	/**
+	 * Mark flipped atoms' shadows in one arena, propagating PENDING over strong
 	 * and weak links with read-clock dedup (a still-DIRTY shadow marked at the
 	 * current clock is already walked). Render arenas are pin-frozen and take no
-	 * log-entry fanout (dev-asserted); settlement is the one exemption. */
+	 * log-entry fanout (dev-asserted); settlement is the one exemption.
+	 */
 	function fanAtomsToArena(a: WorldArena, atoms: AtomInternals[], fromSettlement: boolean): void {
 		if (a.kind === 'render' && !fromSettlement) {
 			throw new InvariantViolation(
@@ -6176,8 +6634,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Decay-by-eviction: swap the dirty list; an unconsumed entry with no live
-	 * consumer MAY drop to cold — the list stays bounded by live consumers' cones. */
+	/**
+	 * Decay-by-eviction: swap the dirty list; an unconsumed entry with no live
+	 * consumer MAY drop to cold — the list stays bounded by live consumers' cones.
+	 */
 	function arenaDecay(a: WorldArena): void {
 		if (a.dirty.length === 0) {
 			return
@@ -6227,8 +6687,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Purge one nodeIndex's shadow from every arena: evict, zero, unindex, thread
-	 * onto the dead-shadow free list. Idempotent (an already-purged index skips). */
+	/**
+	 * Purge one nodeIndex's shadow from every arena: evict, zero, unindex, thread
+	 * onto the dead-shadow free list. Idempotent (an already-purged index skips).
+	 */
 	function purgeNodeFromArenas(ix: NodeIndex): void {
 		eachArena((a) => {
 			const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
@@ -6247,9 +6709,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		})
 	}
 
-	/** A settlement's arena half: scan the suspended list for shadows boxing this
+	/**
+	 * A settlement's arena half: scan the suspended list for shadows boxing this
 	 * sentinel; matches mark DIRTY (listed), stamp the mark clock, and propagate
-	 * PENDING over both subs lists (pin-exempt). Returns whether any matched. */
+	 * PENDING over both subs lists (pin-exempt). Returns whether any matched.
+	 */
 	function arenaInvalidateSettled(a: WorldArena, suspendSentinel: SuspendedRead): boolean {
 		const list = a.suspended
 		const memory = a.memory
@@ -6305,8 +6769,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** One arena's half of the delivery walk: DFS over strong subs lists only
-	 * (weak never delivers); per-arena stamps terminate, global stamps dedup. */
+	/**
+	 * One arena's half of the delivery walk: DFS over strong subs lists only
+	 * (weak never delivers); per-arena stamps terminate, global stamps dedup.
+	 */
 	function walkArenaStrong(
 		a: WorldArena,
 		from: NodeIndex,
@@ -6355,9 +6821,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The durable drain's candidate collection: the root arena's dirty list seeds
+	/**
+	 * The durable drain's candidate collection: the root arena's dirty list seeds
 	 * a walk over ALL links (strong and weak), collecting live same-root watchers
-	 * with the global dedup stamps. Never folds or allocates; the drain owns the rest. */
+	 * with the global dedup stamps. Never folds or allocates; the drain owns the rest.
+	 */
 	function arenaCollectDrainCandidates(
 		a: WorldArena,
 		gen: WalkGen,
@@ -6440,10 +6908,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** One fold-truth evaluation frame (the armed checker's naive fn runs): the
+	/**
+	 * One fold-truth evaluation frame (the armed checker's naive fn runs): the
 	 * serve override becomes FOLD_TRUTH so nothing routes back into the arena
 	 * under check, the world pins those folds' visibility, sink and observation
-	 * capture close, and the eval depth bumps (writes throw). Restores on exit. */
+	 * capture close, and the eval depth bumps (writes throw). Restores on exit.
+	 */
 	function runInFoldTruthFrame<T>(world: World, fn: () => T): T {
 		const savedWorld = activeWorld
 		const savedRoute = serveOverride
@@ -6465,9 +6935,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Diagnostics surface, never consulted by engine logic: dependency edges as
+	/**
+	 * Diagnostics surface, never consulted by engine logic: dependency edges as
 	 * dep → dependents (kernel NodeIds), unioned over every live arena's links.
-	 * Read by graphviz, model-comparison tests, soak metrics. */
+	 * Read by graphviz, model-comparison tests, soak metrics.
+	 */
 	function dependencyEdges(): Map<NodeId, Set<NodeId>> {
 		const out = new Map<NodeId, Set<NodeId>>()
 		eachArena((a) => {
@@ -6502,8 +6974,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return out
 	}
 
-	/** Test seam: a committed arena's (dep → sub) link mode, or undefined
-	 * when no link exists (the mode-transition pins read it). @internal */
+	/**
+	 * Test seam: a committed arena's (dep → sub) link mode, or undefined
+	 * when no link exists (the mode-transition pins read it). @internal
+	 */
 	function __TEST__arenaLinkMode(
 		rootId: RootId,
 		dep: AnyInternals,
@@ -6528,8 +7002,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return undefined
 	}
 
-	/** Test seam: a committed arena's live (dep → sub) link record id, or 0 when
-	 * none (freelist-discipline pins capture ids before a teardown). @internal */
+	/**
+	 * Test seam: a committed arena's live (dep → sub) link record id, or 0 when
+	 * none (freelist-discipline pins capture ids before a teardown). @internal
+	 */
 	function __TEST__arenaLinkId(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number {
 		const a = rootToArena.get(rootId)
 		if (a === undefined) {
@@ -6550,8 +7026,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return 0
 	}
 
-	/** Test seam: raw NEXT_DEP of an arena link record by id — valid on freed
-	 * links too (stale nextDep must name former neighbors, never the free list). @internal */
+	/**
+	 * Test seam: raw NEXT_DEP of an arena link record by id — valid on freed
+	 * links too (stale nextDep must name former neighbors, never the free list). @internal
+	 */
 	function __TEST__arenaLinkNextDep(rootId: RootId, linkId: number): number {
 		const a = rootToArena.get(rootId)
 		if (a === undefined) {
@@ -6602,9 +7080,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		notifyEffects[i] = effect
 	}
 
-	/** Invokes queued listeners at the end of the public operation. A nested
+	/**
+	 * Invokes queued listeners at the end of the public operation. A nested
 	 * public operation started BY a listener appends behind the live bound
-	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
+	 * and drains in the same sweep (the flushing flag stops nested sweeps).
+	 */
 	function flushNotify(): void {
 		if (notifyState.n === 0 || notifyState.flushing) {
 			return
@@ -6656,12 +7136,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Reused durable-drain candidate buffer (drains are never re-entrant). */
 	const drainWatcherBuf: Watcher[] = []
 
-	/** The value-blind per-write delivery walk: reachability from the written
+	/**
+	 * The value-blind per-write delivery walk: reachability from the written
 	 * atom over every live arena's strong links (weak links never traverse —
 	 * untracked reads never notify). It visits structure, never values — the
 	 * receiving render folds its own world — so a paused render's pinned view
 	 * is untouched. Watchers dedup per node ({@link lastWalk}) and deliver in
-	 * id order; dependents no live arena holds fall to the committed-truth drain. */
+	 * id order; dependents no live arena holds fall to the committed-truth drain.
+	 */
 	function deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
 		const gen = ++walkGen
 		const found = walkWatchers
@@ -6693,10 +7175,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		effects.length = 0
 	}
 
-	/** Delivery — per-write, value-blind, in the writer's stack. The
+	/**
+	 * Delivery — per-write, value-blind, in the writer's stack. The
 	 * per-(watcher, slot) dedup bit suppresses a repeat delivery only when
 	 * scheduled-but-unstarted work will fold the write anyway; otherwise
-	 * deliver interleaved so no write can slip between renders unseen. */
+	 * deliver interleaved so no write can slip between renders unseen.
+	 */
 	function deliver(w: Watcher, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
 		const tr = trace // one load covers this call's (at most two) record sites
 		const bit = 1 << slot.id
@@ -6727,7 +7211,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The one urgent pre-paint watcher correction. Every compare-and-correct
+	/**
+	 * The one urgent pre-paint watcher correction. Every compare-and-correct
 	 * site (settlement/quiet/durable drains, mount fixup) shares this body so
 	 * its effect tuple — rendered register, lastValidatedAt stamp, dedup
 	 * re-arm, queued notify — never drifts. Returns true iff a correction fired.
@@ -6738,7 +7223,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * compare values (clocks cannot relate two worlds): 'mount', whose stamp
 	 * the commit step after it owns, and watchers the committing render just
 	 * reset, whose clock its lock-in bumps for content already on screen.
-	 * Quiet corrections record no trace; the fold's quiet-write record covers that. */
+	 * Quiet corrections record no trace; the fold's quiet-write record covers that.
+	 */
 	function correctWatcher(
 		w: Watcher,
 		wInternals: AnyInternals,
@@ -6786,9 +7272,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return true
 	}
 
-	/** The shared drain consult: resolve the watcher's node (skip if tenancy
+	/**
+	 * The shared drain consult: resolve the watcher's node (skip if tenancy
 	 * moved), evaluate it in `world`, settle the watched node's committed
-	 * clock so the correction gate reads settled state, then {@link correctWatcher}. */
+	 * clock so the correction gate reads settled state, then {@link correctWatcher}.
+	 */
 	function reconcileWatcher(
 		w: Watcher,
 		a: WorldArena | undefined,
@@ -6806,8 +7294,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		correctWatcher(w, wInternals, now, cause)
 	}
 
-	/** Drain for a quiet fold: committed truth moved for every root and no walk
-	 * state scopes candidates, so every live watcher re-checks directly. */
+	/**
+	 * Drain for a quiet fold: committed truth moved for every root and no walk
+	 * state scopes candidates, so every live watcher re-checks directly.
+	 */
 	function quietDrain(): void {
 		for (const w of watchers.values()) {
 			if (!w.live) {
@@ -6817,12 +7307,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The durable drain at a committed-truth flip (retirement or per-root
+	/**
+	 * The durable drain at a committed-truth flip (retirement or per-root
 	 * commit): the root arena's dirty list, expanded over ALL arena links —
 	 * weak included, unlike the delivery walk — plus the {@link restaled} set,
 	 * reconciled in id order against committed truth. Value compares are legal
 	 * here (both sides committed); stale dirty entries seed value-gated no-ops.
-	 * SignalEffects validate their graph terminals at the same outer boundary. */
+	 * SignalEffects validate their graph terminals at the same outer boundary.
+	 */
 	function drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const world: World = { kind: 'committed', root: rootId }
 		const gen = ++walkGen // per-node collection dedup + per-arena traversal stamps
@@ -6876,10 +7368,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		settleCap = n
 	}
 
-	/** Queues a settling thenable's sentinel, then drains now or at the next
+	/**
+	 * Queues a settling thenable's sentinel, then drains now or at the next
 	 * boundary. Called by the listener {@link unwrapThenable} installs, after
 	 * the status write; creating the sentinel here keeps one identity with the
-	 * read-side throw even when a thenable's callbacks run synchronously. */
+	 * read-side throw even when a thenable's callbacks run synchronously.
+	 */
 	function settleTap(t: PromiseLike<unknown>): void {
 		const th = t as PromiseLike<unknown> & { suspendSentinel?: SuspendedRead }
 		const suspendSentinel = (th.suspendSentinel ??= new SuspendedRead(t))
@@ -6926,10 +7420,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		drainSettlements()
 	}
 
-	/** The only consumer of the settlement queue. {@link flushNotify} runs
+	/**
+	 * The only consumer of the settlement queue. {@link flushNotify} runs
 	 * inside the loop, so a callback that synchronously settles another
 	 * thenable lands in the queue and gets the next iteration; the drain never
-	 * returns with a settlement unscanned or a notification unflushed. */
+	 * returns with a settlement unscanned or a notification unflushed.
+	 */
 	function drainSettlements(): void {
 		if (settleDraining) {
 			return
@@ -6990,9 +7486,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		reclaimRetryAllSkipped()
 	}
 
-	/** The epilogue every public operation runs on exit: drain queued
+	/**
+	 * The epilogue every public operation runs on exit: drain queued
 	 * settlements to empty, then the divergence check a test armed
-	 * ({@link epilogueCheck}) — both only at the outermost exit. */
+	 * ({@link epilogueCheck}) — both only at the outermost exit.
+	 */
 	function runOperationEpilogue(): void {
 		if (opDepth !== 0) {
 			return
@@ -7009,8 +7507,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The last act inside every public operation's frame, shared by every
-	 * exit: mark the operation's end for the tracer, then flush notifications. */
+	/**
+	 * The last act inside every public operation's frame, shared by every
+	 * exit: mark the operation's end for the tracer, then flush notifications.
+	 */
 	function endOperation(): void {
 		const tr = trace
 		if (tr !== undefined) {
@@ -7032,9 +7532,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// over the record, so observer state lives in the arena and dies with the
 	// record. The role lifecycles live in their own later sections.
 
-	/** A watcher's rendered-world snapshot: what the mounting render saw (its
+	/**
+	 * A watcher's rendered-world snapshot: what the mounting render saw (its
 	 * slot sets, copied by integer assignment). Stored flattened in the observer
-	 * record's extras object; replaced wholesale at mount and committed re-render. */
+	 * record's extras object; replaced wholesale at mount and committed re-render.
+	 */
 	type WatcherSnapshot = {
 		renderPassId: RenderPassId
 		pin: Seq
@@ -7055,10 +7557,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		rootCommitGen: CommitGen
 	}
 
-	/** One component watcher bound to one node. `id` is monotone mount order
+	/**
+	 * One component watcher bound to one node. `id` is monotone mount order
 	 * and never recycles; the arena record does.
 	 * After {@link Kernel.disposeObserver} frees the record, the accessors
-	 * read dead storage, so engine paths resolve through the live stores first. */
+	 * read dead storage, so engine paths resolve through the live stores first.
+	 */
 	class Watcher {
 		readonly id: ObserverId
 		/** The observer's arena record ({@link ObserverField} is the layout). @internal */
@@ -7108,14 +7612,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return E.buffer()[this.rec + ObserverField.NODE_IX]
 		}
 
-		/** The watched record's tenancy generation at mount: record ids recycle,
-		 * so watcher→node resolutions check this stamp and skip on mismatch. */
+		/**
+		 * The watched record's tenancy generation at mount: record ids recycle,
+		 * so watcher→node resolutions check this stamp and skip on mismatch.
+		 */
 		get nodeRecordGen(): Generation {
 			return E.buffer()[this.rec + ObserverField.NODE_GEN]
 		}
 
-		/** Per-(watcher, batch-slot) delivery dedup bits, one int word: a second
-		 * write in a slot re-delivers only if no scheduled render will fold it. */
+		/**
+		 * Per-(watcher, batch-slot) delivery dedup bits, one int word: a second
+		 * write in a slot re-delivers only if no scheduled render will fold it.
+		 */
 		get dedupBits(): BatchSlotSet {
 			return E.buffer()[this.rec + ObserverField.DEDUP_BITS]
 		}
@@ -7123,9 +7631,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			E.buffer()[this.rec + ObserverField.DEDUP_BITS] = bits
 		}
 
-		/** What the committed screen shows for this watcher (the values-column
+		/**
+		 * What the committed screen shows for this watcher (the values-column
 		 * slot). Never a re-fire gate — corrections are clock-decided; mount
-		 * seeding, `ctx.previous`, and correction payloads read it. */
+		 * seeding, `ctx.previous`, and correction payloads read it.
+		 */
 		get lastRenderedValue(): Value {
 			return values[this.rec >> ArenaShape.ID_TO_VALUE_SHIFT]
 		}
@@ -7133,11 +7643,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			values[this.rec >> ArenaShape.ID_TO_VALUE_SHIFT] = v
 		}
 
-		/** The watcher's clock-column stamp: the watched node's per-root
+		/**
+		 * The watcher's clock-column stamp: the watched node's per-root
 		 * committed clock when the screen last agreed with committed truth. A
 		 * committed matching render or an urgent correction advances it; 0 means
 		 * never (a re-staled commit resets it, forcing the next correction).
-		 * Corrections gate on this stamp alone — mismatch means re-fire. */
+		 * Corrections gate on this stamp alone — mismatch means re-fire.
+		 */
 		get lastValidatedAt(): Clock {
 			return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]
 		}
@@ -7145,8 +7657,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT] = c
 		}
 
-		/** The rendered-world snapshot ({@link WatcherSnapshot}): the getter is
-		 * the extras object itself; the setter rewrites five fields in place. */
+		/**
+		 * The rendered-world snapshot ({@link WatcherSnapshot}): the getter is
+		 * the extras object itself; the setter rewrites five fields in place.
+		 */
 		get snapshot(): WatcherSnapshot {
 			return this.x
 		}
@@ -7159,11 +7673,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			x.rootCommitGen = s.rootCommitGen
 		}
 
-		/** Subscribed-for-delivery bit ({@link NodeFlag.OBSERVER_LIVE}). A live
+		/**
+		 * Subscribed-for-delivery bit ({@link NodeFlag.OBSERVER_LIVE}). A live
 		 * watcher holds one observed-consumer retain on its watched node, carried
 		 * transitively by the observation index ({@link observerShift}); every
 		 * watcher liveness flip routes through this setter.
-		 * Edge-filtered, so a dead handle's `live = false` is a safe no-op. */
+		 * Edge-filtered, so a dead handle's `live = false` is a safe no-op.
+		 */
 		get live(): boolean {
 			return (E.buffer()[this.rec + ObserverField.FLAGS] & NodeFlag.OBSERVER_LIVE) !== 0
 		}
@@ -7192,8 +7708,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		pendingReactRun: boolean
 	}
 
-	/** A committed graph terminal. Its root-arena shadow owns the canonical
-	 * dependency links; this handle owns identity and cold diagnostics. */
+	/**
+	 * A committed graph terminal. Its root-arena shadow owns the canonical
+	 * dependency links; this handle owns identity and cold diagnostics.
+	 */
 	class SignalEffect {
 		readonly id: SignalEffectId
 		readonly rec: NodeId
@@ -7329,8 +7847,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- committed SignalEffect terminals ---------------------------------------------
 
-	/** A node's per-root committed clock by nodeIndex (0 = never consulted).
-	 * Reads WITHOUT settling: callers run after a consult already settled it. */
+	/**
+	 * A node's per-root committed clock by nodeIndex (0 = never consulted).
+	 * Reads WITHOUT settling: callers run after a consult already settled it.
+	 */
 	function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
 		const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix] : 0
 		return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]
@@ -7341,9 +7861,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	const dirtySignalEffects: SignalEffect[] = []
 	let nextSignalEffectId = 1
 
-	/** Register the production `useSignalEffect` terminal. Illegal inside an evaluation/fold frame: the
+	/**
+	 * Register the production `useSignalEffect` terminal. Illegal inside an evaluation/fold frame: the
 	 * record is committed-consumer state and must never exist for a discarded
-	 * render attempt (the render-stack half of the guard is the adapter's). */
+	 * render attempt (the render-stack half of the guard is the adapter's).
+	 */
 	function mountSignalEffect(rootId: RootId, name: string): SignalEffect {
 		if (evalDepth > 0 || inFoldCallback) {
 			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame')
@@ -7442,8 +7964,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		flushNotify()
 	}
 
-	/** Production queues the adapter's stable runner; model tests run their
-	 * inline body through the same graph retracker. */
+	/**
+	 * Production queues the adapter's stable runner; model tests run their
+	 * inline body through the same graph retracker.
+	 */
 	function runCommittedSignalEffect(effect: SignalEffect): void {
 		if (effect.body === undefined) {
 			if (effect.pendingReactRun || effect.queuedRun) {
@@ -7468,8 +7992,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Preserve PENDING-only terminals across dirty-list decay while their
-	 * causal render is still unresolved. */
+	/**
+	 * Preserve PENDING-only terminals across dirty-list decay while their
+	 * causal render is still unresolved.
+	 */
 	function preserveDirtySignalEffects(rootFilter: RootId | undefined): void {
 		if (signalEffectCount === 0) {
 			return
@@ -7504,8 +8030,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		effects.length = 0
 	}
 
-	/** Walk dirty committed cones, validate canonical terminal links, and
-	 * request at most one runner per terminal. */
+	/**
+	 * Walk dirty committed cones, validate canonical terminal links, and
+	 * request at most one runner per terminal.
+	 */
 	function flushDirtySignalEffects(rootFilter: RootId | undefined): void {
 		if (signalEffectCount === 0) {
 			return
@@ -7573,21 +8101,27 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		/** The render's pin, frozen at start and held across yields. */
 		pin: Seq
 		maskBatches: Set<BatchId>
-		/** Slot sets fixed at render start: maskBits — slots of the mask's written
-		 * batches; includedBits — plus the root's committed slots (all it may see). */
+		/**
+		 * Slot sets fixed at render start: maskBits — slots of the mask's written
+		 * batches; includedBits — plus the root's committed slots (all it may see).
+		 */
 		maskBits: BatchSlotSet
 		includedBits: BatchSlotSet
 		state: RenderPassState
 		endKind: 'commit' | 'discard' | undefined
-		/** Watchers whose layout effects (subscribe + fixup) fire at this render's
-		 * commit: its own mounts plus adopted reveals. Disjoint from `rendered`. */
+		/**
+		 * Watchers whose layout effects (subscribe + fixup) fire at this render's
+		 * commit: its own mounts plus adopted reveals. Disjoint from `rendered`.
+		 */
 		mounted: WatcherId[]
 		/** Live watchers re-rendered by this render; disjoint from `mounted`. */
 		rendered: Set<WatcherId>
 		/** Positive id means React deps will run; negative means unchanged deps. */
 		signalEffects: number[]
-		/** The render world's arena, claimed at {@link renderStart} and dropped in
-		 * {@link reclaimAfterRenderEnd}. */
+		/**
+		 * The render world's arena, claimed at {@link renderStart} and dropped in
+		 * {@link reclaimAfterRenderEnd}.
+		 */
 		arena?: WorldArena
 	}
 
@@ -7596,8 +8130,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Watcher id source (fresh per composition); mount order is delivery/drain firing order. */
 	let nextWatcher = 1
 
-	/** Watcher→node resolutions that missed and were skipped instead of silently
-	 * binding a reused record (see {@link resolveWatcherInternals}). Test surface. */
+	/**
+	 * Watcher→node resolutions that missed and were skipped instead of silently
+	 * binding a reused record (see {@link resolveWatcherInternals}). Test surface.
+	 */
 	let staleWatcherSkips = 0
 
 	/**
@@ -7616,8 +8152,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return node
 	}
 
-	/** The Watcher.live setter's one call: a live watcher holds one observed-consumer
-	 * ref on its watched node; stale watchers shift nothing (skips pair up). */
+	/**
+	 * The Watcher.live setter's one call: a live watcher holds one observed-consumer
+	 * ref on its watched node; stale watchers shift nothing (skips pair up).
+	 */
 	function observerShift(w: Watcher, delta: 1 | -1): void {
 		const node = resolveWatcherInternals(w)
 		if (node !== undefined) {
@@ -7635,8 +8173,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ------------------------------------------------------ render lifecycle
 
-	/** Open a render pass: pin, mask, and committed-set snapshot all fix here, so
-	 * pause/resume cannot drift. One open render per root (restart = new render). */
+	/**
+	 * Open a render pass: pin, mask, and committed-set snapshot all fix here, so
+	 * pause/resume cannot drift. One open render per root (restart = new render).
+	 */
 	function renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass {
 		if (rootToOpenRender.has(rootId)) {
 			throw new ScheduleError(
@@ -7690,8 +8230,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return getOrThrow(idToRenderPass, id, 'render pass')
 	}
 
-	/** Yield/resume edges: while yielded, code that runs in the gap (event
-	 * handlers, other renders) is "not in render" for this render. */
+	/**
+	 * Yield/resume edges: while yielded, code that runs in the gap (event
+	 * handlers, other renders) is "not in render" for this render.
+	 */
 	function renderYield(id: RenderPassId): void {
 		const p = getRenderPassById(id)
 		if (p.state !== 'open') {
@@ -7743,8 +8285,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return watcher
 	}
 
-	/** Strike a watcher from every render's mounted list, so no later commit's
-	 * layout loop revives it (deferral, reveal adoption, and removal all need this). */
+	/**
+	 * Strike a watcher from every render's mounted list, so no later commit's
+	 * layout loop revives it (deferral, reveal adoption, and removal all need this).
+	 */
 	function unlistMounted(watcherId: WatcherId): void {
 		for (const p of idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId)
@@ -7754,8 +8298,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** A reveal (React's Offscreen/Activity): the tree commits hidden, and the
-	 * watcher's layout effects (subscribe + fixup) defer to a later, adopting commit. */
+	/**
+	 * A reveal (React's Offscreen/Activity): the tree commits hidden, and the
+	 * watcher's layout effects (subscribe + fixup) defer to a later, adopting commit.
+	 */
 	function deferMountEffects(watcherId: WatcherId): void {
 		unlistMounted(watcherId)
 	}
@@ -7773,8 +8319,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		adopter.mounted.push(watcherId)
 	}
 
-	/** An existing live watcher re-rendered by a render: dedup bits re-arm at
-	 * render (the queued work the bits stood for has now started). */
+	/**
+	 * An existing live watcher re-rendered by a render: dedup bits re-arm at
+	 * render (the queued work the bits stood for has now started).
+	 */
 	function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const p = getRenderPassById(renderPassId)
 		if (p.state === 'ended') {
@@ -7817,17 +8365,21 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Full watcher removal — the bindings' unsubscribe surface. Retires the
+	/**
+	 * Full watcher removal — the bindings' unsubscribe surface. Retires the
 	 * watcher from both stores — the `watchers` id map and the `nodeToWatchers`
 	 * routing index — plus any open render's mounted list; deleting from the id
-	 * map alone strands the routing entry (tests/graph-consumers.spec.ts). */
+	 * map alone strands the routing entry (tests/graph-consumers.spec.ts).
+	 */
 	function removeWatcher(watcherId: WatcherId): void {
 		unlistMounted(watcherId)
 		dropWatcher(watcherId)
 	}
 
-	/** Unlinks a watcher from the per-node index (discarded mounts) and frees
-	 * its arena record. */
+	/**
+	 * Unlinks a watcher from the per-node index (discarded mounts) and frees
+	 * its arena record.
+	 */
 	function dropWatcher(wid: WatcherId): void {
 		const w = watchers.get(wid)
 		if (w === undefined) {
@@ -7856,12 +8408,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		E.disposeObserver(w.rec)
 	}
 
-	/** Per-root commit lock-in — the one owner of a root's committed-state
+	/**
+	 * Per-root commit lock-in — the one owner of a root's committed-state
 	 * transition; returns whether anything newly locked in. Per still-live,
 	 * not-yet-committed batch, one unit moves: committed set + slot bits, commit
 	 * generation, committed-advance clock, arena fan-out, durable drain. Other
 	 * batches skip — a commit report is a delta, and re-reporting is an
-	 * idempotent set-add. {@link renderEnd}'s sweep calls the inner form. */
+	 * idempotent set-add. {@link renderEnd}'s sweep calls the inner form.
+	 */
 	function commitBatches(rootId: RootId, batches: Iterable<BatchId>): boolean {
 		let changed = false
 		opDepth++ // public-operation frame (see the engine's write dispatch)
@@ -7922,11 +8476,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return changed
 	}
 
-	/** End a render. Commit order — (1) baseline capture, (2) retirement folds
+	/**
+	 * End a render. Commit order — (1) baseline capture, (2) retirement folds
 	 * due at this commit + per-root lock-in, (3) durable drains, (4) layout
 	 * (subscribe + mount fixup) — matches the order the protocol host performs
 	 * the React work, so observers see states in the order the screen does. On
-	 * discard, render-owned mounts die. Deferred slot releases re-run either way. */
+	 * discard, render-owned mounts die. Deferred slot releases re-run either way.
+	 */
 	function renderEnd(
 		id: RenderPassId,
 		kind: 'commit' | 'discard',
@@ -8151,9 +8707,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		endOperation()
 	}
 
-	/** Render-end reclamation: the ended render's record and arena drop at the
+	/**
+	 * Render-end reclamation: the ended render's record and arena drop at the
 	 * attempt's own close. Batch records the mask retained persist — they are
-	 * episode-lifetime and drop wholesale at the episode close. */
+	 * episode-lifetime and drop wholesale at the episode close.
+	 */
 	function reclaimAfterRenderEnd(p: RenderPass): void {
 		idToRenderPass.delete(p.id)
 		// Deliberately after mount fixup and the re-staled loop, so both saw the
@@ -8179,9 +8737,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		runFoldValve()
 	}
 
-	/** A watcher re-staled by its own commit: lastRenderedValue was reset to a
+	/**
+	 * A watcher re-staled by its own commit: lastRenderedValue was reset to a
 	 * pin-old value while committed truth had already moved past the pin. The
-	 * per-root `restaled` set folds into the next durable drain on its root. */
+	 * per-root `restaled` set folds into the next durable drain on its root.
+	 */
 	function markRestaled(w: Watcher): void {
 		let set = restaled.get(w.root)
 		if (set === undefined) {
@@ -8193,8 +8753,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---------------------------------------------------------- mount fixup
 
-	/** Every slot in `bits` has its last write at or before `pin` (the
-	 * fast-out's clock conjunct, quantified over a snapshot's slot bits). */
+	/**
+	 * Every slot in `bits` has its last write at or before `pin` (the
+	 * fast-out's clock conjunct, quantified over a snapshot's slot bits).
+	 */
 	function areSlotClocksQuiet(bits: BatchSlotSet, pin: Seq): boolean {
 		for (let s = 0; bits !== 0; s++, bits >>>= 1) {
 			if ((bits & 1) === 1 && slots[s].writeClock > pin) {
@@ -8289,11 +8851,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Transitive dependency closure feeding a node: reverse walks over kernel
+	/**
+	 * Transitive dependency closure feeding a node: reverse walks over kernel
 	 * ∪ the mounting render's arena ∪ the root's committed arena, strong links
 	 * only (weak deps cannot deliver). The closure arms the catch-up dedup
 	 * bits, so it must cover every cone the delivery walk can later route — or
-	 * a suppression would degrade into an over-delivery. */
+	 * a suppression would degrade into an over-delivery.
+	 */
 	function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 		const closure = new Set<NodeId>()
 		closure.add(nodeId)
@@ -8318,8 +8882,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return closure
 	}
 
-	/** The kernel leg of the fixup closure: a reverse walk over the kernel's own
-	 * dep links off the raw arena view. One id space — a record's id is its NodeId. */
+	/**
+	 * The kernel leg of the fixup closure: a reverse walk over the kernel's own
+	 * dep links off the raw arena view. One id space — a record's id is its NodeId.
+	 */
 	function collectKernelClosure(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
 		if (seen.has(kernelId)) {
 			return
@@ -8357,8 +8923,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// write path, world reads, the test-only engine reset, and this instance's
 	// `engine` record.
 
-	/** Last-batch cache (windowed writes hit one batch repeatedly — one compare
-	 * beats a Map probe on the classified write path). */
+	/**
+	 * Last-batch cache (windowed writes hit one batch repeatedly — one compare
+	 * beats a Map probe on the classified write path).
+	 */
 	let lastBatchId = 0
 	let lastBatchRef: Batch | undefined = undefined
 
@@ -8388,8 +8956,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return n
 	}
 
-	/** Quiescence arena duties, in order: release committed arenas with zero
-	 * consumers (the root record stays), then renumber the survivors' read clocks. */
+	/**
+	 * Quiescence arena duties, in order: release committed arenas with zero
+	 * consumers (the root record stays), then renumber the survivors' read clocks.
+	 */
 	function arenaQuiesceSweep(): void {
 		for (const [rootId, a] of rootToArena) {
 			if (getConsumerCount(rootId) === 0) {
@@ -8402,10 +8972,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The checker window: the seam feeding tests/arena-checker.ts (the armed
+	/**
+	 * The checker window: the seam feeding tests/arena-checker.ts (the armed
 	 * divergence check — arena-served values ≡ fold-truth — and the structural
 	 * validator). Bracket methods keep mutation save/restore inside the engine.
-	 * Production never calls this; re-arm after a reset. @internal */
+	 * Production never calls this; re-arm after a reset. @internal
+	 */
 	function __TEST__checkerInternals(): ArenaCheckerInternals {
 		return {
 			layout: arenaCheckerLayout(),
@@ -8445,8 +9017,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return arenaPool
 	}
 
-	/** Test seam: the dense nodeIndex-keyed columns (the leak/elements-kind
-	 * audits probe row clearing and packedness); identity changes at reset. @internal */
+	/**
+	 * Test seam: the dense nodeIndex-keyed columns (the leak/elements-kind
+	 * audits probe row clearing and packedness); identity changes at reset. @internal
+	 */
 	function __TEST__columns(): {
 		nodeIndexToInternals: (AnyInternals | undefined)[]
 		lastWalk: number[]
@@ -8458,8 +9032,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return { nodeIndexToInternals, lastWalk, evalMark, obsRefs, obsDeps, nodeToWatchers }
 	}
 
-	/** Test seam: bump a live record's GEN field — arena shadows re-tenant cold
-	 * and watcher stamps go stale, exactly as a real free+reuse would. @internal */
+	/**
+	 * Test seam: bump a live record's GEN field — arena shadows re-tenant cold
+	 * and watcher stamps go stale, exactly as a real free+reuse would. @internal
+	 */
 	function __TEST__bumpNodeGen(id: NodeId): void {
 		E.buffer()[id + NodeField.GEN]++
 	}
@@ -8495,12 +9071,14 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ------------------------------------------------------ the write path
 
-	/** The whole write while quiet: fold over committed base (updaters/reducers
+	/**
+	 * The whole write while quiet: fold over committed base (updaters/reducers
 	 * under both fold-purity guards), drop on policy equality — `isEqual(current,
 	 * incoming)`, invoked once at acceptance — else advance base and the kernel
 	 * together, keeping base ≡ kernel newest ≡ every world's value. One sequence
 	 * stamps baseSeq and {@link committedAdvance}. No batch, no log entry, no
-	 * delivery walk: live observers reconcile value-gated, as a durable drain would. */
+	 * delivery walk: live observers reconcile value-gated, as a durable drain would.
+	 */
 	function quietWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
 		if (evalDepth > 0) {
 			throw new ScheduleError(
@@ -8564,7 +9142,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		drainQuietBoundary()
 	}
 
-	/** Runs the owed quiet-pipeline boundary drain iff we are at a true
+	/**
+	 * Runs the owed quiet-pipeline boundary drain iff we are at a true
 	 * operation boundary: no open kernel effect frame (enterDepth 0) and no
 	 * running SignalEffect body (activeSignalEffect undefined), where the
 	 * SignalEffect runner's routed reads resolve committed and record links.
@@ -8572,7 +9151,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * ({@link quietWriteInner}'s tail, or {@link flush}) drains once it closes.
 	 * The loop re-drains when a SignalEffect body writes and re-owes it, so a
 	 * sibling terminal newly dirtied by that write runs at THIS boundary rather
-	 * than being dropped to an unrelated one. */
+	 * than being dropped to an unrelated one.
+	 */
 	function drainQuietBoundary(): void {
 		if (
 			!quietBoundaryOwed ||
@@ -8610,8 +9190,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** A bare write (no batch context) joins the ambient default batch, or folds
-	 * directly while quiet — no ambient batch opens while nothing is pending. */
+	/**
+	 * A bare write (no batch context) joins the ambient default batch, or folds
+	 * directly while quiet — no ambient batch opens while nothing is pending.
+	 */
 	function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
 		if (quiet) {
 			quietWrite(node, kind, payload)
@@ -8626,10 +9208,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		writeInBatch(ambient.id, node, kind, payload)
 	}
 
-	/** The recorded write path (an explicit batch id, or undefined for the
+	/**
+	 * The recorded write path (an explicit batch id, or undefined for the
 	 * context-free arm). Steps, in order: drop check → intern slot → append log
 	 * entry → member-slot fanout → eager kernel apply → delivery walk →
-	 * notification flush. */
+	 * notification flush.
+	 */
 	function writeInBatch(
 		batchId: BatchId | undefined,
 		node: AtomInternals,
@@ -8797,9 +9381,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		endOperation()
 	}
 
-	/** Trace seam for core `effect()` runs — the kernel flushes them itself, so
+	/**
+	 * Trace seam for core `effect()` runs — the kernel flushes them itself, so
 	 * their wrappers report each value-gated run here. Sibling order is
-	 * implementation-defined; values and firing operations are the contract. */
+	 * implementation-defined; values and firing operations are the contract.
+	 */
 	function logCoreEffectRun(name: string, value: Value): void {
 		const tr = trace
 		if (tr !== undefined) {
@@ -8882,8 +9468,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ------------------------------------------------- the engine reset (test-only)
 
-	/** Idle preconditions for {@link __TEST__resetEngine}: a reset from inside any
-	 * open frame fails the running test loudly instead of corrupting the next one. */
+	/**
+	 * Idle preconditions for {@link __TEST__resetEngine}: a reset from inside any
+	 * open frame fails the running test loudly instead of corrupting the next one.
+	 */
 	function assertIdleForReset(): void {
 		if (!quiescent()) {
 			throw new ScheduleError(
@@ -8921,14 +9509,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// are legal: the queue dies with the composition, its microtask epoch-guarded.)
 	}
 
-	/** The test-only engine reset — a fresh engine for suites that need one per
+	/**
+	 * The test-only engine reset — a fresh engine for suites that need one per
 	 * test. The driver's protocol reset runs first, so the host drops its slot
 	 * tenancy while the engine those ids point into still exists; the kernel
 	 * scrub bumps the engine epoch, turning every cross-reset microtask inert;
 	 * policy, suspense, and probe state clear; {@link composeEngine} then
 	 * re-runs every section's initialization (trace detaches; attach the driver
 	 * again after). BatchIds stay monotonic across resets, so a host-held stale
-	 * id can never collide with a post-reset batch. */
+	 * id can never collide with a post-reset batch.
+	 */
 	function __TEST__resetEngine(options?: EngineResetOptions): void {
 		assertIdleForReset()
 		const d = driver
@@ -8947,13 +9537,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---------------------------------------------------- the engine surface
 
-	/** The engine surface — one record per factory instance, curated against its three consumers
+	/**
+	 * The engine surface — one record per factory instance, curated against its three consumers
 	 * (a member none of them use is engine-internal, not surface): the React
 	 * bindings (renders, batches, commits, world reads), the test harnesses
 	 * (constructors, registries, the __TEST__ seams), and the diagnostics
 	 * tooling (the trace slot, read-only graph views). Every accessor reads the
 	 * current composition, so the record stays valid across
-	 * {@link __TEST__resetEngine}. */
+	 * {@link __TEST__resetEngine}.
+	 */
 	const engine = {
 		// creation + resolution
 		atom,
@@ -9038,8 +9630,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		__TEST__fanAtomsToArena: fanAtomsToArena,
 		__TEST__arenaServe: arenaServe,
 		// state (current composition; identity changes at reset)
-		/** Id-keyed view of the internals registry, materialized per access from
-		 * the dense column (the engine itself keys by nodeIndex only). Cold. */
+		/**
+		 * Id-keyed view of the internals registry, materialized per access from
+		 * the dense column (the engine itself keys by nodeIndex only). Cold.
+		 */
 		get idToInternals(): Map<NodeId, AnyInternals> {
 			const out = new Map<NodeId, AnyInternals>()
 			for (const n of nodeIndexToInternals) {
@@ -9118,8 +9712,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		set onCorrection(fn: ((w: Watcher) => void) | undefined) {
 			onCorrection = fn
 		},
-		/** Recorded dependency edges as dep → dependents (the union of every
-		 * live arena's links; graphviz and the suites read it). */
+		/**
+		 * Recorded dependency edges as dep → dependents (the union of every
+		 * live arena's links; graphviz and the suites read it).
+		 */
 		get dependencyEdges(): Map<NodeId, Set<NodeId>> {
 			return dependencyEdges()
 		},
@@ -9135,15 +9731,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// ---- composition ---------------------------------------------------------------------
 	// `composeEngine` assigns every resettable section of this factory closure.
 
-	/** Derives quiet ⇔ zero live batches, zero open renders, zero episode holds.
+	/**
+	 * Derives quiet ⇔ zero live batches, zero open renders, zero episode holds.
 	 * Recomputed only at pipeline transitions (batch open/retire, render
-	 * start/end, driver attach) so write paths read a stored boolean. */
+	 * start/end, driver attach) so write paths read a stored boolean.
+	 */
 	function recomputeQuiet(): void {
 		setQuiet(liveBatchCount === 0 && rootToOpenRender.size === 0 && episodeHolds.size === 0)
 	}
 
-	/** The quiet flags' one writer: `quiet` here and `standaloneQuiet`
-	 * (quiet AND no driver attached). */
+	/**
+	 * The quiet flags' one writer: `quiet` here and `standaloneQuiet`
+	 * (quiet AND no driver attached).
+	 */
 	function setQuiet(q: boolean): void {
 		quiet = q
 		__setStandaloneQuiet(q && driver === undefined)
@@ -9163,10 +9763,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return readKernelValue(dep)
 	}
 
-	/** Assignments follow section order. Deliberate survivors: the kernel arena
+	/**
+	 * Assignments follow section order. Deliberate survivors: the kernel arena
 	 * and counters ({@link resetKernelState} scrubs those first), the batch-id
 	 * counter (monotonic, so stale host-held ids can't collide), the reclamation
-	 * queues (epoch-defused by that scrub), and the engine-activity probes. */
+	 * queues (epoch-defused by that scrub), and the engine-activity probes.
+	 */
 	function composeEngine(options?: EngineResetOptions): void {
 		probes.compositions++ // engine-activity counter (factory init + test resets)
 		// section 7 — registries, dense columns, clocks, listeners, shared state
@@ -9271,27 +9873,37 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** A reclaimed record's deferred user cleanups; its free queues behind them. */
 	type DeferredCleanupEntry = { id: NodeId; gen: Generation; cleanups: (() => void)[] }
 
-	/** Bounds of the packed finalizer heldValue `gen × ID_SPAN + id` — one
-	 * float64 carrying both a record id and its tenancy generation. */
+	/**
+	 * Bounds of the packed finalizer heldValue `gen × ID_SPAN + id` — one
+	 * float64 carrying both a record id and its tenancy generation.
+	 */
 	const enum HeldValue {
 		/** 2^32: ids fit below it, so div/mod recover generation and id exactly. */
 		ID_SPAN = 0x100000000,
-		/** 2^21 — exclusive generation bound for packing: the largest packed value,
+		/**
+		 * 2^21 — exclusive generation bound for packing: the largest packed value,
 		 * (2^21 − 1) × 2^32 + (2^32 − 1) = 2^53 − 1, is still float64-exact. Larger
-		 * or wrapped-negative generations fall back to an {id, gen} object. */
+		 * or wrapped-negative generations fall back to an {id, gen} object.
+		 */
 		MAX_PACKED_GEN = 0x200000,
 	}
 
-	/** Finalizer heldValue — {@link registerReclaim} picks among the three
-	 * forms; defusing compares generations by raw Int32 equality. */
+	/**
+	 * Finalizer heldValue — {@link registerReclaim} picks among the three
+	 * forms; defusing compares generations by raw Int32 equality.
+	 */
 	type ReclaimHeld = number | { id: NodeId; gen: Generation }
 
-	/** Blocked reclaims' skip tickets, keyed by id. Never scanned — a clearing
-	 * site consults its own id; whole-arena teardowns drain the map. */
+	/**
+	 * Blocked reclaims' skip tickets, keyed by id. Never scanned — a clearing
+	 * site consults its own id; whole-arena teardowns drain the map.
+	 */
 	const reclaimSkipped = new Map<NodeId, ReclaimRetryEntry>()
 
-	/** {@link reclaimSkipped}.size mirrored as a `var`: warm trigger sites bail
-	 * on `!== 0` with no Map.size getter call. @internal */
+	/**
+	 * {@link reclaimSkipped}.size mirrored as a `var`: warm trigger sites bail
+	 * on `!== 0` with no Map.size getter call. @internal
+	 */
 	// eslint-disable-next-line no-var
 	var reclaimSkippedN = 0
 
@@ -9309,14 +9921,18 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// eslint-disable-next-line no-var
 	var reclaimDrainGuard = false
 
-	/** Set while the nudge — a microtask running {@link maybeBoundary} — is
-	 * queued, so filed reclaim work drains even when no public operation follows. */
+	/**
+	 * Set while the nudge — a microtask running {@link maybeBoundary} — is
+	 * queued, so filed reclaim work drains even when no public operation follows.
+	 */
 	// eslint-disable-next-line no-var
 	var reclaimNudgeScheduled = false
 
-	/** Builds the per-epoch registry; the reset epoch lives in its closure.
+	/**
+	 * Builds the per-epoch registry; the reset epoch lives in its closure.
 	 * Dropping a registry cancels undelivered callbacks (the test reset's mass
-	 * cancellation); an extracted callback no-ops on the epoch compare. */
+	 * cancellation); an extracted callback no-ops on the epoch compare.
+	 */
 	function makeReclaimRegistry(): FinalizationRegistry<ReclaimHeld> | undefined {
 		if (typeof FinalizationRegistry !== 'function') {
 			return undefined // no-FR host: dropped handles keep the documented bounded retention
@@ -9341,10 +9957,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// eslint-disable-next-line no-var
 	var reclaimRegistry = makeReclaimRegistry()
 
-	/** Handles register through {@link createKernel}'s registerReclaim.
+	/**
+	 * Handles register through {@link createKernel}'s registerReclaim.
 	 * Measured rejects: per-handle unregister keys (+103ns per construction),
 	 * WeakRef schemes (+93ns), deferred/batched and lazy registration.
-	 * Deterministic dispose never unregisters — gen+epoch defusing covers it. */
+	 * Deterministic dispose never unregisters — gen+epoch defusing covers it.
+	 */
 
 	function reclaimFileSkip(id: NodeId, gen: Generation, epoch: number): void {
 		if (!reclaimSkipped.has(id)) {
@@ -9353,8 +9971,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Drop a skip ticket iff it names this tenancy — a stale finalizer for a
-	 * reused id must never cancel the new tenant's pending retry. */
+	/**
+	 * Drop a skip ticket iff it names this tenancy — a stale finalizer for a
+	 * reused id must never cancel the new tenant's pending retry.
+	 */
 	function reclaimDropSkip(id: NodeId, gen: Generation): void {
 		if (reclaimSkippedN !== 0) {
 			const e = reclaimSkipped.get(id)
@@ -9364,8 +9984,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Per-id retry filing for a guard's clearing site. Only queues — clearing
-	 * sites fire mid-walk, where structural teardown is unsafe. @internal */
+	/**
+	 * Per-id retry filing for a guard's clearing site. Only queues — clearing
+	 * sites fire mid-walk, where structural teardown is unsafe. @internal
+	 */
 	function noteReclaimRetry(id: NodeId): void {
 		if (reclaimSkippedN === 0 || !reclaimSkipped.has(id)) {
 			return
@@ -9377,8 +9999,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		scheduleReclaimNudge()
 	}
 
-	/** Wholesale re-attempt at whole-arena teardowns (render end, settlement
-	 * drain, arena release), where many guards clear at once. @internal */
+	/**
+	 * Wholesale re-attempt at whole-arena teardowns (render end, settlement
+	 * drain, arena release), where many guards clear at once. @internal
+	 */
 	function reclaimRetryAllSkipped(): void {
 		if (reclaimSkippedN === 0) {
 			return
@@ -9422,10 +10046,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		})
 	}
 
-	/** Phase 1 (the finalizer body; retries and the test seam reuse it): verify
+	/**
+	 * Phase 1 (the finalizer body; retries and the test seam reuse it): verify
 	 * epoch and tenancy generation, verify every guard, then tear down
 	 * structure. User code never runs here — owned effects' cleanups defer to
-	 * phase 2, and a blocked reclaim files a skip ticket instead. */
+	 * phase 2, and a blocked reclaim files a skip ticket instead.
+	 */
 	function reclaimNode(id: NodeId, gen: Generation, epoch: number): void {
 		if (epoch !== engineEpoch) {
 			return // a dead epoch's callback (the belt behind the registry drop)
@@ -9479,9 +10105,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		pendingFree.push(id) // swept at the boundary (freeNode: GEN bump + column clears + the record-free scrub)
 	}
 
-	/** Extracts the pending user cleanups of a dying computed's owned effect
+	/**
+	 * Extracts the pending user cleanups of a dying computed's owned effect
 	 * subtree (child effects/scopes link as deps of their creator), in the
-	 * order deterministic disposal would run them. Undefined when none. */
+	 * order deterministic disposal would run them. Undefined when none.
+	 */
 	function collectOwnedCleanups(id: NodeId): (() => void)[] | undefined {
 		let out: (() => void)[] | undefined
 		const memory = E.buffer()
@@ -9509,9 +10137,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		return out
 	}
 
-	/** Phase 2 plus retry processing ({@link boundaryWork} calls it): retries
+	/**
+	 * Phase 2 plus retry processing ({@link boundaryWork} calls it): retries
 	 * run first, then the cleanup queue is taken wholesale and run isolated;
-	 * each record's free queues only after its own cleanups. */
+	 * each record's free queues only after its own cleanups.
+	 */
 	function drainReclaimWork(): void {
 		if (reclaimDrainGuard === true) {
 			return // reentrant boundary during a cleanup: the outer drain owns the batch
@@ -9553,9 +10183,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Deterministic reclaim (test-only): defaults simulate a current-tenancy,
+	/**
+	 * Deterministic reclaim (test-only): defaults simulate a current-tenancy,
 	 * current-epoch finalizer; a stale `gen`/`epoch` pins the defusing compares.
-	 * Runs the trailing boundary so phase 2 lands synchronously. @internal */
+	 * Runs the trailing boundary so phase 2 lands synchronously. @internal
+	 */
 	function __TEST__simulateReclaim(id: NodeId, gen?: Generation, epoch?: number): void {
 		reclaimNode(id, gen ?? E.buffer()[id + NodeField.GEN], epoch ?? engineEpoch)
 		maybeBoundary()
@@ -9582,8 +10214,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- the test reset's kernel half (test-only) -----------------------------------
 
-	/** Idle preconditions for `__TEST__resetEngine`: a reset inside a live
-	 * kernel frame would corrupt the next test, not fail this one. @internal */
+	/**
+	 * Idle preconditions for `__TEST__resetEngine`: a reset inside a live
+	 * kernel frame would corrupt the next test, not fail this one. @internal
+	 */
 	function __assertKernelIdleForReset(): void {
 		if (enterDepth !== 0) {
 			throw new Error(
@@ -9609,9 +10243,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** The kernel scrub (test-only): zero the used arena range, reset allocator
+	/**
+	 * The kernel scrub (test-only): zero the used arena range, reset allocator
 	 * heads/counters, drop side columns to burned seeds — never a reallocation
-	 * (the op table's captured buffer stays valid). Bumps the reset epoch. @internal */
+	 * (the op table's captured buffer stays valid). Bumps the reset epoch. @internal
+	 */
 	function resetKernelState(): void {
 		__assertKernelIdleForReset()
 		engineEpoch++
@@ -9647,8 +10283,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- the engine dispatch ----------------------------------------------------------
 
-	/** @internal Test seam (leak audit): a record's side-column slots, read-only
-	 * — freed records must not pin dead values or closures. */
+	/**
+	 * @internal Test seam (leak audit): a record's side-column slots, read-only
+	 * — freed records must not pin dead values or closures.
+	 */
 	function __TEST__kernelSideColumns(id: NodeId): {
 		value: unknown
 		aux: unknown
@@ -9662,9 +10300,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 	}
 
-	/** Plain-path write tail shared by the public methods' standalone fast arm
+	/**
+	 * Plain-path write tail shared by the public methods' standalone fast arm
 	 * and the engine's no-internals dispatch arm: fold the op, then
-	 * {@link writeAtom}, which applies policy equality once at acceptance. @internal */
+	 * {@link writeAtom}, which applies policy equality once at acceptance. @internal
+	 */
 	function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
 		const id = atom._id
 		const next =
@@ -9678,10 +10318,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		writeAtom(id, atom._isEqual, next)
 	}
 
-	/** Handle-free write path for the engine's lifecycle contexts, which hold
+	/**
+	 * Handle-free write path for the engine's lifecycle contexts, which hold
 	 * node ids but no handle reference: the public methods' policy assert, then
 	 * the engine dispatch. An atom with no engine internals takes the plain kernel
-	 * write with identity equality — its comparator sits on the unreachable handle. @internal */
+	 * write with identity equality — its comparator sits on the unreachable handle. @internal
+	 */
 	function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown): void {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 			throw new Error(
@@ -9704,8 +10346,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		writeAtom(id, undefined, next)
 	}
 
-	/** @internal Test-only policy scrub:
-	 * configure() defaults restored; lifecycle map and queued flush dropped. */
+	/**
+	 * @internal Test-only policy scrub:
+	 * configure() defaults restored; lifecycle map and queued flush dropped.
+	 */
 	function __TEST__resetPolicy(): void {
 		forbidWritesInComputeds = false
 		__TEST__resetLifecycle()
@@ -9721,23 +10365,29 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// eslint-disable-next-line no-var
 	var forbidWritesInComputeds = false
 
-	/** True while the engine is quiet AND no driver is attached — the public
-	 * write path's one fast-arm check. */
+	/**
+	 * True while the engine is quiet AND no driver is attached — the public
+	 * write path's one fast-arm check.
+	 */
 	// eslint-disable-next-line no-var
 	var standaloneQuiet = true
 
-	/** @internal Engine seam: lands the engine's quiet-and-driverless derivation.
-	 * Cold; stores only on change so the untouched slot stays constant-trackable. */
+	/**
+	 * @internal Engine seam: lands the engine's quiet-and-driverless derivation.
+	 * Cold; stores only on change so the untouched slot stays constant-trackable.
+	 */
 	function __setStandaloneQuiet(v: boolean): void {
 		if (v !== standaloneQuiet) {
 			standaloneQuiet = v
 		}
 	}
 
-	/** Runs an updater/reducer under the fold-purity guard: `E` swaps to
+	/**
+	 * Runs an updater/reducer under the fold-purity guard: `E` swaps to
 	 * POISON, the engine's every-op-throws table, so a fold touching any signal
 	 * throws at the dispatch site while the hot paths carry zero fold
-	 * instructions; open outer frames hold the real table as closure constants. */
+	 * instructions; open outer frames hold the real table as closure constants.
+	 */
 	function runFold<T>(fn: () => T): T {
 		const saved = foldGuardSwap()
 		try {
@@ -9761,24 +10411,30 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	}
 
 	type AtomOptions<T> = {
-		/** Observed lifecycle: runs when the atom gains its first subscriber of
+		/**
+		 * Observed lifecycle: runs when the atom gains its first subscriber of
 		 * any kind — kernel (a live computed chain or core effect), SignalEffect,
 		 * or React watcher — and the returned cleanup runs once the last
 		 * subscriber of every kind is gone. Delivered in a microtask, so flaps
-		 * within one tick coalesce; bare `.state` reads never observe. For remote subscriptions. */
+		 * within one tick coalesce; bare `.state` reads never observe. For remote subscriptions.
+		 */
 		effect?: (ctx: AtomCtx<T>) => void | (() => void)
-		/** Policy equality for writes: an incoming value equal to the newest is
+		/**
+		 * Policy equality for writes: an incoming value equal to the newest is
 		 * dropped. While recorded writes are live, different worlds may fold
 		 * different values, so the write is kept and equality applies per fold
-		 * step. The kernel itself compares reference identity only. */
+		 * step. The kernel itself compares reference identity only.
+		 */
 		isEqual?: (a: T, b: T) => boolean
 		/** Debug label. */
 		label?: string
 	}
 
 	type ComputedOptions<T> = {
-		/** Policy equality for recomputes: an equal result returns the previous
-		 * reference, so downstream sees no change. The kernel compares identity only. */
+		/**
+		 * Policy equality for recomputes: an equal result returns the previous
+		 * reference, so downstream sees no change. The kernel compares identity only.
+		 */
 		isEqual?: (a: T, b: T) => boolean
 		/** Debug label. */
 		label?: string
@@ -9788,16 +10444,20 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	class Atom<T> {
 		/** Kernel record id; consumed by the React bindings (`cosignals-react`). @internal */
 		readonly _id: NodeId
-		/** The engine surface that owns this handle. Every handle-taking engine
+		/**
+		 * The engine surface that owns this handle. Every handle-taking engine
 		 * entry point asserts it, so a handle used with a DIFFERENT
 		 * createCosignals() instance throws a clear error instead of silently
-		 * resolving its id against the wrong arena. @internal */
+		 * resolving its id against the wrong arena. @internal
+		 */
 		readonly _engine = engine
 		/** @internal */
 		readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined
-		/** Engine internals, allocated lazily at first engine content (a log
+		/**
+		 * Engine internals, allocated lazily at first engine content (a log
 		 * entry, a watcher, arena presence, a routed read); undefined until then,
-		 * 1:1 with the handle for its life, cleared by the record-free scrub. @internal */
+		 * 1:1 with the handle for its life, cleared by the record-free scrub. @internal
+		 */
 		_internals: AtomInternals | undefined = undefined
 		readonly label: string | undefined
 
@@ -9820,11 +10480,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** The atom's current value (a tracked read inside evaluations); with a
+		/**
+		 * The atom's current value (a tracked read inside evaluations); with a
 		 * routing context live, the engine serves the asking world's value —
 		 * except inside kernel frames (`activeSub === 0` guards the routed arm):
 		 * kernel caches hold newest-world state, and a world-folded value landing
-		 * there would serve later reads with no invalidation. Folds throw on dispatch. */
+		 * there would serve later reads with no invalidation. Folds throw on dispatch.
+		 */
 		get state(): T {
 			if (routingActive && activeSub === 0 && enterDepth === 0) {
 				const v = routedAtomRead(this)
@@ -9835,8 +10497,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			return E.readAtom(this._id) as T
 		}
 
-		/** Replaces the atom's value: the standalone fast arm (plain kernel
-		 * write) or the engine dispatch. */
+		/**
+		 * Replaces the atom's value: the standalone fast arm (plain kernel
+		 * write) or the engine dispatch.
+		 */
 		set(value: T): void {
 			if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 				throw new Error(
@@ -9850,9 +10514,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			writeAtomConcurrent(this, 0, value)
 		}
 
-		/** Functional update. `fn` must be pure — it runs under the fold-purity
+		/**
+		 * Functional update. `fn` must be pure — it runs under the fold-purity
 		 * guard, so signal reads and writes inside it throw; read inputs first.
-		 * An engine-dispatched update records the whole op for per-world replay. */
+		 * An engine-dispatched update records the whole op for per-world replay.
+		 */
 		update(fn: (current: T) => T): void {
 			if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 				throw new Error(
@@ -9873,9 +10539,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	type ReducerAtomOptions<S> = AtomOptions<S>
 
-	/** An atom whose writes go through a reducer, fixed at creation and pure
+	/**
+	 * An atom whose writes go through a reducer, fixed at creation and pure
 	 * (it runs under the fold-purity guard). `dispatch(action)` is exactly
-	 * `update(s => reduce(s, action))`, replayed per world like any updater. */
+	 * `update(s => reduce(s, action))`, replayed per world like any updater.
+	 */
 	class ReducerAtom<S, A> extends Atom<S> {
 		readonly reduce: (state: S, action: A) => S
 
@@ -9900,12 +10568,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		readonly _id: NodeId
 		/** The owning engine surface (see {@link Atom._engine}). @internal */
 		readonly _engine = engine
-		/** Engine internals, allocated lazily at first engine content (see
-		 * {@link Atom._internals}). @internal */
+		/**
+		 * Engine internals, allocated lazily at first engine content (see
+		 * {@link Atom._internals}). @internal
+		 */
 		_internals: ComputedInternals | undefined = undefined
-		/** The raw authored fn, retained on the instance so a reused kernel id
+		/**
+		 * The raw authored fn, retained on the instance so a reused kernel id
 		 * can never serve another tenant's fn; the engine's world evaluations run
-		 * it against world-local previous values. @internal */
+		 * it against world-local previous values. @internal
+		 */
 		readonly _fn: (ctx: ComputedCtx<T>) => T
 		/** @internal */
 		readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined
@@ -9936,10 +10608,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 		}
 
-		/** The computed's current value: rethrows the evaluation's cached error;
+		/**
+		 * The computed's current value: rethrows the evaluation's cached error;
 		 * throws `SuspendedRead` while suspended on a pending `ctx.use` thenable.
 		 * World routing and the kernel-frame guard match {@link Atom.state};
-		 * inside a fold frame the dispatch itself throws. */
+		 * inside a fold frame the dispatch itself throws.
+		 */
 		get state(): T {
 			if (routingActive && activeSub === 0 && enterDepth === 0) {
 				const v = routedComputedRead(this as Computed<unknown>)
@@ -9958,18 +10632,22 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	;(Atom.prototype as unknown as Record<symbol, unknown>)[ATOM_BRAND] = true
 	;(Computed.prototype as unknown as Record<symbol, unknown>)[COMPUTED_BRAND] = true
 
-	/** Assert a public handle belongs to THIS engine instance; the loud
+	/**
+	 * Assert a public handle belongs to THIS engine instance; the loud
 	 * alternative to the silent cross-instance corruption a foreign id would
-	 * cause (its `_id` resolved against this arena addresses a different record). */
+	 * cause (its `_id` resolved against this arena addresses a different record).
+	 */
 	function assertOwnHandle(handle: { _engine?: unknown }): void {
 		if (handle._engine !== engine) {
 			throw new Error('cosignals: handle belongs to a different engine instance')
 		}
 	}
 
-	/** Ownership assert for a resolved internals record, reached through its
+	/**
+	 * Ownership assert for a resolved internals record, reached through its
 	 * (possibly weak) handle; a collected handle cannot be re-associated with a
-	 * foreign engine, so an unresolvable one passes. */
+	 * foreign engine, so an unresolvable one passes.
+	 */
 	function assertOwnInternals(node: AnyInternals): void {
 		const h = node._h
 		const handle = h instanceof WeakRef ? h.deref() : h
@@ -9981,9 +10659,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	/** Either public signal wrapper. */
 	type Signal<T> = Atom<T> | Computed<T>
 
-	/** Runs `fn` immediately with dependency tracking and re-runs it when
+	/**
+	 * Runs `fn` immediately with dependency tracking and re-runs it when
 	 * tracked signals change; effects always observe the newest world. `fn` may
-	 * return a cleanup, run before each re-run and at dispose; returns a disposer. */
+	 * return a cleanup, run before each re-run and at dispose; returns a disposer.
+	 */
 	function effect(fn: () => void | (() => void)): () => void {
 		maybeBoundary()
 		const id = E.newEffect(fn)
@@ -10016,15 +10696,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	// untracked() clears the tracking frame.
 
 	type ConfigureOptions = {
-		/** When true, any atom write during a computed evaluation throws. When
+		/**
+		 * When true, any atom write during a computed evaluation throws. When
 		 * false (default), writes inside computeds are tolerated as long as they
 		 * do not re-enter the writing computed (evaluation cycles throw
-		 * CycleError; self-feedback settles by lazy revalidation). */
+		 * CycleError; self-feedback settles by lazy revalidation).
+		 */
 		forbidWritesInComputeds?: boolean
-		/** Capacity floor, in records (one node or one link each; the arena holds
+		/**
+		 * Capacity floor, in records (one node or one link each; the arena holds
 		 * 3× this number — one node plus two links per unit). Raising it grows at
 		 * the next operation boundary; it never shrinks. Also settable via the
-		 * COSIGNAL_INITIAL_RECORDS env var before first import. */
+		 * COSIGNAL_INITIAL_RECORDS env var before first import.
+		 */
 		initialRecords?: number
 	}
 
@@ -10145,10 +10829,12 @@ export type Computed<T> = InstanceType<typeof defaultCosignals.Computed<T>>
 export type Signal<T> = Atom<T> | Computed<T>
 export type ReducerAtomOptions<S> = AtomOptions<S>
 
-/** True for an Atom (or ReducerAtom) handle from ANY createCosignals()
+/**
+ * True for an Atom (or ReducerAtom) handle from ANY createCosignals()
  * instance. Uses a shared prototype brand rather than `instanceof`, which each
  * instance's own class would fail for another instance's handles — the check
- * embedders (and the React bindings) need to accept per-instance handles. */
+ * embedders (and the React bindings) need to accept per-instance handles.
+ */
 export function isAtom(x: unknown): x is Atom<unknown> {
 	return typeof x === 'object' && x !== null && (x as Record<symbol, unknown>)[ATOM_BRAND] === true
 }

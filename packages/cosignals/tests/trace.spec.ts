@@ -32,8 +32,10 @@ function tick(): () => number {
 	return () => (t += 10)
 }
 
-/** Fresh engine (per test): finish any leftover episode
- * so the reset's idle preconditions hold, then reset. */
+/**
+ * Fresh engine (per test): finish any leftover episode
+ * so the reset's idle preconditions hold, then reset.
+ */
 function freshEngine(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {

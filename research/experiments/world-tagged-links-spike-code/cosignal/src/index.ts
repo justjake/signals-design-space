@@ -276,8 +276,10 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 // Plain type aliases — zero runtime cost, no branding, no casts. They name what
 // each number MEANS so signatures read as the layout docs above.
 
-/** Premultiplied node record id: the Int32 plane index of the record's field 0
- * (id = record ordinal × Plane.STRIDE). 0 = "none" (record 0 is burned). */
+/**
+ * Premultiplied node record id: the Int32 plane index of the record's field 0
+ * (id = record ordinal × Plane.STRIDE). 0 = "none" (record 0 is burned).
+ */
 type NodeId = number;
 /** Premultiplied link record id (links share the plane and stride with nodes). 0 = "none". */
 type LinkId = number;
@@ -306,8 +308,10 @@ type ValueIndex = number;
 // enum members only within one file — a cross-file access becomes a real
 // property lookup at runtime.
 
-/** Field offsets within a NODE record (M plane, stride 8; ids are
- * pre-multiplied: id = record ordinal * 8). */
+/**
+ * Field offsets within a NODE record (M plane, stride 8; ids are
+ * pre-multiplied: id = record ordinal * 8).
+ */
 const enum NodeField {
 	FLAGS = 0,
 	DEPS = 1, // doubles as the free-list next pointer for freed records
@@ -319,8 +323,10 @@ const enum NodeField {
 	// field 7 spare (pad to one cache line per record)
 }
 
-/** Field offsets within a LINK record (link records share the plane, stride,
- * and premultiplied ids with node records). */
+/**
+ * Field offsets within a LINK record (link records share the plane, stride,
+ * and premultiplied ids with node records).
+ */
 const enum LinkField {
 	VERSION = 0,
 	DEP = 1,
@@ -332,8 +338,10 @@ const enum LinkField {
 	// field 7 spare
 }
 
-/** Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
- * + kind bits). A flags word is an OR of these (see `type NodeFlags`). */
+/**
+ * Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
+ * + kind bits). A flags word is an OR of these (see `type NodeFlags`).
+ */
 const enum NodeFlag {
 	MUTABLE = 1,
 	WATCHING = 2,
@@ -357,28 +365,40 @@ const enum NodeFlag {
 	// site either ORs bits or is followed by a forced recompute (unwatched
 	// sets DIRTY), so a stale clear can never serve a payload unwrapped.
 	HAS_BOX = 2048,
-	/** Refines HAS_BOX (never set without it): the payload is a pending
-	 * thenable, not a thrown error. */
+	/**
+	 * Refines HAS_BOX (never set without it): the payload is a pending
+	 * thenable, not a thrown error.
+	 */
 	BOX_SUSPENDED = 4096,
 }
 
-/** Plane geometry: the strides, shifts, and offsets that address a record's
- * fields and its side-column slots from its premultiplied id. */
+/**
+ * Plane geometry: the strides, shifts, and offsets that address a record's
+ * fields and its side-column slots from its premultiplied id.
+ */
 const enum Plane {
 	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
 	STRIDE = 8,
-	/** id >> ID_TO_VALUE_SHIFT: premultiplied id → the record's base index in
-	 * the `values` side column (each record owns 2 value slots: 8 / 4 = 2). */
+	/**
+	 * id >> ID_TO_VALUE_SHIFT: premultiplied id → the record's base index in
+	 * the `values` side column (each record owns 2 value slots: 8 / 4 = 2).
+	 */
 	ID_TO_VALUE_SHIFT = 2,
-	/** id >> ID_TO_FN_SHIFT: premultiplied id → the record's index in the
-	 * `fns` side column (one fn slot per record: 8 / 8 = 1). */
+	/**
+	 * id >> ID_TO_FN_SHIFT: premultiplied id → the record's index in the
+	 * `fns` side column (one fn slot per record: 8 / 8 = 1).
+	 */
 	ID_TO_FN_SHIFT = 3,
-	/** valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
+	/**
+	 * valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
 	 * signal's pending value, an effect's cleanup fn, or the computed's
-	 * owning Computed instance (D4). */
+	 * owning Computed instance (D4).
+	 */
 	AUX_VALUE_OFFSET = 1,
-	/** length >> HALF_PLANE_SHIFT: half the plane — the "keep at least half
-	 * the plane free" watermark term. */
+	/**
+	 * length >> HALF_PLANE_SHIFT: half the plane — the "keep at least half
+	 * the plane free" watermark term.
+	 */
 	HALF_PLANE_SHIFT = 1,
 	/** Records budgeted per configured capacity unit: one node + two links. */
 	RECORDS_PER_UNIT = 3,
@@ -1285,8 +1305,10 @@ let E: Engine = createEngine(initialRecords * Plane.RECORDS_PER_UNIT);
 // path — and zero receipt/world work ever runs (asserted behaviorally by
 // tests/one-core.spec.ts).
 
-/** Declined-read sentinel: the host read hook returns it to mean "not mine —
- * take the plain kernel path". @internal */
+/**
+ * Declined-read sentinel: the host read hook returns it to mean "not mine —
+ * take the plain kernel path". @internal
+ */
 export const __HOST_MISS: { readonly hostMiss: true } = { hostMiss: true };
 
 /** Whole-op codes for the host write hook (0 = set, 1 = update, 2 = dispatch). @internal */
@@ -1618,9 +1640,11 @@ type InstrumentedThenable = PromiseLike<unknown> & {
 	status?: 'pending' | 'fulfilled' | 'rejected';
 	value?: unknown;
 	reason?: unknown;
-	/** The thenable's stable SuspendedRead, minted lazily at the first read
+	/**
+	 * The thenable's stable SuspendedRead, minted lazily at the first read
 	 * that observes it pending — every read site throws THIS instance while
-	 * the thenable is pending, so observers can dedupe by identity. */
+	 * the thenable is pending, so observers can dedupe by identity.
+	 */
 	sr?: SuspendedRead;
 };
 
@@ -1907,10 +1931,12 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
-	/** Host adoption stamp — `{ b: theBridge, n: itsAtomNode }`, written by the
+	/**
+	 * Host adoption stamp — `{ b: theBridge, n: itsAtomNode }`, written by the
 	 * host at registration/adoption so the per-write registry lookup is one
 	 * property load + identity compare instead of a Map probe. Declared here
-	 * (and initialized) so every Atom shares one hidden class. @internal */
+	 * (and initialized) so every Atom shares one hidden class. @internal
+	 */
 	_hostStamp: { b: unknown; n: unknown } | undefined;
 	readonly label: string | undefined;
 
@@ -2047,9 +2073,11 @@ export class ReducerAtom<S, A> extends Atom<S> {
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
 	readonly _id: NodeId;
-	/** ctx.use(key, factory) cache, scoped to this living node (lazily
+	/**
+	 * ctx.use(key, factory) cache, scoped to this living node (lazily
 	 * created; dies with the node). Same key ⇒ same thenable for the node's
-	 * lifetime. @internal */
+	 * lifetime. @internal
+	 */
 	_useCache: Map<string, PromiseLike<unknown>> | undefined;
 	readonly label: string | undefined;
 
@@ -2244,9 +2272,11 @@ class SpikeWorld {
 	frame = 0;
 	/** Live link count (probe + surgical-discard completeness assert). */
 	links = 0;
-	/** Bumped on every world read; fanout dedup: a still-DIRTY shadow whose
+	/**
+	 * Bumped on every world read; fanout dedup: a still-DIRTY shadow whose
 	 * stamp equals this clock has an already-marked cone that nothing
-	 * re-validated since — re-propagation would be a no-op walk. */
+	 * re-validated since — re-propagation would be a no-op walk.
+	 */
 	readClock = 0;
 	/** kernel node id (premultiplied) → shadow id (premultiplied into W). */
 	readonly ns = new Map<number, number>();
@@ -2506,8 +2536,10 @@ function wIsValidLink(w: SpikeWorld, checkLink: number, sub: number): boolean {
 	return false;
 }
 
-/** checkDirty transliteration. wUpdate can evaluate getters (allocations,
- * plane growth), so w.W is re-loaded after every update call. */
+/**
+ * checkDirty transliteration. wUpdate can evaluate getters (allocations,
+ * plane growth), so w.W is re-loaded after every update call.
+ */
 function wCheckDirty(w: SpikeWorld, startLink: number, startSub: number): boolean {
 	let cur = startLink;
 	let sub = startSub;
@@ -2767,8 +2799,10 @@ export function __worldSet(id: number, atom: Atom<unknown>, value: unknown): voi
 	}
 }
 
-/** Reads a signal under a world (top-level entry; nested reads route via the
- * class getters while a world evaluation frame is open). @internal spike */
+/**
+ * Reads a signal under a world (top-level entry; nested reads route via the
+ * class getters while a world evaluation frame is open). @internal spike
+ */
 export function __worldRead(id: number, sig: Atom<unknown> | Computed<unknown>): unknown {
 	const w = mustWorld(id);
 	if (activeSub !== 0) {
@@ -2780,8 +2814,10 @@ export function __worldRead(id: number, sig: Atom<unknown> | Computed<unknown>):
 	return wAtomRead(w, sig as Atom<unknown>);
 }
 
-/** Kills a world. 'surgical' = per-edge unlink walk (prices O(edges) surgery);
- * 'bulk' = drop the whole plane (the O(1) abandonment). @internal spike */
+/**
+ * Kills a world. 'surgical' = per-edge unlink walk (prices O(edges) surgery);
+ * 'bulk' = drop the whole plane (the O(1) abandonment). @internal spike
+ */
 export function __worldDiscard(id: number, mode: 'surgical' | 'bulk' = 'bulk'): void {
 	const w = mustWorld(id);
 	if (mode === 'surgical') {
@@ -2817,9 +2853,11 @@ export function __worldStats(id: number): { links: number; shadows: number; plan
 	return { links: w.links, shadows: w.ns.size, planeBytes: w.W.length * 4 };
 }
 
-/** RED mode — the FAILED historical design: world evaluation hosted on the
+/**
+ * RED mode — the FAILED historical design: world evaluation hosted on the
  * kernel's own computed records/links. Exists to keep NF2's corruption
- * schedule pinned. @internal spike */
+ * schedule pinned. @internal spike
+ */
 export function __naiveWorldRead(id: number, sig: Atom<unknown> | Computed<unknown>): unknown {
 	const w = mustWorld(id);
 	const prevRoute = spikeRoute;
@@ -2838,8 +2876,10 @@ export function __naiveWorldRead(id: number, sig: Atom<unknown> | Computed<unkno
 	}
 }
 
-/** Structural validator over the KERNEL plane (test-only, step-capped): list
- * symmetry, back-pointers, cycle detection. Throws on corruption. @internal spike */
+/**
+ * Structural validator over the KERNEL plane (test-only, step-capped): list
+ * symmetry, back-pointers, cycle detection. Throws on corruption. @internal spike
+ */
 export function __spikeGraphCheck(ids: number[]): { links: number } {
 	const M = E.buffer();
 	const CAP = 100_000;

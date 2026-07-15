@@ -28,8 +28,10 @@ export type RenderPassId = number
 export type WatcherId = number
 export type EffectId = number
 
-/** The write vocabulary: set/update. A reducer-style write records as an
- * update whose closure captures the reducer and the action. */
+/**
+ * The write vocabulary: set/update. A reducer-style write records as an
+ * update whose closure captures the reducer and the action.
+ */
 export type Op = { kind: 'set'; value: Value } | { kind: 'update'; fn: (prev: Value) => Value }
 
 /**
@@ -59,11 +61,13 @@ export type AtomNode = {
 	base: Value
 	baseSeq: number
 	log: WriteLogEntry[]
-	/** Full history for invariant 4 (log-entry retention soundness): compacted
+	/**
+	 * Full history for invariant 4 (log-entry retention soundness): compacted
 	 * log entries move here, and quiet folds append their log-entry-shaped ledger
 	 * entries here directly (see quietWrite — the fold IS already-retired
 	 * history the moment it lands, and every write log is empty at that moment,
-	 * so appending keeps the archive in sequence order). */
+	 * so appending keeps the archive in sequence order).
+	 */
 	archive: WriteLogEntry[]
 	/** The value the atom was created with (shadow-fold origin). */
 	origin: Value
@@ -76,8 +80,10 @@ export type AtomNode = {
 export type Reader = (node: AnyNode) => Value
 export type ComputedFn = (read: Reader, untracked: Reader) => Value
 
-/** One newest-world derivation of a computed: the direct TRACKED deps with
- * the values they had (the tracked fingerprint) and the derived value. */
+/**
+ * One newest-world derivation of a computed: the direct TRACKED deps with
+ * the values they had (the tracked fingerprint) and the derived value.
+ */
 export type NewestSample = { deps: { node: AnyNode; value: Value }[]; value: Value }
 
 export type ComputedNode = {
@@ -110,9 +116,11 @@ export type ComputedNode = {
 	 * the episode (the kernel's cache persists the same way).
 	 */
 	newestSample?: NewestSample
-	/** Per-derivation cycle guard for the sampled evaluations: set while this
+	/**
+	 * Per-derivation cycle guard for the sampled evaluations: set while this
 	 * node's sampled derivation frame is on the stack (evaluation is strictly
-	 * nested, so a per-node bit states exactly what stack membership did). */
+	 * nested, so a per-node bit states exactly what stack membership did).
+	 */
 	sampling?: boolean
 }
 
@@ -126,8 +134,10 @@ export type Batch = {
 	state: 'live' | 'retired'
 	slot: BatchSlot | undefined
 	retiredSeq: number | undefined
-	/** Sequence of this batch's last log entry (0 = none) — the mount fixup's
-	 * fast-path clock check reads it (the engine twin is the same scalar). */
+	/**
+	 * Sequence of this batch's last log entry (0 = none) — the mount fixup's
+	 * fast-path clock check reads it (the engine twin is the same scalar).
+	 */
 	lastWriteSeq: number
 	/** True for the model's auto-created ambient default batch (home of context-free writes). */
 	ambient: boolean
@@ -167,11 +177,15 @@ export type RenderPass = {
 	capturedCommittedSlots: Set<BatchSlot>
 	state: RenderPassState
 	endKind: 'commit' | 'discard' | undefined
-	/** Watchers first mounted by this render (they subscribe + reconcile at its commit).
-	 * Disjoint from `rendered`. */
+	/**
+	 * Watchers first mounted by this render (they subscribe + reconcile at its commit).
+	 * Disjoint from `rendered`.
+	 */
 	mounted: WatcherId[]
-	/** Existing watchers re-rendered by this render (lastRenderedValue updates at
-	 * commit only) — re-renders ONLY, disjoint from `mounted`. */
+	/**
+	 * Existing watchers re-rendered by this render (lastRenderedValue updates at
+	 * commit only) — re-renders ONLY, disjoint from `mounted`.
+	 */
 	rendered: Set<WatcherId>
 }
 
@@ -200,7 +214,8 @@ export type Watcher = {
 	/** Subscribed at its mounting render's commit (React: in the layout phase, before paint). */
 	live: boolean
 	lastRenderedValue: Value
-	/** lastValidatedAt — the watched node's per-(root, node) accepted-change
+	/**
+	 * lastValidatedAt — the watched node's per-(root, node) accepted-change
 	 * counter at the last moment the screen was known to agree with
 	 * committed truth [SANCTIONED MODEL CO-EVOLUTION, owner ruling: observer
 	 * re-fires are at-least-once]. Advances at a committed render whose
@@ -208,7 +223,8 @@ export type Watcher = {
 	 * 0 = never (a re-staled commit resets it, forcing the next drain's
 	 * correction). Drains outside the committing render's own window gate on
 	 * this stamp alone — counter movement means correct, no value
-	 * comparison. */
+	 * comparison.
+	 */
 	lastSeen: number
 	snapshot: WatcherSnapshot
 	/** Per-(watcher, slot) delivery dedup bits — see deliver() for the suppression rule. */
@@ -236,30 +252,36 @@ export type ReactEffect = {
 	root: RootId
 	/** The effect body: run under committed-for-root read capture. */
 	body: (read: Reader) => void
-	/** Dep snapshot: the last run's reads, in read order. `value` is a
+	/**
+	 * Dep snapshot: the last run's reads, in read order. `value` is a
 	 * capture artifact (the run event's values array); `lastSeen` is the
 	 * dep's lastValidatedAt — the per-(root, node) accepted-change counter
 	 * at the read [sanctioned co-evolution: re-checks gate on counter
-	 * movement since the read, never on values]. */
+	 * movement since the read, never on values].
+	 */
 	deps: { node: AnyNode; value: Value; lastSeen: number }[]
 	/** Convenience comparand (tests): the last captured value of the last run. */
 	lastValue: Value
 	runs: number
 	cleanups: number
-	/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
 	 * A WRITING terminal (bug-2 shape): its body writes a sibling's dependency.
 	 * Force-REPLAY (StrictMode double-invoke) of a writer is scoped out of the
-	 * referee — see replayReactEffect. */
+	 * referee — see replayReactEffect.
+	 */
 	writes?: boolean
 }
 
-/** A core effect() observer: it sees the newest world (every write applied).
+/**
+ * A core effect() observer: it sees the newest world (every write applied).
  * A WRITING core effect (R-3 vocabulary) additionally writes its dedicated
  * effect-output atom on every value-gated run — the payload derives from
  * its own run count under an equality cutoff (min(runs, 3)), so each
  * trigger produces a bounded number of effective writes, then drops. The
  * output subset is DISJOINT: no core effect (and no corpus computed) reads
- * an effect-output atom, so the write fan is acyclic by construction. */
+ * an effect-output atom, so the write fan is acyclic by construction.
+ */
 export type CoreEffect = {
 	id: EffectId
 	name: string
@@ -286,9 +308,11 @@ export type World =
 export type ModelEvent =
 	| { type: 'write'; node: string; batch: BatchId; slot: BatchSlot; seq: number }
 	| { type: 'write-dropped'; node: string; batch: BatchId }
-	/** A quiet-mode fold: a bare write while nothing was pending folded
+	/**
+	 * A quiet-mode fold: a bare write while nothing was pending folded
 	 * straight into base — no batch, no log entry, no slot; `seq` is the
-	 * fold's created sequence (the atom's new baseSeq and the committedAdvance clock). */
+	 * fold's created sequence (the atom's new baseSeq and the committedAdvance clock).
+	 */
 	| { type: 'quiet-write'; node: string; seq: number }
 	| {
 			type: 'delivery'
@@ -438,11 +462,13 @@ export class CosignalModel {
 		Map<NodeId, { threw: boolean; v: Value; counter: number }>
 	>()
 
-	/** Refresh one (root, node) committed fold cache row: evaluate
+	/**
+	 * Refresh one (root, node) committed fold cache row: evaluate
 	 * committed-for-root, bump the counter iff the outcome changed. Returns
 	 * the row (callers gate on `counter`; a thrown outcome is conveyed, not
 	 * re-thrown — the model's committed evaluations do not throw today, and
-	 * the engine mirror skips a throwing dep without gating). */
+	 * the engine mirror skips a throwing dep without gating).
+	 */
 	private refreshCommitted(
 		rootId: RootId,
 		node: AnyNode,
@@ -474,9 +500,11 @@ export class CosignalModel {
 		return rec
 	}
 
-	/** The render currently COMMITTING (the span of renderEnd's commit half):
+	/**
+	 * The render currently COMMITTING (the span of renderEnd's commit half):
 	 * the watcher correction gate's cross-world discriminant — see
-	 * drainCommittedObservers [sanctioned co-evolution]. */
+	 * drainCommittedObservers [sanctioned co-evolution].
+	 */
 	private committingRender: RenderPass | undefined
 
 	/** Ambient default batch: the home of bare (context-free) writes. */
@@ -499,11 +527,15 @@ export class CosignalModel {
 	 */
 	private quietBoundaryOwed = false
 	private quietBoundaryActive = false
-	/** >0 while a core-effect flush is on stack (the kernel effect frame twin):
-	 * a core body's nested quiet write owes the drain instead of running it. */
+	/**
+	 * >0 while a core-effect flush is on stack (the kernel effect frame twin):
+	 * a core body's nested quiet write owes the drain instead of running it.
+	 */
 	private coreFlushDepth = 0
-	/** The terminal whose body is currently running (the engine's
-	 * activeSignalEffect twin): a body's nested quiet write owes the drain. */
+	/**
+	 * The terminal whose body is currently running (the engine's
+	 * activeSignalEffect twin): a body's nested quiet write owes the drain.
+	 */
 	private activeReactEffect: ReactEffect | undefined
 	/**
 	 * Monotonic per-episode ordinal for the converged-terminal band's
@@ -512,7 +544,8 @@ export class CosignalModel {
 	 * name; this ordinal disambiguates them, exactly as coreEffectMounts does
 	 * for core effects. Ticked in lockstep with the engine adapter's twin
 	 * (per terminal-band mount op, same order); never reset, so a multi-episode
-	 * schedule keeps names unique across quiescence. */
+	 * schedule keeps names unique across quiescence.
+	 */
 	terminalReactMounts = 0
 
 	private nextNode = 1
@@ -520,13 +553,15 @@ export class CosignalModel {
 	private nextRenderPassId = 1
 	private nextWatcher = 1
 	private nextEffect = 1
-	/** Core-effect mount ordinal, appended to created names (`#k`) so every
+	/**
+	 * Core-effect mount ordinal, appended to created names (`#k`) so every
 	 * core effect's name is unique: sibling firing order under one operation
 	 * is implementation-defined [owner ruling 2026-07-06], the lockstep
 	 * differ compares same-step runs as a multiset sorted on (effect, value),
 	 * and duplicate names would make that comparison ambiguous. Never reset
 	 * (core effects survive quiescence); the engine twin's mount helper keeps
-	 * the same counter, so lockstep-created names agree. */
+	 * the same counter, so lockstep-created names agree.
+	 */
 	private coreEffectMounts = 0
 
 	/** Purity frames: >0 while a world evaluation or fold is on stack (writes then throw). */
@@ -799,9 +834,11 @@ export class CosignalModel {
 		return pins.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...pins)
 	}
 
-	/** Create a batch. At most 31 live at once — one per React priority
+	/**
+	 * Create a batch. At most 31 live at once — one per React priority
 	 * lane. (Lane priority itself stays React's: neither the model nor the
-	 * engine ever consults it — the Priority dimension was deleted.) */
+	 * engine ever consults it — the Priority dimension was deleted.)
+	 */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Batch {
 		if (this.liveBatches().length >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batches may be live at once (one per React lane)')
@@ -820,9 +857,11 @@ export class CosignalModel {
 		return batch
 	}
 
-	/** Look up an id or throw the schedule error every resolver shares (the
+	/**
+	 * Look up an id or throw the schedule error every resolver shares (the
 	 * same hygiene fix as the engine's mustGet — applied independently; the
-	 * two implementations stay unshared by design). */
+	 * two implementations stay unshared by design).
+	 */
 	private mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
 		const v = map.get(id)
 		if (v === undefined) {
@@ -1181,7 +1220,8 @@ export class CosignalModel {
 		}
 	}
 
-	/** Core effects observe the newest world — through `newestValue`, so the
+	/**
+	 * Core effects observe the newest world — through `newestValue`, so the
 	 * values they compare carry the sampled-untracked rule [ruling 2026-07-06]
 	 * exactly as the engine's kernel-served flush does. They flush only when
 	 * a write advances the atom's newest fold, before the delivery loop —
@@ -1189,7 +1229,8 @@ export class CosignalModel {
 	 * flushed by the eager kernel apply itself. Iteration is mount order;
 	 * the ORDER of sibling runs under one operation is implementation-defined
 	 * [owner ruling 2026-07-06] and the lockstep differ compares same-step
-	 * runs as a multiset on (effect, value). */
+	 * runs as a multiset on (effect, value).
+	 */
 	private flushCoreEffects(reached?: Set<NodeId>): void {
 		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
 		// #8] Mark the kernel-effect-frame twin: a writing core body's nested
@@ -1338,8 +1379,10 @@ export class CosignalModel {
 	 * condition fails and the conservative comparison runs — which is the
 	 * point, since arbitrary time passed between render and reveal.
 	 */
-	/** The hidden half of a reveal: the mounting render commits but the watcher's
-	 * layout effects (subscribe + reconcile) defer — an Offscreen/Activity subtree. */
+	/**
+	 * The hidden half of a reveal: the mounting render commits but the watcher's
+	 * layout effects (subscribe + reconcile) defer — an Offscreen/Activity subtree.
+	 */
 	deferMountEffects(watcherId: WatcherId): void {
 		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId)
@@ -1389,9 +1432,11 @@ export class CosignalModel {
 		return this.mountCommittedObserver(rootId, name, (read) => void read(node))
 	}
 
-	/** Mount a committed observer whose body re-chooses deps CAUSALLY: it
+	/**
+	 * Mount a committed observer whose body re-chooses deps CAUSALLY: it
 	 * reads `sel` and, on its truthiness, reads `a` or `b` — the dep-flip
-	 * family where snapshot mechanisms rot (plan amendment 4). */
+	 * family where snapshot mechanisms rot (plan amendment 4).
+	 */
 	mountReactEffectPick(
 		rootId: RootId,
 		sel: AnyNode,
@@ -1435,9 +1480,11 @@ export class CosignalModel {
 		return e
 	}
 
-	/** The registration surface the constructors above configure. The initial
+	/**
+	 * The registration surface the constructors above configure. The initial
 	 * run captures the first dep snapshot (runs stays 0 — the mount run is
-	 * React's own effect invocation, not a re-fire). */
+	 * React's own effect invocation, not a re-fire).
+	 */
 	mountCommittedObserver(rootId: RootId, name: string, body: (read: Reader) => void): ReactEffect {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame')
@@ -1466,9 +1513,11 @@ export class CosignalModel {
 		this.reactEffects.delete(id)
 	}
 
-	/** StrictMode-style replay: cleanup + unconditional re-run (not value-
+	/**
+	 * StrictMode-style replay: cleanup + unconditional re-run (not value-
 	 * gated), recapturing deps. Illegal while the effect's root has an open
-	 * render frame (React double-invokes effects post-commit, never mid-render). */
+	 * render frame (React double-invokes effects post-commit, never mid-render).
+	 */
 	replayReactEffect(id: EffectId): void {
 		const e = this.mustGet(this.reactEffects, id, 'react effect')
 		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
@@ -1494,10 +1543,12 @@ export class CosignalModel {
 		this.runReactEffect(e)
 	}
 
-	/** Runs the body under committed-for-root read capture; installs the new
+	/**
+	 * Runs the body under committed-for-root read capture; installs the new
 	 * dep snapshot. Reads inside a computed's own evaluation belong to the
 	 * computed, not the effect (suppression is by construction: only the
-	 * body's TOP-LEVEL reads reach this reader). */
+	 * body's TOP-LEVEL reads reach this reader).
+	 */
 	private captureReactEffectRun(e: ReactEffect): void {
 		const deps: { node: AnyNode; value: Value; lastSeen: number }[] = []
 		const read: Reader = (n) => {
@@ -1586,10 +1637,12 @@ export class CosignalModel {
 		}
 	}
 
-	/** Mount a core effect() observer: it reads the newest world (sampled —
+	/**
+	 * Mount a core effect() observer: it reads the newest world (sampled —
 	 * the same value face `newestValue` serves). The mount evaluation is the
 	 * silent baseline; names take the per-mount ordinal suffix (see
-	 * `coreEffectMounts`). */
+	 * `coreEffectMounts`).
+	 */
 	mountCoreEffect(node: AnyNode, name: string, writeTo?: AtomNode): CoreEffect {
 		const e: CoreEffect = {
 			id: this.nextEffect++,
@@ -2207,9 +2260,11 @@ export class CosignalModel {
 		return this.evaluate(node, { kind: 'committed', root })
 	}
 
-	/** The newest value: atoms fold; computeds serve the sampled-untracked
+	/**
+	 * The newest value: atoms fold; computeds serve the sampled-untracked
 	 * cache [ruling 2026-07-06: untracked sampling] — see
-	 * `ComputedNode.newestSample`. */
+	 * `ComputedNode.newestSample`.
+	 */
 	newestValue(node: AnyNode): Value {
 		if (node.kind === 'atom') {
 			return this.evaluate(node, { kind: 'newest' })

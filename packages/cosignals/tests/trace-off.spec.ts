@@ -31,11 +31,13 @@ import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js'
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** The engine's module set — the one engine module (every section: kernel,
+/**
+ * The engine's module set — the one engine module (every section: kernel,
  * evaluation policy, observed lifecycle, the concurrent machinery, world
  * arenas, observers, render integration, reclamation) plus its error
  * classes. Every source-discipline scan below covers all of them, so a
- * future extraction can never silently exit the zero-cost contract. */
+ * future extraction can never silently exit the zero-cost contract.
+ */
 const ENGINE_MODULES = ['src/errors.ts', 'src/CosignalEngine.ts']
 
 function src(rel: string): string {
@@ -44,8 +46,10 @@ function src(rel: string): string {
 		.replace(/\/\/[^\n]*/g, '')
 }
 
-/** Fresh engine (one fresh engine per test): finish any leftover episode
- * so the reset's idle preconditions hold, then reset. */
+/**
+ * Fresh engine (one fresh engine per test): finish any leftover episode
+ * so the reset's idle preconditions hold, then reset.
+ */
 function freshEngine(): CosignalEngine {
 	engine.discardAllWip()
 	for (const t of engine.liveBatches()) {
@@ -64,8 +68,10 @@ function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
 	return attachTracer(freshEngine(), opts)
 }
 
-/** One record per call, with a recognizable payload (the typed epoch-reset
- * create — the direct emit surface the engine's sites call). */
+/**
+ * One record per call, with a recognizable payload (the typed epoch-reset
+ * create — the direct emit surface the engine's sites call).
+ */
 function emitN(tr: Tracer, n: number, from = 0): void {
 	for (let i = from; i < from + n; i++) {
 		tr.epochReset(i)

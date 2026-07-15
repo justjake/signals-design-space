@@ -1,7 +1,9 @@
 /** The engine's error types; all are exported from the package entry. */
 
-/** Thrown when a computed is read during its own evaluation — a dependency
- * cycle (upstream alien-signals silently serves the stale cache instead). */
+/**
+ * Thrown when a computed is read during its own evaluation — a dependency
+ * cycle (upstream alien-signals silently serves the stale cache instead).
+ */
 export class CycleError extends Error {
 	constructor(message: string) {
 		super(message)
@@ -9,8 +11,10 @@ export class CycleError extends Error {
 	}
 }
 
-/** An operation that is illegal in the engine's current state — e.g. a write
- * into a retired batch. It signals a mis-timed call, never data corruption. */
+/**
+ * An operation that is illegal in the engine's current state — e.g. a write
+ * into a retired batch. It signals a mis-timed call, never data corruption.
+ */
 export class ScheduleError extends Error {}
 
 /** An engine self-check failed — always a bug; never catch this. */

@@ -39,9 +39,11 @@ export type ScheduleOp =
 	| { t: 'open'; action: boolean }
 	| { t: 'write'; batch: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
-	/** R-2 corpus coverage: writes targeting the CUSTOM-EQUALS topology
+	/**
+	 * R-2 corpus coverage: writes targeting the CUSTOM-EQUALS topology
 	 * member `q` (asymmetric comparator) — without them, equality order is
-	 * lockstep-invisible (no other corpus atom carries custom equality). */
+	 * lockstep-invisible (no other corpus atom carries custom equality).
+	 */
 	| { t: 'writeQ'; batch: number; kind: WriteKind; value: number }
 	| { t: 'bareWriteQ'; kind: WriteKind; value: number }
 	| { t: 'settle'; batch: number }
@@ -53,19 +55,24 @@ export type ScheduleOp =
 	| { t: 'mount'; renderPass: number; node: number }
 	| { t: 'render'; renderPass: number; watcher: number }
 	| { t: 'reactEffect'; root: string; node: number }
-	/** A committed observer whose body re-chooses deps CAUSALLY:
-	 * read(sel) ? read(a) : read(b) — the dep-flip family. */
+	/**
+	 * A committed observer whose body re-chooses deps CAUSALLY:
+	 * read(sel) ? read(a) : read(b) — the dep-flip family.
+	 */
 	| { t: 'reactEffectPick'; root: string; sel: number; a: number; b: number }
 	| { t: 'removeReactEffect'; effect: number }
 	/** StrictMode-style replay: cleanup + unconditional re-run + recapture. */
 	| { t: 'replayReactEffect'; effect: number }
 	| { t: 'coreEffect'; node: number }
-	/** R-3 corpus coverage: a WRITING core effect — mounts on a core node and
+	/**
+	 * R-3 corpus coverage: a WRITING core effect — mounts on a core node and
 	 * writes the `out`-indexed effect-output atom per value-gated run (the
 	 * write classifies normally: ambient batch while pending, quiet fold at
-	 * rest — refereed against the engine's fused-apply effect writes). */
+	 * rest — refereed against the engine's fused-apply effect writes).
+	 */
 	| { t: 'coreEffectWrite'; node: number; out: number }
-	/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
 	 * The converged-terminal band. `tap`/`sig`/`sib` are a DISJOINT atom
 	 * cluster (below), touched only by these ops, so the terminal scenarios
 	 * stay acyclic and order-free like out1/out2:
@@ -75,7 +82,8 @@ export type ScheduleOp =
 	 *  - mountSibWriter: a terminal reading `tap`, writing `sib` — bug 2's
 	 *    cause (a terminal body writing a sibling terminal's dependency);
 	 *  - writeTap: the trigger — a quiet-only bare write to `tap` (the quiet
-	 *    write path where the converged terminal's boundary drain lives). */
+	 *    write path where the converged terminal's boundary drain lives).
+	 */
 	| { t: 'mountTermReader'; root: string; dep: number }
 	| { t: 'mountTapCore' }
 	| { t: 'mountSibWriter'; root: string }
@@ -375,8 +383,10 @@ export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
 	return { model: m, applied, failure: undefined }
 }
 
-/** Pick the index-th entity id (mod population) from a model map, or throw
- * the skip signal — the one lookup shape every entity kind shares. */
+/**
+ * Pick the index-th entity id (mod population) from a model map, or throw
+ * the skip signal — the one lookup shape every entity kind shares.
+ */
 function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
 	const ids = [...map.keys()]
 	if (ids.length === 0) {

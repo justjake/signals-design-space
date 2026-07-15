@@ -156,8 +156,10 @@ function createTracer(opts) {
       }
       return truncatedAtId >= 0 ? Math.max(0, nextId - chunkSize - truncatedAtId) : 0;
     },
-    /** SESSION: sealed (immutable, streamable) chunks — all but the one
-     * being written, while lossless. */
+    /**
+     * SESSION: sealed (immutable, streamable) chunks — all but the one
+     * being written, while lossless.
+     */
     sealedChunks() {
       if (!isSession || truncatedAtId >= 0) {
         return [];
@@ -165,8 +167,10 @@ function createTracer(opts) {
       const writing = nextId >> chunkShift;
       return chunks.slice(0, Math.min(writing, chunks.length));
     },
-    /** §16.2/G-21: losslessness is provable — one gap-free id range with
-     * no truncation-marker inside it. */
+    /**
+     * §16.2/G-21: losslessness is provable — one gap-free id range with
+     * no truncation-marker inside it.
+     */
     verifyLossless() {
       if (!isSession) {
         const from = Math.max(0, nextId - capacity);
@@ -2816,9 +2820,11 @@ function createCosignalEngine(options) {
     // getter chain was ~28% of the effect-heavy kairo tick.
     readAtomById: readAtomPublic,
     readComputedById: readComputedPublic,
-    /** Raw box-shape read for the isPending probe: tracked like any read
+    /**
+     * Raw box-shape read for the isPending probe: tracked like any read
      * (canonical link inside kernel evals, world-resolved in overlay
-     * frames), but the caller receives the box unforwarded. */
+     * frames), but the caller receives the box unforwarded.
+     */
     readComputedRaw(id) {
       if (canonicalEvalDepth > 0) {
         return kernelComputedRead(id);
@@ -2828,9 +2834,11 @@ function createCosignalEngine(options) {
       }
       return readComputedPublic(id);
     },
-    /** Solid's latest(): sample the NEWEST world (Wn — every write
+    /**
+     * Solid's latest(): sample the NEWEST world (Wn — every write
      * visible, our staged-value analog) without pending registration;
-     * tracked callers still subscribe. */
+     * tracked callers still subscribe.
+     */
     latestValue(id) {
       const v = worldValueOf(id, NEWEST_WORLD);
       if (activeSub !== 0 && readCtx !== 2 /* CTX_RENDER */) {
@@ -2841,9 +2849,11 @@ function createCosignalEngine(options) {
     trackCommitted,
     committedEffect,
     subscribeWithFixup,
-    /** The open pass's fixup-relevant identity: pin + included tokens
+    /**
+     * The open pass's fixup-relevant identity: pin + included tokens
      * (interned slots only — never-interned tokens carry no entries and
-     * cannot affect any re-resolution). undefined outside passes. */
+     * cannot affect any re-resolution). undefined outside passes.
+     */
     renderInfo() {
       if (passOpen === 0) {
         return void 0;
@@ -2856,8 +2866,10 @@ function createCosignalEngine(options) {
       }
       return { pin: passPin, tokens, container: passContainer };
     },
-    /** §14.2 deterministic disposal of an atom/computed record (the same
-     * path the FinalizationRegistry takes for collected handles). */
+    /**
+     * §14.2 deterministic disposal of an atom/computed record (the same
+     * path the FinalizationRegistry takes for collected handles).
+     */
     reclaim(h) {
       reclaimNode(h.id, M[h.id + 5 /* GEN */]);
     },
@@ -2886,12 +2898,14 @@ function createCosignalEngine(options) {
       canonicalValue(h) {
         return values[h.id >> 2];
       },
-      /** The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
+      /**
+       * The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
        * Canonical evaluations share one key; pass-world evaluations key on
        * the pass's INCLUDE MASK — the stable identity across restarts and
        * Suspense retries of one logical work (two interleaved works on one
        * root differ in batch sets, so they never alias; identical batch
-       * sets ARE the same world, where sharing is correct). */
+       * sets ARE the same world, where sharing is correct).
+       */
       useCacheKey() {
         if (frameWorlds.length === 0) {
           return "canon";
@@ -2941,14 +2955,18 @@ function createCosignalEngine(options) {
       forceSeqCounter: (n) => {
         seqCounter = n;
       },
-      /** Run the GC finalization path for a handle's record — the same
+      /**
+       * Run the GC finalization path for a handle's record — the same
        * call the FinalizationRegistry makes (deterministic stand-in for
-       * GC timing; a guarded skip registers the reclaim retry). */
+       * GC timing; a guarded skip registers the reclaim retry).
+       */
       simulateFinalize: (h) => {
         reclaimNode(h.id, M[h.id + 5 /* GEN */], true);
       },
-      /** Number of per-world baseline entries a watcher holds (leak
-       * tests: must not grow with retired batches). */
+      /**
+       * Number of per-world baseline entries a watcher holds (leak
+       * tests: must not grow with retired batches).
+       */
       watcherBaselineCount: (h) => metas[h.id >> 3]?.lastBroadcast?.size ?? 0,
       stats: () => ({
         recNext,
@@ -3445,18 +3463,22 @@ function createAPI(engine) {
       this.id = this.handle.id;
       instancesByHandle.set(this.handle, this);
     }
-    /** refresh() support: drop every world's thenable slots so the next
+    /**
+     * refresh() support: drop every world's thenable slots so the next
      * evaluation re-registers fresh fetches. The pendingJoins cache is
      * deliberately KEPT — it is identity infrastructure (same pending
      * source set ⇒ same joined thenable, forever); clearing it would mint
      * a new join for an identical set, a pending→pending identity change
-     * that would spuriously re-broadcast (caught by the oracle fuzz). */
+     * that would spuriously re-broadcast (caught by the oracle fuzz).
+     */
     clearUseSlots() {
       this.useSlots = void 0;
     }
-    /** One thenable identity per evaluation outcome: the single pending
+    /**
+     * One thenable identity per evaluation outcome: the single pending
      * source, or a node-cached join of the set (so retries re-see the same
-     * object even with parallel fetches). */
+     * object even with parallel fetches).
+     */
     joinPending(parts) {
       if (parts.length === 1) {
         return parts[0];
@@ -3472,9 +3494,11 @@ function createAPI(engine) {
       joins.push({ parts: snapshot, joined });
       return joined;
     }
-    /** §12.3 (adapted): record-pending-and-return. Never throws mid-eval
+    /**
+     * §12.3 (adapted): record-pending-and-return. Never throws mid-eval
      * for pending — parallel ctx.use calls all register their fetches
-     * before pending surfaces on the node. */
+     * before pending surfaces on the node.
+     */
     useThenable(thenable) {
       if (frameSp === 0) {
         throw new Error("cosignal: ctx.use may only run inside a computed evaluation");

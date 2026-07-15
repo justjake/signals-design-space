@@ -23,12 +23,14 @@ import {
 import { diffAgainstModelTolerant, engineAsAdapter } from './oracle-adapter.js'
 import frozen from '../../cosignals-oracle/tests/frozen-schedules.json'
 
-/** THE FROZEN FINDING SEEDS (R-3's executable-spec order): the named seeds'
+/**
+ * THE FROZEN FINDING SEEDS (R-3's executable-spec order): the named seeds'
  * schedules were captured as literal op lists BEFORE the generator gained
  * the writing-core-effect and custom-equals bands — their pinned
  * regressions survive any generator change (generator output for the same
  * seed numbers is now different, and that is fine: fresh sweeps regenerate,
- * archives replay literals). */
+ * archives replay literals).
+ */
 const FROZEN = frozen as Record<string, ScheduleOp[]>
 
 const CI_SEEDS = 300

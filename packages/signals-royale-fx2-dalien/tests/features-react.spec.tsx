@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-/** Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
- * useSignalTransition, useCommitted, useAtom, useComputed, useSignalEffect). */
+/**
+ * Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
+ * useSignalTransition, useCommitted, useAtom, useComputed, useSignalEffect).
+ */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
 import {
@@ -36,8 +38,10 @@ afterEach(async () => {
 })
 
 describe('scenario 11 — suspense family', () => {
-	/** The resource idiom: one request per param key, so requests are stable
-	 * across re-evaluations and a param change is what refetches. */
+	/**
+	 * The resource idiom: one request per param key, so requests are stable
+	 * across re-evaluations and a param change is what refetches.
+	 */
 	function makeResource(param: Signal<number>) {
 		let fetchCount = 0
 		const gates = new Map<string, ReturnType<typeof deferred<string>>>()

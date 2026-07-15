@@ -198,8 +198,10 @@ export class Tracer {
 }
 
 let activeTracer: Tracer | null = null
-/** Event ids never restart, so a node cannot accidentally point into a
- * later tracer session after the tracer that recorded its cause stops. */
+/**
+ * Event ids never restart, so a node cannot accidentally point into a
+ * later tracer session after the tracer that recorded its cause stops.
+ */
 let nextTraceEventId: TraceEventId = 1
 
 /** Attach a tracer (replacing any active one). Detach via session.stop(). */

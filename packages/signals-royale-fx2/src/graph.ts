@@ -47,20 +47,26 @@
 import { type ErrorBox, type Suspension, baseUse, finishCompute } from './asyncs.ts'
 import type { DraftId, World } from './worlds.ts'
 
-/** Value equality for the cutoff: when a write or recompute produces an
- * equal value, consumers are not notified and do not recompute. */
+/**
+ * Value equality for the cutoff: when a write or recompute produces an
+ * equal value, consumers are not notified and do not recompute.
+ */
 export type EqualsFn<T> = (a: T, b: T) => boolean
 
 declare const brand: unique symbol
-/** Weak number brand. Plain numbers assign in, so creation and increment
+/**
+ * Weak number brand. Plain numbers assign in, so creation and increment
  * stay cast-free (`let x: EvalPass = 1; x++`), but a value of one brand
  * does not assign to a slot or parameter of another brand — mixing up two
  * counters is a type error. The symbol is declared, never created: it is
- * purely type-level, and the runtime representation stays a plain number. */
+ * purely type-level, and the runtime representation stays a plain number.
+ */
 export type Brand<T, B extends string> = T & { readonly [brand]?: B }
 
-/** The module-wide change clock (see the header): increments on every atom
- * write and every async settlement. */
+/**
+ * The module-wide change clock (see the header): increments on every atom
+ * write and every async settlement.
+ */
 export type GraphChangeClock = Brand<number, 'GraphChangeClock'>
 /** Identity of one trace event; NO_EVENT (zero) means "no event". */
 export type TraceEventId = Brand<number, 'TraceEventId'>
@@ -88,42 +94,56 @@ export const enum Flag {
 	// only. Scheduling dispatches on these bits, never on whether a callback
 	// happens to be installed. A component subscription is
 	// Watching|WatchRender; an effect is Watching|WatchRunEffect.
-	/** Deliver through the render-notify queue, after sync effects settle.
+	/**
+	 * Deliver through the render-notify queue, after sync effects settle.
 	 * The subscriber's own notify callback decides whether the delivery
-	 * becomes a re-render. */
+	 * becomes a re-render.
+	 */
 	WatchRender = 0b0000_0000_1000,
-	/** Effect: at the lane's drain site, refresh its tracked computation and
-	 * run the handler when the settled value changed (see drainLane). */
+	/**
+	 * Effect: at the lane's drain site, refresh its tracked computation and
+	 * run the handler when the settled value changed (see drainLane).
+	 */
 	WatchRunEffect = 0b0000_0001_0000,
 	// Staleness: at most one of the pair is set; writers clear the whole
 	// field before setting, so a single-bit test reads the exact state.
-	/** Possibly stale: confirm dependency changedAt readings before
-	 * recomputing. */
+	/**
+	 * Possibly stale: confirm dependency changedAt readings before
+	 * recomputing.
+	 */
 	StaleCheck = 0b0000_0100_0000,
 	/** Definitely stale: recompute on next pull. */
 	StaleDirty = 0b0000_1000_0000,
 
 	// Async state: at most one of the pair is set; both clear means the
 	// node holds a plain value.
-	/** Latest evaluation threw; node.throwable holds the ErrorBox to
-	 * rethrow. */
+	/**
+	 * Latest evaluation threw; node.throwable holds the ErrorBox to
+	 * rethrow.
+	 */
 	AsyncError = 0b0001_0000_0000,
-	/** Latest evaluation parked on an unresolved thenable; node.throwable
-	 * holds the Suspension. */
+	/**
+	 * Latest evaluation parked on an unresolved thenable; node.throwable
+	 * holds the Suspension.
+	 */
 	AsyncSuspended = 0b0010_0000_0000,
 
-	/** Two meanings by node kind. On atoms and computeds it mirrors
+	/**
+	 * Two meanings by node kind. On atoms and computeds it mirrors
 	 * observerCount > 0 (the count is authoritative; the bit is the cheap
 	 * hot-path test). On watchers it means alive: set at creation, cleared
-	 * at dispose. */
+	 * at dispose.
+	 */
 	Watched = 0b0100_0000_0000,
 	/** Watcher currently sits in a flush queue. */
 	Scheduled = 0b1000_0000_0000,
 	/** Base-state computed evaluation in progress. */
 	Computing = 0b1_0000_0000_0000,
-	/** Draft-world computed evaluation in progress (worlds.ts). Kept
+	/**
+	 * Draft-world computed evaluation in progress (worlds.ts). Kept
 	 * separate from Computing because only a base-state evaluation may
-	 * update the node's validation watermark. */
+	 * update the node's validation watermark.
+	 */
 	DraftComputing = 0b10_0000_0000_0000,
 
 	/** Both staleness bits; (flags & StaleMask) === 0 means clean. */
@@ -136,30 +156,40 @@ export const enum Flag {
 /** A node's Flag bits composed into one stored number. */
 export type Flags = Brand<number, 'Flags'>
 
-/** One dependency edge: `sub` read `dep`. Each link sits in two intrusive
+/**
+ * One dependency edge: `sub` read `dep`. Each link sits in two intrusive
  * doubly/singly linked lists — the subscriber's dependency list (nextDep)
  * and, while the subscriber is watched, the dependency's subscriber list
- * (prevSub/nextSub). */
+ * (prevSub/nextSub).
+ */
 export interface Link {
 	dep: ProducerNode
 	sub: ConsumerNode
 	nextDep: Link | undefined
 	prevSub: Link | undefined
 	nextSub: Link | undefined
-	/** Whether the link is present in dep's subscriber list (true only
-	 * while sub is watched). */
+	/**
+	 * Whether the link is present in dep's subscriber list (true only
+	 * while sub is watched).
+	 */
 	inSubs: boolean
-	/** The evaluation pass that last read this edge. Equality with the
-	 * running pass means the evaluation in progress already touched it. */
+	/**
+	 * The evaluation pass that last read this edge. Equality with the
+	 * running pass means the evaluation in progress already touched it.
+	 */
 	evalPass: EvalPass
 }
 
-/** State every graph node carries, whether it produces values, consumes
- * dependencies, or does both. */
+/**
+ * State every graph node carries, whether it produces values, consumes
+ * dependencies, or does both.
+ */
 export interface ReactiveNode {
 	flags: Flags
-	/** Tracing: the event that caused the latest invalidation to reach
-	 * this node. */
+	/**
+	 * Tracing: the event that caused the latest invalidation to reach
+	 * this node.
+	 */
 	causeEvent: TraceEventId
 	label?: string | undefined
 }
@@ -183,53 +213,73 @@ export interface ProducerNode extends ReactiveNode {
 	/** Subscriber list: watched consumers and store subscriptions. */
 	subs: Link | undefined
 	subsTail: Link | undefined
-	/** Number of observers: watched consumer edges, effects, and React
-	 * subscriptions. */
+	/**
+	 * Number of observers: watched consumer edges, effects, and React
+	 * subscriptions.
+	 */
 	observerCount: number
-	/** Per-world resolution memos, managed by worlds.ts; undefined while
-	 * no transition drafts are live. */
+	/**
+	 * Per-world resolution memos, managed by worlds.ts; undefined while
+	 * no transition drafts are live.
+	 */
 	worldMemos: Map<string, unknown> | undefined
 }
 
-/** State carried only by nodes that read dependencies: computeds, effects,
- * and render watchers. Atoms produce values but never consume them. */
+/**
+ * State carried only by nodes that read dependencies: computeds, effects,
+ * and render watchers. Atoms produce values but never consume them.
+ */
 export interface ConsumerNode extends ReactiveNode {
-	/** Dependency list in first-read order. Computeds and effects rebuild a
+	/**
+	 * Dependency list in first-read order. Computeds and effects rebuild a
 	 * dynamic list on each evaluation. A render watcher's list is one pinned
-	 * link installed at creation and never re-tracked. */
+	 * link installed at creation and never re-tracked.
+	 */
 	deps: Link | undefined
-	/** The last poke walk that reached this node. Equality with the
-	 * running walk's pass means the walk already visited it. */
+	/**
+	 * The last poke walk that reached this node. Equality with the
+	 * running walk's pass means the walk already visited it.
+	 */
 	pokePass: PokePass
 }
 
 let graphChangeClock: GraphChangeClock = 1
-/** The clock reading at the last BASE change — an atom write or a
+/**
+ * The clock reading at the last BASE change — an atom write or a
  * settlement invalidation. Draft activity ticks the clock (world memos
  * and caches key their fast paths on it) without moving this watermark,
  * so "did base state change since X" stays answerable: compare X against
- * this reading, not against the clock. */
+ * this reading, not against the clock.
+ */
 let baseChangedAtGraphChange: GraphChangeClock = 1
 /** Identity of the evaluation pass in progress. */
 let evalPass: EvalPass = 1
-/** Backing counter for evaluation passes — monotonic, never reused. If a
+/**
+ * Backing counter for evaluation passes — monotonic, never reused. If a
  * value were recycled, the same-pass check in trackRead could match an
  * edge left over from a dead pass and skip registering a dependency the
- * current evaluation actually read. */
+ * current evaluation actually read.
+ */
 let evalPassCounter: EvalPass = 1
 function newEvalPass(): EvalPass {
 	evalPass = ++evalPassCounter
 	return evalPass
 }
-/** The node whose dependencies are being tracked right now: reads inside
- * an evaluation register edges against this node. */
+/**
+ * The node whose dependencies are being tracked right now: reads inside
+ * an evaluation register edges against this node.
+ */
 export let activeConsumer: EvaluatedNode<unknown> | null = null
-/** The world an evaluation is running in; null means base state. A world
- * boundary also detaches graph collectors owned by its caller. */
+/**
+ * The world an evaluation is running in; null means base state. A world
+ * boundary also detaches graph collectors owned by its caller.
+ */
 export let currentWorld: World | null = null
-/** The computed body executing right now, tracked separately from
+/**
+ * The computed body executing right now, tracked separately from
  * activeConsumer: untracked() clears activeConsumer but must not disable
- * per-computed policies (like the no-writes-inside-computeds rule). */
+ * per-computed policies (like the no-writes-inside-computeds rule).
+ */
 export let activeEvaluation: EvaluatedNode<unknown> | null = null
 let batchDepth = 0
 
@@ -237,11 +287,13 @@ export function currentGraphChange(): GraphChangeClock {
 	return graphChangeClock
 }
 
-/** Advance the one change clock. Draft activity (opens, intent appends,
+/**
+ * Advance the one change clock. Draft activity (opens, intent appends,
  * retires, discards) and thenable settlement tick through here so every
  * clock-keyed fast path — world memos, the world cache, unwatched
  * validation short-circuits — revalidates; base writes tick inline and
- * additionally move the base watermark. */
+ * additionally move the base watermark.
+ */
 export function tickGraphChange(): GraphChangeClock {
 	return ++graphChangeClock
 }
@@ -258,8 +310,10 @@ export function currentBaseChange(): GraphChangeClock {
 // tracer.
 // ---------------------------------------------------------------------------
 
-/** Emit one entry (or open a span) and return its id, so the caller can pass
- * it on as the cause/parent of downstream entries. */
+/**
+ * Emit one entry (or open a span) and return its id, so the caller can pass
+ * it on as the cause/parent of downstream entries.
+ */
 export type EmitFn = (
 	kind: string,
 	node: ReactiveNode | null,
@@ -267,9 +321,11 @@ export type EmitFn = (
 	attrs?: TraceFields,
 ) => TraceEventId
 
-/** Optional semantic identities and outcomes attached when an entry is emitted
+/**
+ * Optional semantic identities and outcomes attached when an entry is emitted
  * or a span is opened. The consumer converts object identities to stable
- * numeric ids before it stores the entry. */
+ * numeric ids before it stores the entry.
+ */
 export interface TraceFields {
 	root?: object
 	suspension?: object
@@ -280,9 +336,11 @@ export interface TraceFields {
 	world?: readonly DraftId[]
 }
 
-/** Outcome known only when a span closes. A compute reports whether its result
+/**
+ * Outcome known only when a span closes. A compute reports whether its result
  * changed; effects carry nothing. Duration is deliberately NOT here — the
- * consumer owns the clock and times a span from its start/end calls. */
+ * consumer owns the clock and times a span from its start/end calls.
+ */
 export interface SpanEndAttrs {
 	changed?: boolean
 }
@@ -314,8 +372,10 @@ export function setTracer(sink: TraceSink | null): void {
 
 /** The id recorded when an operation has no known cause. */
 export const NO_EVENT: TraceEventId = 0
-/** The trace event acting as causal parent for the operation in progress
- * (a write, an effect run, or a settlement). */
+/**
+ * The trace event acting as causal parent for the operation in progress
+ * (a write, an effect run, or a settlement).
+ */
 export let currentCause: TraceEventId = NO_EVENT
 export function setCurrentCause(id: TraceEventId): TraceEventId {
 	const prev = currentCause
@@ -334,8 +394,10 @@ export interface AtomNode<T> extends ProducerNode {
 	value: T | typeof UNINITIALIZED
 	initializer: (() => T) | undefined
 	equals: EqualsFn<T>
-	/** The onObserved option: setup that runs when the atom gains its first
-	 * observer, returning an optional cleanup for when the last one leaves. */
+	/**
+	 * The onObserved option: setup that runs when the atom gains its first
+	 * observer, returning an optional cleanup for when the last one leaves.
+	 */
 	lifetime: ((ctx: { get(): T; set(v: T): void }) => void | (() => void)) | undefined
 	lifetimeCleanup: (() => void) | undefined
 	lifetimeActive: boolean
@@ -343,14 +405,18 @@ export interface AtomNode<T> extends ProducerNode {
 
 /** State shared by a public computed and an effect's private computation. */
 export interface EvaluatedNode<T> extends ConsumerNode {
-	/** The clock reading at this evaluation's last value change. Effects are
-	 * terminal, but retain the slot so both kinds share one evaluator. */
+	/**
+	 * The clock reading at this evaluation's last value change. Effects are
+	 * terminal, but retain the slot so both kinds share one evaluator.
+	 */
 	changedAtGraphChange: GraphChangeClock
 	/** Cursor through the dependency list during dynamic evaluation. */
 	depsTail: Link | undefined
-	/** The ErrorBox or Suspension selected by the async flags; null for a
+	/**
+	 * The ErrorBox or Suspension selected by the async flags; null for a
 	 * plain value. The stable slot avoids changing shape when a computed
-	 * moves between value, error, and suspended states. */
+	 * moves between value, error, and suspended states.
+	 */
 	throwable: ErrorBox | Suspension | null
 	value: T | typeof UNINITIALIZED
 	fn: (use: UseFn, previous: T | undefined) => T
@@ -362,41 +428,53 @@ export interface EvaluatedNode<T> extends ConsumerNode {
 /** A cached computed-value node — the engine side of a computed. */
 export interface ComputedNode<T> extends ProducerNode, EvaluatedNode<T> {}
 
-/** State needed while a scope or effect body owns nested effects. An effect's
+/**
+ * State needed while a scope or effect body owns nested effects. An effect's
  * Watched bit prevents a self-disposed effect from gaining children
- * later in the same body. */
+ * later in the same body.
+ */
 interface EffectOwner {
 	flags: Flags
 	/** Direct child effects, allocated only when the first child is created. */
 	children: EffectNode[] | undefined
 }
 
-/** Which queue an effect's signal-triggered runs drain through.
- * Setup runs (creation) are always synchronous and unaffected. */
+/**
+ * Which queue an effect's signal-triggered runs drain through.
+ * Setup runs (creation) are always synchronous and unaffected.
+ */
 export const enum Lane {
 	/** Drained by flush(), when the triggering write or batch settles. */
 	Sync = 0,
-	/** With a React host: drained in the layout phase of the hosting root's
+	/**
+	 * With a React host: drained in the layout phase of the hosting root's
 	 * commit — after the same write's DOM mutations and app layout effects,
 	 * before that frame paints. Headless: a microtask, the only host timing
-	 * guaranteed to precede the rendering steps. */
+	 * guaranteed to precede the rendering steps.
+	 */
 	UseLayoutEffect = 1,
-	/** With a React host: drained in the hosting root's passive phase, the
-	 * same flush as useEffect. Headless: setTimeout. */
+	/**
+	 * With a React host: drained in the hosting root's passive phase, the
+	 * same flush as useEffect. Headless: setTimeout.
+	 */
 	UseEffect = 2,
 }
 
 /** A dynamically evaluated effect and its untracked delivery state. */
 export interface EffectNode extends EvaluatedNode<unknown>, EffectOwner {
-	/** The untracked side effect, handed the settled value and the previously
-	 * handled one; may return a cleanup. */
+	/**
+	 * The untracked side effect, handed the settled value and the previously
+	 * handled one; may return a cleanup.
+	 */
 	handler: (value: unknown, previous: unknown) => void | (() => void)
-	/** The compute value the handler last ran with (UNINITIALIZED before
+	/**
+	 * The compute value the handler last ran with (UNINITIALIZED before
 	 * the first run). The delivery gate compares fresh settled values
 	 * against this rather than trusting the compute's own cutoff, because
 	 * validation and delivery are different moments: change stamps advance
 	 * when a pending or error span ends even on an equal value, and a
-	 * handler can be deferred a round while the graph moves on. */
+	 * handler can be deferred a round while the graph moves on.
+	 */
 	lastHandled: unknown
 	/** Which drain site runs the handler. */
 	lane: Lane
@@ -405,22 +483,28 @@ export interface EffectNode extends EvaluatedNode<unknown>, EffectOwner {
 
 /** A store subscription pinned to one producer for its whole life. */
 export interface RenderWatcherNode extends ConsumerNode {
-	/** Render subscribers: delivery callback, run after sync effects
+	/**
+	 * Render subscribers: delivery callback, run after sync effects
 	 * settle. The callback decides whether the delivery becomes a
-	 * re-render. */
+	 * re-render.
+	 */
 	onNotify: (() => void) | undefined
-	/** Draft-wake callback: receives the id and cause of a transition draft
+	/**
+	 * Draft-wake callback: receives the id and cause of a transition draft
 	 * whose new write touches this subscriber's sources. Separate from
 	 * onNotify so draft activity never looks like a base-state change to
-	 * subscribers that compare snapshots. */
+	 * subscribers that compare snapshots.
+	 */
 	onDraftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined
 }
 
 export type WatcherNode = EffectNode | RenderWatcherNode
 
-/** The `use` function handed to computed bodies: read a promise-like,
+/**
+ * The `use` function handed to computed bodies: read a promise-like,
  * returning its value once settled or parking the evaluation until it
- * settles (see asyncs.ts). */
+ * settles (see asyncs.ts).
+ */
 export type UseFn = <U>(t: PromiseLike<U>) => U
 
 // ---------------------------------------------------------------------------
@@ -557,19 +641,23 @@ export function removeObserver(node: ProducerNode): void {
 // down and back up.
 // ---------------------------------------------------------------------------
 
-/** Host schedulers; declared here so the engine typechecks without a DOM
- * or Node lib. */
+/**
+ * Host schedulers; declared here so the engine typechecks without a DOM
+ * or Node lib.
+ */
 declare const queueMicrotask: (fn: () => void) => void
 declare const setTimeout: (fn: () => void, ms?: number) => unknown
 
 const pendingLifetimeAtoms = new Set<AtomNode<unknown>>()
 let lifetimeFlushScheduled = false
 
-/** Called whenever an atom's observer count crosses zero in either
+/**
+ * Called whenever an atom's observer count crosses zero in either
  * direction. Settlement keeps its own microtask rather than riding the
  * useLayoutEffect pump: an onObserved activation feeds data (sockets,
  * ctx.set), and delaying it to a frame boundary would show subscribers the
- * pre-activation value for a visible beat. */
+ * pre-activation value for a visible beat.
+ */
 function noteLifetimeTransition(node: ProducerNode): void {
 	if ((node.flags & Flag.KindAtom) === 0) {
 		return
@@ -636,10 +724,12 @@ export function flushLifetimeTransitions(): void {
 	}
 }
 
-/** Record "sub read dep" for the evaluation in progress. The subscriber's
+/**
+ * Record "sub read dep" for the evaluation in progress. The subscriber's
  * dependency list is reused in place: depsTail is a cursor that advances
  * as the evaluation re-reads dependencies in the same order as last time,
- * so a stable evaluation allocates nothing. */
+ * so a stable evaluation allocates nothing.
+ */
 function trackRead(dep: ProducerNode, sub: EvaluatedNode<unknown>): Link {
 	const tail = sub.depsTail
 	if (tail !== undefined && tail.dep === dep && tail.evalPass === evalPass) {
@@ -714,16 +804,20 @@ function trimDeps(sub: EvaluatedNode<unknown>): void {
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
 
-/** One effect lane: watchers queued toward one drain site. Array capacity
+/**
+ * One effect lane: watchers queued toward one drain site. Array capacity
  * is retained across drains: it is cleared by resetting count, never by
  * `.length = 0`, because V8 trims the backing store on a length reset and
  * the queue would then re-grow from zero capacity on every wave. The cost
  * of retaining capacity is that consumed slots must be nulled so they do
- * not pin disposed watchers. */
+ * not pin disposed watchers.
+ */
 interface LaneState {
 	queue: Array<EffectNode | undefined>
-	/** Round cursor; entries below it are consumed. An index rather than
-	 * Array#shift so wide drains stay linear. */
+	/**
+	 * Round cursor; entries below it are consumed. An index rather than
+	 * Array#shift so wide drains stay linear.
+	 */
 	head: number
 	count: number
 	/** The lane's pump is requested and has not run yet. */
@@ -736,10 +830,12 @@ const lanes: readonly [LaneState, LaneState, LaneState] = [
 	{ queue: [], head: 0, count: 0, pumpRequested: false },
 ]
 
-/** @internal A host-installed pump for the deferred lanes. Returning true
+/**
+ * @internal A host-installed pump for the deferred lanes. Returning true
  * means the host owns this request and will eventually reach the drain
  * entry points (the React bindings re-render a per-root sentinel whose
- * commit-phase effects drain); false falls back to the built-in pumps. */
+ * commit-phase effects drain); false falls back to the built-in pumps.
+ */
 export type LanePump = (lane: Lane.UseLayoutEffect | Lane.UseEffect) => boolean
 let lanePump: LanePump | null = null
 
@@ -748,18 +844,22 @@ export function setLanePump(pump: LanePump | null): void {
 	lanePump = pump
 }
 
-/** @internal Drain the useLayoutEffect lane now. Hosted drains call this from
- * the commit's layout phase, after the pass's DOM mutations. */
+/**
+ * @internal Drain the useLayoutEffect lane now. Hosted drains call this from
+ * the commit's layout phase, after the pass's DOM mutations.
+ */
 export function drainUseLayoutEffectLane(): void {
 	lanes[Lane.UseLayoutEffect].pumpRequested = false
 	drainLane(lanes[Lane.UseLayoutEffect])
 }
 
-/** @internal Drain both deferred lanes now. Lane order is total regardless
+/**
+ * @internal Drain both deferred lanes now. Lane order is total regardless
  * of pump timing: the useLayoutEffect lane settles first, so its entries can
  * never run after same-wave useEffect entries even when this site's pump
  * (a task) fires before a pending useLayoutEffect drain. Hosted drains call
- * this from the commit's passive phase. */
+ * this from the commit's passive phase.
+ */
 export function drainDeferredEffects(): void {
 	lanes[Lane.UseEffect].pumpRequested = false
 	drainLane(lanes[Lane.UseLayoutEffect])
@@ -782,9 +882,11 @@ function requestLaneDrain(lane: Lane.UseLayoutEffect | Lane.UseEffect): void {
 	}
 }
 
-/** @internal Re-arm the built-in pumps for any deferred entries still
+/**
+ * @internal Re-arm the built-in pumps for any deferred entries still
  * queued. Called when a host pump accepted requests whose drains will now
- * never arrive (the last hosting root unmounted, or the host uninstalled). */
+ * never arrive (the last hosting root unmounted, or the host uninstalled).
+ */
 export function repumpDeferredLanes(): void {
 	for (const lane of [Lane.UseLayoutEffect, Lane.UseEffect] as const) {
 		const state = lanes[lane]
@@ -795,9 +897,11 @@ export function repumpDeferredLanes(): void {
 	}
 }
 
-/** Drain the deferred lanes (and pending onObserved transitions) now — the
+/**
+ * Drain the deferred lanes (and pending onObserved transitions) now — the
  * seam for tests and headless hosts, since act() and awaits do not flush
- * scheduler tasks. */
+ * scheduler tasks.
+ */
 export function flushScheduledEffects(): void {
 	flushLifetimeTransitions()
 	const beforePaint = lanes[Lane.UseLayoutEffect]
@@ -808,9 +912,11 @@ export function flushScheduledEffects(): void {
 	drainLane(lanes[Lane.UseEffect])
 }
 
-/** @internal Drop queued lane entries without running them (test reset).
+/**
+ * @internal Drop queued lane entries without running them (test reset).
  * An active drain keeps its cursor, and later writes append after it as a
- * new round. Already-requested pumps fire on empty queues, which is harmless. */
+ * new round. Already-requested pumps fire on empty queues, which is harmless.
+ */
 export function resetEffectLanes(): void {
 	for (const state of lanes) {
 		for (let i = 0; i < state.count; i++) {
@@ -821,18 +927,22 @@ export function resetEffectLanes(): void {
 	}
 }
 
-/** Render-notify subscribers scheduled by the current wave; they are
+/**
+ * Render-notify subscribers scheduled by the current wave; they are
  * notified after sync effects settle. Double-buffered: a draining wave
  * iterates its own buffer while entries scheduled during delivery land in
  * the spare, so an iteration never sees entries added mid-delivery. Same
- * retained-capacity treatment as the effect lanes. */
+ * retained-capacity treatment as the effect lanes.
+ */
 let renderNotifyQueue: Array<RenderWatcherNode | undefined> = []
 let renderNotifyCount = 0
-/** Spare render-notify buffer; null while a draining flush has it
+/**
+ * Spare render-notify buffer; null while a draining flush has it
  * checked out. Delivery can nest (an onNotify callback may write, and that
  * write's flush drains the buffer the outer flush is filling), and a
  * doubly-nested flush must not reuse a buffer that is mid-iteration — it
- * allocates a fresh one instead. */
+ * allocates a fresh one instead.
+ */
 let spareRenderNotify: Array<RenderWatcherNode | undefined> | null = []
 
 /** Route a watcher into its queue by capability bit and lane. */
@@ -881,9 +991,11 @@ function scheduleWatcher(w: WatcherNode): void {
 // record the root node's change, then run the wave.
 // ---------------------------------------------------------------------------
 
-/** A suspended traversal position. The walks are iterative with an
+/**
+ * A suspended traversal position. The walks are iterative with an
  * explicit stack on the heap, so their depth is bounded by memory rather
- * than by JS call-stack frames. */
+ * than by JS call-stack frames.
+ */
 interface WaveFrame {
 	value: Link | undefined
 	prev: WaveFrame | undefined
@@ -965,8 +1077,10 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	} while (true)
 }
 
-/** Identity of the poke walk in progress. Monotonic and never reused, so
- * per-node pokePass stamps need no clearing between walks. */
+/**
+ * Identity of the poke walk in progress. Monotonic and never reused, so
+ * per-node pokePass stamps need no clearing between walks.
+ */
 let pokePass: PokePass = 0
 
 /**
@@ -1238,8 +1352,10 @@ function drainLane(state: LaneState): void {
 	}
 }
 
-/** Drain sync effects until they settle, then deliver render
- * notifications. */
+/**
+ * Drain sync effects until they settle, then deliver render
+ * notifications.
+ */
 export function flush(): void {
 	const sync = lanes[Lane.Sync]
 	if (sync.head !== 0) {
@@ -1299,16 +1415,20 @@ export class SignalReadForbidden extends Error {
 export class SignalWriteForbidden extends Error {
 	name = 'SignalWriteForbidden'
 }
-/** Policy switch only. The machinery for computeds that write state (see
+/**
+ * Policy switch only. The machinery for computeds that write state (see
  * recompute's self-affecting handling) works either way; flipping this to
- * false allows such writes without any other change. */
+ * false allows such writes without any other change.
+ */
 export const FORBID_WRITE_FROM_COMPUTED: boolean = true
 
 let readsForbidden: string | null = null
 let writesForbidden: string | null = null
 
-/** Cold policy path shared by read and write guards. Keeping construction
- * and tracing here leaves the successful guards as their original checks. */
+/**
+ * Cold policy path shared by read and write guards. Keeping construction
+ * and tracing here leaves the successful guards as their original checks.
+ */
 function throwSignalAccessForbidden(kind: 'read' | 'write', reason: string): never {
 	const error =
 		kind === 'read' ? new SignalReadForbidden(reason) : new SignalWriteForbidden(reason)
@@ -1420,13 +1540,15 @@ export function writeAtom<T>(atom: AtomNode<T>, next: T, intent: 'set' | 'update
 /** Thrown by an evaluation when it parks on an unresolved thenable. */
 export const PARKED = Symbol('parked')
 
-/** The use() argument passed to every base-state recompute. One shared
+/**
+ * The use() argument passed to every base-state recompute. One shared
  * function with no per-node closure: at call time the evaluating computed
  * is activeConsumer, so the function can find its owner. (Draft
  * evaluations pass their own use function instead; see worlds.ts.) A
  * use() that escapes its evaluation — captured and called later, or called
  * inside untracked() — finds no evaluating computed and throws rather than
- * park the wrong node. */
+ * park the wrong node.
+ */
 const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 	const consumer = activeConsumer
 	if (consumer === null) {
@@ -1569,11 +1691,13 @@ function chainResolve(start: ComputedNode<unknown>, first: Link): void {
 	}
 }
 
-/** Bring a computed up to date. Which conservative invalidations require
+/**
+ * Bring a computed up to date. Which conservative invalidations require
  * a recomputation is an implementation detail; resolved values and effect
  * observations are the semantic contract. Refreshing is detached from both
  * ambient collectors: dependencies belong to the computed being refreshed,
- * and draft-world sources belong only to an explicit outer read. */
+ * and draft-world sources belong only to an explicit outer read.
+ */
 export function ensureFresh(node: EvaluatedNode<unknown>): void {
 	const prevConsumer = activeConsumer
 	activeConsumer = null
@@ -1696,8 +1820,10 @@ export { UNINITIALIZED }
 
 let activeEffectOwner: EffectOwner | null = null
 
-/** Dispose every child even when one cleanup throws, then surface the first
- * error after the whole owned set is released. */
+/**
+ * Dispose every child even when one cleanup throws, then surface the first
+ * error after the whole owned set is released.
+ */
 function disposeChildren(owner: EffectOwner): void {
 	const children = owner.children
 	if (children === undefined) {
@@ -1721,9 +1847,11 @@ function disposeChildren(owner: EffectOwner): void {
 	}
 }
 
-/** Release the previous run: child effects it created, then its cleanup.
+/**
+ * Release the previous run: child effects it created, then its cleanup.
  * A throwing cleanup poisons the effect — it is disposed fully so it never
- * half-runs again — and the error surfaces to the drain. */
+ * half-runs again — and the error surfaces to the drain.
+ */
 function runEffectCleanup(w: EffectNode): void {
 	// Effects created by the previous run belong to that run.
 	if (w.children !== undefined) {
@@ -1755,9 +1883,11 @@ function runEffectCleanup(w: EffectNode): void {
 	}
 }
 
-/** Run an effect's handler with its settled value. The computation
+/**
+ * Run an effect's handler with its settled value. The computation
  * is settled here by construction: a pull that parked was skipped, and a
- * post-pull invalidation set Scheduled, which skipped the pair. */
+ * post-pull invalidation set Scheduled, which skipped the pair.
+ */
 function runHandler(w: EffectNode): void {
 	const value = w.value
 	const previous = w.lastHandled === UNINITIALIZED ? undefined : w.lastHandled
@@ -1861,10 +1991,12 @@ function unlinkAllDeps(w: ConsumerNode): void {
 	}
 }
 
-/** Create an effect whose one node owns dynamic evaluation and delivery.
+/**
+ * Create an effect whose one node owns dynamic evaluation and delivery.
  * The first run is synchronous when the computation settles; a parked first
  * evaluation stays silent, and its settlement delivers through the lane. A
- * creation-time compute error disposes the effect and rethrows. */
+ * creation-time compute error disposes the effect and rethrows.
+ */
 export function makeEffect(
 	fn: (use: UseFn, previous: unknown) => unknown,
 	handler: (value: unknown, previous: unknown) => void | (() => void),
