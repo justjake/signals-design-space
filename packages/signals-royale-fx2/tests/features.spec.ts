@@ -311,6 +311,27 @@ describe('causality tracer', () => {
 		expect(detached.events()).toEqual([])
 	})
 
+	test('logical ring slots stay ordered and findable through wraparound', () => {
+		const tracer = attachTracer({ capacity: 16 })
+		const ids: number[] = []
+		for (let i = 0; i < 40; i++) {
+			ids.push(tracer.emit(`event-${i}`, null, 0))
+			if (i === 7 || i === 15 || i === 39) {
+				const retained = tracer.events()
+				const start = Math.max(0, i - 15)
+				expect(retained.map((event) => event.id)).toEqual(ids.slice(start))
+				expect(tracer.find(ids[start]!)).toBe(retained[0])
+				expect(tracer.find(ids[i]!)).toBe(retained[retained.length - 1])
+			}
+		}
+		const retained = tracer.events()
+		retained[0]!.kind = 'changed by caller'
+		expect(tracer.events()[0]).toBe(retained[0])
+		expect(tracer.find(ids[23]!)).toBeUndefined()
+		expect(tracer.dropped).toBe(24)
+		tracer.stop()
+	})
+
 	test('a lazy initializer failure during update is not mislabeled as an updater failure', () => {
 		const tracer = attachTracer()
 		const boom = new Error('initializer')

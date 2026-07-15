@@ -50,7 +50,7 @@ const enum Limit {
 }
 
 export class Tracer {
-	private ring: (TraceEvent | undefined)[]
+	private ring: TraceEvent[]
 	private head = 0
 	private size = 0
 	private stopped = false
@@ -137,9 +137,7 @@ export class Tracer {
 		const out: TraceEvent[] = []
 		for (let i = 0; i < this.size; i++) {
 			const evt = this.ring[(this.head + i) % this.ring.length]
-			if (evt !== undefined) {
-				out.push(evt)
-			}
+			out.push(evt)
 		}
 		return out
 	}
@@ -147,10 +145,10 @@ export class Tracer {
 	find(id: TraceEventId): TraceEvent | undefined {
 		for (let i = this.size - 1; i >= 0; i--) {
 			const evt = this.ring[(this.head + i) % this.ring.length]
-			if (evt !== undefined && evt.id === id) {
+			if (evt.id === id) {
 				return evt
 			}
-			if (evt !== undefined && evt.id < id) {
+			if (evt.id < id) {
 				break
 			}
 		}
