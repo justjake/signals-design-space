@@ -4,12 +4,12 @@ import {
 	createComputed,
 	effect,
 	effectScope,
-	installState,
 	createAtom,
 	type Atom,
 	type Computed,
 	type Signal,
 } from '../src/index.ts'
+import { installState } from '../src/ssr.ts'
 
 export interface ReactiveFramework<S = unknown> {
 	name: string

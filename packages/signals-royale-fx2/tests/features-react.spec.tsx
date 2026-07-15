@@ -17,12 +17,11 @@ import {
 	createComputed,
 	nodeOf,
 	read,
-	serializeAtomState,
-	initializeAtomState,
 	createAtom,
 	update,
 	type Atom,
 } from 'signals-royale-fx2'
+import { initializeAtomState, serializeAtomState } from 'signals-royale-fx2/ssr'
 import {
 	SignalsFrameworkProvider,
 	startSignalTransition,

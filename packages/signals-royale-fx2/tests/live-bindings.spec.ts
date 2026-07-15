@@ -7,6 +7,9 @@ test('internal live bindings do not widen the public entry point', () => {
 	expect('activeConsumer' in publicApi).toBe(false)
 	expect('currentWorld' in publicApi).toBe(false)
 	expect('currentPark' in publicApi).toBe(false)
+	expect('serializeAtomState' in publicApi).toBe(false)
+	expect('initializeAtomState' in publicApi).toBe(false)
+	expect('installState' in publicApi).toBe(false)
 	expect(publicApi.getActiveTracer).toBeTypeOf('function')
 })
 

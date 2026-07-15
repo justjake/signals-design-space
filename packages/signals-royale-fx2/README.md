@@ -192,6 +192,8 @@ within a tick coalesce, so a StrictMode double-mount nets one activation.
 ## Server rendering
 
 ```ts
+import { initializeAtomState, installState, serializeAtomState } from 'signals-royale-fx2/ssr';
+
 serializeAtomState([a, b]);            // or { name: atom } records
 initializeAtomState(json, [a2, b2]);   // fresh client atoms
 installState(atom, value);             // one atom

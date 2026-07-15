@@ -6,13 +6,10 @@ import {
 	Tracer,
 	createComputed,
 	effect,
-	initializeAtomState,
-	installState,
 	isPending,
 	nodeOf,
 	read,
 	reducerAtom,
-	serializeAtomState,
 	createAtom,
 	type Atom,
 	type Computed,
@@ -20,6 +17,7 @@ import {
 	update,
 	getActiveTracer,
 } from '../src/index.ts'
+import { initializeAtomState, installState, serializeAtomState } from '../src/ssr.ts'
 import {
 	FORBID_WRITE_FROM_COMPUTED,
 	SignalReadForbidden,

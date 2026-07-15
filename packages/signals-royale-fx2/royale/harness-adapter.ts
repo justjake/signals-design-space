@@ -6,11 +6,11 @@ import {
 	effect,
 	effectScope,
 	endBatch,
-	installState,
 	startBatch,
 	untracked,
 } from '../src/index.ts'
 import { SignalWriteForbidden } from '../src/graph.ts'
+import { installState } from '../src/ssr.ts'
 
 const adapter = {
 	name: 'signals-royale-fx2',

@@ -8,12 +8,10 @@ import {
 	batch,
 	createComputed,
 	effect,
-	initializeAtomState,
 	isPending,
 	latest,
 	nodeOf,
 	read,
-	serializeAtomState,
 	set,
 	createAtom,
 	untracked,
@@ -22,6 +20,7 @@ import {
 	type AtomOptions,
 	type Signal,
 } from 'signals-royale-fx2'
+import { initializeAtomState, serializeAtomState } from 'signals-royale-fx2/ssr'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
