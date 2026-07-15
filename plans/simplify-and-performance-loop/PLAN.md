@@ -21,21 +21,24 @@ concepts or obscures ownership requires human review outside this loop.
 
 ## Roles
 
-### Implementer: Sol xhigh, standard/slow
+### Implementers: Sol xhigh, standard/slow
 
-The persistent implementer owns discovery and implementation. It reads the
-package, tests, profiles, history, and results ledger; chooses the most
-promising change; captures a baseline; implements it; and iterates until
-focused correctness passes and performance is equal or better.
+Up to two persistent implementers may work concurrently in isolated worktrees.
+Each reads the package, tests, profiles, history, and results ledger; chooses
+the most promising change within its assigned non-overlapping area; captures a
+baseline; implements it; and iterates until focused correctness passes and
+performance is equal or better.
 
-The controller must not supply a candidate, shortlist, or locked design. The
-implementer may be ambitious: package-wide redesigns, object/layout changes,
-concept convergence, renaming, and data-oriented designs are in scope. Bound a
-round by one coherent causal story, not by diff size.
+Unless the human prioritizes an item, the controller must not supply a
+candidate, shortlist, or locked design. An implementer may be ambitious:
+package-wide redesigns, object/layout changes, concept convergence, renaming,
+and data-oriented designs are in scope. Bound a round by one coherent causal
+story, not by diff size.
 
-Give it `prompts/implementer.md`, `BACKLOG.md`, `RESULTS.md`, and applicable review feedback.
-Retain its agent handle across rounds and revisions. If Ultra cannot select Sol
-xhigh with the standard/slow tier exactly, stop rather than substitute.
+Give each implementer `prompts/implementer.md`, `BACKLOG.md`, `RESULTS.md`, and
+applicable review feedback. Retain its agent handle across rounds and
+revisions. If Ultra cannot select Sol xhigh with the standard/slow tier
+exactly, stop rather than substitute.
 
 ### Reviewers
 
@@ -91,8 +94,17 @@ to continue.
 
 ## Operating rules
 
-- Work in the primary checkout directly on `main`; never create a worktree or
-  feature branch, switch branches, stash, reset, or push.
+- The controller owns worktree creation, cleanup, and integration. Give each
+  concurrent implementation track a dedicated worktree and feature branch from
+  the same accepted baseline. Implementers must not create worktrees, switch
+  branches, merge, commit, push, stash, or reset.
+- Keep at most two implementation tracks active. Assign disjoint source areas
+  and measurement inputs so their implementation and evidence cannot race.
+- Review and verify each track independently in its worktree. Integrate accepted
+  tracks into `main` one at a time. After each integration, rebase the remaining
+  track; if the earlier change affects its source, hot path, probe, compiler
+  inputs, or runtime dependencies, re-emit, remeasure, re-review, and rerun the
+  final gate before integrating it.
 - Before each round, verify `main` and record the starting diff. Candidate files
   and the exact inputs used by its probe must be stable and attributable.
   Unrelated dirty paths do not block the loop; preserve them.
@@ -117,8 +129,10 @@ plain Node. Never run measured code through `tsx`, esbuild, Bun, live `.ts`
 imports, or a reused output directory.
 
 Record the TypeScript version and hashes for its launcher and resolved compiler
-binary, plus the Node binary/version, compiler config, probe, source manifest,
-runtime dependency state, and full artifact manifest. Copy the resolved React,
+binary, plus the compiler host Node path/version/hash and the sampler Node
+path/version/hash captured by the sampler itself. Record the compiler config,
+probe, source manifest, runtime dependency state, and full artifact manifest.
+Copy the resolved React,
 ReactDOM, and Scheduler packages into the artifact before hashing and making it
 read-only; never link live runtime code. Verify the full manifest after
 sampling. Baseline and candidate use separate outputs but identical non-source
@@ -129,12 +143,13 @@ The exact preparation and run commands live in `templates/round.md`.
 
 ### 1. Discover and implement
 
-Start or resume the implementer without proposing a candidate. Before editing
-production code, it records only its chosen direction, base SHA, causal
-performance hypothesis, probe and repetitions, raw baseline, and measurement
-integrity boundary in `templates/round.md`, including the compiler/runtime and
-baseline emission record above. It completes the explanatory parts before
-handoff. This is an audit trail, not approval or a design lock.
+Start or resume each implementer without proposing a candidate unless the human
+has prioritized one. Before editing production code, it records only its chosen
+direction, base SHA, causal performance hypothesis, probe and repetitions, raw
+baseline, and measurement integrity boundary in `templates/round.md`, including
+the compiler/runtime and baseline emission record above. It completes the
+explanatory parts before handoff. This is an audit trail, not approval or a
+design lock.
 
 The implementer then iterates with focused tests and the identical probe. It
 may replace its approach while pursuing the same coherent goal. It returns when

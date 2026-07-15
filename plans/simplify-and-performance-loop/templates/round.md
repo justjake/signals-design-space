@@ -9,7 +9,8 @@
 - Raw baseline output:
 - Causal performance hypothesis:
 - Measurement integrity boundary:
-- Node path/version and binary hash:
+- TypeScript compiler host Node path/version and binary hash:
+- Sampler Node path/version and binary hash, reported from `process.execPath`:
 - Package-local TypeScript version, launcher hash, and resolved compiler binary
   hash:
 - Emit-config/effective-config/probe hashes:
@@ -24,13 +25,14 @@ round=/tmp/fx2-simplify-loop/NN-SLUG
 revision=REVISION
 probe="$round/probe.mts"
 package="$PWD/packages/signals-royale-fx2"
-node=$(realpath "$(command -v node)")
+compiler_node=$(realpath "$(command -v node)")
+sampler_node="$compiler_node"
 tsc=$(realpath "$package/node_modules/typescript/bin/tsc")
 emit=$(mktemp -d "$round/emit-$revision.XXXXXX")
 emitted_probe="$emit${probe%.mts}.mjs"
 
-NODE_OPTIONS= "$node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --showConfig > "$round/config-$revision.json"
-NODE_OPTIONS= "$node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --pretty false --listEmittedFiles > "$round/emitted-$revision.txt"
+NODE_OPTIONS= "$compiler_node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --showConfig > "$round/config-$revision.json"
+NODE_OPTIONS= "$compiler_node" "$tsc" -p "$round/tsconfig.emit.json" --outDir "$emit" --pretty false --listEmittedFiles > "$round/emitted-$revision.txt"
 cp "$package/package.json" "$emit/package.json"
 mkdir "$emit/node_modules"
 for dependency in react react-dom scheduler; do
@@ -47,7 +49,11 @@ test -f "$emitted_probe"
 ) > "$round/emit-$revision.before.sha256"
 find "$emit" -type f -exec chmod a-w {} +
 find "$emit" -type d -exec chmod a-w {} +
-NODE_ENV=production NODE_OPTIONS= "$node" "$emitted_probe"
+NODE_ENV=production NODE_OPTIONS= "$sampler_node" -e 'console.log(JSON.stringify({execPath: process.execPath, version: process.version}))' > "$round/sampler-$revision.json"
+reported_sampler=$(NODE_OPTIONS= "$sampler_node" -p 'process.execPath')
+test "$(realpath "$reported_sampler")" = "$(realpath "$sampler_node")"
+shasum -a 256 "$reported_sampler" > "$round/sampler-binary-$revision.sha256"
+NODE_ENV=production NODE_OPTIONS= "$sampler_node" "$emitted_probe"
 (
 	cd "$emit"
 	find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256
@@ -58,6 +64,9 @@ cmp "$round/emit-$revision.before.sha256" "$round/emit-$revision.after.sha256"
 The per-round config extends the package's `tsconfig.perf.json`, compiles live
 `src` plus the frozen `.mts` probe in one NodeNext program, and rewrites `.ts`
 imports. Compare the runtime manifests between baseline and candidate.
+Hash the exact path reported in `sampler-$revision.json`; do not infer the
+sampler from the controller shell's `command -v node`. The controller must use
+the same sampler binary for reproduction.
 
 The sections below may evolve during implementation but must be complete before
 handoff.
