@@ -339,9 +339,11 @@ export interface SignalEffectSpec<S extends WatchSource> {
 	 */
 	watch: S
 	/**
-	 * What the effect does: runs untracked with the settled
-	 * (value, previous) pair when the watched value changes, and may
-	 * return a cleanup that runs before the next run and at disposal.
+	 * What the effect does: called with the watched value and the previous
+	 * value it handled (undefined on the first call). May return a cleanup,
+	 * which runs before the next call and when the effect is disposed.
+	 * Reads inside run() are not tracked — a value the effect should react
+	 * to belongs in `watch`.
 	 */
 	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
 	/**
@@ -376,11 +378,22 @@ function useSignalPhaseEffect(
 }
 
 /**
- * A signal effect owned by this component: the factory builds a
- * {@link SignalEffectSpec} on mount and again on every `deps` change,
- * disposing the previous effect first, in React's passive phase.
- * Signal-triggered re-runs drain in the passive phase of the pass the
- * write produced.
+ * Run a side effect when watched signals change, without re-rendering
+ * this component. The factory you pass works like a useEffect body: it
+ * runs on mount and again whenever `deps` change (cleaning up the effect
+ * it previously built), and returns what to watch and what to run:
+ *
+ * ```tsx
+ * useSignalEffect(() => ({
+ *   watch: query,                 // or [a, b], {a, b}, () => a.get() + b.get()
+ *   run: (q) => { analytics.pageView(q) },
+ * }), [])
+ * ```
+ *
+ * Captured props and state belong in `deps`, exactly as with useEffect.
+ * When a watched signal changes, `run` executes alongside the useEffect
+ * callbacks of the React update that change caused — off the critical
+ * path of the frame.
  */
 export function useSignalEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,
@@ -390,11 +403,24 @@ export function useSignalEffect<const S extends WatchSource>(
 }
 
 /**
- * A signal effect owned by this component: the factory builds a
- * {@link SignalEffectSpec} on mount and again on every `deps` change,
- * disposing the previous effect first, in React's layout phase.
- * Signal-triggered re-runs drain in the layout phase of the pass the
- * write produced — after its DOM mutations, before it paints.
+ * Run a DOM-touching side effect when watched signals change, without
+ * re-rendering this component. The factory you pass works like a
+ * useLayoutEffect body: it runs on mount and again whenever `deps`
+ * change (cleaning up the effect it previously built), and returns what
+ * to watch and what to run:
+ *
+ * ```tsx
+ * useSignalLayoutEffect(() => ({
+ *   watch: query,                 // or [a, b], {a, b}, () => a.get() + b.get()
+ *   run: (q) => { el.textContent = q },
+ * }), [el])
+ * ```
+ *
+ * Captured props and state belong in `deps`, exactly as with
+ * useLayoutEffect. When a watched signal changes, `run` executes in the
+ * layout phase of the React update that change caused — after React has
+ * applied its own DOM updates, before the browser paints — so DOM reads
+ * and writes in `run` land in the same frame as React's output.
  */
 export function useSignalLayoutEffect<const S extends WatchSource>(
 	create: () => SignalEffectSpec<S>,

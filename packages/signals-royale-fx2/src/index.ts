@@ -103,22 +103,24 @@ export type Atom<in out T> = {
 	 * Tracked read: inside a computed, an effect source, or a subscribed
 	 * component, this registers a dependency, so the reader re-runs when
 	 * the value changes. What it returns depends on where it runs:
-	 * - ordinarily: base state, meaning committed values plus urgent
-	 *   writes, with transition drafts hidden;
-	 * - inside a React render pass or a transition-draft evaluation: the
-	 *   snapshot that context was given, its drafts included.
+	 * - ordinarily: the committed value, with pending React transitions'
+	 *   writes hidden;
+	 * - inside a React render (or a computed evaluated for one): the
+	 *   snapshot that render was given, which includes the writes of any
+	 *   transition it belongs to.
 	 */
 	get(): T
 	/**
 	 * Write through the equality cutoff (equal writes are dropped). Inside
-	 * a React transition the write is recorded into the transition's draft
-	 * and stays invisible to base readers until it commits.
+	 * a React transition the write is held with the transition and stays
+	 * invisible outside it until the transition commits.
 	 */
 	set(value: T): void
 	/**
 	 * Functional update. Inside a transition the function itself is
-	 * recorded and replays against each world's starting value, the way
-	 * React replays queued useState updaters — keep it pure.
+	 * recorded and replays against whatever value each pending snapshot
+	 * starts from, the way React replays queued useState updaters — keep
+	 * it pure.
 	 */
 	update(fn: (prev: T) => T): void
 	/** Read the current value without registering a dependency. */
@@ -174,15 +176,9 @@ const Atom = class<T> implements AtomNode<T> {
 	set(value: T): void {
 		set(this, value)
 	}
-	/**
-	 * Functional update. Inside a transition the function itself is
-	 * recorded and later replays against each world's starting value, the
-	 * way React replays queued useState updaters.
-	 */
 	update(fn: (prev: T) => T): void {
 		update(this, fn)
 	}
-	/** Read the current world without registering a graph dependency. */
 	peek(): T {
 		const world = currentWorld
 		if (world !== null) {
@@ -509,21 +505,24 @@ export function read<T>(x: Signal<T>): T {
 // ---------------------------------------------------------------------------
 
 /**
- * When an effect's signal-triggered re-runs drain. Setup runs (creation,
- * or a React deps change) are synchronous and unaffected.
+ * When an effect's handler runs after a watched signal changes:
+ * - 'sync' (the default): immediately, as part of the write;
+ * - 'useLayoutEffect' or 'useEffect': in that phase of the React update
+ *   the change caused, alongside components' own effects of that phase.
+ * The very first run at creation is always synchronous, whatever the
+ * schedule.
  */
 export type EffectSchedule = 'sync' | 'useLayoutEffect' | 'useEffect'
 
 /**
  * Options accepted by effect(). `equals` and `label` configure the
- * compute exactly as on createComputed; the same `equals` also gates
- * delivery, comparing fresh settled values against the last-handled one.
+ * effect's source exactly as on createComputed; the same `equals` also
+ * decides whether a new value is different enough to run the handler.
  */
 export interface EffectOptions<T> extends ComputedOptions<T> {
 	/**
-	 * Which React phase runs signal-triggered re-runs ('useLayoutEffect'
-	 * or 'useEffect'); 'sync' (default) runs them inside the settling
-	 * flush.
+	 * When the handler runs after a watched signal changes; 'sync' (the
+	 * default) runs it immediately, as part of the write.
 	 */
 	schedule?: EffectSchedule
 }
@@ -594,33 +593,39 @@ function isSignalHandle(x: object): x is Signal<unknown> {
 }
 
 /**
- * An effect is a source and a handler with different rules.
+ * Create an effect: watch a source, run a handler when its value
+ * changes. Returns a disposer.
  *
  * The source declares what the effect reacts to:
- * - a compute function — tracked dynamically, cached, cut off by equals,
- *   async-capable through use(), handed its previous value; its evaluation
- *   state lives on the effect node, not a separate computed node;
- * - a signal — shorthand for reading it (cutoff Object.is);
- * - a tuple or record of signals — shorthand for reading each into a
- *   same-shaped container (cutoff shallowEquals, since the container is
- *   rebuilt every run; an explicit equals overrides).
+ * - a compute function: runs tracked, so the signals it read — and only
+ *   those — become dependencies, branch by branch; it is cached, handed
+ *   its own previous value, and may read promises through use();
+ * - a signal: shorthand for a compute that reads it;
+ * - a tuple or record of signals: shorthand for a compute that reads
+ *   each one into a same-shaped container of values, compared with
+ *   {@link shallowEquals} by default since the container is rebuilt
+ *   every run (an explicit `equals` overrides).
  *
- * `handler` runs untracked with the settled (value, previous-handled)
- * pair when that value changes. It may return a cleanup that runs before
- * the next handler run and at disposal. Reads inside the handler are
- * deliberately untracked — a value the effect should react to belongs in
- * the source.
+ * The handler is called with the new value and the previous value it
+ * handled, and may return a cleanup that runs before the next handler
+ * run and at disposal. Reads inside the handler are not tracked — a
+ * value the effect should react to belongs in the source.
  *
- * The first run is synchronous at creation when the compute settles
- * immediately; a parked first evaluation fires its first handler at
- * settlement, on the schedule. Parking is silent (the previous value
- * keeps serving; isPending is the indicator), settlement fires only when
- * the settled value differs from the last-handled one, and a compute
- * error rethrows from the drain site without calling the handler.
+ * The first run happens synchronously, at creation. Async sources relax
+ * that:
+ * - nothing has resolved yet: the first handler run waits for the value;
+ * - loading again behind an earlier value: the effect stays quiet and
+ *   keeps the last cleanup installed ({@link isPending} is the loading
+ *   indicator);
+ * - a load completes: the handler runs only if the new value differs
+ *   from the last one it handled.
+ * If the source throws, the handler is not called; the error surfaces
+ * where the effect runs — at the write for 'sync' effects, in the React
+ * phase for scheduled ones.
  *
- * Effects observe base state only: a drafted write is invisible, and a
- * transition reaches every effect exactly once, at retirement, through
- * the normal write path. See docs/effects.md for the full contract.
+ * Effects never see a React transition's pending writes: when the
+ * transition commits, its writes reach effects once, like any other
+ * write. See docs/effects.md for the full contract.
  */
 export function effect<T>(
 	compute: (use: UseFn, previous: T | undefined) => T,

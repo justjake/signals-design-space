@@ -898,17 +898,18 @@ export function repumpDeferredLanes(): void {
 }
 
 /**
- * Drain the deferred lanes (and pending onObserved transitions) now — the
- * seam for tests and headless hosts, since act() and awaits do not flush
- * scheduler tasks.
+ * Run every scheduled effect right now instead of waiting for its
+ * 'useLayoutEffect'/'useEffect' timing, and settle any pending
+ * onObserved subscriptions. For tests and non-React environments, where
+ * nothing else forces scheduled work to a deterministic moment.
  */
 export function flushScheduledEffects(): void {
 	flushLifetimeTransitions()
-	const beforePaint = lanes[Lane.UseLayoutEffect]
-	if (beforePaint.head !== 0) {
+	const layoutLane = lanes[Lane.UseLayoutEffect]
+	if (layoutLane.head !== 0) {
 		return
 	}
-	drainLane(beforePaint)
+	drainLane(layoutLane)
 	drainLane(lanes[Lane.UseEffect])
 }
 
