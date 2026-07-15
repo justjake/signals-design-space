@@ -21,6 +21,7 @@ import {
 	NO_EVENT,
 	batch,
 	currentGraphChange,
+	flushScheduledEffects,
 	invalidateComputed,
 	makeEffect,
 	makeScope,
@@ -34,7 +35,9 @@ import {
 import {
 	createAtom,
 	createComputed,
+	effect,
 	nodeOf,
+	resetEngineForTest,
 	type AtomOptions,
 	type Computed,
 } from '../src/index.ts'
@@ -599,10 +602,137 @@ describe('two-tier graph: tracking and waves', () => {
 	})
 })
 
+describe.each([
+	['sync', Lane.Sync, () => {}],
+	['before-paint', Lane.BeforePaint, flushScheduledEffects],
+] as const)('%s lane drain re-entrancy', (_name, lane, nestedFlush) => {
+	test('a handler write waits until that handler returns', () => {
+		const source = atom(0)
+		const events: string[] = []
+		const stop = makeEffect(
+			() => readAtom(source),
+			(value) => {
+				events.push(`run:${value}:begin`)
+				if (value === 1) {
+					writeAtom(source, 2)
+					nestedFlush()
+				}
+				events.push(`run:${value}:end`)
+			},
+			lane,
+		)
+		events.length = 0
+		writeAtom(source, 1)
+		nestedFlush()
+		expect(events).toEqual([
+			'run:1:begin',
+			'run:1:end',
+			'run:2:begin',
+			'run:2:end',
+		])
+		stop()
+	})
+
+	test('a cleanup write waits until the cleanup-handler pair completes', () => {
+		const source = atom(0)
+		const events: string[] = []
+		const stop = makeEffect(
+			() => readAtom(source),
+			(value) => {
+				events.push(`run:${value}`)
+				return () => {
+					events.push(`cleanup:${value}:begin`)
+					if (value === 0) {
+						writeAtom(source, 2)
+						nestedFlush()
+					}
+					events.push(`cleanup:${value}:end`)
+				}
+			},
+			lane,
+		)
+		events.length = 0
+		writeAtom(source, 1)
+		nestedFlush()
+		expect(events).toEqual([
+			'cleanup:0:begin',
+			'cleanup:0:end',
+			'run:1',
+			'cleanup:1:begin',
+			'cleanup:1:end',
+			'run:2',
+		])
+		stop()
+	})
+})
+
+test('a public engine reset cannot erase an active sync drain', () => {
+	const source = createAtom(0)
+	const events: string[] = []
+	const stop = effect(
+		() => source.get(),
+		(value) => {
+			events.push(`run:${value}:begin`)
+			if (value === 1) {
+				resetEngineForTest()
+				source.set(2)
+			}
+			events.push(`run:${value}:end`)
+		},
+	)
+	events.length = 0
+	source.set(1)
+	expect(events).toEqual([
+		'run:1:begin',
+		'run:1:end',
+		'run:2:begin',
+		'run:2:end',
+	])
+	stop()
+})
+
+test('a nested before-paint flush cannot let after-paint work overtake its next round', () => {
+	const beforeSource = atom(0)
+	const afterSource = atom(0)
+	const events: string[] = []
+	const stopBefore = makeEffect(
+		() => readAtom(beforeSource),
+		(value) => {
+			events.push(`before:${value}:begin`)
+			if (value === 1) {
+				writeAtom(beforeSource, 2)
+				writeAtom(afterSource, 1)
+				flushScheduledEffects()
+			}
+			events.push(`before:${value}:end`)
+		},
+		Lane.BeforePaint,
+	)
+	const stopAfter = makeEffect(
+		() => readAtom(afterSource),
+		(value) => {
+			events.push(`after:${value}`)
+		},
+		Lane.AfterPaint,
+	)
+	events.length = 0
+	writeAtom(beforeSource, 1)
+	flushScheduledEffects()
+	expect(events).toEqual([
+		'before:1:begin',
+		'before:1:end',
+		'before:2:begin',
+		'before:2:end',
+		'after:1',
+	])
+	stopBefore()
+	stopAfter()
+})
+
 describe('two-tier graph: render-notify delivery re-entrancy', () => {
 	// A subscriber's onNotify may write, and that write flushes re-entrantly (the
-	// effect stage is guarded by the flushing flag; delivery is not). These
-	// tests pin the wave-snapshot contract: a wave's iteration never sees
+	// effect stage is guarded by the sync lane's active cursor; delivery is not).
+	// These tests pin the wave-snapshot contract: a wave's iteration never sees
 	// subscribers marked during its own delivery — they are delivered by the nested
 	// wave the marking write triggers, exactly once.
 

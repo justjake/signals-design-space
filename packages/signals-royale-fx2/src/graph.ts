@@ -734,19 +734,23 @@ function requestLaneDrain(lane: Lane): void {
  * scheduler tasks. */
 export function flushScheduledEffects(): void {
 	flushLifetimeTransitions()
-	drainLane(lanes[Lane.BeforePaint])
+	const beforePaint = lanes[Lane.BeforePaint]
+	if (beforePaint.head !== 0) {
+		return
+	}
+	drainLane(beforePaint)
 	drainLane(lanes[Lane.AfterPaint])
 }
 
 /** @internal Drop queued lane entries without running them (test reset).
- * Already-requested pumps fire on empty queues, which is harmless. */
+ * An active drain keeps its cursor, and later writes append after it as a
+ * new round. Already-requested pumps fire on empty queues, which is harmless. */
 export function resetEffectLanes(): void {
 	for (const state of lanes) {
 		for (let i = 0; i < state.count; i++) {
 			state.queue[i] = undefined
 		}
-		state.head = 0
-		state.count = 0
+		state.count = state.head
 		state.pumpRequested = false
 	}
 }
@@ -1049,8 +1053,6 @@ export function batch<T>(fn: () => T): T {
 	}
 }
 
-let flushing = false
-
 /** Hard iteration ceiling: converts a livelock into a thrown error. */
 const enum Limit {
 	/** Queued-effect pulls per drain before declaring a non-settling cycle. */
@@ -1078,8 +1080,15 @@ const enum Limit {
  * write cannot trigger them with stale marks. An erroring compute counts
  * as a throwing pull: the error surfaces from the drain site and the
  * handler never sees it.
+ *
+ * A nonzero head means this lane already has a drain frame. Nested drains
+ * return; entries appended by that frame's callbacks remain after its cursor
+ * and become its next round.
  */
 function drainLane(state: LaneState): void {
+	if (state.head !== 0) {
+		return
+	}
 	let guard = 0
 	try {
 		while (state.head < state.count) {
@@ -1165,18 +1174,16 @@ function drainLane(state: LaneState): void {
 /** Drain sync effects until they settle, then deliver render
  * notifications. */
 export function flush(): void {
-	if (flushing) {
+	const sync = lanes[Lane.Sync]
+	if (sync.head !== 0) {
 		return
 	}
-	const sync = lanes[Lane.Sync]
 	if (sync.count === sync.head && renderNotifyCount === 0) {
 		return
 	}
-	flushing = true
 	try {
 		drainLane(sync)
 	} finally {
-		flushing = false
 		if (renderNotifyCount > 0) {
 			// Take this wave's buffer and swap the spare in as the push
 			// target: subscribers scheduled during delivery land there for
