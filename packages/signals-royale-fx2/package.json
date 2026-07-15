@@ -10,6 +10,7 @@
 		"./debug": "./src/debug/index.ts"
 	},
 	"scripts": {
+		"format-doc-comments": "node tools/format-doc-comments.mjs",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"fuzz": "vitest run tests/oracle-fuzz.spec.ts",
