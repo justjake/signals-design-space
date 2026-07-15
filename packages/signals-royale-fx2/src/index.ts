@@ -32,7 +32,6 @@ import {
 	currentCause,
 	currentWorld,
 	flushLifetimeTransitions,
-	flushScheduledEffects,
 	isUninitialized,
 	makeEffect,
 	peekAtom,
@@ -506,8 +505,8 @@ export {
 	startBatch,
 	endBatch,
 	untracked,
+	flushScheduledEffects,
 } from './graph.ts'
-export { flushScheduledEffects }
 
 // ---------------------------------------------------------------------------
 // SSR

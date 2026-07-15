@@ -26,6 +26,7 @@ import {
 	SignalWriteForbidden,
 	batch as graphBatch,
 	endBatch as graphEndBatch,
+	flushScheduledEffects as graphFlushScheduledEffects,
 	makeScope,
 	observeNode,
 	startBatch as graphStartBatch,
@@ -101,6 +102,7 @@ test('public execution controls are the graph functions', () => {
 	expect(fx2.startBatch).toBe(graphStartBatch)
 	expect(fx2.endBatch).toBe(graphEndBatch)
 	expect(fx2.untracked).toBe(graphUntracked)
+	expect(fx2.flushScheduledEffects).toBe(graphFlushScheduledEffects)
 })
 
 describe('lazy initializers', () => {
