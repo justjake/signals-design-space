@@ -37,6 +37,7 @@ interface DebugState {
 	recomputes: number
 	changes: number
 	lastEventId: number
+	lastKind: string
 }
 
 const DEFAULT_CAPACITY = 4096
@@ -48,8 +49,14 @@ export class Collector implements Backend {
 	private ringHead = 0
 	private nextId = 1
 	private totalEvents = 0
+	/** id → event, for O(chain) cause walks without scanning the ring. Bounded
+	 * to `capacity`: an entry is dropped when its event is evicted. */
+	private readonly byId = new Map<number, DevtoolsEvent>()
 	/** Reduced, retained per-node state — survives ring eviction. */
 	private readonly nodes = new Map<number, DebugState>()
+	/** Live node count per kind, maintained incrementally so `counts()` is O(1)
+	 * rather than O(nodes) — it runs on every panel render. */
+	private readonly kindCounts: Partial<Record<NodeKind, number>> = {}
 	private readonly listeners = new Set<() => void>()
 	private t0 = 0
 	private flushQueued = false
@@ -89,16 +96,21 @@ export class Collector implements Backend {
 		if (this.ring.length < this.capacity) {
 			this.ring.push(evt)
 		} else {
+			const evicted = this.ring[this.ringHead]
+			if (evicted !== undefined) this.byId.delete(evicted.id)
 			this.ring[this.ringHead] = evt
 			this.ringHead = (this.ringHead + 1) % this.capacity
 		}
+		this.byId.set(id, evt)
 		if (node !== null && nodeKind !== undefined) {
 			let st = this.nodes.get(node)
 			if (st === undefined) {
-				st = { kind: nodeKind, recomputes: 0, changes: 0, lastEventId: id }
+				st = { kind: nodeKind, recomputes: 0, changes: 0, lastEventId: id, lastKind: kind }
 				this.nodes.set(node, st)
+				this.kindCounts[nodeKind] = (this.kindCounts[nodeKind] ?? 0) + 1
 			}
 			st.lastEventId = id
+			st.lastKind = kind
 			const cls = kindClass(kind)
 			if (cls === 'compute') st.recomputes++
 			if (cls === 'write') st.changes++
@@ -109,6 +121,10 @@ export class Collector implements Backend {
 
 	/** Drop a node's retained state when the adapter observes it was GC'd. */
 	forget(id: number): void {
+		const st = this.nodes.get(id)
+		if (st === undefined) return
+		const c = this.kindCounts[st.kind]
+		if (c !== undefined) this.kindCounts[st.kind] = c - 1
 		this.nodes.delete(id)
 	}
 
@@ -129,23 +145,20 @@ export class Collector implements Backend {
 	}
 
 	counts(): Counts {
-		const byKind: Partial<Record<NodeKind, number>> = {}
-		for (const st of this.nodes.values()) byKind[st.kind] = (byKind[st.kind] ?? 0) + 1
-		return { nodes: this.nodes.size, events: this.totalEvents, byKind }
-	}
-
-	private ordered(): DevtoolsEvent[] {
-		// Ring in chronological order (oldest first).
-		if (this.ring.length < this.capacity) return this.ring
-		return this.ring.slice(this.ringHead).concat(this.ring.slice(0, this.ringHead))
+		return { nodes: this.nodes.size, events: this.totalEvents, byKind: { ...this.kindCounts } }
 	}
 
 	events(filter: EventFilter, limit: number): DevtoolsEvent[] {
 		const classes = filter.classes ? new Set<KindClass>(filter.classes) : null
 		const out: DevtoolsEvent[] = []
-		const all = this.ordered()
-		for (let i = all.length - 1; i >= 0 && out.length < limit; i--) {
-			const e = all[i]
+		const n = this.ring.length
+		if (n === 0) return out
+		// Walk newest → oldest by index (no full-ring copy), stop at `limit`.
+		const full = n === this.capacity
+		let idx = full ? (this.ringHead - 1 + this.capacity) % this.capacity : n - 1
+		for (let scanned = 0; scanned < n && out.length < limit; scanned++) {
+			const e = this.ring[idx]
+			idx = full ? (idx - 1 + this.capacity) % this.capacity : idx - 1
 			if (filter.node !== undefined && e.node !== filter.node) continue
 			if (classes !== null && !classes.has(kindClass(e.kind))) continue
 			out.push(e)
@@ -154,13 +167,11 @@ export class Collector implements Backend {
 	}
 
 	causeChain(eventId: number): DevtoolsEvent[] {
-		const byId = new Map<number, DevtoolsEvent>()
-		for (const e of this.ring) if (e !== undefined) byId.set(e.id, e)
 		const chain: DevtoolsEvent[] = []
 		let id = eventId
 		let guard = 0
 		while (id > 0 && guard++ < 10000) {
-			const e = byId.get(id)
+			const e = this.byId.get(id)
 			if (e === undefined) break
 			chain.push(e)
 			id = e.cause
@@ -182,6 +193,8 @@ export class Collector implements Backend {
 			stale: v?.stale ?? false,
 			recomputes: st?.recomputes ?? 0,
 			changes: st?.changes ?? 0,
+			lastEventId: st?.lastEventId ?? 0,
+			lastKind: st?.lastKind ?? null,
 		}
 	}
 

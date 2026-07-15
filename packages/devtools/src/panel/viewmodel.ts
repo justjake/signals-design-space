@@ -13,6 +13,8 @@ import {
 	kindClass,
 	type KindClass,
 	type NodeDetails,
+	type NodeKind,
+	type NodeStatus,
 } from '../protocol.ts'
 
 /** A log-table row: verbatim kind + its color class + the node's display name. */
@@ -48,8 +50,8 @@ function summarize(e: DevtoolsEvent): string {
 	return parts.join(' · ')
 }
 
-export function logRows(backend: Backend, filter: EventFilter, limit: number): LogRow[] {
-	return backend.events(filter, limit).map((e) => ({
+function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
+	return {
 		id: e.id,
 		kind: e.kind,
 		cls: kindClass(e.kind),
@@ -58,7 +60,63 @@ export function logRows(backend: Backend, filter: EventFilter, limit: number): L
 		summary: summarize(e),
 		t: e.t,
 		cause: e.cause,
-	}))
+	}
+}
+
+export function logRows(backend: Backend, filter: EventFilter, limit: number): LogRow[] {
+	return backend.events(filter, limit).map((e) => toRow(backend, e))
+}
+
+/** The cause chain leading to `eventId`, resolved to rows, root first. */
+export function causeRows(backend: Backend, eventId: number): LogRow[] {
+	return backend.causeChain(eventId).map((e) => toRow(backend, e))
+}
+
+/** A row in the causal tree: a log row plus its nesting depth and the guide
+ * glyphs that draw the branch lines to its left. */
+export type Guide = 'vert' | 'tee' | 'elbow' | 'none'
+export interface TreeRow {
+	row: LogRow
+	depth: number
+	guides: Guide[]
+	/** Direct children — drives the expand caret on operation roots. */
+	children: number
+}
+
+/**
+ * Nest entries under the entry that caused them. Entries whose cause is 0, or
+ * whose cause isn't in `rows` (filtered out or evicted), are operation roots.
+ * Children always follow their cause in time (the collector guarantees
+ * cause < id), so a depth-first walk emits a stable, readable tree.
+ */
+export function logTree(rows: LogRow[]): TreeRow[] {
+	const present = new Set(rows.map((r) => r.id))
+	const childrenOf = new Map<number, LogRow[]>()
+	const roots: LogRow[] = []
+	for (const r of rows) {
+		if (r.cause > 0 && present.has(r.cause)) {
+			const list = childrenOf.get(r.cause)
+			if (list === undefined) childrenOf.set(r.cause, [r])
+			else list.push(r)
+		} else {
+			roots.push(r)
+		}
+	}
+	const out: TreeRow[] = []
+	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean) => {
+		if (depth > 40) return // guard against a pathological chain
+		const guides: Guide[] = []
+		for (let i = 0; i < depth; i++) {
+			if (i < depth - 1) guides.push(trail[i] ? 'vert' : 'none')
+			else guides.push(isLast ? 'elbow' : 'tee')
+		}
+		const kids = childrenOf.get(row.id) ?? []
+		out.push({ row, depth, guides, children: kids.length })
+		const nextTrail = trail.concat(!isLast)
+		kids.forEach((k, i) => walk(k, depth + 1, nextTrail, i === kids.length - 1))
+	}
+	roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1))
+	return out
 }
 
 /** A node-list row for the graph view. */
@@ -70,9 +128,13 @@ export interface NodeRow {
 	status: GraphNode['status']
 	stale: boolean
 	recomputes: number
+	/** The node's most recent entry, for the "last event" column. */
+	last: { id: number; kind: string } | null
 }
 
 export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[] {
+	// Uses the node's retained last-event pointer — never scans the event ring,
+	// so listing stays cheap at 100k nodes.
 	return backend.search(query, cap).map((n) => ({
 		id: n.id,
 		kind: n.kind,
@@ -81,7 +143,32 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 		status: n.status,
 		stale: n.stale,
 		recomputes: n.recomputes,
+		last: n.lastEventId > 0 ? { id: n.lastEventId, kind: n.lastKind ?? '' } : null,
 	}))
+}
+
+/** A resolved neighbor (dependency or subscriber), enriched for the inspector's
+ * colored, clickable lists. */
+export interface NeighborRef {
+	id: number
+	name: string
+	kind: NodeKind
+	status: NodeStatus
+}
+
+/** How many neighbors the inspector enriches per direction before summarizing
+ * the rest as a count — bounds work when a node has a huge fan-out. */
+const NEIGHBOR_CAP = 40
+
+function neighbors(backend: Backend, ids: number[]): NeighborRef[] {
+	const out: NeighborRef[] = []
+	for (const id of ids) {
+		if (out.length >= NEIGHBOR_CAP) break
+		const n = backend.node(id)
+		if (n === null) continue
+		out.push({ id, name: n.label ?? `${n.kind}#${id}`, kind: n.kind, status: n.status })
+	}
+	return out
 }
 
 /** The inspector payload plus the "why this ran" cause chain, resolved to
@@ -89,35 +176,30 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 export interface InspectorModel {
 	node: NodeDetails
 	name: string
-	deps: { id: number; name: string }[]
-	subs: { id: number; name: string }[]
+	deps: NeighborRef[]
+	subs: NeighborRef[]
+	depsTotal: number
+	subsTotal: number
 	/** Cause chain of the node's most recent entry, root first. */
 	why: LogRow[]
+	/** The node's most recent entry, or null if it has none in the window. */
+	last: LogRow | null
 }
 
 export function inspectorModel(backend: Backend, id: number): InspectorModel | null {
 	const node = backend.node(id)
 	if (node === null) return null
-	const nameOf = (nid: number) => ({ id: nid, name: nodeName(backend, nid) ?? `#${nid}` })
 	// The node's most recent entry anchors the "why" chain.
-	const last = backend.events({ node: id }, 1)[0]
-	const why = last
-		? backend.causeChain(last.id).map((e) => ({
-				id: e.id,
-				kind: e.kind,
-				cls: kindClass(e.kind),
-				node: e.node,
-				name: nodeName(backend, e.node),
-				summary: summarize(e),
-				t: e.t,
-				cause: e.cause,
-			}))
-		: []
+	const lastEvent = backend.events({ node: id }, 1)[0]
+	const why = lastEvent ? backend.causeChain(lastEvent.id).map((e) => toRow(backend, e)) : []
 	return {
 		node,
 		name: node.label ?? `${node.kind}#${node.id}`,
-		deps: node.deps.map(nameOf),
-		subs: node.subs.map(nameOf),
+		deps: neighbors(backend, node.deps),
+		subs: neighbors(backend, node.subs),
+		depsTotal: node.deps.length,
+		subsTotal: node.subs.length,
 		why,
+		last: lastEvent ? toRow(backend, lastEvent) : null,
 	}
 }

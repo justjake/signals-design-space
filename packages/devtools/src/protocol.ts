@@ -39,6 +39,10 @@ export interface GraphNode {
 	/** Retained per-node stats reduced from the event stream. */
 	recomputes: number
 	changes: number
+	/** The node's most recent entry — retained, so listing a node never scans
+	 * the ring. 0 / null when the node has no entry in the window. */
+	lastEventId: number
+	lastKind: string | null
 }
 
 /** A dependency edge: data flows dep → sub. */

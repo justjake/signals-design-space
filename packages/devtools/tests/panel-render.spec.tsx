@@ -9,8 +9,14 @@ import { mountDevtools } from '../src/panel/mount.tsx'
 
 const tick = () => act(async () => { await Promise.resolve() })
 
+function clickButton(root: HTMLElement, label: string) {
+	const btn = [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
+	if (btn === undefined) throw new Error(`no button labeled "${label}"`)
+	return act(async () => { btn.click() })
+}
+
 describe('inline host renders and live-updates from fx2', () => {
-	it('mounts, shows live entries, and re-renders on new engine activity', async () => {
+	it('mounts the graph, switches to the log, and re-renders on new activity', async () => {
 		const dt = attachFx2Devtools()
 		const el = document.createElement('div')
 		document.body.appendChild(el)
@@ -28,12 +34,17 @@ describe('inline host renders and live-updates from fx2', () => {
 				handle = mountDevtools(el, dt.collector)
 			})
 
-			// The log shows real entries with fx2's verbatim kind strings.
+			// Graph is the default view: the base16 theme is inlined and the
+			// discovered nodes are listed.
+			expect(el.innerHTML).toContain('--base00') // base16 theme inlined
 			expect(el.innerHTML).toContain('count')
+			expect(el.innerHTML).toContain('doubled')
+
+			// The log shows real entries with fx2's verbatim kind strings.
+			await clickButton(el, 'Log')
 			expect(el.innerHTML).toContain('set')
 			expect(el.innerHTML).toContain('compute')
 			expect(el.innerHTML).toContain('effect')
-			expect(el.innerHTML).toContain('--base00') // base16 theme inlined
 
 			const before = (el.textContent ?? '').match(/#\d+/g)?.length ?? 0
 
