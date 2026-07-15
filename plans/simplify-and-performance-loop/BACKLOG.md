@@ -14,9 +14,8 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-No exact retry is currently unblocked. Select the next round from the broader
-leads only when one coherent owner or representation can disappear without an
-additional adapter or policy branch.
+1. Collapse the two ambient access-prohibition strings and their setter into one scalar policy owner while preserving exact errors, nested restoration, initializer retry, updater replay, and `FORBID_WRITE_FROM_COMPUTED`.
+2. Make tracer ring occupancy canonical in `head` plus `size`: narrow the private storage to `TraceEvent[]` and delete impossible undefined branches without changing empty, partial, wrapped, overflow, lookup, or causal-walk behavior.
 
 ## Other unmeasured broader leads
 
@@ -30,7 +29,7 @@ additional adapter or policy branch.
 - Move node and draft causal storage into tracer-owned weak state only if detached execution loses `causeEvent`, `openEvent`, and `lastWriteEvent` fields/stores while queued delivery, late wakes, session replacement, and GC remain exact.
 - Unify the tracer's root and suspension object-ID allocators only if semantic numbering remains stable; this is attached-tracer-only cleanup, not a runtime-path round.
 - Cache `latestWorld()` by live-draft membership only if open, retire, and discard remain its sole invalidators, creation order stays exact, and dead `Draft` records are released immediately.
-- Give `alt-a.ts`, `alt-b.ts`, and `cosignals.ts` one shared legacy split-effect composer; `solid-react.ts` has a distinct root/effect owner, and the Royale adapters do not currently share more than one genuine autorun composition. Extract a utility only while it has multiple real callers.
+- Replace the five public alias bindings for batch/effect-scope/untracked with direct aliased exports only if runtime identity and declaration output stay exact; this is a low-risk export-shape cleanup, not a hot-path round.
 - Converge the render-notify double buffer with lane queue state only if nested delivery still cannot overwrite a buffer under iteration; this is a high-risk follow-up to per-lane reentrancy, not an independent first round.
 
 ## Recorded retry leads
@@ -74,6 +73,7 @@ additional adapter or policy branch.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
 - Internal `activeConsumer`, `currentWorld`, and `currentPark` consumers now read their canonical ESM live bindings directly; the three zero-policy getter wrappers and ten calls are gone while public `getActiveTracer()` remains a function.
+- The playground's `alt-a`, `alt-b`, and `cosignals` adapters share one three-caller split-effect composer; Solid and Royale retain their distinct lifecycle mechanisms.
 - Orphaned React error channel removed in favor of tracer events.
 - React client-internals container cached once; mutable `H` and `T` fields remain live reads.
 - `ensureFresh` owns detached graph and world-source collector isolation; the two internal `untracked(() => ensureFresh(...))` adapters are gone.
