@@ -45,6 +45,13 @@ describe('panel view-model', () => {
 			expect(details.deps.map((d) => d.name)).toContain('count')
 			expect(details.why.length).toBeGreaterThan(0)
 			expect(details.why[0].cause).toBe(0)
+
+			// A second write shows a real prev → next value diff: the adapter peeks
+			// the atom's value inertly and diffs against the last it recorded.
+			set(count, 9)
+			const after = logRows(collector, {}, 50)
+			const lastWrite = [...after].reverse().find((r) => r.kind === 'set' && r.name === 'count')!
+			expect(lastWrite.summary).toBe('5 → 9')
 		} finally {
 			dt.detach()
 		}

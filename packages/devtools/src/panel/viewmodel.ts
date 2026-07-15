@@ -43,6 +43,8 @@ function nodeName(backend: Backend, id: number | null): string | null {
 function summarize(e: DevtoolsEvent): string {
 	const d = e.data
 	if (typeof d.error === 'string') return d.error
+	// A write carries a value diff (previewed strings from the adapter).
+	if (typeof d.next === 'string') return typeof d.prev === 'string' ? `${d.prev} → ${d.next}` : `→ ${d.next}`
 	const parts: string[] = []
 	if (typeof d.phase === 'string') parts.push(d.phase)
 	if (typeof d.status === 'string') parts.push(d.status)

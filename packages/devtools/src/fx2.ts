@@ -72,10 +72,15 @@ export interface Fx2Devtools {
 export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number }): Fx2Devtools {
 	// id -> live node, WeakRef so a disposed node can be collected.
 	const registry = new Map<number, WeakRef<ReactiveNode>>()
+	// Last value preview recorded per node, for the write diff. Only previews
+	// (short strings) are held — never a node or a live value — so this can't
+	// leak the graph. Pruned with the node.
+	const lastValue = new Map<number, string>()
 	const finalizer =
 		typeof FinalizationRegistry !== 'undefined'
 			? new FinalizationRegistry<number>((id) => {
 					registry.delete(id)
+					lastValue.delete(id)
 					collector.forget(id)
 				})
 			: null
@@ -141,6 +146,19 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		const nodeIdNum = node !== null ? register(node) : null
 		const nodeKind = node !== null ? kindOf(node) : undefined
 		const data = fields !== undefined ? fieldsToData(fields) : {}
+		// Value diff on a write: the atom already holds the new value when this
+		// fires, so peek it inertly and diff against the last we recorded. The
+		// engine never sends values — value inspection lives here — so the diff
+		// costs nothing when the devtools isn't attached and can't leak.
+		if (nodeIdNum !== null && (kind === 'set' || kind === 'update')) {
+			const next = provider.value(nodeIdNum)?.preview
+			if (next != null) {
+				const prev = lastValue.get(nodeIdNum)
+				if (prev !== undefined) data.prev = prev
+				data.next = next
+				lastValue.set(nodeIdNum, next)
+			}
+		}
 		const id = collector.record(kind, nodeIdNum, cause as unknown as number, nodeKind, data)
 		return id as unknown as TraceEventId
 	})
