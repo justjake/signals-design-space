@@ -269,6 +269,7 @@ export class Collector implements Backend {
 			label: this.provider.label(id),
 			status: v?.status ?? 'ok',
 			valuePreview: v?.preview ?? undefined,
+			pending: v?.pending ?? undefined,
 			stale: v?.stale ?? false,
 			recomputes: st?.recomputes ?? 0,
 			changes: st?.changes ?? 0,
@@ -296,12 +297,10 @@ export class Collector implements Backend {
 	node(id: NodeId): NodeDetails | undefined {
 		const snap = this.snapshot(id)
 		if (snap === undefined) return undefined
-		const v = this.provider.value(id)
 		return {
 			...snap,
 			deps: this.provider.deps(id),
 			subs: this.provider.subs(id),
-			pending: v?.pending ?? undefined,
 			valueFull: this.provider.valueFull(id) ?? undefined,
 			equals: this.provider.equals(id),
 			source: this.provider.source(id),

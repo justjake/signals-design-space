@@ -223,6 +223,9 @@ export interface NodeRow {
 	kind: GraphNode['kind']
 	name: string
 	value: string
+	/** Error / awaited-source message when status !== 'ok'; shown in place of the
+	 * value so an errored or suspended node reads its reason in the list. */
+	pending: string | undefined
 	status: GraphNode['status']
 	stale: boolean
 	recomputes: number
@@ -243,6 +246,7 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 		kind: n.kind,
 		name: n.label ?? `${n.kind}#${n.id}`,
 		value: n.valuePreview ?? '—',
+		pending: n.pending,
 		status: n.status,
 		stale: n.stale,
 		recomputes: n.recomputes,

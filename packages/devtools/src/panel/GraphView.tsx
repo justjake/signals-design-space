@@ -349,7 +349,7 @@ export function GraphView({
 										</td>
 										<td>{n.kind}</td>
 										<td className="dimtxt" style={n.status === 'error' ? { color: 'var(--danger)' } : n.status === 'suspended' ? { color: 'var(--suspended)' } : undefined}>
-											{n.value}
+											{n.status !== 'ok' && n.pending !== undefined ? `${n.status === 'error' ? '! ' : '⧗ '}${n.pending}` : n.value}
 										</td>
 										<td className="dimtxt">{n.last ? `${fmtId('event', n.last.id)} ${n.last.kind}` : '—'}</td>
 										{metricsOn ? (
@@ -453,6 +453,14 @@ export function GraphView({
 									>
 										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : undefined}
 										<rect width={n.w} height={NODE_H} rx={5} />
+										{n.status !== 'ok' ? (
+											<g className={`badge ${n.status === 'error' ? 'err' : 'sus'}`}>
+												<circle cx={n.w - 10} cy={10} r={7} />
+												<text x={n.w - 10} y={13}>
+													{n.status === 'error' ? '!' : '⧗'}
+												</text>
+											</g>
+										) : undefined}
 										<text x={8} y={16}>
 											<tspan className="glyph">{glyphFor(n.kind)}</tspan> {n.label}
 										</text>

@@ -56,6 +56,9 @@ export interface GraphNode {
 	status: NodeStatus
 	/** Short, structured-clone-safe preview of the current value. */
 	valuePreview: string | undefined
+	/** Error message / awaited-source preview when status !== 'ok'; else undefined.
+	 * On the node list/canvas this replaces the value for a non-ok node. */
+	pending: string | undefined
 	/** True when the cached value is stale (a dep changed, no recompute yet). */
 	stale: boolean
 	/** Retained per-node stats reduced from the event stream. */
@@ -103,8 +106,6 @@ export interface DevtoolsEvent {
 export interface NodeDetails extends GraphNode {
 	deps: NodeId[]
 	subs: NodeId[]
-	/** Error message / awaited-source preview when status !== 'ok'. */
-	pending: string | undefined
 	/** A deeper, multi-line value preview for the inspector (the list/canvas use
 	 * the short `valuePreview`). Undefined when the node has no value. */
 	valueFull: string | undefined
