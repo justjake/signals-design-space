@@ -389,15 +389,3 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
 - Writing during render throws.
 - Multiple roots are supported; one transition can span them, and each
   root's render passes stay internally consistent.
-
-## Documentation website
-
-The Fumapress site lives in `docs/`. It generates the homepage from this
-README and the API reference from all four public entry points. TypeDoc
-validation fails when a public declaration has no doc comment, and the example
-check fails when a displayed code sample has no live playground.
-
-From this package, run `pnpm docs:dev` for the local site, `pnpm docs:check` for
-content and type validation, or `pnpm docs:build` for the production build. The
-docs app has its own lockfile so its TypeScript 6 compiler API and stable React
-toolchain do not inherit the repository's experimental overrides.

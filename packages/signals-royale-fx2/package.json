@@ -10,9 +10,6 @@
 		"./debug": "./src/debug/index.ts"
 	},
 	"scripts": {
-		"docs:dev": "pnpm --dir docs dev",
-		"docs:build": "pnpm --dir docs build",
-		"docs:check": "pnpm --dir docs check",
 		"format-doc-comments": "node tools/format-doc-comments.mjs",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
