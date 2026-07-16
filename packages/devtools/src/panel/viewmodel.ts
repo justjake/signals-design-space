@@ -181,6 +181,37 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<number>): TreeRo
 	return out
 }
 
+/**
+ * The consequence tree of one event: everything it caused, directly and
+ * transitively, within the given rows — nested (root = the event, shown as
+ * depth ≥ 1), bounded for huge fan-outs. Shared by the log's "what this caused"
+ * and the graph inspector's last-event view.
+ */
+export function causedTree(rows: LogRow[], eventId: number, cap = 200): TreeRow[] {
+	const self = rows.find((r) => r.id === eventId)
+	if (self === undefined) return []
+	const kids = new Map<number, LogRow[]>()
+	for (const r of rows) {
+		if (r.cause > 0) {
+			const l = kids.get(r.cause)
+			if (l !== undefined) l.push(r)
+			else kids.set(r.cause, [r])
+		}
+	}
+	const sub: LogRow[] = []
+	const seen = new Set<number>()
+	const walk = (id: number): void => {
+		for (const c of kids.get(id) ?? []) {
+			if (sub.length >= cap || seen.has(c.id)) continue
+			seen.add(c.id)
+			sub.push(c)
+			walk(c.id)
+		}
+	}
+	walk(eventId)
+	return logTree([self, ...sub]).filter((t) => t.depth >= 1)
+}
+
 /** A node-list row for the graph view. */
 export interface NodeRow {
 	id: number

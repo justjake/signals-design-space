@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
-import { causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
@@ -169,6 +169,11 @@ export function GraphView({
 	// The "why this ran" chain shown in the inspector: a drawer-picked event if
 	// there is one, else the node's most recent event.
 	const whyChain = eventSel !== null ? causeRows(backend, eventSel) : (model?.why ?? [])
+	// The node's most recent *causing* event — a write or recompute, not a leaf
+	// notify/render — and the consequence tree it produced, mirroring the log's
+	// "what this caused" into the graph sidebar.
+	const lastCause = sel !== null ? backend.events({ node: sel, classes: ['write', 'compute'] }, 1)[0] : undefined
+	const lastCaused = lastCause !== undefined ? causedTree(logRows(backend, {}, 1000), lastCause.id) : []
 	const inspStack = whyChain.find((e) => e.stack !== null)?.stack ?? null
 
 	// Flash a node or row only when its last event actually advances — never on
@@ -583,6 +588,19 @@ export function GraphView({
 							</h3>
 							<CauseSpine chain={whyChain} onPick={(e) => openEventInLog(e.id)} />
 						</div>
+
+						{lastCaused.length > 0 ? (
+							<div className="insp-section">
+								<h3 data-tip="Everything the node’s most recent event caused, directly and transitively.">What it caused · {lastCaused.length}</h3>
+								<ul className="caused-tree">
+									{lastCaused.map((t) => (
+										<li key={t.row.id} style={{ paddingLeft: (t.depth - 1) * 14 }}>
+											<EventRef row={t.row} onClick={() => openEventInLog(t.row.id)} />
+										</li>
+									))}
+								</ul>
+							</div>
+						) : null}
 
 						{inspStack !== null ? <StackTrace frames={inspStack} /> : null}
 						<div className="insp-section">
