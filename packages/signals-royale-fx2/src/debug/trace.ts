@@ -16,8 +16,8 @@
 // them so consumers import only `signals-royale-fx2/debug`, never core.
 export { Tracer, attachTracer, getActiveTracer } from '../tracer.ts'
 export type { TraceEvent, TracerOptions } from '../tracer.ts'
-export { setTracer, NO_EVENT } from '../graph.ts'
-export type { TraceSink, EmitFn, EndSpanFn, TraceFields, SpanEndAttrs, TraceEventId } from '../graph.ts'
+export { setTracer, setHotTracer, NO_EVENT } from '../graph.ts'
+export type { TraceSink, EmitFn, EndSpanFn, TraceFields, SpanEndAttrs, TraceEventId, HotFn, HotStep } from '../graph.ts'
 
 /**
  * The canonical trace vocabulary: every string fx2 actually emits today,
@@ -66,6 +66,11 @@ export type TraceKind =
 	| 'cleanup-error'
 	| 'flush-error'
 	| 'policy-error'
+	// Hot algorithm channel (graph.ts setHotTracer) — a separately gated,
+	// off-by-default, very-high-volume feed of the internal steps.
+	| 'propagate' // the invalidation wave marked subscribers possibly stale
+	| 'check' // a dependency-validation walk confirmed or cleared staleness
+	| 'pull' // a computed/effect computation re-evaluated
 
 /**
  * Coarse class for coloring and filtering in the UI — the ONLY place the
@@ -83,6 +88,7 @@ export type TraceKindClass =
 	| 'batch' // batch / draft lifecycle
 	| 'async' // settle / retry / suspend
 	| 'error' // *-error
+	| 'hot' // hot algorithm steps (propagate / check / pull)
 	| 'system' // anything else
 
 /**
@@ -124,6 +130,10 @@ export function kindClass(kind: TraceKind | string): TraceKindClass {
 		case 'flush-error':
 		case 'policy-error':
 			return 'error'
+		case 'propagate':
+		case 'check':
+		case 'pull':
+			return 'hot'
 		case 'scheduler-fallback':
 			return 'system'
 		default:

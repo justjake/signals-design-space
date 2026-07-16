@@ -183,6 +183,30 @@ export class Collector implements Backend {
 		this.nodes.delete(id)
 	}
 
+	// ── Hot algorithm channel ──────────────────────────────────────────────
+	// The engine-side hook is the adapter's to install; the collector owns
+	// only the on/off state the panel toggles. Hot events arrive through
+	// `record()` like everything else: ids and strings into the bounded ring.
+
+	/** Adapter-installed switch that starts/stops the engine's hot channel. */
+	private hotInstall: ((on: boolean) => void) | undefined
+	private hotOn = false
+
+	/** Adapter API: register the engine switch behind `setHotMode`. */
+	setHotSource(install: (on: boolean) => void): void {
+		this.hotInstall = install
+	}
+
+	setHotMode(on: boolean): void {
+		if (this.hotOn === on) return
+		this.hotOn = on
+		this.hotInstall?.(on)
+	}
+
+	hotMode(): boolean {
+		return this.hotOn
+	}
+
 	private scheduleFlush(): void {
 		if (this.flushQueued || this.listeners.size === 0) return
 		this.flushQueued = true

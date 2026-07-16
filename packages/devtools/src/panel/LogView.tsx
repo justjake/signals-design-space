@@ -11,7 +11,9 @@ const LIMIT = 1000
 /**
  * Filter chips. Each toggles the kind-classes it names; origin/error/batch/
  * async are structural and always shown. Internals (bookkeeping) is off by
- * default.
+ * default. Hot is off by default too, and it is more than a filter: it also
+ * switches the engine's hot channel on and off (nothing is recorded while
+ * it's off — that channel is zero-cost when disabled).
  */
 const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip: string }[] = [
 	{ key: 'write', label: 'set/update', sw: 'var(--atom)', classes: ['write'], tip: 'Changes to atoms: set (assigned a value) and update (computed from the previous value) — where every change starts.' },
@@ -19,6 +21,7 @@ const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip
 	{ key: 'render', label: 'render', sw: 'var(--watcher)', classes: ['notify', 'render'], tip: 'Rendering: notify (a watcher was told its inputs changed) and render (a render pass, start to commit).' },
 	{ key: 'effect', label: 'effect', sw: 'var(--effect)', classes: ['effect'], tip: 'Effects — code that runs after changes commit: effect() (library) and useSignalEffect (component).' },
 	{ key: 'internals', label: 'internals', sw: 'var(--system)', classes: ['system'], tip: 'Library bookkeeping with no user intent behind it. Off by default. Batch begins and transitions stay visible — they are structure, not noise.' },
+	{ key: 'hot', label: 'hot', sw: 'var(--hot)', classes: ['hot'], tip: 'The engine\'s internal steps, recorded only while this is on: propagate (a change marks what it reaches stale), check (a read confirms whether inputs really changed), pull (a stale computed re-evaluates). Very high volume; off by default.' },
 ]
 const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async']
 
@@ -39,6 +42,9 @@ const KIND_TIPS: Record<string, string> = {
 	'transition-commit': 'A transition committed to the UI.',
 	'transition-retire': 'A committed transition folded into base state.',
 	'transition-discard': 'A transition was abandoned.',
+	propagate: 'Hot step: a change pushed "possibly stale" marks down to its subscribers.',
+	check: 'Hot step: a read walked dependencies to confirm whether anything really changed.',
+	pull: 'Hot step: a stale computed or effect computation re-evaluated.',
 }
 function kindTip(kind: string): string {
 	return KIND_TIPS[kind] ?? (kind.endsWith('-error') ? 'This step threw an error.' : kind)
@@ -120,7 +126,8 @@ export function LogView({
 	selectEvent?: EventId | undefined
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
-	const [on, setOn] = useState<Record<string, boolean>>({ write: true, compute: true, render: true, effect: true, internals: false })
+	// Hot mirrors the backend's channel state so a remounted panel shows the truth.
+	const [on, setOn] = useState<Record<string, boolean>>(() => ({ write: true, compute: true, render: true, effect: true, internals: false, hot: backend.hotMode?.() ?? false }))
 	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
@@ -305,7 +312,12 @@ export function LogView({
 							className={`kchip ${on[c.key] ? 'on' : ''}`}
 							data-tip={c.tip}
 							aria-pressed={on[c.key]}
-							onClick={() => setOn({ ...on, [c.key]: !on[c.key] })}
+							onClick={() => {
+								const next = !on[c.key]
+								// The hot chip drives the engine channel, not just the filter.
+								if (c.key === 'hot') backend.setHotMode?.(next)
+								setOn({ ...on, [c.key]: next })
+							}}
 						>
 							<span className="sw" style={{ background: c.sw }} />
 							{c.label}
@@ -523,6 +535,8 @@ function classVar(cls: KindClass): string {
 			return 'suspended'
 		case 'origin':
 			return 'thread'
+		case 'hot':
+			return 'hot'
 		default:
 			return 'system'
 	}

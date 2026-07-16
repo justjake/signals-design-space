@@ -59,4 +59,48 @@ describe('fx2 → collector pipeline', () => {
 			dt.detach()
 		}
 	})
+
+	it('hot mode is off by default and toggling installs/removes the engine hook', () => {
+		const dt = attachFx2Devtools({ now: fakeClock() })
+		const { collector } = dt
+		const hotRows = () =>
+			collector.events({}, 500).filter((e) => e.kind === 'propagate' || e.kind === 'check' || e.kind === 'pull')
+		try {
+			const count = createAtom(1, { label: 'hot-count' })
+			const doubled = createComputed(() => count.get() * 2, { label: 'hot-doubled' })
+			const dispose = effect(
+				() => doubled.get(),
+				() => {},
+			)
+
+			// Off by default: exercising the graph records no hot rows.
+			expect(collector.hotMode()).toBe(false)
+			set(count, 2)
+			expect(hotRows()).toHaveLength(0)
+
+			// Enabled: the same write now records propagate/check/pull rows,
+			// carrying node ids only (numbers), never a node object.
+			collector.setHotMode(true)
+			expect(collector.hotMode()).toBe(true)
+			set(count, 3)
+			const hot = hotRows()
+			const kinds = new Set(hot.map((e) => e.kind))
+			expect(kinds.has('propagate')).toBe(true)
+			expect(kinds.has('check')).toBe(true)
+			expect(kinds.has('pull')).toBe(true)
+			for (const e of hot) expect(typeof e.node).toBe('number')
+			// The rows filter under their own kind class.
+			expect(collector.events({ classes: ['hot'] }, 500)).toHaveLength(hot.length)
+
+			// Disabled again: the hook is removed, no further hot rows arrive.
+			collector.setHotMode(false)
+			expect(collector.hotMode()).toBe(false)
+			const recorded = hotRows().length
+			set(count, 4)
+			expect(hotRows()).toHaveLength(recorded)
+			dispose()
+		} finally {
+			dt.detach()
+		}
+	})
 })

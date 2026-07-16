@@ -35,7 +35,8 @@ export const PANEL_CSS = `
     --text: var(--base05); --muted: var(--base04); --faint: var(--base03);
     --atom: var(--base0A); --computed: var(--base0C); --watcher: var(--base0E);
     --effect: var(--base0B); --danger: var(--base08); --suspended: var(--base0D);
-    --system: var(--base04); --thread: color-mix(in srgb, var(--base0A) 72%, var(--base07));
+    --system: var(--base04); --hot: var(--base09);
+    --thread: color-mix(in srgb, var(--base0A) 72%, var(--base07));
     --sans: "IBM Plex Sans", system-ui, sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, monospace;
     position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -173,6 +174,7 @@ export const PANEL_CSS = `
   .chip.async     { color: var(--suspended); border-color: color-mix(in srgb, var(--suspended) 45%, transparent); background: color-mix(in srgb, var(--suspended) 9%, transparent); }
   .chip.error     { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
   .chip.origin    { color: var(--thread); border-color: color-mix(in srgb, var(--thread) 45%, transparent); background: color-mix(in srgb, var(--thread) 9%, transparent); }
+  .chip.hot       { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, transparent); background: color-mix(in srgb, var(--hot) 9%, transparent); }
   .chip.system    { color: var(--system); border-color: color-mix(in srgb, var(--system) 45%, transparent); background: color-mix(in srgb, var(--system) 9%, transparent); }
 
   /* diffs */
