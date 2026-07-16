@@ -110,11 +110,14 @@ export function LogView({
 	query,
 	setQuery,
 	inspect,
+	selectEvent,
 }: {
 	backend: Backend
 	query: string
 	setQuery: (q: string) => void
 	inspect: (id: number) => void
+	/** An event to select from outside (e.g. a graph spine link); null = none. */
+	selectEvent?: number | null
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	const [on, setOn] = useState<Record<string, boolean>>({ write: true, compute: true, render: true, effect: true, internals: false })
@@ -134,6 +137,11 @@ export function LogView({
 	useEffect(() => {
 		selRowRef.current?.scrollIntoView({ block: 'nearest' })
 	}, [selected])
+
+	// Select an event requested from outside (a graph "last caused by" link).
+	useEffect(() => {
+		if (selectEvent != null) setSelected(selectEvent)
+	}, [selectEvent])
 
 	// Esc clears the timeline window (a click on the strip clears it too).
 	useEffect(() => {

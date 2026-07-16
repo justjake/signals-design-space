@@ -34,11 +34,18 @@ export function App({
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
 	const [focus, setFocus] = useState<number | null>(null)
 	const [logQuery, setLogQuery] = useState('')
+	const [logSelect, setLogSelect] = useState<number | null>(null)
 	const [themeOpen, setThemeOpen] = useState(false)
 
 	const inspect = (id: number) => {
 		setFocus(id)
 		setTab('graph')
+	}
+	// Open a specific event in the log — the graph's causal chain uses this so a
+	// spine entry links to its log row (not just to the node it's about).
+	const openEventInLog = (eventId: number) => {
+		setLogSelect(eventId)
+		setTab('log')
 	}
 	// "Open in Log" pre-populates the visible search filter with the node's name
 	// — no hidden per-node state; it's the log, filtered, and you can see and
@@ -86,9 +93,9 @@ export function App({
 			</header>
 
 			{tab === 'graph' ? (
-				<GraphView backend={backend} focus={focus} setFocus={setFocus} openInLog={openInLog} />
+				<GraphView backend={backend} focus={focus} setFocus={setFocus} openInLog={openInLog} openEventInLog={openEventInLog} />
 			) : (
-				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={inspect} />
+				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={inspect} selectEvent={logSelect} />
 			)}
 
 			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootEl} />

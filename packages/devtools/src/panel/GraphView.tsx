@@ -65,11 +65,13 @@ export function GraphView({
 	focus,
 	setFocus,
 	openInLog,
+	openEventInLog,
 }: {
 	backend: Backend
 	focus: number | null
 	setFocus: (id: number | null) => void
 	openInLog: (id: number) => void
+	openEventInLog: (eventId: number) => void
 }) {
 	const [query, setQuery] = useState('')
 	const [depth, setDepth] = useState(2)
@@ -535,7 +537,7 @@ export function GraphView({
 							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
 								Last caused by{eventSel !== null ? ` · #${eventSel}` : ''}
 							</h3>
-							<CauseSpine chain={whyChain} onPick={(e) => e.node !== null && pick(e.node)} />
+							<CauseSpine chain={whyChain} onPick={(e) => openEventInLog(e.id)} />
 						</div>
 
 						{inspStack !== null ? <StackTrace frames={inspStack} /> : null}
