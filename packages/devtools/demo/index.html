@@ -27,7 +27,11 @@
 	</head>
 	<body>
 		<div id="app">
-			<h3>fx2 demo app</h3>
+			<h3><span id="engine" data-testid="engine">fx2</span> demo app</h3>
+			<p>
+				engine: <a id="pick-fx2" href="?">fx2</a> ·
+				<a id="pick-dalien" href="?engine=dalien">fx2-dalien</a>
+			</p>
 			<button id="inc" data-testid="inc">increment</button>
 			<p>
 				doubled = <b data-testid="out" id="out">0</b>

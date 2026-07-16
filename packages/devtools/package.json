@@ -9,7 +9,9 @@
 		"./fx2": "./src/fx2.ts",
 		"./panel": "./src/panel/mount.tsx",
 		"./button": "./src/panel/DevtoolsPanelButton.tsx",
-		"./vite": "./src/vite.ts"
+		"./vite": "./src/vite.ts",
+		"./engine": "./src/engine.ts",
+		"./dalien": "./src/dalien.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
@@ -19,7 +21,8 @@
 		"build:extension": "node scripts/build-extension.mjs"
 	},
 	"dependencies": {
-		"signals-royale-fx2": "workspace:*"
+		"signals-royale-fx2": "workspace:*",
+		"signals-royale-fx2-dalien": "workspace:*"
 	},
 	"devDependencies": {
 		"@playwright/test": "1.61.1",
