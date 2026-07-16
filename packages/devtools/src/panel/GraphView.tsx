@@ -3,6 +3,7 @@ import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
 import { fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
+import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
 
 const NODE_H = 40
 const DEFAULT_PER_COL = 6
@@ -71,6 +72,10 @@ export function GraphView({
 	const [drawerOpen, setDrawerOpen] = useState(true)
 	const [history, setHistory] = useState<number[]>([])
 	const [copied, setCopied] = useState(false)
+	// Resizable pane sizes (px).
+	const [nodeListH, setNodeListH] = useState(168)
+	const [drawerH, setDrawerH] = useState(200)
+	const [inspectorW, setInspectorW] = useState(320)
 	// Selection (inspected + highlighted) is separate from focus (what the
 	// canvas lays out around): a single click selects without moving anything;
 	// a double-click re-focuses and relayouts. So clicking a node never shifts
@@ -220,7 +225,7 @@ export function GraphView({
 
 			<div className="main">
 				<div className="canvas-col">
-					<section className="nodelist" aria-label="All nodes">
+					<section className="nodelist" aria-label="All nodes" style={{ height: nodeListH, maxHeight: nodeListH }}>
 						<table>
 							<thead>
 								<tr>
@@ -260,6 +265,7 @@ export function GraphView({
 							</tfoot>
 						</table>
 					</section>
+					<ResizeHandle dir="v" onDelta={(d) => setNodeListH((h) => clampSize(h + d, 60, 460))} />
 
 					<div className="canvas-wrap">
 						{layout === null ? (
@@ -339,7 +345,10 @@ export function GraphView({
 					</div>
 
 					{effectiveFocus !== null && drawerOpen ? (
-						<section className="drawer" aria-label="Log entries for the focused node">
+						<ResizeHandle dir="v" onDelta={(d) => setDrawerH((h) => clampSize(h - d, 80, 520))} />
+					) : null}
+					{effectiveFocus !== null && drawerOpen ? (
+						<section className="drawer" aria-label="Log entries for the focused node" style={{ maxHeight: drawerH }}>
 							<div className="drawer-head">
 								Log <span className="name">{model?.name}</span> · {drawer.length} entries
 								<span className="spacer" />
@@ -374,14 +383,15 @@ export function GraphView({
 					) : null}
 				</div>
 
+				<ResizeHandle dir="h" onDelta={(d) => setInspectorW((w) => clampSize(w - d, 220, 640))} />
 				{model === null ? (
-					<aside className="inspector" aria-label="Node inspector">
+					<aside className="inspector" aria-label="Node inspector" style={{ width: inspectorW }}>
 						<div className="insp-section" style={{ color: 'var(--muted)' }}>
 							No nodes yet — interact with the app to populate the graph.
 						</div>
 					</aside>
 				) : (
-					<aside className="inspector" aria-label="Node inspector">
+					<aside className="inspector" aria-label="Node inspector" style={{ width: inspectorW }}>
 						<div className="insp-head">
 							<div className="insp-kind" style={{ color: kindVar(model.node.kind) }}>
 								<span className="sw" />

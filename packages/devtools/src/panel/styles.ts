@@ -220,6 +220,12 @@ export const PANEL_CSS = `
 
   /* inspector */
   .inspector, .causality { width: 320px; flex: none; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+
+  /* resize handles between panes */
+  .resizer { flex: none; position: relative; z-index: 5; }
+  .resizer-v { height: 5px; margin: -2px 0; cursor: row-resize; }
+  .resizer-h { width: 5px; margin: 0 -2px; cursor: col-resize; }
+  .resizer:hover, .resizer:active { background: color-mix(in srgb, var(--thread) 55%, transparent); }
   .inspector { display: flex; flex-direction: column; }
   .insp-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }
   .insp-kind { font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--computed); display: flex; align-items: center; gap: 6px; }

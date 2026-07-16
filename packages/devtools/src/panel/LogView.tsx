@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
 import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
+import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
 
 const LIMIT = 1000
 
@@ -122,6 +123,7 @@ export function LogView({
 	const [collapse, setCollapse] = useState(false)
 	const [selected, setSelected] = useState<number | null>(null)
 	const [copied, setCopied] = useState(false)
+	const [czW, setCzW] = useState(320)
 
 	const classes = useMemo(() => {
 		const set = new Set<KindClass>(ALWAYS_ON)
@@ -320,8 +322,9 @@ export function LogView({
 					</table>
 				</div>
 
+				{sel !== null ? <ResizeHandle dir="h" onDelta={(d) => setCzW((w) => clampSize(w - d, 220, 640))} /> : null}
 				{sel !== null ? (
-					<aside className="causality" aria-label="Why this ran">
+					<aside className="causality" aria-label="Why this ran" style={{ width: czW }}>
 						<div className="cz-head">
 							<div className="cz-kicker">Selected entry</div>
 							<div className="cz-title">
