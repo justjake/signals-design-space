@@ -2,30 +2,29 @@
 import { describe, expect, test } from 'vitest'
 import {
 	Flag,
+	attachTracer,
 	createComputed,
 	effect,
 	isPending,
 	latest,
-	committed,
 	nodeOf,
 	read,
 	reducerAtom,
 	setRenderWorldProvider,
 	createAtom,
-	untracked,
 	type Computed,
 	type Signal,
 } from '../src/index.ts'
 import {
+	BASE_WORLD,
 	discardDraft,
+	draftsAffecting,
 	liveDraftCount,
 	openDraft,
 	rebaseLogIntentCount,
 	resolveState,
 	retireDraft,
 	runWithDraftWrites,
-	sealDraft,
-	setCommittedWorld,
 	worldOf,
 	type DraftId,
 } from '../src/worlds.ts'
@@ -44,24 +43,139 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve))
 function inDraft(fn: () => void): DraftId {
 	const d = openDraft()
 	runWithDraftWrites(d, fn)
-	sealDraft(d)
 	return d.id
 }
 
 /** Resolve a handle's state as seen by the world of these draft ids. */
-function stateIn(x: Signal<any> | Computed<any>, ids: readonly DraftId[]): unknown {
+function stateIn(x: Signal<any>, ids: readonly DraftId[]): unknown {
 	return resolveState(nodeOf(x), worldOf(ids))
 }
 
-/**
- * A drafted world's memo record for a plain value (the ResolvedState shape:
- * async flag bits clear, no throwable).
- */
-function valueState(value: unknown): { flags: number; value: unknown; throwable: null } {
-	return { flags: 0, value, throwable: null }
+/** A drafted world's memo record for a plain value. */
+function valueState(value: unknown): { flags: number; value: unknown } {
+	return { flags: 0, value }
 }
 
 describe('draft visibility', () => {
+	test('only async-capable or async states own a throwable payload', () => {
+		const atom = createAtom(1)
+		const computed = createComputed(() => atom.get())
+		expect(Object.hasOwn(resolveState(nodeOf(atom), BASE_WORLD), 'throwable')).toBe(false)
+		expect(Object.hasOwn(resolveState(nodeOf(computed), BASE_WORLD), 'throwable')).toBe(true)
+
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => atom.set(2))
+		const world = worldOf([draft.id])
+		expect(Object.hasOwn(resolveState(nodeOf(atom), world), 'throwable')).toBe(false)
+		expect(Object.hasOwn(resolveState(nodeOf(computed), world), 'throwable')).toBe(false)
+
+		const boom = new Error('boom')
+		const failure = createComputed(() => {
+			throw boom
+		})
+		const failed = resolveState(nodeOf(failure), world)
+		expect(failed.flags & Flag.AsyncError).toBe(Flag.AsyncError)
+		expect(Object.hasOwn(failed, 'throwable')).toBe(true)
+
+		const pending = createComputed((use) => use(new Promise<never>(() => {})))
+		const suspended = resolveState(nodeOf(pending), world)
+		expect(suspended.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(Object.hasOwn(suspended, 'throwable')).toBe(true)
+		discardDraft(draft.id)
+	})
+
+	test('world computation correlates unrelated drafts without inventing one as its cause', () => {
+		const source = createAtom(0)
+		const unrelated = createAtom(0)
+		const computed = createComputed(() => source.get(), { label: 'computed' })
+		const tracer = attachTracer()
+		const sourceDraft = openDraft()
+		runWithDraftWrites(sourceDraft, () => source.set(1))
+		const unrelatedDraft = openDraft()
+		runWithDraftWrites(unrelatedDraft, () => unrelated.set(2))
+
+		expect(stateIn(computed, [sourceDraft.id, unrelatedDraft.id])).toEqual(valueState(1))
+		const compute = tracer
+			.events()
+			.find((event) => event.kind === 'compute' && event.label === 'computed')!
+		expect(compute.cause).toBe(0)
+		expect(compute.draftId).toBeUndefined()
+		expect(compute.world).toEqual([sourceDraft.id, unrelatedDraft.id])
+
+		tracer.stop()
+		discardDraft(unrelatedDraft.id)
+		discardDraft(sourceDraft.id)
+	})
+
+	test('world computation traces a stable error only when it first becomes the result', () => {
+		const boom = new Error('computed boom')
+		const source = createAtom(0)
+		const computed = createComputed(
+			() => {
+				source.get()
+				throw boom
+			},
+			{ label: 'failing computed' },
+		)
+		const tracer = attachTracer()
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => source.set(1))
+		const world = worldOf([draft.id])
+
+		const first = resolveState(nodeOf(computed), world)
+		expect(first.flags & Flag.AsyncError).toBe(Flag.AsyncError)
+		const failure = tracer.events().find((event) => event.kind === 'compute-error')!
+		const firstCompute = tracer.find(failure.cause)!
+		expect(firstCompute.kind).toBe('compute')
+		expect(failure.error).toBe(boom)
+		expect(failure.world).toEqual([draft.id])
+
+		runWithDraftWrites(draft, () => source.set(2))
+		expect(resolveState(nodeOf(computed), world)).toBe(first)
+		expect(tracer.events().filter((event) => event.kind === 'compute-error')).toHaveLength(1)
+
+		tracer.stop()
+		discardDraft(draft.id)
+	})
+
+	test('a swallowed cutoff replay reports its updater only when an ordinary read propagates it', () => {
+		const boom = new Error('updater boom')
+		const atom = createAtom(0)
+		const computed = createComputed(() => atom.get())
+		const stop = effect(
+			() => computed.get(),
+			() => {},
+		)
+		const tracer = attachTracer()
+		const draft = openDraft()
+		runWithDraftWrites(draft, () =>
+			atom.update(() => {
+				throw boom
+			}),
+		)
+		expect(
+			tracer.events().some((event) => event.kind === 'callback-error' && event.error === boom),
+		).toBe(false)
+		expect(() => stateIn(atom, [draft.id])).toThrow(boom)
+		expect(
+			tracer.events().some((event) => event.kind === 'callback-error' && event.error === boom),
+		).toBe(true)
+		tracer.stop()
+		stop()
+		discardDraft(draft.id)
+	})
+
+	test('runWithDraftWrites targets writes only; reads stay in the base world', () => {
+		const atom = createAtom(0)
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => {
+			atom.set(1)
+			expect(atom.get()).toBe(0)
+		})
+		expect(stateIn(atom, [draft.id])).toEqual(valueState(1))
+		discardDraft(draft.id)
+	})
+
 	test('draft writes are invisible to base-state readers until retirement', () => {
 		const a = createAtom(0)
 		const id = inDraft(() => a.set(1))
@@ -73,15 +187,35 @@ describe('draft visibility', () => {
 		expect(latest(a)).toBe(1)
 	})
 
+	test('atom.peek reads the current world without creating a graph dependency', () => {
+		const atom = createAtom(0)
+		const peeked = createComputed(() => atom.peek())
+		expect(peeked.get()).toBe(0)
+		const draft = openDraft()
+		runWithDraftWrites(draft, () => atom.set(1))
+		expect(latest(peeked)).toBe(1)
+		runWithDraftWrites(draft, () => atom.set(2))
+		// The world memo also treats peek as untracked: a later write into the
+		// same draft does not invalidate the computed's cached resolution.
+		expect(latest(peeked)).toBe(1)
+		discardDraft(draft.id)
+		atom.set(2)
+		// The base computed never subscribed through peek, so its cached base
+		// value remains the value from its only tracked evaluation.
+		expect(peeked.get()).toBe(0)
+	})
+
 	test('retirement folds through the write path: effects run once per fold', () => {
 		const a = createAtom(0)
 		const b = createAtom(0)
 		let runs = 0
-		effect(() => {
-			a.get()
-			b.get()
-			runs++
-		})
+		// Fresh tuples never compare equal, so every delivered pull counts.
+		effect(
+			() => [a.get(), b.get()],
+			() => {
+				runs++
+			},
+		)
 		const id = inDraft(() => {
 			a.set(1)
 			b.set(2)
@@ -102,11 +236,12 @@ describe('draft visibility', () => {
 
 	test('fold loudness is per subscriber: rendered-world resolutions decide who re-renders', () => {
 		// There is no global silent/loud fold state: at retire, the fold's
-		// writes notify subscribers, and each re-renders only if resolving its
-		// OWN rendered world now differs from what it rendered (the bindings'
-		// notify predicate). This pins the engine half of that contract: a
-		// carrier's world resolves the SAME value before and after the fold
-		// (retired ids normalize out), while the base world's resolution moves.
+		// writes notify subscribers, and each re-renders only if resolving
+		// its own rendered world now differs from what it rendered (the
+		// bindings' notify predicate). This pins the engine half of that
+		// contract: a carrier's world resolves the same value before and
+		// after the fold (retired ids normalize out), while the base world's
+		// resolution moves.
 		const a = createAtom(1)
 		const id = inDraft(() => a.set(9))
 		// Before the fold: the carrier rendered 9 from its world; base shows 1.
@@ -188,8 +323,8 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 		expect(read(a)).toBe(6)
 	})
 
-	test('[falsify-first, oracle catch seed 5] an urgent equality-cutoff write on a drafted cell re-wakes the draft audience', () => {
-		// An urgent intent on a drafted cell rebases the pending worlds even
+	test('[falsify-first, oracle catch seed 5] an urgent equality-cutoff write on a drafted atom re-wakes the draft audience', () => {
+		// An urgent intent on a drafted atom rebases the pending worlds even
 		// when the base-state write cuts off on equality: replaying …+1 gives
 		// 6, but …+1…set(5) gives 5. No wave runs (base state never moved), so without
 		// an explicit poke-and-wake the draft's audience keeps the pre-rebase
@@ -343,43 +478,6 @@ describe('computeds across worlds', () => {
 		discardDraft(id)
 	})
 
-	test('committed() cannot select a root from inside a computed', () => {
-		const source = createAtom(1)
-		const root = {}
-		const reader = createComputed(() => committed(source, root))
-		expect(() => reader.get()).toThrow(/committed\(\).*inside a computed/)
-		const untrackedReader = createComputed(() => untracked(() => committed(source, root)))
-		expect(() => untrackedReader.get()).toThrow(/committed\(\).*inside a computed/)
-	})
-
-	test('committed() cannot select a root during a draft evaluation', () => {
-		const branch = createAtom(false)
-		const source = createAtom(1)
-		const root = {}
-		const reader = createComputed(() => (branch.get() ? committed(source, root) : source.get()))
-		expect(reader.get()).toBe(1)
-		const id = inDraft(() => branch.set(true))
-		expect(() => latest(reader)).toThrow(/committed\(\).*inside a computed/)
-		discardDraft(id)
-	})
-
-	test('committed() self-read is a cycle', () => {
-		const root = {}
-		let self!: Computed<number>
-		self = createComputed(() => committed(self, root))
-		expect(() => self.get()).toThrow(/cycle detected in computed/)
-	})
-
-	test('a computed cannot read its cached value from another world', () => {
-		const branch = createAtom(false)
-		const committedRoot = {}
-		let self!: Computed<number>
-		self = createComputed(() => (branch.get() ? committed(self, committedRoot) : 1))
-		expect(self.get()).toBe(1)
-		const id = inDraft(() => branch.set(true))
-		expect(() => latest(self)).toThrow(/cycle detected in computed/)
-		discardDraft(id)
-	})
 
 	test('writes are also forbidden during draft-world computed evaluation', () => {
 		const source = createAtom(0)
@@ -425,6 +523,23 @@ describe('computeds across worlds', () => {
 		expect(state1).toBe(state2) // stable identity for unchanged resolution
 		expect((state1 as { value: { n: number } }).value.n).toBe(6)
 		retireDraft(id)
+	})
+
+	test('cached world membership survives unrelated draft writes', () => {
+		const included = openDraft()
+		const unrelated = openDraft()
+		const ids = [included.id]
+		const first = worldOf(ids)
+		const atom = createAtom(0)
+		try {
+			runWithDraftWrites(unrelated, () => atom.set(1))
+			expect(worldOf(ids)).toBe(first)
+			retireDraft(included.id)
+			expect(worldOf(ids).drafts).toEqual([])
+		} finally {
+			discardDraft(unrelated.id)
+			discardDraft(included.id)
+		}
 	})
 
 	test('world memo certificates ignore unrelated graph and draft activity', () => {
@@ -556,7 +671,37 @@ describe('computeds across worlds', () => {
 		discardDraft(draft.id)
 	})
 
-	test('isPending flips for drafted cells and computeds over them', () => {
+	test('a world suspension is stable for one pending span and fresh for the next', async () => {
+		const firstGate = deferred<number>()
+		const secondGate = deferred<number>()
+		const phase = createAtom(0)
+		let runs = 0
+		const c = createComputed((use) => {
+			runs++
+			return use(phase.get() === 0 ? firstGate.promise : secondGate.promise)
+		})
+		const draft = openDraft()
+		const first = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(first.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+
+		runWithDraftWrites(draft, () => phase.set(0))
+		const retry = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(runs).toBe(2)
+		expect(retry).toBe(first)
+		expect(retry.throwable).toBe(first.throwable)
+
+		firstGate.resolve(7)
+		await tick()
+		expect(stateIn(c, [draft.id])).toEqual(valueState(7))
+
+		runWithDraftWrites(draft, () => phase.set(1))
+		const next = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
+		expect(next.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(next.throwable).not.toBe(first.throwable)
+		discardDraft(draft.id)
+	})
+
+	test('isPending flips for drafted atoms and computeds over them', () => {
 		const a = createAtom(1)
 		const c = createComputed(() => a.get() * 2)
 		expect(read(c)).toBe(2) // establish base-state deps
@@ -571,10 +716,10 @@ describe('computeds across worlds', () => {
 		expect(read(c)).toBe(18)
 	})
 
-	test('isPending is transitive through computeds (Solid 2.0 status forwarding)', () => {
-		// Solid 2.0's pending rule: a computed over a pending source is itself
-		// pending — status forwards through derivation. A drafted cell two
-		// levels down must surface at the top of the chain.
+	test('isPending is transitive through computeds', () => {
+		// A computed over a pending source is itself pending — status
+		// forwards through derivation. A drafted atom two levels down must
+		// surface at the top of the chain.
 		const a = createAtom(1)
 		const c1 = createComputed(() => a.get() * 10)
 		const c2 = createComputed(() => c1.get() + 1)
@@ -587,11 +732,63 @@ describe('computeds across worlds', () => {
 		expect(isPending(c2)).toBe(false)
 	})
 
-	test('a draft append notifies subscribers of computeds over the cell', () => {
+	test('isPending follows current dependencies and live intents during overlapping teardown', () => {
+		const chooseLeft = createAtom(true)
+		const left = createAtom(0)
+		const right = createAtom(0)
+		const selected = createComputed(() => (chooseLeft.get() ? left.get() : right.get()))
+		const flips: boolean[] = []
+		const unsub = observeNode(nodeOf(selected), () => flips.push(isPending(selected)))
+		expect(read(selected)).toBe(0)
+
+		const leftDraft = inDraft(() => left.set(1))
+		expect(isPending(selected)).toBe(true)
+		chooseLeft.set(false)
+		expect(read(selected)).toBe(0)
+		expect(isPending(selected)).toBe(false)
+
+		const firstRightDraft = inDraft(() => right.set(1))
+		const secondRightDraft = inDraft(() => right.set(2))
+		expect(isPending(selected)).toBe(true)
+		discardDraft(firstRightDraft)
+		expect(isPending(selected)).toBe(true)
+
+		flips.length = 0
+		retireDraft(secondRightDraft)
+		// Fold notifications run before releaseDraft removes the retired intent.
+		// Pendingness must inspect draft state instead of treating log presence
+		// as a live draft.
+		expect(flips[flips.length - 1]).toBe(false)
+		expect(isPending(selected)).toBe(false)
+
+		discardDraft(leftDraft)
+		unsub()
+	})
+
+	test('draft discovery dedupes shared dependencies and keeps draft order', () => {
+		const a = createAtom(1)
+		const b = createAtom(2)
+		const unrelated = createAtom(3)
+		const left = createComputed(() => a.get() + b.get())
+		const right = createComputed(() => b.get() - a.get())
+		const root = createComputed(() => left.get() * right.get())
+		expect(read(root)).toBe(3)
+		const first = inDraft(() => a.set(4))
+		const ignored = inDraft(() => unrelated.set(5))
+		const second = inDraft(() => b.set(6))
+
+		expect(draftsAffecting(nodeOf(root))).toEqual([first, second])
+
+		discardDraft(second)
+		discardDraft(ignored)
+		discardDraft(first)
+	})
+
+	test('a draft append notifies subscribers of computeds over the atom', () => {
 		// Pending probes subscribe to the node they probe, not to its inputs.
 		// Draft activity on an input must therefore travel the watched edges
 		// down to the subscribers, or a probe over a computed never wakes up —
-		// its snapshot would flip (the deps scan sees the drafted cell) but
+		// its snapshot would flip (the deps scan sees the drafted atom) but
 		// nothing tells it to look.
 		const a = createAtom(1)
 		const c = createComputed(() => a.get() * 2)
@@ -607,27 +804,21 @@ describe('computeds across worlds', () => {
 	})
 })
 
-describe('per-root committed views', () => {
-	test('committed(x, container) tracks each root, then converges after fold', () => {
+describe('the committed view is base state', () => {
+	test('ambient reads hide drafts and converge at retirement', () => {
 		const a = createAtom(0)
-		const rootA = {}
-		const rootB = {}
 		const id = inDraft(() => a.set(1))
-		setCommittedWorld(rootA, [id]) // root A committed the transition
-		setCommittedWorld(rootB, []) // root B still on base
-		expect(committed(a, rootA)).toBe(1)
-		expect(committed(a, rootB)).toBe(0)
-		expect(committed(a)).toBe(0) // no container: base state
+		expect(read(a)).toBe(0) // the draft is invisible
+		expect(latest(a)).toBe(1)
 		retireDraft(id)
-		expect(committed(a, rootA)).toBe(1)
-		expect(committed(a, rootB)).toBe(1) // retired drafts resolve as no-ops
+		expect(read(a)).toBe(1) // the fold landed in base state
 	})
 })
 
 describe('latest() context resolution', () => {
-	// The rule: latest() means "newest intent" only in AMBIENT code. Inside an
-	// evaluation context it resolves that context's own world — reading ahead
-	// of your world is a tear.
+	// latest() means "newest view" only in ambient code. Inside
+	// an evaluation context it resolves that context's own world — reading
+	// ahead of your world is a tear.
 
 	test('inside a base-state computed evaluation, latest() resolves base state — never a draft', () => {
 		const a = createAtom(1)
@@ -651,9 +842,12 @@ describe('latest() context resolution', () => {
 	test('latest() inside an effect tracks base state: re-runs on folds, never on draft writes', () => {
 		const a = createAtom(0)
 		const seen: number[] = []
-		effect(() => {
-			seen.push(latest(a))
-		})
+		effect(
+			() => latest(a),
+			(v) => {
+				seen.push(v)
+			},
+		)
 		a.set(1)
 		expect(seen).toEqual([0, 1])
 		const id = inDraft(() => a.set(9))
@@ -739,9 +933,38 @@ describe('dead-prefix folding', () => {
 })
 
 describe('quiescence', () => {
+	test('a nested last discard clears logs before the outer retirement notification returns', () => {
+		const retiring = createAtom(0)
+		const discarded = createAtom(0)
+		const retiringDraft = inDraft(() => retiring.set(1))
+		const discardedDraft = inDraft(() => discarded.set(1))
+		const total = createComputed(() => retiring.get() + discarded.get())
+		stateIn(total, [retiringDraft, discardedDraft])
+		let retiringLogDuringNotification = -1
+		let memosClearedDuringNotification = false
+		const unsubscribe = observeNode(nodeOf(retiring), () => {
+			discardDraft(discardedDraft)
+			retiringLogDuringNotification = rebaseLogIntentCount(
+				nodeOf(retiring) as CellNode<unknown>,
+			)
+			memosClearedDuringNotification = nodeOf(total).worldMemos === null
+		})
+
+		retireDraft(retiringDraft)
+
+		expect(retiringLogDuringNotification).toBe(0)
+		expect(memosClearedDuringNotification).toBe(true)
+		expect(rebaseLogIntentCount(nodeOf(discarded) as CellNode<unknown>)).toBe(0)
+		expect(retiring.get()).toBe(1)
+		expect(discarded.get()).toBe(0)
+		unsubscribe()
+	})
+
 	test('retiring the last draft drops logs and world memos', async () => {
 		const a = createAtom(0)
 		const c = createComputed(() => a.get() + 1)
+		expect(Object.hasOwn(nodeOf(a), 'worldMemos')).toBe(true)
+		expect(Object.hasOwn(nodeOf(c), 'worldMemos')).toBe(true)
 		const id = inDraft(() => a.set(1))
 		stateIn(c, [id])
 		expect(liveDraftCount()).toBe(1)

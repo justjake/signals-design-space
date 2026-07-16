@@ -1,4 +1,4 @@
-/** RoyaleAdapter: the shared cross-entrant battery surface for fx2. */
+/** This package's adapter for the shared cross-entrant test battery. */
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -6,15 +6,12 @@ import { flushSync } from 'react-dom'
 import {
 	attachTracer,
 	batch,
-	committed,
 	createComputed,
 	effect,
-	initializeAtomState,
 	isPending,
 	latest,
 	nodeOf,
 	read,
-	serializeAtomState,
 	set,
 	createAtom,
 	untracked,
@@ -22,13 +19,12 @@ import {
 	type Atom,
 	type AtomOptions,
 	type Signal,
-	type UseFn,
 } from 'signals-royale-fx2-dalien'
+import { initializeAtomState, serializeAtomState } from 'signals-royale-fx2-dalien/ssr'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
 	startSignalTransition,
-	useCommitted,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
@@ -37,15 +33,17 @@ import {
 } from '../src/react/index.ts'
 
 export interface RoyaleHandle {
-	errors: unknown[]
 	dispose(): void
 }
 
 export interface RoyaleTraceView {
 	whyLastDelivery(x: unknown): string[]
-	events(): Array<{ id: number; kind: string; cause?: number }>
+	events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>
+	dropped(): number
 	stop(): void
 }
+
+const NEVER_EQUAL = (): boolean => false
 
 const adapter = {
 	slug: 'fx2',
@@ -89,14 +87,19 @@ const adapter = {
 	latest(x: unknown): unknown {
 		return latest(x as Signal<unknown>)
 	},
-	committed(x: unknown, container?: unknown): unknown {
-		return committed(x as Signal<unknown>, container as object | undefined)
-	},
+	// committed()/useCommitted are intentionally absent: the committed view
+	// is implicit (base state; screens converge at retirement), matching how
+	// Solid and React expose no committed-view query either. Battery cases
+	// that require the capability skip against this adapter.
 	isPending(x: unknown): boolean {
 		return isPending(x as Signal<unknown>)
 	},
 	effect(fn: () => void | (() => void)): () => void {
-		return effect(fn)
+		// The battery's effect is a single tracked body with an optional
+		// cleanup. Run the body as the compute (battery bodies read but never
+		// write signals); its fresh return value is the cleanup the handler
+		// installs. Never-equal delivery keeps one handler run per re-run.
+		return effect(() => fn(), (cleanup) => cleanup, { equals: NEVER_EQUAL })
 	},
 	batch(fn: () => void): void {
 		batch(fn)
@@ -118,15 +121,23 @@ const adapter = {
 		return useComputed(fn, deps)
 	},
 	useSignalEffect(fn: () => void | (() => void)): void {
-		useSignalEffect(fn)
+		// Same autorun shape as effect() above, latest-ref'd so re-renders
+		// refresh the body without re-creating the effect.
+		const latest = React.useRef(fn)
+		latest.current = fn
+		useSignalEffect(
+			() => ({
+				watch: () => latest.current(),
+				run: (cleanup) => cleanup,
+				equals: NEVER_EQUAL,
+			}),
+			[],
+		)
 	},
 	useIsPending(x: unknown): boolean {
 		return useIsPending(x as Signal<unknown>)
 	},
-	useCommitted(x: unknown): unknown {
-		return useCommitted(x as Signal<unknown>)
-	},
-	startSignalTransition(scope: () => void): void {
+	startTransitionWrite(scope: () => void): void {
 		startSignalTransition(scope)
 	},
 
@@ -136,19 +147,29 @@ const adapter = {
 			whyLastDelivery(x: unknown): string[] {
 				return t.whyLastDelivery(nodeOf(x as Signal<unknown>))
 			},
-			events(): Array<{ id: number; kind: string; cause?: number }> {
-				return t
-					.events()
-					.map((e) => ({ id: e.id, kind: e.kind, cause: e.cause === 0 ? undefined : e.cause }))
+			events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }> {
+				const events: Array<{ id: number; kind: string; cause?: number; error?: unknown }> = []
+				for (const event of t.events()) {
+					events.push({
+						id: event.id,
+						kind: event.kind,
+						cause: event.cause === 0 ? undefined : event.cause,
+						error: event.error,
+					})
+				}
+				return events
+			},
+			dropped(): number {
+				return t.dropped
 			},
 			stop(): void {
 				t.stop()
 			},
 		}
 	},
-	// onDomMutation is intentionally absent: bracketing React's DOM mutation
-	// phase needs reconciler cooperation, and this package runs on stock React
-	// by design. The shared battery's scenario 16 is exempt by owner ruling.
+	// onDomMutation is intentionally absent: bracketing React's DOM
+	// mutation phase needs reconciler cooperation, and this package runs
+	// on stock React by design.
 }
 
 export default adapter

@@ -4,12 +4,12 @@ import {
 	createComputed,
 	effect,
 	effectScope,
-	installState,
 	createAtom,
 	type Atom,
 	type Computed,
 	type Signal,
 } from '../src/index.ts'
+import { installState } from '../src/ssr.ts'
 
 export interface ReactiveFramework<S = unknown> {
 	name: string
@@ -27,6 +27,9 @@ export interface ReactiveFramework<S = unknown> {
 type Cell = Signal<unknown>
 
 let disposeScope: (() => void) | null = null
+
+const NEVER_EQUAL = (): boolean => false
+const NOOP_HANDLER = (): void => {}
 
 const framework: ReactiveFramework<Cell> = {
 	name: 'Royale FX2',
@@ -52,7 +55,10 @@ const framework: ReactiveFramework<Cell> = {
 		return (cell as Computed<unknown>).get()
 	},
 	effect(fn) {
-		effect(fn)
+		// The benchmark's effect is a single tracked body (it reads and
+		// counts, never writes signals): run it as the compute, deliver to a
+		// no-op handler on every re-run.
+		effect(fn, NOOP_HANDLER, { equals: NEVER_EQUAL })
 	},
 	withBatch(fn) {
 		batch(fn)
@@ -73,4 +79,4 @@ const framework: ReactiveFramework<Cell> = {
 }
 
 export default framework
-export { framework as royaleFx2Framework, createAtom }
+export { createAtom, framework as royaleFx2Framework }

@@ -3,28 +3,34 @@ import { describe, expect, test } from 'vitest'
 import * as fx2 from '../src/index.ts'
 import {
 	attachTracer,
+	Tracer,
 	createComputed,
 	effect,
-	initializeAtomState,
-	installState,
 	isPending,
 	nodeOf,
 	read,
 	reducerAtom,
-	serializeAtomState,
 	createAtom,
 	type Atom,
 	type Computed,
 	untracked,
 	update,
+	getActiveTracer,
 } from '../src/index.ts'
+import { initializeAtomState, installState, serializeAtomState } from '../src/ssr.ts'
 import {
 	FORBID_WRITE_FROM_COMPUTED,
 	SignalReadForbidden,
 	SignalWriteForbidden,
+	batch as graphBatch,
+	endBatch as graphEndBatch,
+	flushScheduledEffects as graphFlushScheduledEffects,
+	makeScope,
 	observeNode,
+	startBatch as graphStartBatch,
+	untracked as graphUntracked,
 } from '../src/graph.ts'
-import { openDraft, retireDraft, runWithDraftWrites, sealDraft } from '../src/worlds.ts'
+import { openDraft, retireDraft, runWithDraftWrites } from '../src/worlds.ts'
 
 type Animal = { name: string }
 type Dog = Animal & { bark(): void }
@@ -48,7 +54,7 @@ describe('lifetime effects', () => {
 		read(c) // unobserved computed chain: no observation
 		await tick()
 		expect(log).toEqual([])
-		const dispose = effect(() => void c.get()) // observes the chain into a
+		const dispose = effect(() => c.get(), () => {}) // observes the chain into a
 		await tick()
 		expect(log).toEqual(['on:0'])
 		const unsub = observeNode(nodeOf(a), () => {}) // second kind: store subscription
@@ -71,9 +77,9 @@ describe('lifetime effects', () => {
 				return () => log.push('off')
 			},
 		})
-		const d1 = effect(() => void a.get())
+		const d1 = effect(() => a.get(), () => {})
 		d1()
-		const d2 = effect(() => void a.get())
+		const d2 = effect(() => a.get(), () => {})
 		await tick()
 		expect(log).toEqual(['on']) // net one activation across the flap
 		expect(read(a)).toBe(42)
@@ -81,6 +87,20 @@ describe('lifetime effects', () => {
 		await tick()
 		expect(log).toEqual(['on', 'off'])
 	})
+})
+
+test('forbidden-operation errors name themselves', () => {
+	expect(new SignalReadForbidden().name).toBe('SignalReadForbidden')
+	expect(new SignalWriteForbidden().name).toBe('SignalWriteForbidden')
+})
+
+test('public execution controls are the graph functions', () => {
+	expect(fx2.effectScope).toBe(makeScope)
+	expect(fx2.batch).toBe(graphBatch)
+	expect(fx2.startBatch).toBe(graphStartBatch)
+	expect(fx2.endBatch).toBe(graphEndBatch)
+	expect(fx2.untracked).toBe(graphUntracked)
+	expect(fx2.flushScheduledEffects).toBe(graphFlushScheduledEffects)
 })
 
 describe('lazy initializers', () => {
@@ -153,8 +173,8 @@ describe('lazy initializers', () => {
 	})
 })
 
-describe('derived policy and APIs', () => {
-	test('factories return graph nodes without runtime class exports', () => {
+describe('computed policy and APIs', () => {
+	test('factories return graph nodes with one shared method prototype', () => {
 		const source = createAtom(1)
 		const reduced = reducerAtom((state: number, action: number) => state + action, 1)
 		const computedValue = createComputed(() => source.get() + 1)
@@ -162,6 +182,12 @@ describe('derived policy and APIs', () => {
 		expect(nodeOf(source)).toBe(source)
 		expect(nodeOf(reduced)).toBe(reduced)
 		expect(nodeOf(computedValue)).toBe(computedValue)
+		// The handle IS the node. get/peek live on one non-exported prototype
+		// shared by every computed (measured faster than own-field functions
+		// for this engine), so handles never carry per-instance methods.
+		expect(Object.getPrototypeOf(computedValue)).toBe(Object.getPrototypeOf(otherComputed))
+		expect(Object.hasOwn(computedValue, 'get')).toBe(false)
+		expect(Object.hasOwn(computedValue, 'peek')).toBe(false)
 		expect(computedValue.get).toBe(otherComputed.get)
 		expect(computedValue.peek).toBe(otherComputed.peek)
 		expect(fx2).not.toHaveProperty('Atom')
@@ -269,10 +295,12 @@ describe('SSR', () => {
 		})
 		const c2 = createAtom('default')
 		let effectRuns = 0
-		const dispose = effect(() => {
-			void c2.get()
-			effectRuns++
-		})
+		const dispose = effect(
+			() => c2.get(),
+			() => {
+				effectRuns++
+			},
+		)
 		initializeAtomState(json, [c1, c2])
 		expect(initRuns).toBe(0)
 		expect(effectRuns).toBe(1) // install did not count as a write
@@ -295,28 +323,243 @@ describe('SSR', () => {
 })
 
 describe('causality tracer', () => {
+	test('only the explicitly attached tracer can emit', () => {
+		const detached = new Tracer()
+		expect(detached.emit('manual', null, 0)).toBe(0)
+		expect(detached.events()).toEqual([])
+	})
+
+	test('logical ring slots stay ordered and findable through wraparound', () => {
+		const tracer = attachTracer({ capacity: 16 })
+		const ids: number[] = []
+		for (let i = 0; i < 40; i++) {
+			ids.push(tracer.emit(`event-${i}`, null, 0))
+			if (i === 7 || i === 15 || i === 39) {
+				const retained = tracer.events()
+				const start = Math.max(0, i - 15)
+				expect(retained.map((event) => event.id)).toEqual(ids.slice(start))
+				expect(tracer.find(ids[start]!)).toBe(retained[0])
+				expect(tracer.find(ids[i]!)).toBe(retained[retained.length - 1])
+			}
+		}
+		const retained = tracer.events()
+		retained[0]!.kind = 'changed by caller'
+		expect(tracer.events()[0]).toBe(retained[0])
+		expect(tracer.find(ids[23]!)).toBeUndefined()
+		expect(tracer.dropped).toBe(24)
+		tracer.stop()
+	})
+
+	test('root and suspension ids use independent per-session namespaces', () => {
+		const shared = {}
+		const otherRoot = {}
+		const otherSuspension = {}
+		const first = attachTracer()
+		first.emit('mixed', null, 0, { root: shared, suspension: shared })
+		first.emit('mixed', null, 0, { root: otherRoot, suspension: otherSuspension })
+		first.emit('mixed', null, 0, { root: shared, suspension: otherSuspension })
+		const events = first.events()
+		expect(events.map(({ rootId, suspensionId }) => [rootId, suspensionId])).toEqual([
+			[1, 1],
+			[2, 2],
+			[1, 2],
+		])
+		expect(first.format(events[0]!)).toContain('root=1 suspension=1')
+
+		const replacement = attachTracer()
+		replacement.emit('mixed', null, 0, { root: otherRoot, suspension: otherSuspension })
+		expect(replacement.events()[0]).toMatchObject({ rootId: 1, suspensionId: 1 })
+		expect(first.emit('stopped', null, 0, { root: shared, suspension: shared })).toBe(0)
+		replacement.stop()
+	})
+
+	test('a lazy initializer failure during update is not mislabeled as an updater failure', () => {
+		const tracer = attachTracer()
+		const boom = new Error('initializer')
+		let updaterRuns = 0
+		const atom = createAtom((): number => {
+			throw boom
+		})
+		expect(() =>
+			update(atom, (value) => {
+				updaterRuns++
+				return value + 1
+			}),
+		).toThrow(boom)
+		expect(updaterRuns).toBe(0)
+		const failures = tracer
+			.events()
+			.filter((event) => event.kind === 'callback-error' && event.error === boom)
+		expect(failures.map((event) => event.phase)).toEqual(['initializer'])
+		tracer.stop()
+	})
+
+	test('policy errors are retained only by an explicitly attached tracer', () => {
+		const source = createAtom(0)
+		const first = createComputed(() => {
+			source.set(1)
+			return 1
+		})
+		expect(getActiveTracer()).toBeNull()
+		expect(() => read(first)).toThrow(SignalWriteForbidden)
+		expect(getActiveTracer()).toBeNull()
+
+		const tracer = attachTracer()
+		const second = createComputed(() => {
+			source.set(2)
+			return 2
+		})
+		let thrown: unknown
+		try {
+			read(second)
+		} catch (error) {
+			thrown = error
+		}
+		const policy = tracer.events().find((event) => event.kind === 'policy-error')!
+		expect(thrown).toBeInstanceOf(SignalWriteForbidden)
+		expect(policy.error).toBe(thrown)
+		expect(policy.phase).toBe('write')
+		const compute = tracer.find(policy.cause)!
+		expect(compute.kind).toBe('compute')
+		tracer.stop()
+		expect(getActiveTracer()).toBeNull()
+	})
+
+	test('handler, cleanup, and compute errors retain the propagated error object', () => {
+		const tracer = attachTracer()
+		const bodyError = new Error('body')
+		expect(() =>
+			effect(
+				() => 1,
+				() => {
+					throw bodyError
+				},
+			),
+		).toThrow(bodyError)
+		const cleanupError = new Error('cleanup')
+		const dispose = effect(
+			() => 1,
+			() => () => {
+				throw cleanupError
+			},
+		)
+		expect(dispose).toThrow(cleanupError)
+		// A creation-time compute error disposes the effect and rethrows; it
+		// is a compute error, not an effect error — the handler never saw it.
+		const computeError = new Error('compute')
+		expect(() =>
+			effect(
+				(): number => {
+					throw computeError
+				},
+				() => {},
+			),
+		).toThrow(computeError)
+		const events = tracer.events()
+		expect(events.find((event) => event.kind === 'effect-error')?.error).toBe(bodyError)
+		expect(events.find((event) => event.kind === 'cleanup-error')?.error).toBe(cleanupError)
+		expect(events.find((event) => event.kind === 'compute-error')?.error).toBe(computeError)
+		expect(
+			events.some((event) => event.kind === 'effect-error' && event.error === cleanupError),
+		).toBe(false)
+		tracer.stop()
+	})
+
+	test('a self-disposing cleanup preserves its thrown object and trace label', () => {
+		const tracer = attachTracer()
+		const source = createAtom(0)
+		const cleanupError = { kind: 'cleanup' }
+		let dispose!: () => void
+		dispose = effect(
+			() => source.get(),
+			() => () => {
+				dispose()
+				throw cleanupError
+			},
+			{ label: 'self-disposing effect' },
+		)
+
+		let thrown: unknown
+		try {
+			source.set(1)
+		} catch (error) {
+			thrown = error
+		}
+		expect(thrown).toBe(cleanupError)
+		const cleanupEvent = tracer
+			.events()
+			.find((event) => event.kind === 'cleanup-error' && event.error === cleanupError)!
+		expect(cleanupEvent.error).toBe(cleanupError)
+		expect(cleanupEvent.label).toBe('self-disposing effect')
+		tracer.stop()
+	})
+
+	test('a handler failure is reported to the tracer attached by the handler', () => {
+		const attachedError = new Error('attached in handler')
+		let attached!: Tracer
+		expect(() =>
+			effect(
+				() => 1,
+				() => {
+					attached = attachTracer()
+					throw attachedError
+				},
+			),
+		).toThrow(attachedError)
+		const attachedEvent = attached
+			.events()
+			.find((event) => event.kind === 'effect-error' && event.error === attachedError)!
+		expect(attachedEvent.cause).toBe(0)
+		attached.stop()
+
+		const first = attachTracer()
+		const replacementError = new Error('replacement in handler')
+		let replacement!: Tracer
+		expect(() =>
+			effect(
+				() => 1,
+				() => {
+					replacement = attachTracer()
+					throw replacementError
+				},
+			),
+		).toThrow(replacementError)
+		expect(first.events().some((event) => event.kind === 'effect')).toBe(true)
+		expect(first.events().some((event) => event.kind === 'effect-error')).toBe(false)
+		const replacementEvent = replacement
+			.events()
+			.find((event) => event.kind === 'effect-error' && event.error === replacementError)!
+		expect(replacementEvent.cause).toBe(0)
+		replacement.stop()
+	})
+
 	test('chains: effect run -> write -> parent write; ring bounds with counted overflow', () => {
 		const t = attachTracer({ capacity: 16 })
 		const a = createAtom(0, { label: 'a' })
 		const b = createAtom(0, { label: 'b' })
-		effect(() => b.set(a.get() + 1)) // writes b whenever a changes
+		effect(
+			() => a.get(),
+			(v) => b.set(v + 1),
+			{ label: 'copy a to b' },
+		) // writes b whenever a changes
 		a.set(1)
 		const events = t.events()
 		const kinds = events.map((e) => e.kind)
-		expect(kinds).toContain('write')
-		expect(kinds).toContain('effect-run')
+		expect(kinds).toContain('set')
+		expect(kinds).toContain('effect')
 		// The write to b is caused by the effect run, which is caused by the
 		// write to a.
-		const writeB = [...events].reverse().find((e) => e.kind === 'write' && e.label === 'b')!
+		const writeB = [...events].reverse().find((e) => e.kind === 'set' && e.label === 'b')!
 		const effectRun = events.find((e) => e.id === writeB.cause)!
-		expect(effectRun.kind).toBe('effect-run')
+		expect(effectRun.kind).toBe('effect')
+		expect(effectRun.label).toBe('copy a to b')
 		const writeA = events.find((e) => e.id === effectRun.cause)!
-		expect(writeA.kind).toBe('write')
+		expect(writeA.kind).toBe('set')
 		expect(writeA.label).toBe('a')
 		// Unrelated operations never chain.
 		const unrelated = createAtom(0, { label: 'u' })
 		unrelated.set(1)
-		const writeU = t.events().find((e) => e.kind === 'write' && e.label === 'u')!
+		const writeU = t.events().find((e) => e.kind === 'set' && e.label === 'u')!
 		expect(writeU.cause).toBe(0)
 		// Overflow is counted, never silent.
 		for (let i = 0; i < 100; i++) {
@@ -332,13 +575,12 @@ describe('causality tracer', () => {
 		const a = createAtom(1, { label: 'a' })
 		const d = openDraft()
 		runWithDraftWrites(d, () => a.update((x) => x + 1))
-		sealDraft(d)
 		retireDraft(d.id)
 		const events = t.events()
-		const retire = events.find((e) => e.kind === 'draft-retire')!
+		const retire = events.find((e) => e.kind === 'transition-retire')!
 		const draftWrite = events.find((e) => e.id === retire.cause)!
-		expect(draftWrite.kind).toBe('write')
-		const foldWrite = [...events].reverse().find((e) => e.kind === 'write' && e.label === 'a')!
+		expect(draftWrite.kind).toBe('update')
+		const foldWrite = [...events].reverse().find((e) => e.kind === 'set' && e.label === 'a')!
 		expect(foldWrite.cause).toBe(retire.id)
 		t.stop()
 	})

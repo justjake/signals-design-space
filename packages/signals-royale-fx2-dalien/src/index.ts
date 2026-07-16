@@ -1,14 +1,15 @@
 /**
- * signals-royale-fx2-dalien — a concurrent signal engine designed to ride React's
- * own scheduling machinery instead of forking it.
+ * signals-royale-fx2-dalien — the public API: atoms, computeds, effects,
+ * and the read/write functions that connect them to React transitions.
  *
- * Base state lives in a conventional signal graph (lazy cached
- * computeds, effects, batching). Concurrency is a thin overlay: writes
- * issued inside a React transition become DRAFTS (ordered logs of write
- * intents), and readers resolve values in a WORLD — base state plus
- * the drafts a specific render pass is allowed to see. Draft intents
- * replay over the live base value, so urgent writes rebase pending
- * transitions by construction. See worlds.ts for the full model.
+ * Base state lives in a conventional signal graph (graph.ts: lazy cached
+ * computeds, effects, batching) whose node and link records live in one
+ * typed-array arena. React-transition support is a thin overlay on top
+ * (worlds.ts): writes issued inside a transition are recorded into a
+ * draft instead of hitting the atom, and each reader resolves values
+ * against base state plus the drafts it is allowed to see. See the
+ * worlds.ts header for the full model; this file only decides which path
+ * each read and write takes.
  */
 
 import {
@@ -16,37 +17,42 @@ import {
 	type DerivedNode,
 	type EqualsFn,
 	type Flags,
+	type TraceEventId,
 	ReactiveNode,
 	type UseFn,
 	Flag,
+	Lane,
 	NodeSlot,
 	UNINITIALIZED,
 	assertSignalReadAllowed,
 	assertSignalWriteAllowed,
-	activeWorldSourceConsumer,
 	activeEvaluation,
+	currentCause,
 	flushLifetimeTransitions,
 	getActiveConsumer,
 	isUninitialized,
 	initializeCell,
 	initializeDerived,
 	makeEffect,
-	makeScope,
 	peekCell,
 	readCell,
 	readDerived,
+	resetEffectLanes,
 	resetGraphForBenchmark,
 	runUpdater,
-	trackWorldRead,
-	startBatch as graphStartBatch,
-	endBatch as graphEndBatch,
-	batch as graphBatch,
 	untracked as graphUntracked,
-	useImpl,
+	emitEvent,
 	writeCell,
 	graphMemory,
 } from './graph.ts'
-import { type ResolvedState, type ErrorBox, type Suspension, asyncPlaneUsed, isErrorBox } from './asyncs.ts'
+import {
+	type ErrorBox,
+	type ResolvedState,
+	type Suspension,
+	asyncPlaneUsed,
+	baseUse,
+	unwrapResolved,
+} from './asyncs.ts'
 import {
 	type Draft,
 	type DraftId,
@@ -56,19 +62,16 @@ import {
 	appendUrgentIntent,
 	cellHasDraftIntents,
 	classifyWrite,
-	committedWorldOf,
+	currentPark,
+	draftsAffecting,
 	discardAllDrafts,
-	getCurrentPark,
 	getCurrentWorld,
 	latestWorld,
-	draftsAffecting,
 	peekWorldMemo,
 	pokeRebasedCell,
 	resolveState,
 	resolveStateUntracked,
 	setAmbientClassifier,
-	trackWorldSources,
-	unwrapForEval,
 	worldOf,
 } from './worlds.ts'
 import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer.ts'
@@ -77,8 +80,11 @@ import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer
 // Public handle types
 // ---------------------------------------------------------------------------
 
+/** Options accepted by createAtom(). */
 export interface AtomOptions<T> {
+	/** Value equality for the cutoff; defaults to Object.is. */
 	equals?: EqualsFn<T>
+	/** Debug name shown in trace output. */
 	label?: string
 	/**
 	 * Runs when the atom gains its first subscriber of any kind; the cleanup
@@ -87,18 +93,46 @@ export interface AtomOptions<T> {
 	onObserved?: (ctx: { get(): T; set(v: T): void }) => void | (() => void)
 }
 
+/** Options accepted by createComputed(). */
 export interface ComputedOptions<T> {
+	/** Value equality for the cutoff; defaults to Object.is. */
 	equals?: EqualsFn<T>
+	/** Debug name shown in trace output. */
 	label?: string
 }
 
+/** A writable reactive value. */
 export type Atom<in out T> = {
+	/**
+	 * Tracked read: inside a computed, an effect source, or a subscribed
+	 * component, this registers a dependency, so the reader re-runs when
+	 * the value changes. What it returns depends on where it runs:
+	 * - ordinarily: the committed value, with pending React transitions'
+	 *   writes hidden;
+	 * - inside a React render (or a computed evaluated for one): the
+	 *   snapshot that render was given, which includes the writes of any
+	 *   transition it belongs to.
+	 */
 	get(): T
+	/**
+	 * Write through the equality cutoff (equal writes are dropped). Inside
+	 * a React transition the write is held with the transition and stays
+	 * invisible outside it until the transition commits.
+	 */
 	set(value: T): void
+	/**
+	 * Functional update. Inside a transition the function itself is
+	 * recorded and replays against whatever value each pending snapshot
+	 * starts from, the way React replays queued useState updaters — keep
+	 * it pure.
+	 */
 	update(fn: (prev: T) => T): void
+	/** Read the current value without registering a dependency. */
 	peek(): T
 }
 
+// A class expression keeps the public structural Atom type separate from
+// the private constructor while giving the runtime value the same name.
 const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 	declare value: T | typeof UNINITIALIZED
 	declare initializer: (() => T) | undefined
@@ -114,31 +148,23 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 		super()
 		initializeCell(this, initial, opts)
 	}
-	/**
-	 * Base-state read (tracked inside computations); in a draft evaluation,
-	 * resolves that evaluation's own world.
-	 */
+	// World evaluations run untracked — their staleness evidence is the
+	// certificate, not graph edges — so only the base branch registers a
+	// dependency. (User-facing contracts live on the public Atom type.)
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
-			// Inside a draft evaluation every read resolves that world.
-			const state = resolveState(this, world)
-			trackWorldRead(this)
-			return state.value as T
+			// Every read within a selected world resolves that same world.
+			return resolveState(this, world).value as T
 		}
 		return readCell(this)
 	}
 	set(value: T): void {
 		set(this, value)
 	}
-	/**
-	 * Functional update. Inside a transition the function is recorded and
-	 * REPLAYS against each world's base value (React updater-queue rules).
-	 */
 	update(fn: (prev: T) => T): void {
 		update(this, fn)
 	}
-	/** Untracked base-state read. */
 	peek(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
@@ -148,37 +174,54 @@ const Atom = class<T> extends ReactiveNode implements CellNode<T> {
 	}
 }
 
-/** A signal whose dispatches replay through one reducer fixed at creation. */
+/** An atom whose dispatches replay through one reducer fixed at creation. */
 export type ReducerAtom<S, A> = Atom<S> & {
-	dispatch(action: A): void
+	/**
+	 * Apply `action` through the reducer fixed at creation. Inside a
+	 * React transition the dispatch is recorded and replayed against each
+	 * pending snapshot, the same way {@link Atom.update} records its
+	 * function — so keep the reducer pure.
+	 */
+	dispatch: (action: A) => void
 }
 
-type ReducerAtomNode<S, A> = ReducerAtom<S, A> & CellNode<S> & {
-	reduce: (state: S, action: A) => S
-}
+type ReducerAtomNode<S, A> = ReducerAtom<S, A> &
+	CellNode<S> & {
+		reduce: (state: S, action: A) => S
+	}
 
+/**
+ * Shared by every reducer atom, avoiding one dispatch closure per atom.
+ * TypeScript erases the fake `this` parameter.
+ */
 function dispatchReducer<S, A>(this: ReducerAtomNode<S, A>, action: A): void {
 	const reduce = this.reduce
 	this.update((state) => reduce(state, action))
 }
 
+/**
+ * A cached value derived from atoms and other computeds; recomputes
+ * only when read after a dependency changed.
+ */
 export type Computed<out T> = {
+	/**
+	 * Tracked, cached read: registers a dependency and recomputes only if
+	 * a dependency changed. When the computed is async (its function reads
+	 * a promise through `use`), the result depends on that promise:
+	 * - settled: returns the settled value;
+	 * - pending behind an earlier settled value (a refetch): keeps
+	 *   returning that earlier value, and {@link isPending} reports true;
+	 * - pending with nothing settled yet (a first load): throws the
+	 *   computed's stable pending promise, which React Suspense catches;
+	 * - failed: rethrows the same error object at every read site.
+	 */
 	get(): T
+	/**
+	 * get() without the dependency: returns the same value in every
+	 * situation described above, but the reader never re-runs when this
+	 * computed changes.
+	 */
 	peek(): T
-}
-
-function unwrapComputedWorldState<T>(state: ResolvedState): T {
-	const park = getCurrentPark()
-	if (park !== null) {
-		return unwrapForEval(state, park) as T
-	}
-	if ((state.flags & Flag.AsyncError) !== 0) {
-		throw (state.throwable as ErrorBox).error
-	}
-	if ((state.flags & Flag.AsyncSuspended) !== 0 && isUninitialized(state.value)) {
-		throw (state.throwable as Suspension).promise
-	}
-	return state.value as T
 }
 
 const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
@@ -189,15 +232,15 @@ const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 		super()
 		initializeDerived(this, fn, opts)
 	}
+	// World resolutions unwrap under the ambient park (an enclosing draft
+	// evaluation forwards pendingness; a render serves stale or suspends) —
+	// the same rule for tracked get() and untracked peek(), so the two
+	// cannot drift on async behavior.
 	get(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
-			const state = resolveState(this, world)
-			trackWorldRead(this)
-			if (activeWorldSourceConsumer !== null) {
-				trackWorldSources(this, world)
-			}
-			return unwrapComputedWorldState<T>(state)
+			// Every read within a selected world resolves that same world.
+			return unwrapResolved(resolveState(this, world), currentPark) as T
 		}
 		const value = readDerived(this)
 		if (asyncPlaneUsed && (graphMemory[this.id + NodeSlot.Flags] & Flag.AsyncMask) !== 0) {
@@ -208,12 +251,13 @@ const Computed = class<T> extends ReactiveNode implements DerivedNode<T> {
 	peek(): T {
 		const world = getCurrentWorld()
 		if (world !== null) {
-			return unwrapComputedWorldState<T>(resolveStateUntracked(this, world))
+			return unwrapResolved(resolveStateUntracked(this, world), currentPark) as T
 		}
 		return graphUntracked(() => this.get())
 	}
 }
 
+/** Any reactive value that can be tracked automatically. */
 export type Signal<T> = Atom<T> | Computed<T>
 
 export function createAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
@@ -241,10 +285,13 @@ export function createComputed<T>(
 /** @internal Resolve a handle to its engine node. */
 export function nodeOf(x: Signal<any>): ReactiveNode {
 	const node = x as unknown as ReactiveNode
-	if (typeof node.id !== 'number') {
-		throw new TypeError('expected a signal or computed handle')
+	if (
+		typeof node.id === 'number' &&
+		(node.flags & (Flag.KindCell | Flag.KindDerived)) !== 0
+	) {
+		return node
 	}
-	return node
+	throw new TypeError('expected an atom or computed handle')
 }
 
 // ---------------------------------------------------------------------------
@@ -252,53 +299,51 @@ export function nodeOf(x: Signal<any>): ReactiveNode {
 // ---------------------------------------------------------------------------
 
 /**
- * Cold tail of a computed read that is in an async state: rethrow errors,
- * park an evaluating consumer on the suspension, serve stale data when a
- * settled value exists, otherwise suspend (first load).
+ * Finish a computed read that found the node in an async state: park an
+ * evaluating consumer on the suspension (pending forwards), then apply the
+ * shared unwrap — rethrow errors, serve stale data when a settled value
+ * exists, otherwise suspend (first load).
  */
 function unwrapAsyncRead(node: DerivedNode<unknown>): unknown {
-	if ((graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncError) !== 0) {
-		throw (node.throwable as ErrorBox).error
+	if ((graphMemory[node.id + NodeSlot.Flags] & Flag.AsyncSuspended) !== 0) {
+		const consumer = getActiveConsumer()
+		if (consumer !== null && (graphMemory[consumer.id + NodeSlot.Flags] & Flag.KindCell) === 0) {
+			// baseUse parks the consumer and throws; it never returns here.
+			baseUse((node.throwable as Suspension).promise, consumer as DerivedNode<unknown>)
+		}
 	}
-	const suspension = node.throwable as Suspension
-	const consumer = getActiveConsumer()
-	if (consumer !== null && (graphMemory[consumer.id + NodeSlot.Flags] & Flag.KindDerived) !== 0) {
-		// Pending forwards: park the evaluating computed on this suspension.
-		useImpl(suspension.promise, consumer as DerivedNode<unknown>)
-	}
-	if (!isUninitialized(node.value)) {
-		return node.value
-	} // stale serves
-	throw suspension.promise // never settled: suspend
+	return unwrapResolved(node as ResolvedState, null)
 }
 
 /**
- * The value slot of a state view, sentinel normalized: a suspended state
- * with no settled value reads as undefined on the never-suspending channels
- * (latest, committed).
+ * The value slot of a state view, with the uninitialized sentinel
+ * normalized to undefined — latest() never suspends, so a suspended state
+ * with no settled value reads as undefined there.
  */
 function stateValue(st: ResolvedState): unknown {
 	return isUninitialized(st.value) ? undefined : st.value
 }
 
 /**
- * Newest intent: base state plus every live draft; never suspends. That is
- * the AMBIENT meaning — inside an evaluation context, latest() resolves that
- * context's own world instead, because reading ahead of your world is a
- * tear: a draft evaluation sees its draft world, a base-state computed or
- * effect evaluation sees base state, a render pass sees the pass's world.
+ * Read the newest view of x: base state plus every live transition
+ * draft. Never suspends. That meaning only applies outside any
+ * evaluation or render. Inside one, latest() resolves the caller's own
+ * context instead, because reading ahead of your context would show a
+ * torn mix of snapshots:
+ * - a transition-draft evaluation reads its own draft's view;
+ * - a base-state computed or effect reads base state;
+ * - a React render pass reads that pass's view.
  */
 export function latest<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
 	let world = getCurrentWorld()
 	if (world === null) {
 		if (getActiveConsumer() !== null) {
-			// A base-state evaluation (computed or effect) is running. Its context
-			// world is the base world, and this read is a real dependency: track it so
-			// a later change to x re-runs the consumer rather than leaving it
-			// permanently stale.
+			// A base-state evaluation is running. Its world is base state, and
+			// this read is a real dependency: track it so a later change to x
+			// re-runs the consumer rather than leaving it permanently stale.
 			world = BASE_WORLD
-			if ((graphMemory[node.id + NodeSlot.Flags] & Flag.KindCell) !== 0) {
+			if ((node.flags & Flag.KindCell) !== 0) {
 				readCell(node as CellNode<unknown>)
 			} else {
 				readDerived(node as DerivedNode<unknown>)
@@ -306,34 +351,8 @@ export function latest<T>(x: Signal<T>): T {
 		} else {
 			world = renderWorld() ?? latestWorld()
 		}
-	} else {
-		trackWorldRead(node)
 	}
 	const st = resolveState(node, world)
-	if (
-		activeWorldSourceConsumer !== null &&
-		(graphMemory[node.id + NodeSlot.Flags] & Flag.KindDerived) !== 0
-	) {
-		trackWorldSources(node, world)
-	}
-	if ((st.flags & Flag.AsyncError) !== 0) {
-		throw (st.throwable as ErrorBox).error
-	}
-	return stateValue(st) as T
-}
-
-/** What is on screen: per-root when a container is given. Never subscribes. */
-export function committed<T>(x: Signal<T>, container?: object): T {
-	const node = nodeOf(x)
-	if (activeEvaluation === node) {
-		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
-	}
-	if (activeEvaluation !== null) {
-		throw new Error(
-			'committed() cannot be read inside a computed; read the dependency normally or use the previous argument for self history',
-		)
-	}
-	const st = resolveState(node, committedWorldOf(container))
 	if ((st.flags & Flag.AsyncError) !== 0) {
 		throw (st.throwable as ErrorBox).error
 	}
@@ -341,31 +360,21 @@ export function committed<T>(x: Signal<T>, container?: object): T {
 }
 
 /**
- * Committed-view snapshot with stable identity: the value, or the ErrorBox
- * itself (identity-stable for the whole error span — see isErrorBox) whose
- * error the caller rethrows. The React bindings' useCommitted snapshot.
- */
-export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
-	const st = resolveState(node, committedWorldOf(container))
-	if ((st.flags & Flag.AsyncError) !== 0) {
-		return st.throwable
-	}
-	return stateValue(st)
-}
-
-/**
- * Cheap flip-only probe: true while newer data exists behind what is on
- * screen — a pending transition draft on this atom, or an async refetch
- * loading behind a stale value. Passive by contract: never evaluates,
- * never refetches, never suspends.
+ * True while newer data exists behind what is on screen:
+ * - a transition draft with writes over x is still pending, or
+ * - an async computed is loading again while its previous settled value
+ *   keeps serving.
+ * Passive by contract: never evaluates, never refetches, never
+ * suspends.
  */
 export function isPending(x: Signal<any>): boolean {
 	return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld())
 }
 
 /**
- * Node-level pendingness probe; `world` scopes the suspended-memo check
- * (null = ambient). The React bindings' useIsPending snapshot.
+ * Node-level pendingness probe, also used by the React bindings'
+ * useIsPending. `world` scopes the suspended-memo check; null means
+ * ambient.
  */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
 	assertSignalReadAllowed()
@@ -376,10 +385,10 @@ export function isPendingPassive(node: ReactiveNode, world: World | null): boole
 	if ((flags & Flag.KindDerived) === 0) {
 		return false
 	}
-	// Pending means "stale data exists while newer data loads" (Solid 2.0's
-	// rule): a suspension with settled history is pending; a FIRST LOAD is
-	// not — it has no stale data to indicate over, and suspending is
-	// Suspense's job, not the indicator's.
+	// Pending means "stale data exists while newer data loads". A
+	// suspension with settled history is pending; a first load is not — it
+	// has no stale data to indicate over, and suspending is Suspense's
+	// job, not the indicator's.
 	if ((flags & Flag.AsyncSuspended) !== 0) {
 		return !isUninitialized((node as DerivedNode<unknown>).value)
 	}
@@ -389,10 +398,11 @@ export function isPendingPassive(node: ReactiveNode, world: World | null): boole
 			return !isUninitialized(memo.value)
 		}
 	}
-	// A drafted input anywhere in the dependency closure means newer data is
-	// pending behind this computed's base value — transitive, like Solid's
-	// status forwarding: a computed over a pending source is itself pending.
-	return draftsAffecting(node).length > 0
+	// A drafted input anywhere in the dependency closure means newer data
+	// is pending behind this computed's base value. Pendingness is
+	// transitive: a computed over a pending source is itself pending. The
+	// closure walk is the same one late-subscription repair uses.
+	return draftsAffecting(node).length !== 0
 }
 
 // ---------------------------------------------------------------------------
@@ -417,11 +427,13 @@ export function set<T>(x: Atom<T>, value: T): void {
 		appendDraftIntent(draft, cell, 'set', value)
 		return
 	}
-	// Urgent: base state moves now; pending worlds replay it in dispatch order.
+	// Urgent write: base state moves now, and pending worlds will replay
+	// the intent in dispatch order.
 	const rebased = appendUrgentIntent(cell, 'set', value)
 	const changed = writeCell(cell, value)
-	// Equality cutoff with pending drafts: base state did not move (no wave
-	// ran) but the drafted replays did — their audiences must still hear it.
+	// When the write was a base-state no-op (equality) but the atom has
+	// pending drafts, the drafted replays still changed — their audiences
+	// must hear about it even though no wave ran.
 	if (rebased && !changed) {
 		pokeRebasedCell(cell)
 	}
@@ -430,17 +442,26 @@ export function set<T>(x: Atom<T>, value: T): void {
 export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
-	const cell = x as unknown as CellNode<T>
+	const cell = x as unknown as CellNode<unknown>
 	const draft = classifyWrite()
 	if (draft !== null) {
-		appendDraftIntent(draft, cell as CellNode<unknown>, 'update', fn)
+		appendDraftIntent(draft, cell, 'update', fn)
 		return
 	}
-	const next = runUpdater(fn, peekCell(cell))
-	const rebased = appendUrgentIntent(cell as CellNode<unknown>, 'update', fn)
-	const changed = writeCell(cell, next)
+	const previous = peekCell(cell) as T
+	let next: T
+	try {
+		next = runUpdater(fn, previous)
+	} catch (error) {
+		if (emitEvent !== null) {
+			emitEvent('callback-error', activeEvaluation, currentCause, { error, phase: 'updater' })
+		}
+		throw error
+	}
+	const rebased = appendUrgentIntent(cell, 'update', fn)
+	const changed = writeCell(cell, next, 'update')
 	if (rebased && !changed) {
-		pokeRebasedCell(cell as CellNode<unknown>)
+		pokeRebasedCell(cell)
 	}
 }
 
@@ -453,75 +474,205 @@ export function read<T>(x: Signal<T>): T {
 // Effects, batching, untracked
 // ---------------------------------------------------------------------------
 
-export const effect: (fn: () => void | (() => void)) => () => void = makeEffect
-export const effectScope: (fn: () => void) => () => void = makeScope
-export const batch: <T>(fn: () => T) => T = graphBatch
-export const startBatch: () => void = graphStartBatch
-export const endBatch: () => void = graphEndBatch
-export const untracked: <T>(fn: () => T) => T = graphUntracked
-export { resetGraphForBenchmark }
+/**
+ * When an effect's handler runs after a watched signal changes:
+ * - 'sync' (the default): immediately, as part of the write;
+ * - 'useLayoutEffect' or 'useEffect': in that phase of the React update
+ *   the change caused, alongside components' own effects of that phase.
+ * The very first run at creation is always synchronous, whatever the
+ * schedule.
+ */
+export type EffectSchedule = 'sync' | 'useLayoutEffect' | 'useEffect'
 
-// ---------------------------------------------------------------------------
-// SSR
-// ---------------------------------------------------------------------------
-
-/** Atoms under app-supplied keys: positional (array) or named (record). */
-type AtomMap = Record<string, Atom<any>> | Atom<any>[]
-
-/** Serialize base atom state under app-supplied keys. */
-export function serializeAtomState(
-	atoms: AtomMap,
-	replacer?: (key: string, value: unknown) => unknown,
-): string {
-	const out: Record<string, unknown> = {}
-	if (Array.isArray(atoms)) {
-		for (let i = 0; i < atoms.length; i++) {
-			out[i] = peekCell(atoms[i] as unknown as CellNode<unknown>)
-		}
-	} else {
-		for (const key in atoms) {
-			if (Object.prototype.hasOwnProperty.call(atoms, key)) {
-				out[key] = peekCell(atoms[key] as unknown as CellNode<unknown>)
-			}
-		}
-	}
-	return JSON.stringify(out, replacer as never)
+/**
+ * Options accepted by effect(). `equals` and `label` configure the
+ * effect's source exactly as on createComputed; the same `equals` also
+ * decides whether a new value is different enough to run the handler.
+ */
+export interface EffectOptions<T> extends ComputedOptions<T> {
+	/**
+	 * When the handler runs after a watched signal changes; 'sync' (the
+	 * default) runs it immediately, as part of the write.
+	 */
+	schedule?: EffectSchedule
 }
 
 /**
- * Install a value without running lazy initializers and without counting
- * as a write: no propagation, no equality check, no effects.
+ * One-level-deep equality:
+ * - arrays: same length and element-wise Object.is;
+ * - plain objects: same own keys and key-wise Object.is;
+ * - everything else: Object.is.
+ * The default cutoff for tuple and record effect sources, whose computes
+ * rebuild their container on every run.
  */
-export function installState<T>(atom: Atom<T>, value: T): void {
-	assertSignalWriteAllowed()
-	const node = atom as unknown as CellNode<T>
-	node.initializer = undefined
-	node.value = value
-}
-
-export function initializeAtomState(
-	json: string,
-	atoms: AtomMap,
-	reviver?: (key: string, value: unknown) => unknown,
-): void {
-	const data = JSON.parse(json, reviver as never) as Record<string, unknown>
-	if (Array.isArray(atoms)) {
-		for (let i = 0; i < atoms.length; i++) {
-			if (Object.prototype.hasOwnProperty.call(data, i)) {
-				installState(atoms[i], data[i])
+export function shallowEquals(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) {
+		return true
+	}
+	if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) {
+		return false
+	}
+	if (Array.isArray(a)) {
+		if (!Array.isArray(b) || a.length !== b.length) {
+			return false
+		}
+		for (let i = 0; i < a.length; i++) {
+			if (!Object.is(a[i], b[i])) {
+				return false
 			}
 		}
-	} else {
-		for (const key in atoms) {
-			if (
-				Object.prototype.hasOwnProperty.call(atoms, key) &&
-				Object.prototype.hasOwnProperty.call(data, key)
-			) {
-				installState(atoms[key], data[key])
-			}
+		return true
+	}
+	if (Array.isArray(b)) {
+		return false
+	}
+	const keysA = Object.keys(a)
+	if (keysA.length !== Object.keys(b).length) {
+		return false
+	}
+	for (const key of keysA) {
+		if (
+			!Object.prototype.hasOwnProperty.call(b, key) ||
+			!Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+		) {
+			return false
 		}
 	}
+	return true
 }
+
+/** The value a signal handle produces. */
+export type SignalValue<S> = S extends Signal<infer V> ? V : never
+
+/**
+ * Signal container sources map to same-shaped value containers: a tuple
+ * of signals yields a tuple of values, a record yields a record.
+ */
+export type SignalValues<S> = { -readonly [K in keyof S]: SignalValue<S[K]> }
+
+/**
+ * A signal handle: an object whose flags carry an engine kind bit.
+ * Distinguishes handles from plain objects (a record source) without
+ * duck-typing on `get`, which Map and foreign reactives would satisfy.
+ */
+function isSignalHandle(x: object): x is Signal<unknown> {
+	return (
+		typeof (x as { flags?: unknown }).flags === 'number' &&
+		((x as { flags: number }).flags & (Flag.KindCell | Flag.KindDerived)) !== 0
+	)
+}
+
+/**
+ * Create an effect: watch a source, run a handler when its value
+ * changes. Returns a disposer.
+ *
+ * The source declares what the effect reacts to:
+ * - a compute function: runs tracked, so the signals it read — and only
+ *   those — become dependencies, branch by branch; it is cached, handed
+ *   its own previous value, and may read promises through use();
+ * - a signal: shorthand for a compute that reads it;
+ * - a tuple or record of signals: shorthand for a compute that reads
+ *   each one into a same-shaped container of values, compared with
+ *   {@link shallowEquals} by default since the container is rebuilt
+ *   every run (an explicit `equals` overrides).
+ *
+ * The handler is called with the new value and the previous value it
+ * handled, and may return a cleanup that runs before the next handler
+ * run and at disposal. Reads inside the handler are not tracked — a
+ * value the effect should react to belongs in the source.
+ *
+ * The first run happens synchronously, at creation. Async sources relax
+ * that:
+ * - nothing has resolved yet: the first handler run waits for the value;
+ * - loading again behind an earlier value: the effect stays quiet and
+ *   keeps the last cleanup installed ({@link isPending} is the loading
+ *   indicator);
+ * - a load completes: the handler runs only if the new value differs
+ *   from the last one it handled.
+ * If the source throws, the handler is not called; the error surfaces
+ * where the effect runs — at the write for 'sync' effects, in the React
+ * phase for scheduled ones.
+ *
+ * Effects never see a React transition's pending writes: when the
+ * transition commits, its writes reach effects once, like any other
+ * write. See docs/effects.md for the full contract.
+ */
+export function effect<T>(
+	compute: (use: UseFn, previous: T | undefined) => T,
+	handler: (value: T, previous: T | undefined) => void | (() => void),
+	opts?: EffectOptions<T>,
+): () => void
+export function effect<S extends Signal<any>>(
+	source: S,
+	handler: (value: SignalValue<S>, previous: SignalValue<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValue<S>>,
+): () => void
+export function effect<const S extends readonly Signal<any>[]>(
+	sources: S,
+	handler: (values: SignalValues<S>, previous: SignalValues<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValues<S>>,
+): () => void
+export function effect<S extends Record<string, Signal<any>>>(
+	sources: S,
+	handler: (values: SignalValues<S>, previous: SignalValues<S> | undefined) => void | (() => void),
+	opts?: EffectOptions<SignalValues<S>>,
+): () => void
+export function effect(
+	source:
+		| ((use: UseFn, previous: any) => unknown)
+		| Signal<any>
+		| readonly Signal<any>[]
+		| Record<string, Signal<any>>,
+	handler: (value: any, previous: any) => void | (() => void),
+	opts?: EffectOptions<any>,
+): () => void {
+	const schedule = opts?.schedule
+	const lane =
+		schedule === 'useLayoutEffect'
+			? Lane.UseLayoutEffect
+			: schedule === 'useEffect'
+				? Lane.UseEffect
+				: Lane.Sync
+	let compute: (use: UseFn, previous: unknown) => unknown
+	let equals = opts?.equals as EqualsFn<unknown> | undefined
+	if (typeof source === 'function') {
+		compute = source
+	} else if (isSignalHandle(source)) {
+		compute = () => source.get()
+	} else if (Array.isArray(source)) {
+		const sources = source as readonly Signal<unknown>[]
+		compute = () => {
+			const values = new Array<unknown>(sources.length)
+			for (let i = 0; i < sources.length; i++) {
+				values[i] = sources[i]!.get()
+			}
+			return values
+		}
+		equals ??= shallowEquals
+	} else {
+		const record = source as Record<string, Signal<unknown>>
+		const keys = Object.keys(record)
+		compute = () => {
+			const values: Record<string, unknown> = {}
+			for (const key of keys) {
+				values[key] = record[key]!.get()
+			}
+			return values
+		}
+		equals ??= shallowEquals
+	}
+	return makeEffect(compute, handler, lane, equals, opts?.label)
+}
+
+export {
+	makeScope as effectScope,
+	batch,
+	startBatch,
+	endBatch,
+	untracked,
+	flushScheduledEffects,
+} from './graph.ts'
+export { resetGraphForBenchmark }
 
 // ---------------------------------------------------------------------------
 // Tracing
@@ -531,20 +682,23 @@ export { attachTracer, getActiveTracer, Tracer }
 export type { TraceEvent }
 
 // ---------------------------------------------------------------------------
-// Render-world provider (installed by the ./react bindings, which import
-// engine modules directly — the react directory is part of the library).
+// Render-world provider, installed by the ./react bindings (which import
+// engine modules directly — the react directory is part of this library).
 // ---------------------------------------------------------------------------
 
 /**
- * Installed by the bindings: answers "what world is rendering right now".
- * - draft ids: the pass's world was noted by this pass and is still valid;
- * - 'base': a component render is executing but no valid note exists
- *   (the note expired or belongs to another pass) — plain latest()/
- *   isPending() must fall back to BASE rather than read a stale world
- *   or read ahead into live drafts;
- * - null: no render is executing — ambient reads see newest intent.
- * A provider (not a sticky setter) because only the host knows when React
- * is rendering and which notes a pass refreshed.
+ * Answers "what world is rendering right now":
+ * - draft ids: the current render pass declared its world and the
+ *   declaration is still valid;
+ * - 'base': a component render is executing but no valid declaration
+ *   exists (it expired or belongs to another pass). Plain latest() and
+ *   isPending() calls must then fall back to base state — wrong-toward-
+ *   base is safe, while reading a stale world or reading ahead into live
+ *   drafts is not;
+ * - null: no render is executing, so ambient reads see the newest view.
+ * A provider function rather than a sticky setter, because only the React
+ * host knows when React is rendering and which declarations a pass
+ * refreshed.
  */
 let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null
 
@@ -569,23 +723,25 @@ function renderWorld(): World | null {
 }
 
 /**
- * Reset seam for tests: discard live drafts, settle lifetime flaps, drop
- * ambient classification, detach any tracer. Existing atoms stay valid.
+ * Test seam: discard live drafts, settle pending lifetime transitions,
+ * drop ambient classification, detach any tracer. Existing atoms stay
+ * valid.
  */
 export function resetEngineForTest(): void {
 	discardAllDrafts()
 	flushLifetimeTransitions()
+	resetEffectLanes()
 	setAmbientClassifier(null)
 	setRenderWriteGuard(null)
 	renderWorldProvider = null
 	getActiveTracer()?.stop()
 }
 
-export type { ResolvedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
+export type { ResolvedState, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags }
 /**
- * The ResolvedState read protocol: the Flag bit constants (test async bits
- * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
- * check, and the never-settled sentinel test.
+ * For consumers reading ResolvedState views directly: the Flag bit
+ * constants (test async bits via Flag.AsyncMask/AsyncError/
+ * AsyncSuspended) and the uninitialized sentinel test.
  */
-export { Flag, isErrorBox, isUninitialized }
+export { Flag, isUninitialized }
 export { BASE_WORLD }

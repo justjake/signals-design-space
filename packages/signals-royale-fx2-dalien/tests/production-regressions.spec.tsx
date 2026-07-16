@@ -1,34 +1,39 @@
 // @vitest-environment jsdom
 /**
- * Production-round regressions.
+ * Regression tests.
  *
- * Tear family: latest()/isPending() in ANY render body must resolve that
- * pass's world or fall back to BASE. Wrong-toward-base is
+ * Tear family: latest()/isPending() in any render body must resolve that
+ * pass's world or fall back to base state. Wrong-toward-base is
  * acceptable; wrong-toward-stale-world or wrong-toward-drafts never is.
- * Each shape below renders a component that did NOT refresh the scope's
+ * Each shape below renders a component that did not refresh its connection's
  * render-world note and asserts it cannot consume a stale one.
  *
- * Wake family: a transition's render passes re-render ONLY subscribers of
- * cells the transition drafted (plus what React re-renders for its own
+ * Wake family: a transition's render passes re-render only subscribers
+ * of cells the transition drafted (plus what React re-renders for its own
  * reasons: pending uncommitted updates, cascades). Render counts on every
  * subscriber are the proof.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
-import { latest, read, createAtom } from 'signals-royale-fx2-dalien'
+import {
+	attachTracer,
+	createAtom,
+	createComputed,
+	latest,
+	read,
+	type TraceEvent,
+} from 'signals-royale-fx2-dalien'
 import { startSignalTransition, useValue } from 'signals-royale-fx2-dalien/react'
-import { openDraft, runWithDraftWrites, sealDraft, type Draft } from '../src/worlds.ts'
-import { broadcastDraft, draftWakeStats } from '../src/react/host.ts'
+import { openDraft, runWithDraftWrites, type Draft } from '../src/worlds.ts'
+import { broadcastDraft } from '../src/react/host.ts'
 
 let h: Harness
 beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 /** A held transition over `a`: drafts a.set(2), suspends until gate. */
@@ -81,7 +86,7 @@ describe('tear: the render-world note is validity-gated', () => {
 			</>,
 		)
 		await start() // held: the transition pass noted its world and suspended
-		// Urgent pass dirties ONLY the probe; the scope (and every fx2 hook)
+		// The urgent pass dirties only the probe; the provider (and every hook)
 		// bails out, so nothing refreshed the note for this pass.
 		await act(() => bump())
 		expect(text(container)).toContain('p:1;')
@@ -99,9 +104,9 @@ describe('tear: the render-world note is validity-gated', () => {
 			</React.Suspense>,
 		)
 		await start()
-		// A plain root (no SignalScopeProvider, zero hooks — plain latest() calls are
-		// legal anywhere) rendered right after the transition pass: no pass of
-		// this root ever refreshed any note.
+		// A plain root (no SignalsFrameworkProvider, zero hooks — plain latest()
+		// calls are legal anywhere) rendered right after the transition pass:
+		// no pass of this root ever refreshed any note.
 		const sampled: number[] = []
 		function Plain() {
 			sampled.push(latest(a))
@@ -112,7 +117,7 @@ describe('tear: the render-world note is validity-gated', () => {
 		await act(() => {
 			plainRoot.render(<Plain />)
 		})
-		expect(sampled).toEqual([1]) // base-state fallback, not the scoped draft
+		expect(sampled).toEqual([1]) // base-state fallback, not the held draft
 		await release()
 		await act(() => plainRoot.unmount())
 		div.remove()
@@ -144,7 +149,8 @@ describe('tear: the render-world note is validity-gated', () => {
 			)
 		}
 		const { container } = await h.mount(<List />)
-		// Root B: no scope, no fx2 hooks; re-rendered by flushSync mid-slice.
+		// Root B: no provider, none of our hooks; re-rendered by flushSync
+		// mid-slice.
 		const sampled: number[] = []
 		let bump!: () => void
 		function Probe() {
@@ -280,16 +286,16 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 					cells[0].set(1)
 					hold.set(true)
 				})
-				// Deliberately NOT sealed: the batch continues below.
+				// The draft remains live: the batch continues below.
 			})
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held, invisible
-		// Late append from a plain event context (no ambient transition): the
-		// wake must ride the OWNING transition's lane, so the committed DOM
-		// stays untouched and untouched subscribers stay asleep.
+		// Late append from a plain event context (no ambient transition):
+		// the wake must join the owning transition's updates, so the
+		// committed DOM stays untouched and untouched subscribers stay
+		// asleep.
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[1].set(2))
-			sealDraft(draft)
 		})
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
 		for (let i = 2; i < N; i++) {
@@ -344,7 +350,7 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		})
 		await act(async () => {})
 		// T2 woke exactly b's subscriber; its commit rides behind T1's hold
-		// because both drafts flow through the scope's one reducer queue and
+		// because both drafts flow through the connection's one reducer queue and
 		// React entangles same-queue transition updates (stock updater rules).
 		expect(bRenders).toBeGreaterThan(1)
 		expect(text(container)).toBe('a:0;b:0;')
@@ -357,11 +363,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 
 	test('a same-cell write burst dispatches one draft-lane wake per subscriber, not one per write', async () => {
 		const SUBS = 4
-		const cell = createAtom(0)
+		const cell = createAtom(0, { label: 'burst' })
+		const computed = createComputed(() => cell.get(), { label: 'burst-computed' })
 		const renders = new Array<number>(SUBS).fill(0)
 		function Sub({ i }: { i: number }) {
 			renders[i]++
-			return <i>{useValue(cell)};</i>
+			return <i>{useValue(computed)};</i>
 		}
 		const { container } = await h.mount(
 			<>
@@ -370,28 +377,104 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 				))}
 			</>,
 		)
-		draftWakeStats.dispatches = 0
-		let dispatchesBeforeRender = -1
-		await act(() => {
-			startSignalTransition(() => {
-				for (let k = 1; k <= 100; k++) {
-					cell.set(k)
+		const tracer = attachTracer()
+		const wakesBeforeRender: TraceEvent[] = []
+		try {
+			await act(() => {
+				startSignalTransition(() => {
+					for (let k = 1; k <= 100; k++) {
+						cell.set(k)
+					}
+				})
+				// Sampled synchronously after the writes, before React renders the
+				// transition pass: what the burst itself cost in reducer dispatches.
+				for (const event of tracer.events()) {
+					if (event.kind === 'transition-notify') {
+						wakesBeforeRender.push(event)
+					}
 				}
 			})
-			// Sampled synchronously after the writes, before React renders the
-			// transition pass: what the burst itself cost in reducer dispatches.
-			dispatchesBeforeRender = draftWakeStats.dispatches
-		})
-		expect(dispatchesBeforeRender).toBe(SUBS) // one per subscribing hook
+		} finally {
+			tracer.stop()
+		}
+		expect(wakesBeforeRender).toHaveLength(SUBS) // one per subscribing hook
+		const draftId = wakesBeforeRender[0]!.draftId
+		const rootId = wakesBeforeRender[0]!.rootId
+		expect(draftId).toBeDefined()
+		expect(rootId).toBeDefined()
+		for (const wake of wakesBeforeRender) {
+			expect(wake).toMatchObject({ label: 'burst-computed', draftId, rootId })
+			expect(tracer.find(wake.cause)).toMatchObject({
+				kind: 'set',
+				label: 'burst',
+				draftId,
+			})
+		}
 		await act(async () => {})
 		expect(text(container)).toBe('100;'.repeat(SUBS))
 		expect(renders).toEqual(new Array(SUBS).fill(2)) // mount + one transition pass
 	})
 
+	test('a computed mounted after a draft write traces its late-subscription wake to that write', async () => {
+		const source = createAtom(0, { label: 'late-source' })
+		const computed = createComputed(() => source.get(), { label: 'late-computed' })
+		const gate = deferred<void>()
+		function Suspender() {
+			const value = useValue(source)
+			if (value > 0 && !gate.settled) {
+				throw gate.promise
+			}
+			return <b>s:{value};</b>
+		}
+		function LateReader() {
+			return <i>r:{useValue(computed)};</i>
+		}
+		function App({ late }: { late: boolean }) {
+			return (
+				<>
+					<React.Suspense fallback={null}>
+						<Suspender />
+					</React.Suspense>
+					{late ? <LateReader /> : null}
+				</>
+			)
+		}
+		const { root, container } = await h.mount(<App late={false} />)
+		const tracer = attachTracer()
+		try {
+			await act(() => {
+				startSignalTransition(() => source.set(1))
+			})
+			await act(() => {
+				root.render(<App late={true} />)
+			})
+		} finally {
+			tracer.stop()
+		}
+		expect(text(container)).toBe('s:0;r:0;')
+		const wakes: TraceEvent[] = []
+		for (const event of tracer.events()) {
+			if (event.kind === 'transition-notify' && event.label === 'late-computed') {
+				wakes.push(event)
+			}
+		}
+		expect(wakes).toHaveLength(1)
+		expect(tracer.find(wakes[0]!.cause)).toMatchObject({
+			kind: 'set',
+			label: 'late-source',
+			draftId: wakes[0]!.draftId,
+		})
+		await act(async () => {
+			gate.resolve()
+			await gate.promise
+		})
+		expect(text(container)).toBe('s:1;r:1;')
+	})
+
 	test('late append to a cell the transition pass already rendered re-dispatches and lands', async () => {
-		// Guards the dedup's clear-on-render contract: after a pass consumed the
-		// draft, a new intent on the SAME cell must re-dispatch (a swallowed wake
-		// would let React bail out and commit a stale frame).
+		// Guards the dedup's clear-on-render contract: after a pass consumed
+		// the draft, a new intent on the same cell must re-dispatch — a
+		// swallowed wake would let React bail out and commit a stale frame.
 		const { cells, renders, grid } = makeGrid()
 		const hold = createAtom(false)
 		const gate = deferred<void>()
@@ -426,7 +509,6 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(afterHeldPass).toBe(2)
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[0].set(2))
-			sealDraft(draft)
 		})
 		expect(renders[0]).toBe(afterHeldPass + 1) // exactly one more transition render
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
@@ -470,7 +552,6 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held
 		await act(() => {
 			runWithDraftWrites(draft, () => cells[0].set(2))
-			sealDraft(draft)
 		})
 		await act(async () => {
 			gate.resolve()

@@ -219,3 +219,52 @@ These single React samples are direction checks, not stable estimates; the
 isolated graph comparison is the repeatable performance gate. Typecheck and
 all 337 package tests, including the nine adversarial scheduled-effect cases,
 pass at this point.
+
+## 2026-07-15 source convergence: the split-effect model
+
+The fork now carries the source package's split-effect rewrite and everything
+that followed it, re-expressed in the arena:
+
+- `effect(compute, handler, {schedule})` with three drain lanes (sync /
+  useLayoutEffect / useEffect), two-phase drains (pull all computes, then run
+  cleanups and handlers), and the last-handled value anchor. Effect nodes
+  share the derived evaluator: one record type carries the compute's value,
+  dependency list, and async state, plus handle-owned delivery fields.
+- The old scheduled-effect machinery is gone: `WatchSchedule`, `WatchDraft`,
+  the two-watcher world-source scheme, and the watcher validation loop are
+  deleted; render watchers hold one pinned link and are never validated.
+- Lane queues keep the (record id, generation) typed enqueue on the write
+  path; the drain's pull phase resolves survivors into a retained handle
+  array for the run phases, and generation stamps make reclaimed entries
+  drain as no-ops.
+- The tracer seam is the 3-method sink (`emitEvent`/`startSpan`/`endSpan`)
+  with the API-vocabulary kinds; `./debug` (tracer + inert inspect) and
+  `./ssr` subpaths match the source package.
+- One clock: draft activity and settlement tick the graph clock, and a base
+  watermark answers "did base state change since X" (the separate
+  DraftChangeClock is deleted).
+
+Two lifetime rules earned their own machinery during the port:
+
+- **Pin identity is watcher liveness.** A disposed watcher's record may be
+  reclaimed and reused, so its flags word can never be read again; every
+  post-dispose entry point (double dispose, owner-alive checks, wake and
+  notify delivery) tests `pinnedInternals[id] === handle` instead. Disposal
+  defers record reclaim to handle finalization when the effect ever parked
+  (a thenable's parked set may still invalidate it) or when it disposed
+  itself mid-evaluation (the unwinding evaluation still stamps the record).
+- **Pins retain closure scope chains.** An unwatched chain keeps forward
+  links, each link pins its dependency's handle, and a pinned handle retains
+  its compute closure's whole scope chain. If that scope chain contains a
+  higher handle of the same chain (every computed built in one shared
+  function scope does this), the pin roots a cycle the collector can never
+  break — the object-graph source package collects the same cycle wholesale
+  because nothing engine-side roots it. Chains built through per-level
+  factory scopes reclaim fully, one level per collection round (each level's
+  finalizer drops the pin below it). This is the standing cost of numeric
+  links + strong pins; a fix would need weak pins for unwatched edges.
+
+Typecheck and all 412 package tests (179 conformance cases, the oracle fuzz
+suite, GC/leak suite, React suites) pass at this point. Benchmarks not yet
+re-run against the rewritten source package; the isolated-graph protocol
+remains the gate.

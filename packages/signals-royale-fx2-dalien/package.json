@@ -5,7 +5,9 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./react": "./src/react/index.ts"
+		"./ssr": "./src/ssr.ts",
+		"./react": "./src/react/index.ts",
+		"./debug": "./src/debug/index.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",

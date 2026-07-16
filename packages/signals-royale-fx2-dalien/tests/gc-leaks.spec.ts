@@ -5,12 +5,21 @@
  * Reclamation model under test:
  * - Unwatched computeds hold references dependency-ward only, so dropping
  *   the last user reference collects the whole chain structurally.
- * - Effect disposers are FinalizationRegistry-backed: dropping a disposer
- *   without calling it reclaims the watcher and unlinks its subscriptions.
+ * - Effects and subscriptions are explicit resources; their owners call the
+ *   returned disposer.
  * - Draft retirement drops rebase logs and world memos (quiescence).
  */
 import { describe, expect, test } from 'vitest'
-import { createComputed, effect, effectScope, nodeOf, read, createAtom, type Atom } from '../src/index.ts'
+import {
+	attachTracer,
+	createAtom,
+	createComputed,
+	effect,
+	effectScope,
+	nodeOf,
+	read,
+	type Atom,
+} from '../src/index.ts'
 import { nextSubscriber, observeNode, type CellNode, type Link } from '../src/graph.ts'
 import {
 	liveDraftCount,
@@ -18,7 +27,6 @@ import {
 	resolveState,
 	retireDraft,
 	runWithDraftWrites,
-	sealDraft,
 	worldOf,
 	type DraftId,
 } from '../src/worlds.ts'
@@ -83,10 +91,10 @@ describe('leak audit', () => {
 	})
 
 	test('a retired draft id in long-lived state retains neither the Draft record nor its logged intents', async () => {
-		// The React bindings' contract: long-lived React state (reducer worlds,
-		// committed id sets) holds draft IDS, never Draft records — a record
-		// captured in a committed reducer state that never updates again would
-		// be retained forever, while a stale id is inert.
+		// React bindings promise that long-lived React state (reducer
+		// worlds, committed id sets) holds draft ids, never Draft records —
+		// a record captured in a committed reducer state that never updates
+		// again would be retained forever, while a stale id is inert.
 		const a = createAtom({ n: 0 })
 		const committedReducerState: DraftId[] = [] // stands in for React state that never updates again
 		let draftRef!: WeakRef<object>
@@ -95,7 +103,6 @@ describe('leak audit', () => {
 			const draft = openDraft()
 			const payload = { n: 1 }
 			runWithDraftWrites(draft, () => a.set(payload))
-			sealDraft(draft)
 			committedReducerState.push(draft.id)
 			draftRef = new WeakRef(draft)
 			payloadRef = new WeakRef(payload)
@@ -119,7 +126,7 @@ describe('leak audit', () => {
 			const mid = createComputed(() => base.get() * 2)
 			const top = createComputed(() => mid.get() + 1)
 			// Subscribe without pulling, pull through the watched tier, then
-			// unsubscribe: promote installed back-edges down to the cell, and
+			// unsubscribe: promote installed back-edges down to the atom, and
 			// demote must remove every one of them.
 			const unsub = observeNode(nodeOf(top), () => {})
 			expect(read(top)).toBe(3)
@@ -135,7 +142,10 @@ describe('leak audit', () => {
 
 	test('disposing an effect deterministically unlinks now (no GC needed)', () => {
 		const base = createAtom(1)
-		const dispose = effect(() => void base.get())
+		const dispose = effect(
+			() => base.get(),
+			() => {},
+		)
 		expect(subCount(base)).toBe(1)
 		dispose()
 		expect(subCount(base)).toBe(0)
@@ -148,14 +158,17 @@ describe('leak audit', () => {
 		// would pin the disposed watcher (and its closure) forever. Passes before
 		// and after the storage change; fails against a retained-capacity variant
 		// that skips the nulling.
-		const cell = createAtom(0)
+		const atom = createAtom(0)
 		const payloadRef = (() => {
 			const payload = { tag: 'effect-closure-payload' }
-			const dispose = effect(() => {
-				cell.get()
-				void payload
-			})
-			cell.set(1) // flush enqueues and runs the watcher (slot consumed)
+			const dispose = effect(
+				() => {
+					void payload
+					return atom.get()
+				},
+				() => {},
+			)
+			atom.set(1) // flush enqueues and runs the watcher (slot consumed)
 			dispose()
 			return new WeakRef(payload)
 		})()
@@ -164,11 +177,11 @@ describe('leak audit', () => {
 	})
 
 	test('[guard] a disposed subscription collects even though the render-notify buffer retains capacity', async () => {
-		const cell = createAtom(0)
+		const atom = createAtom(0)
 		const payloadRef = (() => {
 			const payload = { tag: 'subscription-closure-payload' }
-			const unsub = observeNode(nodeOf(cell), () => void payload)
-			cell.set(1) // delivery consumes the subscription's buffer slot
+			const unsub = observeNode(nodeOf(atom), () => void payload)
+			atom.set(1) // delivery consumes the subscription's buffer slot
 			unsub()
 			return new WeakRef(payload)
 		})()
@@ -176,25 +189,80 @@ describe('leak audit', () => {
 		expect(payloadRef.deref()).toBeUndefined()
 	})
 
+	test('[guard] deep-chain scratch and drain slots do not retain computed nodes', async () => {
+		const base = createAtom(0)
+		let savedRef!: WeakRef<object>
+		// Scope hygiene is load-bearing for this engine: an unwatched chain
+		// keeps forward links, each link pins its dependency's HANDLE, and a
+		// pinned handle retains its closure's whole scope chain. Building the
+		// chain through these factories keeps each compute's scope from
+		// containing a higher handle; a chain built in one shared scope (the
+		// straight-line version of this test) is retained by that
+		// pin-to-scope cycle for as long as the engine lives. See
+		// EXPERIMENT.md's lifetime notes.
+		const grow = (previous: { get(): number }) => createComputed(() => previous.get() + 1)
+		const watch = (top: { get(): number }) =>
+			effect(
+				() => top.get(),
+				() => {},
+			)
+		;(() => {
+			const nodes = [createComputed(() => base.get() + 1)]
+			for (let i = 1; i < 40; i++) {
+				nodes.push(grow(nodes[i - 1]))
+			}
+			const dispose = watch(nodes[39])
+			base.set(1)
+			savedRef = new WeakRef(nodeOf(nodes[23]))
+			dispose()
+		})()
+		// Reclamation cascades: a collection round frees one level's record,
+		// whose finalizer drops the pin on the level below — so a 40-deep
+		// chain needs more rounds than a flat graph, but every node is still
+		// reclaimed.
+		await collect(60)
+		expect(savedRef.deref()).toBeUndefined()
+		expect(subCount(base)).toBe(0)
+	})
+
+	test('a tracer does not retain a dropped node after recording its delivery', async () => {
+		const tracer = attachTracer()
+		const nodeRef = (() => {
+			const node = nodeOf(createAtom(0, { label: 'temporary' }))
+			tracer.emit('notify', node, 0)
+			expect(tracer.whyLastDelivery(node)[0]).toMatch(/notify/)
+			return new WeakRef(node)
+		})()
+		await collect(10)
+		const retained = nodeRef.deref()
+		tracer.stop()
+		expect(retained).toBeUndefined()
+	})
+
 	test('[guard] effects preempted by a throwing flush collect after disposal (catch-path slots nulled)', async () => {
-		const cell = createAtom(0)
+		const atom = createAtom(0)
 		let armed = false
 		const payloadRef = (() => {
-			const disposeThrowing = effect(() => {
-				cell.get()
-				if (armed) {
-					throw new Error('boom')
-				}
-			})
-			// Scheduled behind the thrower: the aborted flush clears it via the
+			const disposeThrowing = effect(
+				() => atom.get(),
+				() => {
+					if (armed) {
+						throw new Error('boom')
+					}
+				},
+			)
+			// Scheduled behind the thrower: the aborted drain clears it via the
 			// catch path, which must null its unconsumed slot too.
 			const payload = { tag: 'preempted-effect-payload' }
-			const disposePreempted = effect(() => {
-				cell.get()
-				void payload
-			})
+			const disposePreempted = effect(
+				() => {
+					void payload
+					return atom.get()
+				},
+				() => {},
+			)
 			armed = true
-			expect(() => cell.set(1)).toThrow('boom')
+			expect(() => atom.set(1)).toThrow('boom')
 			disposeThrowing()
 			disposePreempted()
 			return new WeakRef(payload)
@@ -211,10 +279,12 @@ describe('leak audit', () => {
 			// Common usage: the per-effect disposer is dropped because the scope
 			// owns the effect. Collecting that disposer is not abandonment — the
 			// effect must stay live until the scope goes.
-			void effect(() => {
-				base.get()
-				runs++
-			})
+			void effect(
+				() => base.get(),
+				() => {
+					runs++
+				},
+			)
 		})
 		expect(runs).toBe(1)
 		base.set(2)

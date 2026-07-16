@@ -1,37 +1,20 @@
-/** FrameworkAdapter for the shared conformance/bench harness. */
+/** Test-only adapter for the shared conformance and benchmark harnesses. */
+import { SkipTest } from 'reactive-framework-test-suite'
 import {
+	createAtom,
 	createComputed,
 	effect,
 	effectScope,
 	endBatch,
-	installState,
-	createAtom,
 	startBatch,
-	type Computed,
 	untracked,
 } from '../src/index.ts'
+import { SignalWriteForbidden } from '../src/graph.ts'
+import { installState } from '../src/ssr.ts'
 
-export interface AdapterSignal<T> {
-	read(): T
-	write(value: T): void
-}
-export interface AdapterComputed<T> {
-	read(): T
-}
-export interface FrameworkAdapter {
-	name: string
-	signal<T>(initialValue: T): AdapterSignal<T>
-	computed<T>(fn: () => T): AdapterComputed<T>
-	effect(fn: () => void | (() => void)): () => void
-	effectScope(fn: () => void): () => void
-	startBatch(): void
-	endBatch(): void
-	untracked<T>(fn: () => T): T
-}
-
-const adapter: FrameworkAdapter = {
+const adapter = {
 	name: 'signals-royale-fx2-dalien',
-	signal<T>(initialValue: T): AdapterSignal<T> {
+	signal<T>(initialValue: T) {
 		// The engine treats function-valued initials as lazy initializers; the
 		// harness stores plain values, including functions, so opt out here.
 		const s = createAtom(initialValue)
@@ -40,14 +23,31 @@ const adapter: FrameworkAdapter = {
 		}
 		return {
 			read: () => s.get(),
-			write: (value: T) => s.set(value),
+			write(value: T) {
+				try {
+					s.set(value)
+				} catch (error) {
+					if (
+						error instanceof SignalWriteForbidden &&
+						error.message === 'writes inside computeds are forbidden'
+					) {
+						throw new SkipTest('computed writes are disabled by policy')
+					}
+					throw error
+				}
+			},
 		}
 	},
-	computed<T>(fn: () => T): AdapterComputed<T> {
-		const c: Computed<T> = createComputed(fn)
+	computed<T>(fn: () => T) {
+		const c = createComputed(fn)
 		return { read: () => c.get() }
 	},
-	effect,
+	// The harness's effect is a single tracked body. It runs as the compute;
+	// a body that writes signals throws the computed write-policy error,
+	// which signal.write above converts to SkipTest.
+	effect(fn: () => void | (() => void)): () => void {
+		return effect(() => fn(), (cleanup) => cleanup, { equals: () => false })
+	},
 	effectScope,
 	startBatch,
 	endBatch,

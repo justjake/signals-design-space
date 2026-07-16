@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * Lane semantics of the one-channel notification design: a base write
- * re-renders with exactly useState's urgency — the lane comes from the
- * dispatch context, because the wake IS a reducer dispatch made in that
- * context. These tests observe real scheduling (no act), so the act
- * environment flag is turned off per test and restored after.
+ * Scheduling semantics of the notification design: a base write
+ * re-renders with exactly useState's urgency, because the wake is itself
+ * a reducer dispatch made in the write's context. These tests observe
+ * real scheduling (no act), so the act environment flag is turned off per
+ * test and restored after.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
@@ -19,9 +19,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
 	;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = prevActEnv
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 const drainMicrotasks = async () => {
@@ -57,7 +55,7 @@ describe('base writes behave like useState', () => {
 				res()
 			}, 0),
 		)
-		// The discriminator: a sync-lane update (what useSyncExternalStore
+		// This timing separates the lanes: a sync-lane update (what useSyncExternalStore
 		// forced for every store change) flushes in the microtask window; a
 		// default-lane update waits for a scheduler task. useState semantics =
 		// the latter.

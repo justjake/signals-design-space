@@ -1,25 +1,33 @@
 // @vitest-environment jsdom
 /**
  * Scenarios 11, 14-18, plus fx2-specific surfaces (ambient transitions,
- * useSignalTransition, useCommitted, useAtom, useComputed, useSignalEffect).
+ * useSignalTransition, useAtom, useComputed,
+ * useSignalEffect/useSignalLayoutEffect).
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
+import {
+	act,
+	deferred,
+	flushEffects,
+	makeHarness,
+	text,
+	React,
+	type Harness,
+} from './helpers.tsx'
 import {
 	attachTracer,
 	createComputed,
 	nodeOf,
 	read,
-	serializeAtomState,
-	initializeAtomState,
 	createAtom,
 	update,
-	type Signal,
+	type Atom,
 } from 'signals-royale-fx2-dalien'
+import { initializeAtomState, serializeAtomState } from 'signals-royale-fx2-dalien/ssr'
 import {
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useAtom,
-	useCommitted,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
@@ -32,9 +40,7 @@ beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 describe('scenario 11 — suspense family', () => {
@@ -42,7 +48,7 @@ describe('scenario 11 — suspense family', () => {
 	 * The resource idiom: one request per param key, so requests are stable
 	 * across re-evaluations and a param change is what refetches.
 	 */
-	function makeResource(param: Signal<number>) {
+	function makeResource(param: Atom<number>) {
 		let fetchCount = 0
 		const gates = new Map<string, ReturnType<typeof deferred<string>>>()
 		const data = createComputed((use) => {
@@ -150,6 +156,73 @@ describe('scenario 14 — lifetime effects across subscriber kinds', () => {
 })
 
 describe('scenario 15 — causality traces', () => {
+	test('a suspension records observed render and readiness branches with shared identities', async () => {
+		const key = createAtom(0, { label: 'key' })
+		const gate = deferred<string>()
+		const data = createComputed((use) => (key.get() === 0 ? 'zero' : use(gate.promise)), {
+			label: 'data',
+		})
+		function App() {
+			return <span>{useValue(data)}</span>
+		}
+		const { container } = await h.mount(
+			<React.Suspense fallback={<i>loading</i>}>
+				<App />
+			</React.Suspense>,
+		)
+		expect(text(container)).toBe('zero')
+
+		const tracer = attachTracer()
+		await act(() => {
+			startSignalTransition(() => key.set(1))
+		})
+		expect(text(container)).toBe('zero')
+		let events = tracer.events()
+		const write = events.find((event) => event.kind === 'set' && event.label === 'key')!
+		const compute = events.find((event) => event.kind === 'compute' && event.label === 'data')!
+		expect(compute.cause).toBe(0)
+		expect(compute.draftId).toBeUndefined()
+		expect(compute.world).toEqual([write.draftId])
+		const suspended = events.find(
+			(event) => event.kind === 'compute-suspend' && event.cause === compute.id,
+		)!
+		const encountered = events.find((event) => event.kind === 'render-suspend')!
+		expect(suspended.suspensionId).toBeDefined()
+		expect(encountered.suspensionId).toBe(suspended.suspensionId)
+		expect(encountered.cause).toBe(0)
+		expect(encountered.rootId).toBeDefined()
+		expect(events.some((event) => event.kind === 'root-park')).toBe(false)
+
+		await act(async () => {
+			gate.resolve('one')
+			await gate.promise
+			await Promise.resolve()
+		})
+		expect(text(container)).toBe('one')
+		events = tracer.events()
+		const settled = events.find((event) => event.kind === 'settle')!
+		const ready = events.find(
+			(event) => event.kind === 'retry' && event.cause === settled.id,
+		)!
+		const rendered = events.find((event) => event.kind === 'render')!
+		const delivery = events.find(
+			(event) => event.kind === 'notify' && event.cause === rendered.id,
+		)!
+		const commit = events.find((event) => event.kind === 'transition-commit')!
+		expect(settled.status).toBe('fulfilled')
+		expect(ready.suspensionId).toBe(suspended.suspensionId)
+		expect(delivery.rootId).toBe(encountered.rootId)
+		expect(commit.rootId).toBe(encountered.rootId)
+		expect(events.some((event) => event.kind === 'retry-schedule')).toBe(false)
+		expect(events.some((event) => event.kind === 'render-retry')).toBe(false)
+		for (const event of events) {
+			if (event.cause !== 0) {
+				expect(event.cause).toBeLessThan(event.id)
+			}
+		}
+		tracer.stop()
+	})
+
 	test('urgent chain reaches the write; post-retirement chain passes the retirement', async () => {
 		const t = attachTracer()
 		const a = createAtom(1, { label: 'a' })
@@ -179,14 +252,14 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(container)).toBe('v:2')
 		const urgentChain = t.whyLastDelivery(nodeOf(a))
-		expect(urgentChain.join(' ')).toMatch(/write/i)
+		expect(urgentChain.join(' ')).toMatch(/set|update/i)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(container)).toBe('v:4')
 		const retiredChain = t.whyLastDelivery(nodeOf(a))
-		expect(retiredChain.join(' ')).toMatch(/retire|write/i)
+		expect(retiredChain.join(' ')).toMatch(/retire|set|update/i)
 		// Structure: causes always reference earlier events.
 		for (const e of t.events()) {
 			if (e.cause !== 0) {
@@ -195,11 +268,186 @@ describe('scenario 15 — causality traces', () => {
 		}
 		t.stop()
 	})
+
+	test('two sibling suspensions retain distinct identities when they settle in reverse', async () => {
+		const firstGate = deferred<string>()
+		const secondGate = deferred<string>()
+		const first = createComputed((use) => use(firstGate.promise), { label: 'first' })
+		const second = createComputed((use) => use(secondGate.promise), { label: 'second' })
+		function Value({ signal }: { signal: typeof first }) {
+			return <span>{useValue(signal)}</span>
+		}
+		const tracer = attachTracer()
+		const { container } = await h.mount(
+			<>
+				<React.Suspense fallback={<i>first-pending</i>}>
+					<Value signal={first} />
+				</React.Suspense>
+				<React.Suspense fallback={<i>second-pending</i>}>
+					<Value signal={second} />
+				</React.Suspense>
+			</>,
+		)
+		expect(text(container)).toBe('first-pendingsecond-pending')
+		let firstSuspend
+		let secondSuspend
+		for (const event of tracer.events()) {
+			if (event.kind === 'render-suspend' && event.label === 'first') {
+				firstSuspend = event
+			} else if (event.kind === 'render-suspend' && event.label === 'second') {
+				secondSuspend = event
+			}
+		}
+		expect(firstSuspend).toBeDefined()
+		expect(secondSuspend).toBeDefined()
+		const firstEvent = firstSuspend!
+		const secondEvent = secondSuspend!
+		expect(firstEvent.rootId).toBe(secondEvent.rootId)
+		expect(firstEvent.suspensionId).not.toBe(secondEvent.suspensionId)
+
+		await act(async () => {
+			secondGate.resolve('second-ready')
+			await secondGate.promise
+		})
+		expect(text(container)).toBe('first-pendingsecond-ready')
+		const secondReady = tracer.events().find(
+			(event) => event.kind === 'retry' && event.suspensionId === secondEvent.suspensionId,
+		)
+		expect(secondReady).toBeDefined()
+		expect(
+			tracer.events().some(
+				(event) =>
+					event.kind === 'retry' && event.suspensionId === firstEvent.suspensionId,
+			),
+		).toBe(false)
+
+		await act(async () => {
+			firstGate.resolve('first-ready')
+			await firstGate.promise
+		})
+		expect(text(container)).toBe('first-readysecond-ready')
+		expect(
+			tracer.events().some(
+				(event) =>
+					event.kind === 'retry' && event.suspensionId === firstEvent.suspensionId,
+			),
+		).toBe(true)
+		tracer.stop()
+	})
+
+	test('one suspension shared by two roots keeps one suspension id and two root ids', async () => {
+		const gate = deferred<string>()
+		const shared = createComputed((use) => use(gate.promise), { label: 'shared' })
+		function App() {
+			return <span>{useValue(shared)}</span>
+		}
+		const tracer = attachTracer()
+		const first = await h.mount(
+			<React.Suspense fallback={<i>pending</i>}>
+				<App />
+			</React.Suspense>,
+		)
+		const second = await h.mount(
+			<React.Suspense fallback={<i>pending</i>}>
+				<App />
+			</React.Suspense>,
+		)
+		expect(text(first.container)).toBe('pending')
+		expect(text(second.container)).toBe('pending')
+		const rootIds = new Set<number>()
+		let suspensionId: number | undefined
+		for (const event of tracer.events()) {
+			if (event.kind !== 'render-suspend' || event.label !== 'shared') {
+				continue
+			}
+			suspensionId ??= event.suspensionId
+			expect(event.suspensionId).toBe(suspensionId)
+			rootIds.add(event.rootId!)
+		}
+		expect(rootIds.size).toBe(2)
+
+		await act(async () => {
+			gate.resolve('ready')
+			await gate.promise
+		})
+		expect(text(first.container)).toBe('ready')
+		expect(text(second.container)).toBe('ready')
+		const deliveredRoots = new Set<number>()
+		for (const event of tracer.events()) {
+			if (event.kind === 'notify' && event.label === 'shared') {
+				deliveredRoots.add(event.rootId!)
+			}
+		}
+		expect(deliveredRoots).toEqual(rootIds)
+		expect(
+			tracer.events().some(
+				(event) => event.kind === 'retry' && event.suspensionId === suspensionId,
+			),
+		).toBe(true)
+		tracer.stop()
+	})
+
+	test('replacing a tracer while pending does not import the old suspension cause', async () => {
+		const gate = deferred<string>()
+		const data = createComputed((use) => use(gate.promise), { label: 'pending-replacement' })
+		function App() {
+			return <span>{useValue(data)}</span>
+		}
+		const first = attachTracer()
+		const mounted = await h.mount(
+			<React.Suspense fallback={<i>pending</i>}>
+				<App />
+			</React.Suspense>,
+		)
+		expect(text(mounted.container)).toBe('pending')
+		expect(first.events().some((event) => event.kind === 'render-suspend')).toBe(true)
+		first.stop()
+		const second = attachTracer()
+		await act(async () => {
+			gate.resolve('ready')
+			await gate.promise
+		})
+		expect(text(mounted.container)).toBe('ready')
+		const settled = second.events().find((event) => event.kind === 'settle')!
+		const ready = second.events().find((event) => event.kind === 'retry')!
+		expect(settled.cause).toBe(0)
+		expect(ready.cause).toBe(settled.id)
+		for (const event of second.events()) {
+			if (event.cause !== 0) {
+				expect(second.find(event.cause)).toBeDefined()
+			}
+		}
+		second.stop()
+	})
+
+	test('replacing a tracer after render sanitizes the later committed delivery', async () => {
+		const value = createAtom(1, { label: 'commit-replacement' })
+		const first = attachTracer()
+		let second: ReturnType<typeof attachTracer> | undefined
+		function App() {
+			const rendered = useValue(value)
+			if (second === undefined) {
+				first.stop()
+				second = attachTracer()
+			}
+			return <span>{rendered}</span>
+		}
+		const mounted = await h.mount(<App />)
+		expect(text(mounted.container)).toBe('1')
+		expect(first.events().some((event) => event.kind === 'render')).toBe(true)
+		expect(first.whyLastDelivery(nodeOf(value))).toEqual([
+			'(no delivery recorded for this node)',
+		])
+		const delivery = second!.events().find((event) => event.kind === 'notify')!
+		expect(delivery.cause).toBe(0)
+		expect(second!.whyLastDelivery(nodeOf(value))[0]).toMatch(/notify/)
+		second!.stop()
+	})
 })
 
-// Scenario 16 (the DOM mutation window) is intentionally absent: bracketing
-// React's mutation phase needs reconciler cooperation, which is out of scope
-// for a stock-React package. Owner-ruled exemption; see README + REPORT.
+// Scenario 16 (the DOM mutation window) is intentionally absent:
+// bracketing React's mutation phase needs reconciler cooperation, which
+// is out of scope for a stock-React package.
 
 describe('scenario 17 — lazy initializers under React', () => {
 	test('initializer runs at first render read, once', async () => {
@@ -257,11 +505,11 @@ describe('scenario 18 — SSR', () => {
 	})
 })
 
-describe('hooks demand a SignalScopeProvider', () => {
-	// The hooks have no unscoped mode: a scope is the world carrier, and a
-	// subscriber without one has no channel for transition worlds at all.
-	// Rendering any scope-consuming hook outside a SignalScopeProvider throws with a
-	// message naming the fixes.
+describe('hooks demand a SignalsFrameworkProvider', () => {
+	// Hooks have no provider-free mode. The root connection carries
+	// transition worlds, so a subscriber without one has no channel for
+	// them. Rendering a provider-dependent hook without a provider throws
+	// with a message naming the fixes.
 	class Boundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
 		state: { error: Error | null } = { error: null }
 		static getDerivedStateFromError(error: Error) {
@@ -276,19 +524,22 @@ describe('hooks demand a SignalScopeProvider', () => {
 		}
 	}
 
-	test('[falsify-first] every scope-consuming hook throws without a scope, naming the fixes', async () => {
+	test('[falsify-first] provider-dependent hooks throw without a provider and name the fixes', async () => {
 		const { createRoot } = await import('react-dom/client')
+		const tracer = attachTracer()
 		const a = createAtom(1)
+		// useSignalEffect and useSignalLayoutEffect are absent deliberately:
+		// they observe base state, which needs no root channel, so they work
+		// without a provider.
 		const cases: Array<[string, () => React.ReactNode]> = [
 			['useValue', () => <span>{useValue(a)}</span>],
 			['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
 			['useIsPending', () => <span>{String(useIsPending(a))}</span>],
-			['useCommitted', () => <span>{useCommitted(a)}</span>],
 		]
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
 			const div = document.body.appendChild(document.createElement('div'))
-			const root = createRoot(div) // deliberately no SignalScopeProvider
+			const root = createRoot(div) // deliberately no SignalsFrameworkProvider
 			await act(() => {
 				root.render(
 					<Boundary>
@@ -297,8 +548,60 @@ describe('hooks demand a SignalScopeProvider', () => {
 				)
 			})
 			expect(text(div), name).toContain('caught:')
-			expect(text(div), name).toContain('SignalScopeProvider')
+			expect(text(div), name).toContain(`caught:${name}wasrendered`)
+			expect(text(div), name).toContain('SignalsFrameworkProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
+			await act(() => root.unmount())
+			div.remove()
+		}
+		const missingProviderErrors = []
+		for (const event of tracer.events()) {
+			if (event.kind === 'policy-error' && event.phase === 'missing-provider') {
+				missingProviderErrors.push(event)
+			}
+		}
+		expect(missingProviderErrors.length).toBeGreaterThanOrEqual(cases.length)
+		for (const event of missingProviderErrors) {
+			expect(event.error).toBeInstanceOf(Error)
+		}
+		tracer.stop()
+	})
+
+	test('[falsify-first] a descendant provider throws before its connection mounts', async () => {
+		const { createRoot } = await import('react-dom/client')
+		const tracer = attachTracer()
+		const div = document.body.appendChild(document.createElement('div'))
+		const root = createRoot(div)
+		try {
+			await act(() => {
+				root.render(
+					<SignalsFrameworkProvider>
+						<Boundary>
+							<SignalsFrameworkProvider>
+								<span>nested child</span>
+							</SignalsFrameworkProvider>
+						</Boundary>
+					</SignalsFrameworkProvider>,
+				)
+			})
+			expect(text(div)).toContain(
+				'caught:SignalsFrameworkProvidercannotbenestedinsideanotherSignalsFrameworkProvider.',
+			)
+			expect(text(div)).toContain('wrapCreateRoot(createRoot)')
+			expect(text(div)).not.toContain('nestedchild')
+			const errors = []
+			for (const event of tracer.events()) {
+				if (event.kind === 'policy-error' && event.phase === 'nested-provider') {
+					errors.push(event)
+				}
+			}
+			expect(errors.length).toBeGreaterThan(0)
+			for (const event of errors) {
+				expect(event.cause).toBe(0)
+				expect(event.error).toBeInstanceOf(Error)
+			}
+		} finally {
+			tracer.stop()
 			await act(() => root.unmount())
 			div.remove()
 		}
@@ -343,7 +646,7 @@ describe('fx2 extras', () => {
 		const a = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
-		let start!: (scope: () => void) => void
+		let start!: (fn: () => void) => void
 		const pendingSeen: boolean[] = []
 		function Controls() {
 			const [isPending, startFn] = useSignalTransition()
@@ -382,46 +685,61 @@ describe('fx2 extras', () => {
 		expect(pendingSeen).toContain(true)
 	})
 
-	test('useCommitted tracks this root screen, urgent and transitional', async () => {
+	test('[falsify-first] the pending snapshot flips while a draft is held, without extra renders', async () => {
 		const a = createAtom(0)
-		let renders = 0
-		function App() {
-			renders++
-			const now = useValue(a)
-			const shown = useCommitted(a)
-			return (
-				<span>
-					n:{now};c:{shown};
-				</span>
-			)
+		const hold = createAtom(false)
+		const gate = deferred<void>()
+		let pendingRenders = 0
+		function PendingProbe() {
+			pendingRenders++
+			return <i>p:{useIsPending(hold) ? 1 : 0};</i>
 		}
-		const { container } = await h.mount(<App />)
-		expect(text(container)).toBe('n:0;c:0;')
-		expect(renders).toBe(1)
+		function Suspender() {
+			if (useValue(hold) && !gate.settled) {
+				throw gate.promise
+			}
+			return null
+		}
+		const { container } = await h.mount(
+			<>
+				<PendingProbe />
+				<React.Suspense fallback={null}>
+					<Suspender />
+				</React.Suspense>
+			</>,
+		)
+		expect(text(container)).toBe('p:0;')
 		await act(() => {
-			a.set(1)
+			startSignalTransition(() => {
+				a.set(1)
+				hold.set(true)
+			})
 		})
-		expect(text(container)).toBe('n:1;c:1;')
-		expect(renders).toBe(2)
-		await act(() => {
-			startSignalTransition(() => a.set(2))
+		expect(text(container)).toBe('p:1;')
+		expect(pendingRenders).toBe(2)
+		await act(async () => {
+			gate.resolve()
+			await gate.promise
 		})
-		await act(async () => {})
-		expect(text(container)).toBe('n:2;c:2;')
-		// The transition renders the draft, then confirmCommit advances the
-		// root-local committed screen for useCommitted.
-		expect(renders).toBe(4)
+		expect(text(container)).toBe('p:0;')
+		expect(pendingRenders).toBe(3)
 	})
 
-	test('useAtom is component-owned; useComputed derives; useSignalEffect observes commits', async () => {
+	test('useAtom is component-owned; useComputed derives; useSignalEffect observes base', async () => {
 		const base = createAtom(2)
 		const effectSeen: number[] = []
 		function App() {
 			const own = useAtom(10)
 			const sum = useComputed(() => base.get() + own.get(), [own])
-			useSignalEffect(() => {
-				effectSeen.push(base.get())
-			})
+			useSignalEffect(
+				() => ({
+					watch: () => base.get(),
+					run: (v) => {
+						effectSeen.push(v)
+					},
+				}),
+				[],
+			)
 			return (
 				<span>
 					s:{sum};o:{useValue(own)};
@@ -433,6 +751,7 @@ describe('fx2 extras', () => {
 		await act(() => {
 			base.set(3)
 		})
+		await flushEffects()
 		expect(text(container)).toBe('s:13;o:10;')
 		expect(effectSeen).toEqual([2, 3])
 	})

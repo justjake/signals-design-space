@@ -21,6 +21,7 @@
 import {
 	type DerivedNode,
 	type Flags,
+	type TraceEventId,
 	Flag,
 	NodeSlot,
 	PARKED,
@@ -28,60 +29,55 @@ import {
 	invalidateDerived,
 	isUninitialized,
 	NO_EVENT,
+	currentCause,
 	setCurrentCause,
-	setFinishComputeImpl,
-	setUseImpl,
 	startBatch,
 	endBatch,
-	traceHook,
+	tickGraphChange,
+	emitEvent,
 	untracked,
 	graphMemory,
 } from './graph.ts'
 
 export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected'
 
+/**
+ * Per-thenable tracking record: its settlement state plus everything
+ * currently parked on it.
+ */
 export interface ThenableBox {
 	status: ThenableStatus
-	value: unknown
-	reason: unknown
-	/** Computeds whose latest base-state evaluation parked on this thenable. */
-	parkedNodes: Set<DerivedNode<unknown>>
-	/** Suspensions (base-state or per-world) waiting on this thenable. */
-	parkedSuspensions: Set<Suspension>
+	/** Fulfillment value or rejection reason, selected by status. */
+	result: unknown
+	/**
+	 * Computeds whose latest base-state evaluation parked on this thenable,
+	 * or null after settlement releases the membership owner.
+	 */
+	parkedNodes: Set<DerivedNode<unknown>> | null
+	/**
+	 * Suspensions (base-state or per-world) waiting on this thenable, or
+	 * null after settlement releases the membership owner.
+	 */
+	parkedSuspensions: Set<Suspension> | null
 }
 
 /**
  * One pending span: a stable promise that resolves when the span makes
- * progress, so a suspended React render retries exactly then.
+ * progress, so a suspended React render retries exactly then and not
+ * before.
  */
 export interface Suspension {
 	promise: Promise<void>
-	resolve: () => void
-	settled: boolean
-}
-
-export interface ErrorBox {
-	error: unknown
+	resolve: ((cause?: TraceEventId) => void) | null
 }
 
 /**
- * Box identity is the rethrow-same-reference contract: every read of an
- * erroring computed rethrows the same reason, and identity-comparing
- * consumers (snapshot equality, memo reconciliation) rely on the box staying
- * the same object for the whole error span. Boxes are registered so value
- * channels that hand a box to a caller (committedSnapshot) can be told apart
- * from user values without a marker allocation.
+ * A thrown error, boxed so an erroring evaluation has one stable result
+ * object to compare and rethrow (see the header on stability). The class
+ * identity distinguishes engine errors from error-shaped user values.
  */
-const errorBoxes = new WeakSet<object>()
-
-export function makeErrorBox(error: unknown): ErrorBox {
-	const box: ErrorBox = { error }
-	errorBoxes.add(box)
-	return box
-}
-
-export function isErrorBox(v: unknown): v is ErrorBox {
-	return typeof v === 'object' && v !== null && errorBoxes.has(v)
+export class ErrorBox {
+	constructor(public error: unknown) {}
 }
 
 /**
@@ -94,38 +90,69 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  *   clear = plain value state.
  * - value: the settled value; the UNINITIALIZED sentinel when none exists
  *   yet. A suspended state with a settled value is "stale" — the previous
- *   value keeps serving while the refetch runs (stale ⇔ value is not the
- *   sentinel; unwrap sites normalize the sentinel to undefined).
- * - throwable: the value-plane companion — the ErrorBox whose .error every
- *   read rethrows (AsyncError), the Suspension whose .promise suspends a
- *   reader (AsyncSuspended), null in the value state.
+ *   value keeps serving while the refetch runs (unwrap sites normalize the
+ *   sentinel to undefined).
+ * - throwable: present only for async states — the ErrorBox whose .error
+ *   every read rethrows (AsyncError), or the Suspension whose .promise
+ *   suspends a reader (AsyncSuspended). Node-backed views keep the slot as
+ *   null for a plain value because they can become async.
  */
 export interface ResolvedState {
 	flags: Flags
 	value: unknown
-	throwable: ErrorBox | Suspension | null
+	throwable?: ErrorBox | Suspension | null
+}
+
+/**
+ * Read one ResolvedState under a park policy — the shared tail of every
+ * unwrap site:
+ * - a plain value flows through;
+ * - an error rethrows its stable reason;
+ * - a pending state parks through `park` when one is supplied (evaluation
+ *   contexts forward pendingness; no stale value may leak into their
+ *   result), and otherwise serves settled history ("stale"), suspending
+ *   on the promise only when none exists yet.
+ */
+export function unwrapResolved(
+	st: ResolvedState,
+	park: ((t: PromiseLike<unknown>) => unknown) | null,
+): unknown {
+	const asyncBits = st.flags & Flag.AsyncMask
+	if (asyncBits === 0) {
+		return st.value
+	}
+	if (asyncBits === Flag.AsyncError) {
+		throw (st.throwable as ErrorBox).error
+	}
+	const suspension = st.throwable as Suspension
+	if (park !== null) {
+		return park(suspension.promise)
+	}
+	if (!isUninitialized(st.value)) {
+		return st.value // stale serves
+	}
+	throw suspension.promise // never settled: suspend
 }
 
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>()
-
-/** Installed by worlds.ts: settlement also invalidates world memos. */
-let onSettlement: (() => void) | null = null
-export function setOnSettlement(fn: () => void): void {
-	onSettlement = fn
-}
 
 export function makeSuspension(): Suspension {
 	let resolveRaw!: () => void
 	const promise = new Promise<void>((r) => (resolveRaw = r))
 	const ep: Suspension = {
 		promise,
-		settled: false,
-		resolve: () => {
-			if (ep.settled) {
+		resolve: (cause = NO_EVENT) => {
+			if (ep.resolve === null) {
 				return
 			}
-			ep.settled = true
+			ep.resolve = null
 			resolveRaw()
+			if (emitEvent !== null) {
+				// The suspension promise is now fulfilled. React may retry because
+				// of that fact, but the engine does not observe when it schedules or
+				// which later render is that retry.
+				emitEvent('retry', null, cause, { suspension: ep })
+			}
 		},
 	}
 	return ep
@@ -138,41 +165,49 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
 	}
 	const fresh: ThenableBox = {
 		status: 'pending',
-		value: undefined,
-		reason: undefined,
+		result: undefined,
 		parkedNodes: new Set(),
 		parkedSuspensions: new Set(),
 	}
 	boxes.set(t, fresh)
 	t.then(
-		(v) => {
-			fresh.status = 'fulfilled'
-			fresh.value = v
-			settle(fresh)
-		},
-		(r) => {
-			fresh.status = 'rejected'
-			fresh.reason = r
-			settle(fresh)
-		},
+		(v) => settle(fresh, 'fulfilled', v),
+		(r) => settle(fresh, 'rejected', r),
 	)
 	return fresh
 }
 
 /**
- * Settlement is a write: invalidate parked computeds and eagerly bring
- * them up to date (progressive evaluations park on their NEXT thenable
- * without waiting for a reader, and passive probes observe final state when
- * the wave's notifications run), then release the suspensions so suspended
- * renders retry against the settled graph.
+ * A thenable settled. Treat it like a write: invalidate the parked
+ * computeds and eagerly re-evaluate them — eagerly, so a computed that
+ * awaits several thenables in sequence parks on the next one without
+ * waiting for a reader, and so passive probes observe the final state when
+ * the wave's notifications run. Then release the suspensions, so suspended
+ * renders retry against the already-settled graph.
  */
-function settle(box: ThenableBox): void {
-	const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT
-	onSettlement?.()
-	const nodes = [...box.parkedNodes]
-	box.parkedNodes.clear()
-	const suspensions = [...box.parkedSuspensions]
-	box.parkedSuspensions.clear()
+function settle(box: ThenableBox, status: 'fulfilled' | 'rejected', result: unknown): void {
+	if (box.status !== 'pending') {
+		return
+	}
+	box.status = status
+	box.result = result
+	const cause =
+		emitEvent !== null
+			? emitEvent('settle', null, NO_EVENT, {
+					status: box.status,
+					error: box.status === 'rejected' ? box.result : undefined,
+				})
+			: NO_EVENT
+	// Settlement ticks the one change clock even when nothing base-visible
+	// parked here: world memos whose suspensions this settlement resolves
+	// key their fast path on the clock, and a memo serving a suspended
+	// state with a resolved suspension would suspend renders on an
+	// already-fulfilled promise.
+	tickGraphChange()
+	const nodes = box.parkedNodes!
+	box.parkedNodes = null
+	const suspensions = box.parkedSuspensions!
+	box.parkedSuspensions = null
 	const prevCause = setCurrentCause(cause)
 	startBatch()
 	try {
@@ -181,15 +216,19 @@ function settle(box: ThenableBox): void {
 			try {
 				untracked(() => ensureFresh(node))
 			} catch {
-				// Evaluation state (pending/error) is recorded on the node; readers
-				// see it at their own read sites.
+				// The evaluation outcome (pending or error) is recorded on the
+				// node; readers encounter it at their own read sites.
 			}
 		}
 	} finally {
-		endBatch()
-		setCurrentCause(prevCause)
-		for (const ep of suspensions) {
-			ep.resolve()
+		nodes.clear()
+		try {
+			endBatch()
+		} finally {
+			setCurrentCause(prevCause)
+			for (const ep of suspensions) {
+				ep.resolve?.(cause)
+			}
 		}
 	}
 }
@@ -202,31 +241,39 @@ function settle(box: ThenableBox): void {
  */
 export let asyncPlaneUsed = false
 
-/** use(t) inside a base-state evaluation. */
-function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
+/** Handles use(t) inside a base-state evaluation. */
+export function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
 	const box = trackThenable(t)
 	if (box.status === 'fulfilled') {
-		return box.value
+		return box.result
 	}
 	if (box.status === 'rejected') {
-		throw box.reason
+		throw box.result
 	}
-	box.parkedNodes.add(consumer)
+	box.parkedNodes!.add(consumer)
 	const flags = graphMemory[consumer.id + NodeSlot.Flags]
-	// Reuse the span's suspension so Suspense retries see one stable thenable —
-	// but never a settled one, or a suspended render would retry in a loop.
+	// Reuse the pending span's suspension so Suspense retries see one
+	// stable thenable — but never a settled one, or a suspended render
+	// would retry in a loop.
 	const suspension =
-		(flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+		(flags & Flag.AsyncSuspended) !== 0 && (consumer.throwable as Suspension).resolve !== null
 			? (consumer.throwable as Suspension)
 			: makeSuspension()
-	box.parkedSuspensions.add(suspension)
+	box.parkedSuspensions!.add(suspension)
+	if (emitEvent !== null) {
+		emitEvent('compute-suspend', consumer, currentCause, { suspension })
+	}
 	consumer.throwable = suspension
-	graphMemory[consumer.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended
+	// EverAsync marks the node as a possible member of a parked set for the
+	// rest of its life; effect disposal keys its record-reclaim path on it.
+	graphMemory[consumer.id + NodeSlot.Flags] =
+		(flags & ~Flag.AsyncMask) | Flag.AsyncSuspended | Flag.EverAsync
 	asyncPlaneUsed = true
 	throw PARKED
 }
 
-function finishCompute(
+/** Fold a recompute's value, park, or throw into the node's async state. */
+export function finishCompute(
 	node: DerivedNode<unknown>,
 	parked: boolean,
 	hasError: boolean,
@@ -235,25 +282,26 @@ function finishCompute(
 ): boolean {
 	const flags = graphMemory[node.id + NodeSlot.Flags]
 	if (parked) {
-		// baseUse installed the suspended state. Advance the version so
-		// downstream readers re-pull and park on the (possibly fresh) suspension.
+		// baseUse already installed the suspended state. Report a change so
+		// downstream readers re-pull and park on the (possibly fresh)
+		// suspension.
 		return true
 	}
 	if (hasError) {
 		if ((flags & Flag.AsyncSuspended) !== 0) {
-			;(node.throwable as Suspension).resolve()
+			;(node.throwable as Suspension).resolve?.(currentCause)
 		}
 		const sameError =
 			(flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === error
 		if (!sameError) {
-			node.throwable = makeErrorBox(error)
+			node.throwable = new ErrorBox(error)
 		}
 		graphMemory[node.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncError
 		asyncPlaneUsed = true
 		return !sameError
 	}
 	if ((flags & Flag.AsyncSuspended) !== 0) {
-		;(node.throwable as Suspension).resolve()
+		;(node.throwable as Suspension).resolve?.(currentCause)
 	}
 	graphMemory[node.id + NodeSlot.Flags] = flags & ~Flag.AsyncMask
 	node.throwable = null
@@ -266,6 +314,3 @@ function finishCompute(
 	// a pending or error span (readers may have parked or thrown).
 	return (flags & Flag.AsyncMask) !== 0
 }
-
-setUseImpl(baseUse)
-setFinishComputeImpl(finishCompute)

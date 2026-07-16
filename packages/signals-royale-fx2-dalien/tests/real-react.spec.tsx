@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The real-React gate: RULES scenarios 1-18 against this package's own fork
- * build, written with raw createRoot + act (no RTL).
+ * End-to-end scenarios against real React, written with raw
+ * createRoot + act (no React Testing Library).
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
@@ -10,17 +10,13 @@ import {
 	createComputed,
 	isPending as enginePending,
 	latest,
-	committed,
 	read,
 	createAtom,
 	update,
-	serializeAtomState,
-	initializeAtomState,
 } from 'signals-royale-fx2-dalien'
 import {
 	startSignalTransition,
 	useIsPending,
-	useSignalTransition,
 	useValue,
 } from 'signals-royale-fx2-dalien/react'
 
@@ -29,9 +25,7 @@ beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 function Reader({ id, atom }: { id: string; atom: ReturnType<typeof createAtom<number>> }) {
@@ -107,7 +101,6 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		})
 		expect(text(container)).toBe('P;v:0;') // held: no leak, no fallback, probe flipped
 		expect(read(a)).toBe(0)
-		expect(committed(a)).toBe(0)
 		expect(latest(a)).toBe(1)
 		expect(enginePending(a)).toBe(true)
 		await act(async () => {
@@ -205,10 +198,11 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 
 describe('the latest() context rule', () => {
 	// With a transition draft held over base state, each context must
-	// resolve its OWN world: the transition's render sees the draft, an
-	// urgent render body does not, a base-state computed evaluation resolves
-	// base state (and stays live — the read is tracked), and ambient code sees
-	// newest intent. Reading ahead of your world is a tear.
+	// resolve its own world: the transition's render sees the draft, an
+	// urgent render body does not, a base-state computed evaluation
+	// resolves base state (and stays live — the read is tracked), and
+	// ambient code sees the newest view. Reading ahead of your world is a
+	// tear.
 	test('urgent bodies, base-state computeds, the transition render, and ambient code', async () => {
 		const a = createAtom(1)
 		const b = createAtom(0) // unrelated urgent driver
@@ -393,7 +387,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 })
 
 describe('scenario 7 — one transition across two roots', () => {
-	test('per-root committed views diverge while one root holds, then join', async () => {
+	test('screens diverge while one root holds; base state joins at retirement', async () => {
 		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
@@ -414,26 +408,25 @@ describe('scenario 7 — one transition across two roots', () => {
 		})
 		expect(text(one.container)).toBe('s:0;') // held here
 		expect(text(two.container)).toBe('r:1;') // committed there
-		expect(committed(a, one.container)).toBe(0)
-		expect(committed(a, two.container)).toBe(1)
-		expect(read(a)).toBe(0) // base state folds only when every root commits
+		// Base state folds only when every root commits, so during the skew
+		// it trails the early-committing root.
+		expect(read(a)).toBe(0)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(one.container)).toBe('s:1;')
-		expect(committed(a, one.container)).toBe(1)
 		expect(read(a)).toBe(1)
 	})
 })
 
 describe('silent folds must repair subscribers the render-pass worlds never reached', () => {
-	// A retirement is silent for a subscriber because its rendered world
-	// resolves the same values the fold produced. That premise
-	// only holds for subscribers whose root carried the draft. The shape below
-	// never carried it, so the fold is its ONLY delivery channel — it must
+	// A retirement is silent for a subscriber when its rendered world
+	// resolves the same values the fold produced — which only holds for
+	// subscribers whose root carried the draft. The shape below never
+	// carried it, so the fold is its only delivery channel: it must
 	// converge, not stay stale until the next write.
-	test('a scope mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
+	test('a provider mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
 		const a = createAtom(1)
 		const gate = deferred<void>()
 		function Suspender() {
@@ -535,6 +528,30 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 })
 
 describe('scenario 10 — write-during-render fails loudly', () => {
+	test('set() before the component calls a hook throws without mutating', async () => {
+		const a = createAtom(0)
+		class Boundary extends React.Component<React.PropsWithChildren, { rejected: boolean }> {
+			override state = { rejected: false }
+			static getDerivedStateFromError() {
+				return { rejected: true }
+			}
+			override render() {
+				return this.state.rejected ? <span>rejected</span> : this.props.children
+			}
+		}
+		function Bad() {
+			a.set(1)
+			return null
+		}
+		const { container } = await h.mount(
+			<Boundary>
+				<Bad />
+			</Boundary>,
+		)
+		expect(text(container)).toBe('rejected')
+		expect(read(a)).toBe(0)
+	})
+
 	test('set() from a component body throws synchronously', async () => {
 		const a = createAtom(0)
 		let thrown: unknown

@@ -1,24 +1,22 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
-import { committed, createAtom, createComputed, latest, nodeOf, read } from 'signals-royale-fx2-dalien'
+import { createAtom, createComputed, latest, nodeOf, read } from 'signals-royale-fx2-dalien'
 import {
-	SignalScopeProvider,
+	SignalsFrameworkProvider,
 	startSignalTransition,
 	useSignalEffect,
 	useSignalLayoutEffect,
 	useValue,
 } from 'signals-royale-fx2-dalien/react'
-import { act, deferred, makeHarness, React, type Harness } from './helpers.tsx'
+import { act, deferred, flushEffects, makeHarness, React, type Harness } from './helpers.tsx'
 
 let h: Harness
 beforeEach(() => {
 	h = makeHarness()
 })
 afterEach(async () => {
-	const errors = [...h.handle.errors]
 	await h.cleanup()
-	expect(errors).toEqual([])
 })
 
 describe('scheduled React signal effects', () => {
@@ -32,34 +30,45 @@ describe('scheduled React signal effects', () => {
 		}
 	}
 
-	test('graph flush only schedules; layout follows root commit and passive follows layout', async () => {
+	test('setup runs in the React phase; a write only marks and enqueues', async () => {
 		const atom = createAtom(0)
 		const events: string[] = []
-		let container: HTMLElement | undefined
 		function App() {
-			useSignalLayoutEffect(() => {
-				events.push(
-					`layout:${atom.get()}:${container === undefined ? 'mount' : committed(atom, container)}`,
-				)
-			})
-			useSignalEffect(() => {
-				events.push(`passive:${atom.get()}`)
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`layout:${v}`)
+					},
+				}),
+				[],
+			)
+			useSignalEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`passive:${v}`)
+					},
+				}),
+				[],
+			)
 			return null
 		}
-		const mounted = await h.mount(<App />)
-		container = mounted.container
-		expect(events).toEqual(['layout:0:mount', 'passive:0'])
+		await h.mount(<App />)
+		// First runs land exactly in the React phases, in order.
+		expect(events).toEqual(['layout:0', 'passive:0'])
 		events.length = 0
 		await act(() => {
 			events.push('write:start')
 			atom.set(1)
 			events.push('write:end')
-			// The graph flush may schedule React work, but never invokes either
-			// user effect body itself.
+			// The write path only marks and enqueues; neither handler runs
+			// inside it.
 			expect(events).toEqual(['write:start', 'write:end'])
 		})
-		expect(events).toEqual(['write:start', 'write:end', 'layout:1:1', 'passive:1'])
+		await flushEffects()
+		// The useLayoutEffect lane drains ahead of the useEffect lane.
+		expect(events).toEqual(['write:start', 'write:end', 'layout:1', 'passive:1'])
 		events.length = 0
 		await act(() => {
 			startSignalTransition(() => {
@@ -69,29 +78,42 @@ describe('scheduled React signal effects', () => {
 			})
 			expect(events).toEqual(['transition:start', 'transition:end'])
 		})
-		expect(events).toEqual(['transition:start', 'transition:end', 'layout:2:2', 'passive:2'])
+		await flushEffects()
+		// The drafted write was invisible; retirement delivered it once.
+		expect(events).toEqual(['transition:start', 'transition:end', 'layout:2', 'passive:2'])
 	})
 
 	test('cleanup precedes each rerun and the final cleanup runs on unmount', async () => {
 		const atom = createAtom(0)
 		const events: string[] = []
 		function App() {
-			useSignalLayoutEffect(() => {
-				const value = atom.get()
-				events.push(`layout:run:${value}`)
-				return () => events.push(`layout:cleanup:${value}`)
-			})
-			useSignalEffect(() => {
-				const value = atom.get()
-				events.push(`passive:run:${value}`)
-				return () => events.push(`passive:cleanup:${value}`)
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: atom, // signal-source shorthand through the hook
+					run: (value) => {
+						events.push(`layout:run:${value}`)
+						return () => events.push(`layout:cleanup:${value}`)
+					},
+				}),
+				[],
+			)
+			useSignalEffect(
+				() => ({
+					watch: atom,
+					run: (value) => {
+						events.push(`passive:run:${value}`)
+						return () => events.push(`passive:cleanup:${value}`)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		const { root } = await h.mount(<App />)
 		expect(events).toEqual(['layout:run:0', 'passive:run:0'])
 		events.length = 0
 		await act(() => atom.set(1))
+		await flushEffects()
 		expect(events).toEqual([
 			'layout:cleanup:0',
 			'layout:run:1',
@@ -109,53 +131,146 @@ describe('scheduled React signal effects', () => {
 		])
 	})
 
-	test('latest reads are tracked in both React effect phases', async () => {
+	test('latest reads are tracked in both phases (compute-side)', async () => {
 		const atom = createAtom(0)
 		const layout: number[] = []
 		const passive: number[] = []
 		function App() {
-			useSignalLayoutEffect(() => {
-				layout.push(latest(atom))
-			})
-			useSignalEffect(() => {
-				passive.push(latest(atom))
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => latest(atom),
+					run: (v) => {
+						layout.push(v)
+					},
+				}),
+				[],
+			)
+			useSignalEffect(
+				() => ({
+					watch: () => latest(atom),
+					run: (v) => {
+						passive.push(v)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		await h.mount(<App />)
 		expect(layout).toEqual([0])
 		expect(passive).toEqual([0])
 		await act(() => atom.set(1))
+		await flushEffects()
 		expect(layout).toEqual([0, 1])
 		expect(passive).toEqual([0, 1])
 	})
 
-	test('a dependency write from the body queues a later React-phase rerun', async () => {
+	test('a dependency write from the handler queues a later lane rerun', async () => {
 		const atom = createAtom(0)
 		const seen: number[] = []
 		function App() {
-			useSignalEffect(() => {
-				const value = atom.get()
-				seen.push(value)
-				if (value === 0) {
-					atom.set(1)
-				}
-			})
+			useSignalEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (value) => {
+						seen.push(value)
+						if (value === 0) {
+							atom.set(1)
+						}
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		await h.mount(<App />)
+		await flushEffects()
 		expect(seen).toEqual([0, 1])
 	})
 
-	test('a throwing initial body disposes its watcher in either phase', async () => {
+	test('handler runs are gated by the value anchor: net reverts deliver nothing', async () => {
+		const atom = createAtom(0)
+		const seen: number[] = []
+		function App() {
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
+				[],
+			)
+			return null
+		}
+		await h.mount(<App />)
+		expect(seen).toEqual([0])
+		await act(() => {
+			atom.set(5)
+			atom.set(0) // reverted before the lane drained
+		})
+		await flushEffects()
+		expect(seen).toEqual([0]) // net-of-window cutoff: no run at all
+		await act(() => atom.set(5))
+		await flushEffects()
+		expect(seen).toEqual([0, 5])
+	})
+
+	test('dependency tracking shrinks and expands with the compute branches', async () => {
+		for (const phase of ['layout', 'passive'] as const) {
+			const wide = createAtom(true)
+			const first = createAtom(0)
+			const second = createAtom(0)
+			const seen: string[] = []
+			function App() {
+				const usePhase = phase === 'layout' ? useSignalLayoutEffect : useSignalEffect
+				usePhase(
+					() => ({
+						watch: () => {
+							const isWide = wide.get()
+							const values = `${isWide}:${first.get()}`
+							return isWide ? `${values}:${second.get()}` : values
+						},
+						run: (s) => {
+							seen.push(s)
+						},
+					}),
+					[],
+				)
+				return null
+			}
+			await h.mount(<App />)
+			expect(seen, phase).toEqual(['true:0:0'])
+			await act(() => wide.set(false))
+			await flushEffects()
+			expect(seen, phase).toEqual(['true:0:0', 'false:0'])
+			await act(() => second.set(1))
+			await flushEffects()
+			expect(seen, phase).toEqual(['true:0:0', 'false:0']) // pruned branch: silent
+			await act(() => wide.set(true))
+			await flushEffects()
+			expect(seen, phase).toEqual(['true:0:0', 'false:0', 'true:0:1'])
+			await act(() => second.set(2))
+			await flushEffects()
+			expect(seen, phase).toEqual(['true:0:0', 'false:0', 'true:0:1', 'true:0:2'])
+		}
+	})
+
+	test('a throwing initial compute disposes its watcher in either phase', async () => {
 		for (const phase of ['layout', 'passive'] as const) {
 			const atom = createAtom(0)
 			function Broken() {
 				const usePhase = phase === 'layout' ? useSignalLayoutEffect : useSignalEffect
-				usePhase(() => {
-					atom.get()
-					throw new Error(`${phase} boom`)
-				})
+				usePhase(
+					() => ({
+						watch: () => {
+							atom.get()
+							throw new Error(`${phase} boom`)
+						},
+						run: () => {},
+					}),
+					[],
+				)
 				return null
 			}
 			await h.mount(
@@ -173,12 +288,24 @@ describe('scheduled React signal effects', () => {
 		const gate = deferred<void>()
 		const events: string[] = []
 		function Effects() {
-			useSignalLayoutEffect(() => {
-				events.push(`layout:${atom.get()}`)
-			})
-			useSignalEffect(() => {
-				events.push(`passive:${atom.get()}`)
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`layout:${v}`)
+					},
+				}),
+				[],
+			)
+			useSignalEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`passive:${v}`)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		function Suspender() {
@@ -201,26 +328,34 @@ describe('scheduled React signal effects', () => {
 				hold.set(true)
 			})
 		})
-		expect(events).toEqual([])
+		await flushEffects()
+		expect(events).toEqual([]) // drafts are invisible to effects
 		expect(read(atom)).toBe(0)
 		expect(latest(atom)).toBe(1)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
+		await flushEffects()
 		expect(events).toEqual(['layout:1', 'passive:1'])
 	})
 
-	test('an effect mounted urgently while a transition is held observes its later commit', async () => {
+	test('an effect mounted urgently while a transition is held observes its later retirement', async () => {
 		const atom = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		const seen: number[] = []
 		let showEffect!: (show: boolean) => void
 		function Effect() {
-			useSignalLayoutEffect(() => {
-				seen.push(atom.get())
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		function Suspender() {
@@ -248,24 +383,35 @@ describe('scheduled React signal effects', () => {
 		})
 		expect(seen).toEqual([])
 		await act(() => showEffect(true))
-		expect(seen).toEqual([0])
+		expect(seen).toEqual([0]) // mounted mid-hold: base state
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
+		await flushEffects()
 		expect(seen).toEqual([0, 1])
 	})
 
-	test('containerless scopes run effects in their own committed worlds', async () => {
+	test('effects observe base state: a multi-root transition delivers at retirement', async () => {
+		// One transition spans two roots; the second root commits it while the
+		// first holds. Effects are base-only, so neither root's effect sees the
+		// draft until every root commits and the fold lands — the per-root skew
+		// window is invisible to effects by design (see docs/effects.md).
 		const atom = createAtom(0)
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		const firstSeen: number[] = []
 		const secondSeen: number[] = []
 		function Effect({ seen }: { seen: number[] }) {
-			useSignalLayoutEffect(() => {
-				seen.push(atom.get())
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		function Suspender() {
@@ -281,17 +427,17 @@ describe('scheduled React signal effects', () => {
 		try {
 			await act(() => {
 				firstRoot.render(
-					<SignalScopeProvider>
+					<SignalsFrameworkProvider>
 						<React.Suspense fallback={null}>
 							<Effect seen={firstSeen} />
 							<Suspender />
 						</React.Suspense>
-					</SignalScopeProvider>,
+					</SignalsFrameworkProvider>,
 				)
 				secondRoot.render(
-					<SignalScopeProvider>
+					<SignalsFrameworkProvider>
 						<Effect seen={secondSeen} />
-					</SignalScopeProvider>,
+					</SignalsFrameworkProvider>,
 				)
 			})
 			expect(firstSeen).toEqual([0])
@@ -302,13 +448,18 @@ describe('scheduled React signal effects', () => {
 					hold.set(true)
 				})
 			})
+			await flushEffects()
+			// The second root committed the transition, but the draft is not
+			// retired until the first root does too — base is unchanged and
+			// both effects stay silent.
 			expect(firstSeen).toEqual([0])
-			expect(secondSeen).toEqual([0, 1])
+			expect(secondSeen).toEqual([0])
 			expect(read(atom)).toBe(0)
 			await act(async () => {
 				gate.resolve()
 				await gate.promise
 			})
+			await flushEffects()
 			expect(firstSeen).toEqual([0, 1])
 			expect(secondSeen).toEqual([0, 1])
 			expect(read(atom)).toBe(1)
@@ -322,22 +473,24 @@ describe('scheduled React signal effects', () => {
 		}
 	})
 
-	test('an equal world-only computed branch rewires its committed root effect', async () => {
+	test('a held transition never rewires a base effect; retirement delivers the switched branch', async () => {
 		const flag = createAtom(false)
 		const left = createAtom(10)
-		const right = createAtom(10)
+		const right = createAtom(11)
 		const hold = createAtom(false)
 		const pick = createComputed(() => (flag.get() ? right.get() : left.get()))
 		const gate = deferred<void>()
 		const seen: number[] = []
-		const cleaned: number[] = []
-		let renders = 0
 		function Effect() {
-			renders++
-			useSignalLayoutEffect(() => {
-				seen.push(pick.get())
-				return () => cleaned.push(pick.get())
-			})
+			useSignalLayoutEffect(
+				() => ({
+					watch: pick,
+					run: (v) => {
+						seen.push(v)
+					},
+				}),
+				[],
+			)
 			return null
 		}
 		function Suspender() {
@@ -346,39 +499,142 @@ describe('scheduled React signal effects', () => {
 			}
 			return null
 		}
-		const first = await h.mount(<Effect />)
+		await h.mount(<Effect />)
 		await h.mount(
 			<React.Suspense fallback={null}>
 				<Suspender />
 			</React.Suspense>,
 		)
 		expect(seen).toEqual([10])
-		expect(renders).toBe(1)
 		await act(() => {
 			startSignalTransition(() => {
 				flag.set(true)
 				hold.set(true)
 			})
 		})
-		expect(committed(flag, first.container)).toBe(true)
-		expect(committed(pick, first.container)).toBe(10)
+		await flushEffects()
 		expect(seen).toEqual([10])
-		expect(renders).toBe(2)
 		expect(read(flag)).toBe(false)
 
+		// Only the drafted world reads `right`; the base effect still tracks
+		// the base branch and stays silent.
 		await act(() => right.set(20))
-		expect(seen).toEqual([10, 20])
-		expect(cleaned).toEqual([20])
-		expect(renders).toBe(3)
-		expect(read(flag)).toBe(false)
+		await flushEffects()
+		expect(seen).toEqual([10])
 
+		// The base branch is live: it delivers.
+		await act(() => left.set(12))
+		await flushEffects()
+		expect(seen).toEqual([10, 12])
+
+		// Retirement folds the branch switch; the effect re-tracks and sees
+		// the drafted branch's current value.
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
-		expect(seen).toEqual([10, 20])
-		expect(cleaned).toEqual([20])
-		expect(renders).toBe(3)
+		await flushEffects()
+		expect(seen).toEqual([10, 12, 20])
 		expect(read(flag)).toBe(true)
+	})
+
+	test('deps-array changes re-create the effect in the React phase', async () => {
+		const atom = createAtom(0)
+		const events: string[] = []
+		let bump!: () => void
+		function App() {
+			const [gen, setGen] = React.useState(0)
+			bump = () => setGen((g) => g + 1)
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						events.push(`run:${gen}:${v}`)
+						return () => events.push(`cleanup:${gen}:${v}`)
+					},
+				}),
+				[gen],
+			)
+			return null
+		}
+		await h.mount(<App />)
+		expect(events).toEqual(['run:0:0'])
+		await act(() => bump())
+		// Old effect disposed and the new one first-ran, both inside React's
+		// layout phase for the deps-change commit.
+		expect(events).toEqual(['run:0:0', 'cleanup:0:0', 'run:1:0'])
+		await act(() => atom.set(1))
+		await flushEffects()
+		expect(events).toEqual(['run:0:0', 'cleanup:0:0', 'run:1:0', 'cleanup:1:0', 'run:1:1'])
+	})
+
+	test('factory spec typing follows the watch shape', () => {
+		const n = createAtom(0)
+		const s = createAtom('x')
+		function Probe() {
+			useSignalEffect(
+				() => ({
+					watch: [n, s],
+					run: (values) => {
+						values satisfies [number, string]
+					},
+				}),
+				[],
+			)
+			useSignalLayoutEffect(
+				() => ({
+					watch: { n, s },
+					run: (values) => {
+						values satisfies { n: number; s: string }
+						// @ts-expect-error record values are not a tuple
+						values satisfies [number, string]
+					},
+				}),
+				[],
+			)
+			return null
+		}
+		expect(typeof Probe).toBe('function')
+	})
+
+	test('captured props are deps-fresh: listed deps re-create, omitted deps freeze', async () => {
+		const atom = createAtom(0)
+		const fresh: string[] = []
+		const frozen: string[] = []
+		let setLabel!: (label: string) => void
+		function App() {
+			const [label, set] = React.useState('a')
+			setLabel = set
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						fresh.push(`${label}:${v}`)
+					},
+				}),
+				[label], // what exhaustive-deps demands for the capture
+			)
+			useSignalLayoutEffect(
+				() => ({
+					watch: () => atom.get(),
+					run: (v) => {
+						frozen.push(`${label}:${v}`)
+					},
+				}),
+				// eslint-disable-next-line react-hooks/exhaustive-deps
+				[], // omitted on purpose: creation-time capture, useEffect's own rule
+			)
+			return null
+		}
+		await h.mount(<App />)
+		expect(fresh).toEqual(['a:0'])
+		expect(frozen).toEqual(['a:0'])
+		await act(() => setLabel('b')) // deps change re-creates: cleanup + first run
+		expect(fresh).toEqual(['a:0', 'b:0'])
+		expect(frozen).toEqual(['a:0'])
+		await act(() => atom.set(1))
+		await flushEffects()
+		expect(fresh).toEqual(['a:0', 'b:0', 'b:1'])
+		expect(frozen).toEqual(['a:0', 'a:1']) // stale by contract, like useEffect
 	})
 })

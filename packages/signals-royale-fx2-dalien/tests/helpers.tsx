@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import { flushScheduledEffects } from 'signals-royale-fx2-dalien'
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
@@ -22,13 +23,12 @@ export interface Harness {
 	cleanup(): Promise<void>
 }
 
-const scopedCreateRoot = wrapCreateRoot(createRoot as never)
+const frameworkCreateRoot = wrapCreateRoot(createRoot as never)
 
 export function makeHarness(): Harness {
 	resetReactSignalsForTest()
 	;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 	const handle = registerReactSignals()
-	handle.errors.length = 0
 	const containers: HTMLElement[] = []
 	const roots: Array<{ render(node: unknown): void; unmount(): void }> = []
 	return {
@@ -38,7 +38,7 @@ export function makeHarness(): Harness {
 		async mount(node) {
 			const container = document.createElement('div')
 			document.body.appendChild(container)
-			const root = scopedCreateRoot(container)
+			const root = frameworkCreateRoot(container)
 			containers.push(container)
 			roots.push(root)
 			await act(() => {
@@ -80,4 +80,16 @@ export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; s
 }
 
 export const tick = (ms = 0): Promise<void> => new Promise((res) => setTimeout(() => res(), ms))
+
+/**
+ * Drain both deferred lanes deterministically — requests that fell back
+ * to the built-in timer pumps are not flushed by act(), so lane-delivered
+ * handlers are asserted after this. Wrapped in act so handler writes that
+ * re-render components stay inside it.
+ */
+export const flushEffects = (): Promise<void> =>
+	act(async () => {
+		flushScheduledEffects()
+	})
+
 export { act, React }

@@ -1,8 +1,8 @@
 /** react-seam-bench Contender for fx2. */
 import type { ComponentType, ReactNode } from 'react'
-import { batch, set, createAtom, type Atom } from 'signals-royale-fx2-dalien'
+import { batch, createAtom, set, type Atom } from 'signals-royale-fx2-dalien'
 import {
-	SignalScopeProvider,
+	SignalsFrameworkProvider,
 	registerReactSignals,
 	startSignalTransition,
 	useValue,
@@ -55,7 +55,7 @@ const contender: Contender = {
 			dispose() {
 				cells.length = 0 // dropped handles reclaim structurally
 			},
-			Provider: SignalScopeProvider as ComponentType<{ children: ReactNode }>,
+			Provider: SignalsFrameworkProvider as ComponentType<{ children: ReactNode }>,
 		}
 	},
 }
