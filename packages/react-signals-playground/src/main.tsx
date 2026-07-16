@@ -22,7 +22,17 @@ if (container === null) {
 // battery — never fetch the devtools. ?devtools=1 opens it on load.
 if (location.pathname.includes('royale-fx2')) {
 	const open = new URLSearchParams(location.search).has('devtools')
-	void import('./devtools-button').then((m) => m.mountDevtoolsButton(open))
+	if (open) {
+		// ?devtools: attach the collector before the first render (top-level await),
+		// so every node and watcher is captured from the start — including watcher
+		// component names, which are only read at a hook's first render while the
+		// tracer is attached. Gated on the flag so the default load and the battery
+		// never pay for tracing.
+		const m = await import('./devtools-button')
+		m.mountDevtoolsButton(true)
+	} else {
+		void import('./devtools-button').then((m) => m.mountDevtoolsButton(false))
+	}
 }
 
 createRoot(container).render(<App />)
