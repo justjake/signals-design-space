@@ -123,6 +123,27 @@ describe('debug/hot — gated hot algorithm channel', () => {
 		dispose()
 	})
 
+	it('hot steps carry the cause of the write that drove them', () => {
+		const a = createAtom(0, { label: 'hc-a' })
+		const c = createComputed(() => a.get() + 1, { label: 'hc-c' })
+		const dispose = effect(
+			() => c.get(),
+			() => {},
+		)
+		const tracer = attachTracer()
+		const hot: { step: string; cause: number }[] = []
+		setHotTracer((_node, step, cause) => hot.push({ step, cause }))
+		set(a, 1)
+		const write = tracer.events().find((e) => e.kind === 'set' && e.label === 'hc-a')!
+		const propagate = hot.find((h) => h.step === 'propagate')!
+		expect(propagate.cause).toBe(write.id) // the write that drove the wave, not a root
+		// The pull driven by this write's flush chains to it too (not a root).
+		expect(hot.some((h) => h.step === 'pull' && h.cause === write.id)).toBe(true)
+		setHotTracer(null)
+		tracer.stop()
+		dispose()
+	})
+
 	it('an attached hot hook adds no strong retention of nodes', async () => {
 		const steps: string[] = []
 		// The hook receives live nodes but records only strings — the contract

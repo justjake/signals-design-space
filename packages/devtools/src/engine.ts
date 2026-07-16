@@ -58,7 +58,7 @@ export interface EngineDebug {
 			endSpan?(id: number, attrs?: { changed?: boolean }): void
 		} | null,
 	): void
-	setHotTracer(fn: ((node: EngineNode, step: string) => void) | null): void
+	setHotTracer(fn: ((node: EngineNode, step: string, cause?: number) => void) | null): void
 	inspect(node: EngineNode): EngineInspected
 	deps(node: EngineNode): EngineNode[]
 	subs(node: EngineNode): EngineNode[]
@@ -391,7 +391,7 @@ export function attachEngineDevtools(
 	// the step string — the ring never holds a node, same as every other event.
 	collector.setHotSource((on) =>
 		engine.setHotTracer(
-			on ? (node, step) => void collector.record(step, register(node), 0 as EventId, kindOf(node), {}) : null,
+			on ? (node, step, cause) => void collector.record(step, register(node), (cause ?? 0) as EventId, kindOf(node), {}) : null,
 		),
 	)
 

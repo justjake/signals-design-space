@@ -396,7 +396,7 @@ export type HotStep = 'propagate' | 'check' | 'pull'
  * not retain the node — derive an id and drop the reference (the devtools
  * adapter maps nodes to numeric ids through WeakRefs).
  */
-export type HotFn = (node: ReactiveNode, step: HotStep) => void
+export type HotFn = (node: ReactiveNode, step: HotStep, cause: TraceEventId) => void
 let hotHook: HotFn | null = null
 /** Install or detach the hot hook. `null` restores the detached null-check path. */
 export function setHotTracer(fn: HotFn | null): void {
@@ -1069,7 +1069,8 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	}
 	if (hotHook !== null) {
 		// Every link in a subscriber list shares its dep: the changed producer.
-		hotHook(link.dep, 'propagate')
+		// The wave's cause (the write/settle driving it) is the propagate's cause.
+		hotHook(link.dep, 'propagate', cause)
 	}
 	let cur: Link = link
 	let next: Link | undefined = cur.nextSub
@@ -1622,7 +1623,9 @@ const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 
 function recompute(node: EvaluatedNode<unknown>): void {
 	if (hotHook !== null) {
-		hotHook(node, 'pull')
+		// The re-eval is caused by the state change that invalidated this node
+		// (propagation stamped it), or the operation in flight if unstamped.
+		hotHook(node, 'pull', node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause)
 	}
 	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
@@ -1785,7 +1788,9 @@ export function ensureFresh(node: EvaluatedNode<unknown>): void {
 
 function ensureFreshAt(node: EvaluatedNode<unknown>, depth: number): void {
 	if (hotHook !== null) {
-		hotHook(node, 'check')
+		// A read validating this node's dependencies — caused by the operation
+		// in flight (the read/wave that reached here).
+		hotHook(node, 'check', currentCause)
 	}
 	const flags = node.flags
 	if ((flags & Flag.Watched) !== 0) {
