@@ -172,6 +172,30 @@ export function LogView({
 		(r) => matchesSearch(r, query) && (brush === undefined || (r.t >= brush[0] && r.t <= brush[1])),
 	)
 
+	// Flash a row only when its event genuinely arrives — never on a view or
+	// filter switch, which re-render or remount existing rows. A high-water mark
+	// of the largest event id seen baselines on the first commit (no flash for
+	// the initial fill); later commits flash only ids above it.
+	const seenMax = useRef<EventId | undefined>(undefined)
+	const [flashing, setFlashing] = useState<ReadonlySet<EventId>>(() => new Set())
+	useEffect(() => {
+		let max = seenMax.current ?? (0 as EventId)
+		const fresh: EventId[] = []
+		for (const r of rows) {
+			if (seenMax.current !== undefined && r.id > seenMax.current) fresh.push(r.id)
+			if (r.id > max) max = r.id
+		}
+		seenMax.current = max
+		if (fresh.length === 0) return
+		setFlashing((f) => new Set([...f, ...fresh]))
+		const t = setTimeout(() => setFlashing((f) => {
+			const n = new Set(f)
+			for (const id of fresh) n.delete(id)
+			return n
+		}), 800)
+		return () => clearTimeout(t)
+	})
+
 	// Tree mode: resolve any cause referenced but outside the visible window
 	// (still in the ring) and prepend its ancestry, so rows nest under the real
 	// event instead of orphaning. Then nest, honoring the collapsed set.
@@ -395,7 +419,7 @@ export function LogView({
 										<tr
 											key={r.id}
 											ref={r.id === selected ? selRowRef : undefined}
-											className={r.id === selected ? 'selected' : undefined}
+											className={`${r.id === selected ? 'selected' : ''}${flashing.has(r.id) ? ' flash' : ''}`.trim() || undefined}
 											aria-selected={r.id === selected}
 											onClick={() => setSelected(r.id)}
 										>
@@ -416,7 +440,7 @@ export function LogView({
 										<tr
 											key={t.row.id}
 											ref={t.row.id === selected ? selRowRef : undefined}
-											className={`${t.depth === 0 && t.children > 0 ? 'op-head' : ''} ${t.row.id === selected ? 'selected' : ''}`.trim() || undefined}
+											className={`${t.depth === 0 && t.children > 0 ? 'op-head' : ''} ${t.row.id === selected ? 'selected' : ''}${flashing.has(t.row.id) ? ' flash' : ''}`.trim() || undefined}
 											aria-selected={t.row.id === selected}
 											onClick={() => setSelected(t.row.id)}
 										>

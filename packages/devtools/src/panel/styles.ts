@@ -361,10 +361,11 @@ export const PANEL_CSS = `
   .td-foot .tbtn { padding: 5px 12px; }
   .td-foot .td-apply { color: var(--bg); background: var(--thread); border-color: var(--thread); font-weight: 600; }
 
-  /* flash on update: a row/node re-mounts (keyed on its last event) → the
-     animation replays once, fading a tint away. New log entries flash on
-     insert the same way. */
-  .log tbody tr { animation: signals-devtools-flash .8s ease-out; }
+  /* flash on update: the .flash class is toggled on for ~animation duration
+     when a row/node's own activity advances (a new log event arrives, a graph
+     node's last event changes). Class-gated, not remount-keyed, so switching
+     views or filters never replays it. */
+  .log tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
   .nodelist tbody tr { cursor: pointer; }
   .nodelist tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
   .node.flash rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
@@ -392,7 +393,7 @@ export const PANEL_CSS = `
 
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
-    .log tbody tr, .nodelist tbody tr.flash, .node.flash rect:not(.ring) { animation: none; }
+    .log tbody tr.flash, .nodelist tbody tr.flash, .node.flash rect:not(.ring) { animation: none; }
     .thread-anim { opacity: 0; }
   }
 }

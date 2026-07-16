@@ -283,9 +283,6 @@ export function GraphView({
 	return (
 		<>
 			<div className="toolbar">
-				<select className="select" aria-label="Engine">
-					<option>fx2 · {counts.nodes} nodes</option>
-				</select>
 				<input
 					className="search"
 					type="search"
@@ -581,7 +578,7 @@ export function GraphView({
 							<div className="insp-id">
 								{model.node.kind} · {fmtId('node', model.node.id)} · engine fx2
 							</div>
-							<div className="insp-desc">{KIND_TIP[model.node.kind]}</div>
+							<div className="insp-desc">{KIND_TIP[model.node.kind].replace(/^[^:]+:\s*/, '')}</div>
 						</div>
 
 						<div className="insp-section">
@@ -596,7 +593,7 @@ export function GraphView({
 
 						{model.node.source !== undefined ? (
 							<div className="insp-section">
-								<h3 data-tip="How this node was created — its stringified compute/effect function.">Source</h3>
+								<h3>Source</h3>
 								<div className="value-preview">{model.node.source}</div>
 							</div>
 						) : undefined}
