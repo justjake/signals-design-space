@@ -1,9 +1,18 @@
 import { readdir, readFile } from 'node:fs/promises'
 
 const content = new URL('../content/docs/', import.meta.url)
-const files = ['index.mdx']
-for (const file of await readdir(new URL('guides/', content))) {
-	if (file.endsWith('.mdx')) files.push(`guides/${file}`)
+const files = []
+const directories = [{ url: content, prefix: '' }]
+while (directories.length > 0) {
+	const directory = directories.pop()
+	for (const entry of await readdir(directory.url, { withFileTypes: true })) {
+		const path = `${directory.prefix}${entry.name}`
+		if (entry.isDirectory()) {
+			directories.push({ url: new URL(`${entry.name}/`, directory.url), prefix: `${path}/` })
+		} else if (entry.name.endsWith('.mdx')) {
+			files.push(path)
+		}
+	}
 }
 
 for (const file of files) {

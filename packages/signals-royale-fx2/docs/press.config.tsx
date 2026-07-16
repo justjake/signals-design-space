@@ -10,7 +10,11 @@ export default defineConfig({
 	content: docs.toFumadocsSource(),
 	site: {
 		name: 'signals-royale-fx2',
-		baseUrl: import.meta.env.DEV ? 'http://localhost:3000' : 'https://signals-royale-fx2.dev',
+		git: {
+			user: 'justjake',
+			repo: 'signals-design-space',
+			branch: 'main',
+		},
 	},
 	meta: {
 		root() {
