@@ -490,24 +490,39 @@ export function confirmRootCommit(
 ): void {
 	connection.committing = true
 	try {
-		getActiveTracer()?.emit('transition-commit', null, NO_EVENT, {
-			root: connection,
-			world: ids,
-		})
+		const tracer = getActiveTracer()
+		let commitEvent: TraceEventId = NO_EVENT
+		if (tracer !== null) {
+			// The commit is caused by the committed draft's last write (its
+			// open event when it never wrote), so the committed frame chains
+			// back to the transition's origin instead of rooting itself.
+			let commitCause: TraceEventId = NO_EVENT
+			for (const id of ids) {
+				const draft = hostedDrafts.get(id)?.draft
+				if (draft !== undefined) {
+					commitCause = draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent
+				}
+			}
+			commitEvent = tracer.emit('transition-commit', null, commitCause, {
+				root: connection,
+				world: ids,
+			})
+		}
 		// This root's committed view changed; poke the draft watchers of every
 		// atom the committed drafts touched. This is cheap: value subscribers
 		// bail through the notify predicate when their resolution is
-		// unchanged. No engine event exists for a root commit, so the poke
-		// carries no cause. All pokes run before any retirement, because pokes
-		// can flush synchronously while retirement folds state and starts its
-		// own notification wave.
+		// unchanged. The poke carries the commit event, so a subscriber it
+		// does re-render (one whose passes never carried the draft) traces
+		// back through the commit to the transition's writes. All pokes run
+		// before any retirement, because pokes can flush synchronously while
+		// retirement folds state and starts its own notification wave.
 		for (const id of ids) {
 			const hosted = hostedDrafts.get(id)
 			if (hosted === undefined || hosted.draft.state !== 'open') {
 				continue
 			}
 			for (const atom of hosted.draft.cells) {
-				pokeDraftWatchers(atom, NO_EVENT)
+				pokeDraftWatchers(atom, commitEvent)
 			}
 		}
 		for (const id of ids) {

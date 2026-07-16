@@ -224,8 +224,14 @@ export function openDraft(): Draft {
 		cutoffAtGraphChange: alone ? currentGraphChange() : 0,
 		world: { drafts, sig: String(id) },
 		cells: new Set(),
+		// The transition roots at the operation in flight — the DOM-event
+		// origin a devtools adapter attributed, or the write/effect whose
+		// first drafted write opened it — so the whole causal subtree of the
+		// transition chains back to what the user did.
 		openEvent:
-			emitEvent !== null ? emitEvent('transition-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
+			emitEvent !== null
+				? emitEvent('transition-open', null, currentCause, { draftId: id })
+				: NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)
@@ -412,7 +418,12 @@ export function retireDraft(id: DraftId): void {
 					{ draftId: id },
 				)
 			: NO_EVENT
-	const prevCause = setCurrentCause(evt)
+	// Attribute the base-state fold to the drafted write it applies — the intent
+	// — rather than the retirement bookkeeping, so the trace reads "set X ← your
+	// write" instead of "set X ← transition-retire". The retire event still
+	// drives the watcher pokes below.
+	const foldCause = draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : evt
+	const prevCause = setCurrentCause(foldCause)
 	try {
 		startBatch()
 		try {

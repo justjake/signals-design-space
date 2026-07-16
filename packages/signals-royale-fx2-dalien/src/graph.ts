@@ -338,10 +338,11 @@ export interface EffectNode extends ReactiveNode {
 export interface RenderWatcherNode extends ReactiveNode {
 	/**
 	 * Render subscribers: delivery callback, run after sync effects
-	 * settle. The callback decides whether the delivery becomes a
-	 * re-render.
+	 * settle, with this watcher's causeEvent — the state change (write,
+	 * settle, fold) whose invalidation scheduled it. The callback decides
+	 * whether the delivery becomes a re-render.
 	 */
-	onNotify: (() => void) | undefined
+	onNotify: ((cause: TraceEventId) => void) | undefined
 	/**
 	 * Draft-wake callback: receives the id and cause of a transition draft
 	 * whose new write touches this subscriber's sources. Separate from
@@ -490,6 +491,32 @@ export function setTracer(sink: TraceSink | null): void {
 	emitEvent = sink?.emitEvent ?? null
 	startSpan = sink?.startSpan ?? null
 	endSpan = sink?.endSpan ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Hot algorithm channel. A second, independently gated hook for the
+// highest-volume internal steps: the invalidation wave, the dependency
+// validation walk, and the recompute. Deliberately NOT routed through the
+// emitEvent seam above — these steps would flood the causal log, and each
+// channel must attach and detach alone. Same discipline as the tracer seam:
+// a mutable module binding, detached cost is one null check per site.
+// ---------------------------------------------------------------------------
+
+/**
+ * One hot step: the invalidation wave pushing staleness marks ('propagate'),
+ * the dependency-validation walk ('check'), or a re-evaluation ('pull').
+ */
+export type HotStep = 'propagate' | 'check' | 'pull'
+/**
+ * The hot channel's hook. It receives the live node plus a step tag and must
+ * not retain the node — derive an id and drop the reference (the devtools
+ * adapter maps nodes to numeric ids through WeakRefs).
+ */
+export type HotFn = (node: ReactiveNode, step: HotStep) => void
+let hotHook: HotFn | null = null
+/** Install or detach the hot hook. `null` restores the detached null-check path. */
+export function setHotTracer(fn: HotFn | null): void {
+	hotHook = fn
 }
 
 /**
@@ -1563,6 +1590,10 @@ function createGraphCore(
 		if (link === undefined) {
 			return
 		}
+		if (hotHook !== null) {
+			// Every link in a subscriber list shares its dep: the changed producer.
+			hotHook(pinnedInternals[linkDep(link) >> RECORD_SHIFT]!, 'propagate')
+		}
 		const tracing = cause !== NO_EVENT
 		let stack = waveStack
 		let top = 0
@@ -1686,6 +1717,9 @@ function createGraphCore(
 							}
 							scheduleWatcher(sub, nextFlags)
 							M[sub + NodeSlot.Flags] = nextFlags | Flag.Scheduled
+							// A cause-less poke (a root commit with no tracer, a rebase
+							// after an equality no-op) keeps the previous attribution
+							// instead of wiping a pending delivery's cause.
 							if (cause !== NO_EVENT) {
 								causeColumn[sub >> RECORD_SHIFT] = cause
 							}
@@ -1694,6 +1728,14 @@ function createGraphCore(
 							}
 						}
 					} else if ((flags & Flag.KindDerived) !== 0) {
+						// Stamp traversed computeds for tracing: a draft-world
+						// evaluation (the write-time cutoff below, or a transition
+						// render) opens its compute span with causeEvent, so a
+						// background recompute chains through the draft activity
+						// that disturbed it.
+						if (cause !== NO_EVENT) {
+							causeColumn[sub >> RECORD_SHIFT] = cause
+						}
 						const subSubs = subsOf(sub)
 						if (subSubs !== undefined) {
 							const subChanged = valueChanged?.(pinnedInternals[sub >> RECORD_SHIFT]!) ?? true
@@ -2042,7 +2084,7 @@ function createGraphCore(
 						// record may already be reclaimed and reused, so its flags
 						// word cannot be read.
 						if (pinnedInternals[w.id >> RECORD_SHIFT] === w) {
-							w.onNotify!()
+							w.onNotify!(causeColumn[w.id >> RECORD_SHIFT] as TraceEventId)
 						}
 					}
 				} finally {
@@ -2169,6 +2211,9 @@ function createGraphCore(
 	}
 
 	function recompute(node: DerivedNode<unknown>): void {
+		if (hotHook !== null) {
+			hotHook(node, 'pull')
+		}
 		const mem = M
 		const clocks = graphClocks
 		const id = ensureNodeRecord(node)
@@ -2190,8 +2235,14 @@ function createGraphCore(
 		let hasError = false
 		let error: unknown
 		let value: unknown
-		const compute =
-			startSpan !== null ? startSpan('compute', node, causeColumn[id >> RECORD_SHIFT]) : NO_EVENT
+		// A computed's first run is a lazy eval on read, so nothing has propagated a
+		// cause to it yet (causeEvent is NO_EVENT) and the compute would orphan. Fall
+		// back to the active operation's cause (currentCause) — the write or fold in
+		// flight — so a first "new result" chains back to what triggered it. Outside
+		// an operation currentCause is NO_EVENT, so this never mis-attributes.
+		const nodeCause = causeColumn[id >> RECORD_SHIFT] as TraceEventId
+		const computeCause = nodeCause !== NO_EVENT ? nodeCause : currentCause
+		const compute = startSpan !== null ? startSpan('compute', node, computeCause) : NO_EVENT
 		const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 		try {
 			value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
@@ -2389,6 +2440,9 @@ function createGraphCore(
 
 	/** Bring a derived up to date; exact recompute counts are the contract. */
 	function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags, depth = 0): void {
+		if (hotHook !== null) {
+			hotHook(node, 'check')
+		}
 		const mem = M
 		const clocks = graphClocks
 		const pins = pinnedInternals
@@ -2887,10 +2941,10 @@ function createGraphCore(
 	}
 
 	const RenderWatcherHandle = class extends ReactiveNode implements RenderWatcherNode {
-		declare onNotify: (() => void) | undefined
+		declare onNotify: ((cause: TraceEventId) => void) | undefined
 		declare onDraftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined
 		constructor(
-			notify: () => void,
+			notify: (cause: TraceEventId) => void,
 			draftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined,
 		) {
 			super()
@@ -3004,14 +3058,20 @@ function createGraphCore(
 	 */
 	function observeNode(
 		node: ReactiveNode,
-		notify: () => void,
+		notify: (cause: TraceEventId) => void,
 		draftWake?: (id: DraftId, cause: TraceEventId) => void,
-	): () => void {
+		label?: string,
+	): (() => void) & { watcher: RenderWatcherNode } {
 		const mem = M
 		const pins = pinnedInternals
 		// A render watcher owns only its callbacks; the pinned link and every
 		// record field live behind the prototype's record-backed getters.
 		const sub: RenderWatcherNode = new RenderWatcherHandle(notify, draftWake)
+		// Attach a label only when supplied, so an unlabeled watcher keeps its
+		// exact object shape (hidden class) — no cost for the non-devtools path.
+		if (label !== undefined) {
+			sub.label = label
+		}
 		const subId = allocNode(sub, Flag.Watching | Flag.WatchRender | Flag.Watched)
 		pins[subId >> RECORD_SHIFT] = sub
 		try {
@@ -3066,7 +3126,11 @@ function createGraphCore(
 			}
 			throw error
 		}
-		return () => disposeWatcher(sub)
+		// The disposer stays the whole return value (most callers just call it);
+		// the watcher node rides along as a property for the render hook, which
+		// records notify/render/transition-notify against it — so those events
+		// belong to the component's subscription, not to the producer it watches.
+		return Object.assign(() => disposeWatcher(sub), { watcher: sub })
 	}
 
 	return {

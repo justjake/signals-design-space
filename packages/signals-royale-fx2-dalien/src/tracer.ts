@@ -10,11 +10,14 @@
  */
 
 import {
+	type Link,
 	type ReactiveNode,
 	type TraceEventId,
 	type TraceFields,
 	NO_EVENT,
+	nextSubscriber,
 	setTracer,
+	subscriberOf,
 } from './graph.ts'
 
 /** One entry in the tracer's ring. */
@@ -177,9 +180,26 @@ export class Tracer {
 	/**
 	 * The causal chain from the most recent delivery caused by this node,
 	 * back to its originating write or retirement, human-readable.
+	 *
+	 * We deliver to watchers, not to the watched node, so notify/render are
+	 * recorded against a subscriber. Asked about a producer, report the most
+	 * recent delivery among its subscribers (a watcher passed directly still
+	 * resolves via its own entry).
 	 */
 	whyLastDelivery(node: ReactiveNode | object): string[] {
-		const start = this.lastDelivery.get(node)
+		let start = this.lastDelivery.get(node)
+		if (start === undefined) {
+			for (
+				let link: Link | undefined = (node as ReactiveNode).subs;
+				link !== undefined;
+				link = nextSubscriber(link)
+			) {
+				const delivery = this.lastDelivery.get(subscriberOf(link))
+				if (delivery !== undefined && (start === undefined || delivery > start)) {
+					start = delivery
+				}
+			}
+		}
 		if (start === undefined) {
 			return ['(no delivery recorded for this node)']
 		}

@@ -1,6 +1,6 @@
 /**
- * `signals-royale-fx2-dalien/debug/trace` — the tracer surface and the
- * canonical trace vocabulary.
+ * `signals-royale-fx2-dalien/debug/trace` — the tracer surface and the canonical
+ * trace vocabulary.
  *
  * This module is the ONE source of kind strings. The engine emits these
  * verbatim and the devtools shows them verbatim: there is no runtime mapping
@@ -16,20 +16,19 @@
 // them so consumers import only `signals-royale-fx2-dalien/debug`, never core.
 export { Tracer, attachTracer, getActiveTracer } from '../tracer.ts'
 export type { TraceEvent, TracerOptions } from '../tracer.ts'
-export { setTracer, NO_EVENT } from '../graph.ts'
-export type {
-	TraceSink,
-	EmitFn,
-	EndSpanFn,
-	TraceFields,
-	SpanEndAttrs,
-	TraceEventId,
-} from '../graph.ts'
+export { setTracer, setHotTracer, NO_EVENT } from '../graph.ts'
+export type { TraceSink, EmitFn, EndSpanFn, TraceFields, SpanEndAttrs, TraceEventId, HotFn, HotStep } from '../graph.ts'
 
 /**
- * The canonical trace vocabulary: every string the engine actually emits
- * today, verbatim. The devtools' kind chips and filters are typed against
- * this union and show these strings as-is — there is no runtime mapping.
+ * The canonical trace vocabulary: every string the engine actually emits today,
+ * verbatim. The devtools' kind chips and filters are typed against this union
+ * and show these strings as-is — there is no runtime mapping.
+ *
+ * A usability rename pass is pending design sign-off (candidates:
+ * `write`→`set`/`update`, `effect-run`→`effect`, `deliver`→`notify`,
+ * `render-value`→`render`, `provider-world-commit`→`commit`). When it lands,
+ * the string changes here AND at the emit site together — never a translation
+ * layer. Until then this reflects reality so nothing lies.
  */
 export type TraceKind =
 	// Atom write, by the API verb the caller used (graph.ts / worlds.ts draft
@@ -67,6 +66,11 @@ export type TraceKind =
 	| 'cleanup-error'
 	| 'flush-error'
 	| 'policy-error'
+	// Hot algorithm channel (graph.ts setHotTracer) — a separately gated,
+	// off-by-default, very-high-volume feed of the internal steps.
+	| 'propagate' // the invalidation wave marked subscribers possibly stale
+	| 'check' // a dependency-validation walk confirmed or cleared staleness
+	| 'pull' // a computed/effect computation re-evaluated
 
 /**
  * Coarse class for coloring and filtering in the UI — the ONLY place the
@@ -84,6 +88,7 @@ export type TraceKindClass =
 	| 'batch' // batch / draft lifecycle
 	| 'async' // settle / retry / suspend
 	| 'error' // *-error
+	| 'hot' // hot algorithm steps (propagate / check / pull)
 	| 'system' // anything else
 
 /**
@@ -125,6 +130,10 @@ export function kindClass(kind: TraceKind | string): TraceKindClass {
 		case 'flush-error':
 		case 'policy-error':
 			return 'error'
+		case 'propagate':
+		case 'check':
+		case 'pull':
+			return 'hot'
 		case 'scheduler-fallback':
 			return 'system'
 		default:

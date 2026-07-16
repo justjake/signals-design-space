@@ -31,6 +31,7 @@
  */
 import type * as React from 'react'
 import {
+	captureOwnerStack,
 	useCallback,
 	useContext,
 	useEffect,
@@ -56,15 +57,17 @@ import {
 } from '../index.ts'
 import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
+	currentCause,
+	emitEvent,
 	Flag,
 	NO_EVENT,
 	observeNode,
 	type GraphChangeClock,
 	type ReactiveNode,
+	type RenderWatcherNode,
 	type TraceEventId,
 } from '../graph.ts'
 import { BASE_WORLD, resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
-import { getActiveTracer } from '../tracer.ts'
 import {
 	correctSubscription,
 	dispatchDraftWake,
@@ -88,6 +91,28 @@ interface UseValueState {
 	rendered: RenderedResolution
 	repairPending: boolean
 	/**
+	 * Trace id of the 'notify' whose dispatch the next base-world render
+	 * answers; that render is caused by it and consumes it. NO_EVENT when
+	 * nothing scheduled the render (mount, a parent-driven pass).
+	 */
+	notifyEvent: TraceEventId
+	/**
+	 * Trace id of the latest 'transition-notify' delivered to this hook.
+	 * Draft-world renders chain to it without consuming it: a transition
+	 * re-renders its passes (suspend, rebase, retry) and every pass answers
+	 * the same wake.
+	 */
+	draftNotifyEvent: TraceEventId
+	/** Best-effort React component name that owns this hook, for labeling the
+	 * watcher in the devtools; captured once, only when a tracer is attached. */
+	watcherLabel: string | undefined
+	/** The engine watcher node this hook subscribes with, once its layout effect
+	 * has run. notify/render/transition-notify are recorded against it — we
+	 * deliver to watchers, so those events belong to this component's
+	 * subscription, not the producer it watches. undefined before the first
+	 * subscription: the mount render falls back to the node. */
+	watcher: RenderWatcherNode | undefined
+	/**
 	 * What the committed tree shows for this hook. Advances only in the
 	 * layout effect, so a transition's speculative values never enter it
 	 * while the transition is held. The notify predicate compares against
@@ -102,6 +127,32 @@ const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
 const NO_IDS: readonly DraftId[] = []
 
+/** Best-effort React component name that owns the current hook, for labeling
+ * its watcher in the devtools. Read once at mount and only when a tracer is
+ * attached. Prefers React 19's captureOwnerStack() — the same owner-component
+ * stack React uses for error/warning stacks — and falls back to a raw stack on
+ * older React. Minified builds mangle names; a manual label always wins. */
+function renderingComponentName(): string | undefined {
+	let stack: string | null | undefined
+	try {
+		stack = typeof captureOwnerStack === 'function' ? captureOwnerStack() : null
+	} catch {
+		stack = null
+	}
+	// captureOwnerStack lists owner components directly; the raw fallback also
+	// has this helper + hook frames, which the filter below skips.
+	if (stack == null || stack === '') stack = new Error().stack
+	if (stack == null) return undefined
+	for (const line of stack.split('\n')) {
+		const m = line.match(/^\s*at (\w+)/)
+		if (m === null) continue
+		const name = m[1]
+		if (name === 'renderingComponentName' || name.startsWith('use') || name === 'Object') continue
+		if (/^[A-Z]/.test(name)) return name
+	}
+	return undefined
+}
+
 /**
  * These hooks cannot work without a SignalsFrameworkProvider. The root
  * connection carries transition worlds, and a subscriber without one has
@@ -114,7 +165,7 @@ function requireRootConnection(hook: string): ReactRootConnection {
 			`${hook} was rendered without a SignalsFrameworkProvider above it. ` +
 				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.',
 		)
-		getActiveTracer()?.emit('policy-error', null, NO_EVENT, {
+		emitEvent?.('policy-error', null, NO_EVENT, {
 			error,
 			phase: 'missing-provider',
 		})
@@ -145,7 +196,7 @@ function unwrapState(
 	}
 	if (asyncBits === Flag.AsyncError) {
 		const error = (st.throwable as ErrorBox).error
-		getActiveTracer()?.emit('render-error', node, node.causeEvent, { error, root: connection })
+		emitEvent?.('render-error', node, node.causeEvent, { error, root: connection })
 		throw error
 	}
 	const suspension = st.throwable as Suspension
@@ -156,7 +207,7 @@ function unwrapState(
 	// This render path is about to throw the suspension promise. The root
 	// identifies the rendering connection; it does not claim that React catches
 	// the promise, parks work, or schedules a retry.
-	getActiveTracer()?.emit('render-suspend', node, NO_EVENT, {
+	emitEvent?.('render-suspend', node, NO_EVENT, {
 		root: connection,
 		suspension,
 	})
@@ -203,9 +254,24 @@ export function useValue<T>(x: Signal<T>): T {
 			delivered: new Set(),
 			rendered: { ids: NO_IDS, value: undefined, live: false },
 			repairPending: false,
+			notifyEvent: NO_EVENT,
+			draftNotifyEvent: NO_EVENT,
+			// Capture the owning component's name once, only when tracing is on.
+			watcherLabel: emitEvent !== null ? renderingComponentName() : undefined,
+			watcher: undefined,
 			committed: { ids: NO_IDS, value: undefined, live: false },
 		}
 		stateRef.current = state
+	}
+	// Name the watcher lazily too: a hook that first rendered before the tracer
+	// attached (the panel opened after load) captured no name. Grab it on the
+	// first render once tracing is on, and stamp the already-subscribed watcher
+	// node, so the devtools shows the component instead of "watcher#id".
+	if (emitEvent !== null && state.watcherLabel === undefined) {
+		state.watcherLabel = renderingComponentName()
+	}
+	if (state.watcher !== undefined && state.watcher.label === undefined && state.watcherLabel !== undefined) {
+		state.watcher.label = state.watcherLabel
 	}
 	// Draft ids delivered to this hook's reducer since its last render. A
 	// repeat id adds nothing while the first is still queued: the dispatch
@@ -224,10 +290,11 @@ export function useValue<T>(x: Signal<T>): T {
 				return
 			}
 			state.delivered.add(id)
-			getActiveTracer()?.emit('transition-notify', node, cause, {
-				draftId: id,
-				root: connection,
-			})
+			state.draftNotifyEvent =
+				emitEvent?.('transition-notify', state.watcher ?? node, cause, {
+					draftId: id,
+					root: connection,
+				}) ?? NO_EVENT
 			dispatchDraftWake(id, wake)
 		},
 		[connection, node, state, wake],
@@ -241,29 +308,40 @@ export function useValue<T>(x: Signal<T>): T {
 	// "would the committed tree show anything different if re-rendered
 	// now?". The dispatch inherits the ambient scheduling context —
 	// exactly useState's semantics for the write that caused it.
-	const onNotify = useCallback(() => {
-		// The connection's first-child marker confirms before descendant layout
-		// effects. During that narrow window this render is the one committing,
-		// so compare against it directly; outside it, never trust speculative
-		// render state over the last completed commit.
-		const stash = connection.committing ? state.rendered : state.committed
-		if (!stash.live || state.repairPending) {
-			return
-		}
-		if (!resolutionDiffers(node, stash)) {
-			return
-		}
-		state.repairPending = true
-		wake(REPAIR_WAKE)
-	}, [node, connection, state, wake])
+	const onNotify = useCallback(
+		(cause: TraceEventId) => {
+			// The connection's first-child marker confirms before descendant layout
+			// effects. During that narrow window this render is the one committing,
+			// so compare against it directly; outside it, never trust speculative
+			// render state over the last completed commit.
+			const stash = connection.committing ? state.rendered : state.committed
+			if (!stash.live || state.repairPending) {
+				return
+			}
+			if (!resolutionDiffers(node, stash)) {
+				return
+			}
+			state.repairPending = true
+			// The state change that woke this watcher (the write/settle/fold the
+			// invalidation stamped) causes the notify; the render this dispatch
+			// produces is caused by the notify in turn.
+			state.notifyEvent = emitEvent?.('notify', state.watcher ?? node, cause, { root: connection }) ?? NO_EVENT
+			wake(REPAIR_WAKE)
+		},
+		[node, connection, state, wake],
+	)
 	// Subscribe in a layout effect so correctSubscription repairs a value
 	// that changed during a time-sliced mount before the frame can paint.
 	useLayoutEffect(() => {
-		const off = observeNode(node, onNotify, deliver)
+		const off = observeNode(node, onNotify, deliver, state.watcherLabel)
+		state.watcher = off.watcher
 		if (state.rendered.live) {
 			correctSubscription(node, state.rendered, connection, deliver, wake)
 		}
-		return off
+		return () => {
+			state.watcher = undefined
+			off()
+		}
 	}, [node, connection, state, deliver, wake, onNotify])
 	const world = worldOf(ids)
 	const st = resolveState(node, world)
@@ -272,10 +350,24 @@ export function useValue<T>(x: Signal<T>): T {
 	stash.ids = ids
 	stash.value = value
 	stash.live = true
-	const renderEvent =
-		getActiveTracer()?.emit('render', node, node.causeEvent, {
-			root: connection,
-		}) ?? NO_EVENT
+	if (emitEvent !== null) {
+		// A draft-world render is caused by the transition-notify that woke
+		// this hook; a base-world render consumes and answers the notify that
+		// scheduled it. A render nothing scheduled (mount, a parent-driven
+		// pass) roots at the node's last recorded state change — never at
+		// another render.
+		let renderCause: TraceEventId
+		if (world.drafts.length !== 0) {
+			renderCause = state.draftNotifyEvent
+		} else {
+			renderCause = state.notifyEvent
+			state.notifyEvent = NO_EVENT
+		}
+		if (renderCause === NO_EVENT) {
+			renderCause = node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause
+		}
+		emitEvent('render', state.watcher ?? node, renderCause, { root: connection })
+	}
 	// Advance the committed stash at commit time. No dependency array: the
 	// effect runs on every commit with that render's resolution, and a
 	// suspended render never reaches it.
@@ -284,7 +376,6 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
-		getActiveTracer()?.emit('notify', node, renderEvent, { root: connection })
 	})
 	return value as T
 }
