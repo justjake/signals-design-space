@@ -75,14 +75,16 @@ function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: No
 
 export function GraphView({
 	backend,
-	focus,
-	setFocus,
+	selected,
+	onSelect,
 	openInLog,
 	openEventInLog,
 }: {
 	backend: Backend
-	focus: NodeId | undefined
-	setFocus: (id: NodeId | undefined) => void
+	/** The inspected node, owned by App (drives the global nav history). */
+	selected: NodeId | undefined
+	/** Report a user selection so App records it and updates `selected`. */
+	onSelect: (id: NodeId) => void
 	openInLog: (id: NodeId) => void
 	openEventInLog: (eventId: EventId) => void
 }) {
@@ -90,17 +92,15 @@ export function GraphView({
 	const [depth, setDepth] = useState(2)
 	const [kindOn, setKindOn] = useState<Record<NodeKind, boolean>>({ atom: true, computed: true, watcher: true, effect: true })
 	const [drawerOpen, setDrawerOpen] = useState(true)
-	// Back/forward navigation over the focused-node trail: `at` is the cursor.
-	const [nav, setNav] = useState<{ trail: NodeId[]; at: number }>({ trail: [], at: -1 })
+	// Canvas center — the node the layout is built around. Distinct from the
+	// inspected `selected` (a prop): clicking a shown node inspects it without
+	// moving the canvas; navigating to an off-canvas node recenters here.
+	const [focus, setFocus] = useState<NodeId | undefined>(undefined)
 	const [copied, setCopied] = useState(false)
 	// Resizable pane sizes (px).
 	const [nodeListH, setNodeListH] = useState(168)
 	const [drawerH, setDrawerH] = useState(200)
 	const [inspectorW, setInspectorW] = useState(320)
-	// Selection (inspected + highlighted) is separate from focus (what the canvas
-	// lays out around): clicking a node that's already shown just inspects it in
-	// place (no relayout, no shift); clicking one that's off-canvas re-centers.
-	const [selected, setSelected] = useState<NodeId | undefined>(undefined)
 	// A specific event picked from the drawer to inspect in the sidebar; null
 	// falls back to the node's most recent event.
 	const [eventSel, setEventSel] = useState<EventId | undefined>(undefined)
@@ -116,6 +116,9 @@ export function GraphView({
 	const [view, setView] = useState<Box | undefined>(undefined)
 	const svgRef = useRef<SVGSVGElement | null>(null)
 	const panRef = useRef<{ cx: number; cy: number; vx: number; vy: number } | undefined>(undefined)
+	// Ids currently drawn, so the recenter effect can tell an in-view selection
+	// (inspect in place) from an off-canvas one (recenter). Set after `layout`.
+	const shownRef = useRef<Set<NodeId>>(new Set())
 
 	// Cap the listed window: the list is a searchable index into a possibly
 	// huge graph, not a full render. Narrow with search; the canvas is the
@@ -141,58 +144,31 @@ export function GraphView({
 	const errCount = allRows.filter((n) => n.status === 'error').length
 	const suspCount = allRows.filter((n) => n.status === 'suspended').length
 
-	// Moving focus resets selection, expansion, viewport, and the breadcrumb.
+	// Recentering the canvas resets expansion and viewport.
 	useEffect(() => {
-		setSelected(effectiveFocus)
-		setEventSel(undefined)
 		setPerCol(DEFAULT_PER_COL)
 		setView(undefined)
 	}, [effectiveFocus])
 
-	// Back/forward history tracks the inspected node (`selected`) — the thing you
-	// actually navigate. Any selection (a pick, a focus change, a jump) appends
-	// and drops the forward tail; a back/forward move sets `navigating` so its
-	// own selection isn't re-recorded.
-	const navigating = useRef(false)
+	// When the inspected node changes — a pick here, or a link / back-forward
+	// from App — recenter the canvas onto it only if it isn't already drawn (so
+	// inspecting a visible node never shifts the graph), and drop any drawer
+	// event pick. `shownRef` holds the ids drawn this render for that test.
 	useEffect(() => {
-		if (selected === undefined) return
-		if (navigating.current) {
-			navigating.current = false
-			return
-		}
-		setNav((n) => {
-			if (n.trail[n.at] === selected) return n
-			const trail = [...n.trail.slice(0, n.at + 1), selected].slice(-20)
-			return { trail, at: trail.length - 1 }
-		})
-	}, [selected])
-
-	const goTo = (at: number) => {
-		navigating.current = true
-		setNav((n) => ({ ...n, at }))
-		setSelected(nav.trail[at])
+		if (selected !== undefined && !shownRef.current.has(selected)) setFocus(selected)
 		setEventSel(undefined)
-	}
-	const goBack = () => {
-		if (nav.at > 0) goTo(nav.at - 1)
-	}
-	const goForward = () => {
-		if (nav.at < nav.trail.length - 1) goTo(nav.at + 1)
-	}
+	}, [selected])
 
 	const sel = selected ?? effectiveFocus
 	const model = sel === undefined ? undefined : inspectorModel(backend, sel)
 	const layout = effectiveFocus === undefined ? undefined : layoutFocus(backend, effectiveFocus, depth, perCol)
+	shownRef.current = new Set(layout ? layout.nodes.map((n) => n.id) : [])
 	const drawer = sel === undefined ? [] : logRows(backend, { node: sel }, 40)
 
-	// One click behaves the same for a canvas node or a list row: inspect it in
-	// place; only re-center the canvas if it isn't already shown, so inspecting
-	// a visible node never shifts the graph. (No separate "focus" gesture.)
-	const pick = (id: NodeId) => {
-		setSelected(id)
-		setEventSel(undefined)
-		if (layout !== undefined && !layout.nodes.some((n) => n.id === id)) setFocus(id)
-	}
+	// One click behaves the same for a canvas node or a list row: report the
+	// selection to App. The [selected] effect recenters only if it's off-canvas,
+	// so inspecting a visible node never shifts the graph.
+	const pick = (id: NodeId) => onSelect(id)
 	// The "why this ran" chain shown in the inspector: a drawer-picked event if
 	// there is one, else the node's most recent event.
 	const whyChain = eventSel !== undefined ? causeRows(backend, eventSel) : (model?.why ?? [])
@@ -404,14 +380,6 @@ export function GraphView({
 					<div className="canvas-wrap">
 						{layout !== undefined ? (
 							<div className="canvas-controls">
-								<span role="group" aria-label="Navigate history" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-									<button className="tbtn mode" data-tip="Back to the previous focused node." aria-label="Back" disabled={nav.at <= 0} onClick={goBack}>
-										◀
-									</button>
-									<button className="tbtn mode" data-tip="Forward." aria-label="Forward" disabled={nav.at >= nav.trail.length - 1} onClick={goForward}>
-										▶
-									</button>
-								</span>
 								<button className="tbtn" data-tip="How many levels of dependencies/subscribers to lay out around the focus." onClick={() => setDepth(depth >= 3 ? 1 : depth + 1)}>
 									Depth: {depth}
 								</button>
@@ -671,7 +639,7 @@ export function GraphView({
 							<h3>
 								Downstream <span className="win">{model.subsTotal} direct</span>
 							</h3>
-							<NeighborList items={model.subs} onPick={setFocus} />
+							<NeighborList items={model.subs} onPick={pick} />
 						</div>
 					</aside>
 				)}

@@ -59,6 +59,12 @@ export const PANEL_CSS = `
   .rec .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: signals-devtools-blink 1.6s ease-in-out infinite; }
   .theme-btn { align-self: center; margin-right: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font: 11px var(--mono); background: var(--surface); }
   .theme-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .theme-btn:disabled { opacity: .4; cursor: default; }
+  .theme-btn:disabled:hover { color: var(--muted); border-color: var(--border); }
+  .histnav { align-self: center; display: inline-flex; margin-right: 12px; }
+  .histnav .theme-btn { margin-right: 0; border-radius: 0; }
+  .histnav .theme-btn:first-child { border-radius: 4px 0 0 4px; }
+  .histnav .theme-btn:last-child { border-radius: 0 4px 4px 0; border-left: none; }
 
   /* toolbar + controls */
   .toolbar, .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--border); flex: none; }
@@ -375,7 +381,7 @@ export const PANEL_CSS = `
      shrinking or reflowing into a cramped multi-line block when the panel is
      docked to the bottom or the viewport is small. */
   .chrome { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
-  .chrome .brand, .chrome .tabs, .chrome .theme-btn { flex: none; }
+  .chrome .brand, .chrome .tabs, .chrome .theme-btn, .chrome .histnav { flex: none; }
   .chrome .spacer { min-width: 0; }
   /* The recording readout is the least essential item — let it be the one that
      truncates when space is tight, so the tabs, dock/theme, and close ✕ stay

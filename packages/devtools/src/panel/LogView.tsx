@@ -116,14 +116,17 @@ export function LogView({
 	query,
 	setQuery,
 	inspect,
-	selectEvent,
+	selected,
+	onSelect,
 }: {
 	backend: Backend
 	query: string
 	setQuery: (q: string) => void
 	inspect: (id: NodeId) => void
-	/** An event to select from outside (e.g. a graph spine link); undefined = none. */
-	selectEvent?: EventId | undefined
+	/** The selected event, owned by App (drives the global nav history). */
+	selected: EventId | undefined
+	/** Report a user selection so App records it and updates `selected`. */
+	onSelect: (id: EventId) => void
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	// Hot mirrors the backend's channel state so a remounted panel shows the truth.
@@ -131,7 +134,6 @@ export function LogView({
 	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
-	const [selected, setSelected] = useState<EventId | undefined>(undefined)
 	const [copied, setCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
 	// Timeline brush: [t0, t1] in µs, or undefined for the full window.
@@ -144,11 +146,6 @@ export function LogView({
 	useEffect(() => {
 		selRowRef.current?.scrollIntoView({ block: 'nearest' })
 	}, [selected])
-
-	// Select an event requested from outside (a graph "last caused by" link).
-	useEffect(() => {
-		if (selectEvent !== undefined) setSelected(selectEvent)
-	}, [selectEvent])
 
 	// Esc clears the timeline window (a click on the strip clears it too).
 	useEffect(() => {
@@ -421,7 +418,7 @@ export function LogView({
 											ref={r.id === selected ? selRowRef : undefined}
 											className={`${r.id === selected ? 'selected' : ''}${flashing.has(r.id) ? ' flash' : ''}`.trim() || undefined}
 											aria-selected={r.id === selected}
-											onClick={() => setSelected(r.id)}
+											onClick={() => onSelect(r.id)}
 										>
 											<td className="id">{fmtId('event', r.id)}</td>
 											<td className="t">
@@ -431,7 +428,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
 											</td>
-											<NameCell row={r} onCause={() => setSelected(r.cause)} onNode={inspect} />
+											<NameCell row={r} onCause={() => onSelect(r.cause)} onNode={inspect} />
 											<td className="data">{r.summary}</td>
 											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
@@ -442,7 +439,7 @@ export function LogView({
 											ref={t.row.id === selected ? selRowRef : undefined}
 											className={`${t.depth === 0 && t.children > 0 ? 'op-head' : ''} ${t.row.id === selected ? 'selected' : ''}${flashing.has(t.row.id) ? ' flash' : ''}`.trim() || undefined}
 											aria-selected={t.row.id === selected}
-											onClick={() => setSelected(t.row.id)}
+											onClick={() => onSelect(t.row.id)}
 										>
 											<td className="id">
 												<span className="treecell">
@@ -471,7 +468,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
 											</td>
-											<NameCell row={t.row} onCause={() => setSelected(t.row.cause)} onNode={inspect} />
+											<NameCell row={t.row} onCause={() => onSelect(t.row.cause)} onNode={inspect} />
 											<td className="data">{t.row.summary}</td>
 											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>
@@ -506,7 +503,7 @@ export function LogView({
 							</h3>
 							<CauseSpine
 								chain={spine}
-								onPick={(e) => setSelected(e.id)}
+								onPick={(e) => onSelect(e.id)}
 								renderExtra={(t) => (
 									<div className="impact-card">
 										whole operation: <b>{opEntries} entries</b>
@@ -528,7 +525,7 @@ export function LogView({
 								<ul className="caused-tree">
 									{caused.map((t) => (
 										<li key={t.row.id} style={{ paddingLeft: (t.depth - 1) * 14 }}>
-											<EventRef row={t.row} onClick={() => setSelected(t.row.id)} />
+											<EventRef row={t.row} onClick={() => onSelect(t.row.id)} />
 										</li>
 									))}
 								</ul>

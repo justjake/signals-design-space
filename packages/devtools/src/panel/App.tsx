@@ -7,10 +7,24 @@ import { Tooltips } from './Tooltips.tsx'
 import { GraphView } from './GraphView.tsx'
 import { LogView } from './LogView.tsx'
 
+/** A place you navigated to: a node in the graph, or an event in the log. The
+ * back/forward history is one timeline of these across both views. */
+type NavLoc = { tab: 'graph'; node: NodeId } | { tab: 'log'; event: EventId }
+
+function sameLoc(a: NavLoc | undefined, b: NavLoc): boolean {
+	if (a === undefined || a.tab !== b.tab) return false
+	return a.tab === 'graph' && b.tab === 'graph'
+		? a.node === b.node
+		: a.tab === 'log' && b.tab === 'log'
+			? a.event === b.event
+			: false
+}
+
 /**
- * The devtools panel: chrome (brand · Graph/Log tabs · theme · recording),
- * then the active view. Selecting a node anywhere focuses the Graph tab on it;
- * a node's "Open in Log" jumps to the Log filtered to it.
+ * The devtools panel: chrome (brand · back/forward · Graph/Log tabs · theme ·
+ * recording), then the active view. Navigation is global: inspecting a node,
+ * opening an event in the log, or following a cross-view link all append to one
+ * history, so back/forward retraces your path across both views.
  *
  * Standalone extras (dock toggle, close ✕) appear only when the host wires
  * them — an inline/overlay launcher does; the Chrome extension panel doesn't
@@ -32,24 +46,43 @@ export function App({
 	// mount, not a frame late.
 	const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null)
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
-	const [focus, setFocus] = useState<NodeId | undefined>(undefined)
+	// Per-view selection (persists when you switch tabs) + one shared history.
+	const [graphSel, setGraphSel] = useState<NodeId | undefined>(undefined)
+	const [logSel, setLogSel] = useState<EventId | undefined>(undefined)
 	const [logQuery, setLogQuery] = useState('')
-	const [logSelect, setLogSelect] = useState<EventId | undefined>(undefined)
+	const [nav, setNav] = useState<{ trail: NavLoc[]; at: number }>({ trail: [], at: -1 })
 	const [themeOpen, setThemeOpen] = useState(false)
 
-	const inspect = (id: NodeId) => {
-		setFocus(id)
-		setTab('graph')
+	// Point a view at a location. Never re-records when a view reports the
+	// location it's already on, so a prop-driven selection (a back/forward move)
+	// can't feed back into the history.
+	const apply = (loc: NavLoc) => {
+		setTab(loc.tab)
+		if (loc.tab === 'graph') setGraphSel(loc.node)
+		else setLogSel(loc.event)
 	}
-	// Open a specific event in the log — the graph's causal chain uses this so a
-	// spine entry links to its log row (not just to the node it's about).
-	const openEventInLog = (eventId: EventId) => {
-		setLogSelect(eventId)
-		setTab('log')
+	const navigate = (loc: NavLoc) => {
+		setNav((n) => {
+			if (sameLoc(n.trail[n.at], loc)) return n
+			const trail = [...n.trail.slice(0, n.at + 1), loc].slice(-30)
+			return { trail, at: trail.length - 1 }
+		})
+		apply(loc)
 	}
+	const go = (delta: number) => {
+		const at = nav.at + delta
+		if (at < 0 || at >= nav.trail.length) return
+		setNav((n) => ({ ...n, at }))
+		apply(nav.trail[at])
+	}
+
+	// Open a node in the graph / an event in the log. Used by both the views'
+	// own selections and the cross-view links (a log row's "view in graph", a
+	// graph spine entry's jump to its log row).
+	const openNode = (id: NodeId) => navigate({ tab: 'graph', node: id })
+	const openEvent = (eventId: EventId) => navigate({ tab: 'log', event: eventId })
 	// "Open in Log" pre-populates the visible search filter with the node's name
-	// — no hidden per-node state; it's the log, filtered, and you can see and
-	// clear the filter.
+	// — a filter action, not a single-target jump, so it doesn't join the history.
 	const openInLog = (id: NodeId) => {
 		const n = backend.node(id)
 		setLogQuery(`name:${n?.label ?? `${n?.kind ?? 'node'}#${id}`}`)
@@ -64,6 +97,14 @@ export function App({
 					<span className="dot" />
 					Signals
 				</div>
+				<span className="histnav" role="group" aria-label="Navigate history">
+					<button className="theme-btn" data-tip="Back to the previous place you looked." aria-label="Back" disabled={nav.at <= 0} onClick={() => go(-1)}>
+						◀
+					</button>
+					<button className="theme-btn" data-tip="Forward." aria-label="Forward" disabled={nav.at >= nav.trail.length - 1} onClick={() => go(1)}>
+						▶
+					</button>
+				</span>
 				<nav className="tabs">
 					<button className="tab" aria-current={tab === 'graph' ? 'page' : undefined} onClick={() => setTab('graph')}>
 						Graph
@@ -93,9 +134,9 @@ export function App({
 			</header>
 
 			{tab === 'graph' ? (
-				<GraphView backend={backend} focus={focus} setFocus={setFocus} openInLog={openInLog} openEventInLog={openEventInLog} />
+				<GraphView backend={backend} selected={graphSel} onSelect={openNode} openInLog={openInLog} openEventInLog={openEvent} />
 			) : (
-				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={inspect} selectEvent={logSelect} />
+				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={openNode} selected={logSel} onSelect={openEvent} />
 			)}
 
 			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootEl} />
