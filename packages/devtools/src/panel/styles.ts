@@ -267,7 +267,7 @@ export const PANEL_CSS = `
   /* causality panel */
   .cz-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }
   .cz-kicker { font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-  .cz-title { font: 600 13px var(--mono); margin-top: 4px; color: var(--effect); }
+  .cz-title { font: 600 13px var(--mono); margin-top: 4px; color: var(--text); }
   .cz-sub { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
   .cz-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
   .cz-section h3 { margin: 0 0 10px; font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }

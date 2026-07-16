@@ -439,10 +439,10 @@ export function LogView({
 						<div className="cz-head">
 							<div className="cz-kicker">Selected entry</div>
 							<div className="cz-title">
-								#{sel.id} {sel.kind}
+								<EventRef row={sel} />
 							</div>
 							<div className="cz-sub">
-								{sel.name ?? 'engine'} · +{((sel.t - (opRoot?.t ?? sel.t)) / 1000).toFixed(3)}ms into the operation
+								+{((sel.t - (opRoot?.t ?? sel.t)) / 1000).toFixed(3)}ms into the operation
 							</div>
 						</div>
 						<div className="cz-section">
