@@ -83,13 +83,19 @@ function deepPreview(v: unknown, depth: number): string {
 function captureStack(): StackFrame[] {
 	const raw = new Error().stack
 	if (raw == null) return []
-	const out: StackFrame[] = []
+	const parsed: StackFrame[] = []
 	for (const line of raw.split('\n')) {
 		const m = line.match(/at (?:(.*?) \()?(.*?):(\d+):(\d+)\)?\s*$/)
-		if (m === null) continue
-		const file = m[2]
-		if (/node_modules|signals-devtools|signals-royale-fx2|\/react-dom|\/react-jsx|\breact\.development\b/.test(file)) continue
-		out.push({ fn: m[1] || '<anonymous>', file, line: Number(m[3]), col: Number(m[4]) })
+		if (m !== null) parsed.push({ fn: m[1] || '<anonymous>', file: m[2], line: Number(m[3]), col: Number(m[4]) })
+	}
+	// The top frames are this adapter module (captureStack, emit); drop them by
+	// file, then drop engine/framework/dep frames, leaving the app's own.
+	const selfFile = parsed[0]?.file
+	const out: StackFrame[] = []
+	for (const f of parsed) {
+		if (f.file === selfFile) continue
+		if (/node_modules|signals-royale-fx2|\/react-dom|\/react\/|\/react-jsx|\breact\.development\b|\/scheduler/.test(f.file)) continue
+		out.push(f)
 		if (out.length >= 12) break
 	}
 	return out
