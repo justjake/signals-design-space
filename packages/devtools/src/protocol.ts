@@ -169,6 +169,7 @@ export function kindClass(kind: string): KindClass {
 		case 'update':
 			return 'write'
 		case 'compute':
+		case 'recompute':
 			return 'compute'
 		case 'notify':
 		case 'transition-notify':

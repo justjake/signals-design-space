@@ -31,14 +31,29 @@ describe('debug/inspect — inert observation', () => {
 			expect(snap.value).toBe(20) // old value, not 200 — proves no recompute
 			expect(snap.stale).toBe(true)
 		}
-		// The load-bearing property: inspecting emitted zero compute events.
-		expect(tracer.events().filter((e) => e.kind === 'compute')).toHaveLength(0)
+		// The load-bearing property: inspecting emitted zero evaluation events.
+		expect(tracer.events().filter((e) => e.kind === 'compute' || e.kind === 'recompute')).toHaveLength(0)
 		tracer.stop()
 
 		// A real read re-evaluates and clears staleness.
 		expect(read(c)).toBe(200)
 		expect(inspect(cn).value).toBe(200)
 		expect(inspect(cn).stale).toBe(false)
+	})
+
+	it('traces compute on first evaluation and recompute after', () => {
+		const a = createAtom(1, { label: 'src' })
+		const c = createComputed(() => a.get() + 1, { label: 'cc' })
+		const tracer = attachTracer()
+		expect(read(c)).toBe(2) // first evaluation
+		set(a, 2)
+		expect(read(c)).toBe(3) // re-evaluation
+		const kinds = tracer
+			.events()
+			.filter((e) => e.label === 'cc' && (e.kind === 'compute' || e.kind === 'recompute'))
+			.map((e) => e.kind)
+		expect(kinds).toEqual(['compute', 'recompute'])
+		tracer.stop()
 	})
 
 	it('classifies atoms and assigns stable ids', () => {

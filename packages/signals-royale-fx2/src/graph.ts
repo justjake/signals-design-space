@@ -1647,7 +1647,10 @@ function recompute(node: EvaluatedNode<unknown>): void {
 	// flight — so a first "new result" chains back to what triggered it. Outside
 	// an operation currentCause is NO_EVENT, so this never mis-attributes.
 	const computeCause = node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause
-	const compute = startSpan !== null ? startSpan('compute', node, computeCause) : NO_EVENT
+	// First evaluation is 'compute' (the node coming into existence); every later
+	// evaluation is 'recompute'. Distinct kinds so the trace tells a node's birth
+	// from a node churning — no display-layer remap.
+	const compute = startSpan !== null ? startSpan(node.value === UNINITIALIZED ? 'compute' : 'recompute', node, computeCause) : NO_EVENT
 	const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 	try {
 		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)

@@ -35,10 +35,12 @@ export type TraceKind =
 	// path); the intent is threaded from set()/update().
 	| 'set'
 	| 'update'
-	// Computed lifecycle. `compute` fires just before node.fn() runs, only on
-	// real evaluation (never a cache hit); -error/-suspend when it throws or
-	// parks on a thenable.
+	// Computed lifecycle. Fires just before node.fn() runs, only on real
+	// evaluation (never a cache hit): `compute` on the first (the node coming
+	// into existence), `recompute` on every later run; -error/-suspend when it
+	// throws or parks on a thenable.
 	| 'compute'
+	| 'recompute'
 	| 'compute-error'
 	| 'compute-suspend'
 	// Effects (graph.ts).
@@ -104,6 +106,7 @@ export function kindClass(kind: TraceKind | string): TraceKindClass {
 		case 'update':
 			return 'write'
 		case 'compute':
+		case 'recompute':
 			return 'compute'
 		case 'notify':
 		case 'transition-notify':
