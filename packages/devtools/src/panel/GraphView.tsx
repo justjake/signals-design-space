@@ -655,6 +655,14 @@ export function GraphView({
 								<span className="v">{fmtTook(model.node.selfUs)} · {model.node.recomputes} {model.node.recomputes === 1 ? 'run' : 'runs'}</span>
 								<span className="k">status</span>
 								<span className="v">{model.node.stale ? 'stale' : model.node.status}</span>
+								{model.node.checks > 0 ? (
+									<>
+										<span className="k" data-tip="Reads that found the node already fresh and served the memoized value without re-evaluating — the memoization win. Counted only while the hot channel is on.">from cache</span>
+										<span className="v">
+											{Math.max(0, model.node.checks - model.node.pulls).toLocaleString()} of {model.node.checks.toLocaleString()} reads
+										</span>
+									</>
+								) : undefined}
 							</div>
 							{model.node.newResults + model.node.sameResults > 0 ? (
 								<>

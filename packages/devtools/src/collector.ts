@@ -51,6 +51,11 @@ interface DebugState {
 	/** Recompute outcomes: result changed vs. stayed equal. */
 	newResults: number
 	sameResults: number
+	/** Hot-channel counts (only accrue while hot mode is on): dependency
+	 * validations (`check`) and re-evaluations (`pull`). A check that didn't
+	 * lead to a pull served the value from cache — the memoization win. */
+	checks: number
+	pulls: number
 	lastEventId: EventId
 	lastKind: string
 }
@@ -125,7 +130,7 @@ export class Collector implements Backend {
 		if (node !== undefined && nodeKind !== undefined) {
 			let st = this.nodes.get(node)
 			if (st === undefined) {
-				st = { kind: nodeKind, recomputes: 0, changes: 0, selfUs: 0, newResults: 0, sameResults: 0, lastEventId: id, lastKind: kind }
+				st = { kind: nodeKind, recomputes: 0, changes: 0, selfUs: 0, newResults: 0, sameResults: 0, checks: 0, pulls: 0, lastEventId: id, lastKind: kind }
 				this.nodes.set(node, st)
 				this.kindCounts[nodeKind] = (this.kindCounts[nodeKind] ?? 0) + 1
 			}
@@ -134,6 +139,8 @@ export class Collector implements Backend {
 			const cls = kindClass(kind)
 			if (cls === 'compute') st.recomputes++
 			if (cls === 'write') st.changes++
+			if (kind === 'check') st.checks++
+			else if (kind === 'pull') st.pulls++
 		}
 		this.scheduleFlush()
 		return id
@@ -276,6 +283,8 @@ export class Collector implements Backend {
 			selfUs: st?.selfUs ?? 0,
 			newResults: st?.newResults ?? 0,
 			sameResults: st?.sameResults ?? 0,
+			checks: st?.checks ?? 0,
+			pulls: st?.pulls ?? 0,
 			lastEventId: st?.lastEventId ?? (0 as EventId),
 			lastKind: st?.lastKind ?? undefined,
 		}

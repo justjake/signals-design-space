@@ -72,6 +72,10 @@ export interface GraphNode {
 	 */
 	newResults: number
 	sameResults: number
+	/** Hot-channel counts (nonzero only after hot mode has run): dependency
+	 * validations and re-evaluations. checks − pulls ≈ reads served from cache. */
+	checks: number
+	pulls: number
 	/**
 	 * The node's most recent entry — retained, so listing a node never scans
 	 * the ring. 0 / undefined when the node has no entry in the window.
