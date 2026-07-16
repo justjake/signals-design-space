@@ -2110,6 +2110,7 @@ export function observeNode(
 	node: ProducerNode,
 	notify: () => void,
 	draftWake?: (id: DraftId, cause: TraceEventId) => void,
+	label?: string,
 ): () => void {
 	const sub: RenderWatcherNode = {
 		flags: Flag.Watching | Flag.WatchRender | Flag.Watched,
@@ -2118,6 +2119,7 @@ export function observeNode(
 		onNotify: notify,
 		onDraftWake: draftWake,
 		pokePass: 0,
+		label,
 	}
 	try {
 		if ((node.flags & Flag.KindAtom) !== 0) {

@@ -31,6 +31,7 @@
  */
 import type * as React from 'react'
 import {
+	captureOwnerStack,
 	useCallback,
 	useContext,
 	useEffect,
@@ -87,6 +88,9 @@ interface UseValueState {
 	/** What the hook's most recent render resolved (committed or not). */
 	rendered: RenderedResolution
 	repairPending: boolean
+	/** Best-effort React component name that owns this hook, for labeling the
+	 * watcher in the devtools; captured once, only when a tracer is attached. */
+	watcherLabel: string | undefined
 	/**
 	 * What the committed tree shows for this hook. Advances only in the
 	 * layout effect, so a transition's speculative values never enter it
@@ -101,6 +105,32 @@ const NOOP = (): void => {}
 const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 
 const NO_IDS: readonly DraftId[] = []
+
+/** Best-effort React component name that owns the current hook, for labeling
+ * its watcher in the devtools. Read once at mount and only when a tracer is
+ * attached. Prefers React 19's captureOwnerStack() — the same owner-component
+ * stack React uses for error/warning stacks — and falls back to a raw stack on
+ * older React. Minified builds mangle names; a manual label always wins. */
+function renderingComponentName(): string | undefined {
+	let stack: string | null | undefined
+	try {
+		stack = typeof captureOwnerStack === 'function' ? captureOwnerStack() : null
+	} catch {
+		stack = null
+	}
+	// captureOwnerStack lists owner components directly; the raw fallback also
+	// has this helper + hook frames, which the filter below skips.
+	if (stack == null || stack === '') stack = new Error().stack
+	if (stack == null) return undefined
+	for (const line of stack.split('\n')) {
+		const m = line.match(/^\s*at (\w+)/)
+		if (m === null) continue
+		const name = m[1]
+		if (name === 'renderingComponentName' || name.startsWith('use') || name === 'Object') continue
+		if (/^[A-Z]/.test(name)) return name
+	}
+	return undefined
+}
 
 /**
  * These hooks cannot work without a SignalsFrameworkProvider. The root
@@ -203,6 +233,8 @@ export function useValue<T>(x: Signal<T>): T {
 			delivered: new Set(),
 			rendered: { ids: NO_IDS, value: undefined, live: false },
 			repairPending: false,
+			// Capture the owning component's name once, only when tracing is on.
+			watcherLabel: emitEvent !== null ? renderingComponentName() : undefined,
 			committed: { ids: NO_IDS, value: undefined, live: false },
 		}
 		stateRef.current = state
@@ -259,7 +291,7 @@ export function useValue<T>(x: Signal<T>): T {
 	// Subscribe in a layout effect so correctSubscription repairs a value
 	// that changed during a time-sliced mount before the frame can paint.
 	useLayoutEffect(() => {
-		const off = observeNode(node, onNotify, deliver)
+		const off = observeNode(node, onNotify, deliver, state.watcherLabel)
 		if (state.rendered.live) {
 			correctSubscription(node, state.rendered, connection, deliver, wake)
 		}
