@@ -14,9 +14,11 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-No exact new simplification is selected. Resurvey the accepted post-Round-125
-layout before promoting another broader lead; do not force a performance-only
-representation or reopen a recorded retry without its stated natural change.
+Round 127's post-Round-125 source/profile/history survey and near-miss revisit
+found no further simplification with an equal-or-better execution path. Resume
+only after a natural adjacent layout/runtime change satisfies a recorded retry
+condition, or after human review broadens the work to algorithm or scheduling
+design.
 
 ## Other unmeasured broader leads
 
@@ -24,7 +26,6 @@ representation or reopen a recorded retry without its stated natural change.
 - Avoid allocating a computed world state that equality immediately replaces with the prior state; preserve error/suspension identity, custom equality, trace order, and world memo stability.
 - Encode dependency-link membership in an existing detached pointer sentinel only if promotion, trimming, disposal, and GC invariants remain direct; retry the Round 19 narrow/wide lifecycle and dynamic-tracking controls.
 - Remove the per-render `RenderWorldNote` object only if scalar ambient owners plus a generation token preserve same-stack root handoff, suspended renders, and stale scheduled expiry.
-- Lazily allocate a thenable's parked-node and parked-suspension Sets on first membership; preserve invalidate-before-resolve ordering, mixed base/world consumers, throwing settlement, and collection.
 - Move node and draft causal storage into tracer-owned weak state only if detached execution loses `causeEvent`, `openEvent`, and `lastWriteEvent` fields/stores while queued delivery, late wakes, session replacement, and GC remain exact.
 - Cache `latestWorld()` by live-draft membership only if open, retire, and discard remain its sole invalidators, creation order stays exact, and dead `Draft` records are released immediately.
 - Converge the render-notify double buffer with lane queue state only if nested delivery still cannot overwrite a buffer under iteration; this is a high-risk follow-up to per-lane reentrancy, not an independent first round.
@@ -46,7 +47,7 @@ representation or reopen a recorded retry without its stated natural change.
 - Replace hosted drafts' parallel recipient/audience Sets with one audience-status Map plus pending count; retry the exact Round 74 diff only after a natural compiler/runtime/layout change, keeping the 64-root lifecycle as a hard gate.
 - Make hosted-draft audience history weak while strong recipients continue to own retirement; retry the exact Round 76 Set-to-WeakSet diff only after a natural compiler/runtime/layout change, keeping non-empty construction/retirement modes as hard gates.
 - Remove render-watcher staleness and let `Scheduled` plus queue membership own pending notification; retry the exact Round 95 model only after a natural propagation-layout change, keeping first-cause base waves, latest-cause draft pokes, the 280-byte `propagateWave` pin, and both notification controls.
-- Direct-index tracer events from the private oldest-retained ID; retry the exact revised Round 97 diff only after a naturally stable core-control window, retaining the empty, wrapped, stopped, replacement-session, exposed-event-mutation, malformed-ID, and causal-chain falsifiers.
+- Direct-index tracer events only after a natural tracer layout makes the oldest retained ID canonical without another private owner or a public-field behavior change; retain Round 97's empty, wrapped, stopped, replacement-session, exposed-event-mutation, malformed-ID, and causal-chain falsifiers.
 - Lazily allocate only `ThenableBox.parkedNodes` after a natural async/runtime/layout change removes first-membership and nullable-settlement costs; retry the exact Round 126 shape with synchronous fulfillment/rejection, world-only pending, base pending/settlement, and suspension construction frozen, without variants or resampling.
 - Use React's stable reducer dispatch as the root identity only after the commit handshake disappears or a broader commit-layout change already owns its active-root marker; retry the exact Round 100 design with the frozen host-transition mode as a hard gate, not by tuning the rejected ESM-binding shape.
 - Let `useValue`'s pending-draft Set also own the zero repair sentinel only after a natural representation/runtime change; retry the exact Round 104 design with mount and 100-write burst modes as hard gates, retaining the scalar boolean until then.
