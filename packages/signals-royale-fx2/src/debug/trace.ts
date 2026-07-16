@@ -94,7 +94,8 @@ export function kindClass(kind: TraceKind | string): TraceKindClass {
 	switch (kind) {
 		case 'dom-event':
 			return 'origin' // synthetic root the collector adds from window.event
-		case 'write':
+		case 'set':
+		case 'update':
 			return 'write'
 		case 'compute':
 			return 'compute'
