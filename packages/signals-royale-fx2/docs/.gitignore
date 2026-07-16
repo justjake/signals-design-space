@@ -1,5 +1,6 @@
 .source/
+.generated-api/
 dist/
 node_modules/
 content/docs/index.mdx
-content/docs/api/reference/
+content/docs/api/*.mdx

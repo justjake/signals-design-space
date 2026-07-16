@@ -1,7 +1,12 @@
-import { readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 
-const directory = new URL('../content/docs/api/reference/', import.meta.url)
-await rename(new URL('index-1.mdx', directory), new URL('core.mdx', directory))
+const generated = new URL('../.generated-api/', import.meta.url)
+const output = new URL('../content/docs/api/', import.meta.url)
+await rename(new URL('index-1.mdx', generated), new URL('core.mdx', generated))
+await rm(new URL('reference/', output), { recursive: true, force: true })
+for (const file of await readdir(output)) {
+	if (file.endsWith('.mdx')) await rm(new URL(file, output))
+}
 
 const titles = {
 	'core.mdx': 'Core API',
@@ -11,23 +16,24 @@ const titles = {
 	'ssr.mdx': 'Server rendering API',
 }
 
-for (const file of await readdir(directory)) {
-	if (!file.endsWith('.mdx')) continue
-	let source = await readFile(new URL(file, directory), 'utf8')
+for (const file of await readdir(generated)) {
+	if (!file.endsWith('.mdx') || file === 'index.mdx') continue
+	let source = await readFile(new URL(file, generated), 'utf8')
 	source = source
 		.replaceAll('index-1.mdx', 'core.mdx')
 		.replaceAll('[index](core.mdx)', '[core](core.mdx)')
-	if (file === 'core.mdx') {
-		source = source.replace('/ index\n', '/ core\n').replace('\n# index\n', '\n# Core API\n')
-	}
 	if (file === 'react.mdx') {
 		let insideCode = false
+		let example = false
 		let withPlaygrounds = ''
 		for (const line of source.split('\n')) {
 			withPlaygrounds += `${line}\n`
 			if (line.startsWith('```')) {
+				if (!insideCode) example = line === '```tsx'
 				insideCode = !insideCode
-				if (!insideCode) withPlaygrounds += '\n<Playground name="batch-effect" />\n\n'
+				if (!insideCode && example) {
+					withPlaygrounds += '\n<Playground name="batch-effect" />\n\n'
+				}
 			}
 		}
 		source = withPlaygrounds
@@ -35,17 +41,5 @@ for (const file of await readdir(directory)) {
 	const heading = source.match(/^# (.+)$/m)?.[1]
 	const title = titles[file] ?? heading
 	if (title === undefined) throw new Error(`No title found for ${file}`)
-	await writeFile(new URL(file, directory), source.replace('---\n', `---\ntitle: ${title}\n`))
+	await writeFile(new URL(file, output), source.replace('---\n', `---\ntitle: ${title}\n`))
 }
-
-await writeFile(
-	new URL('meta.json', directory),
-	JSON.stringify(
-		{
-			title: 'Generated API',
-			pages: ['index', 'core', 'react', 'ssr', 'debug'],
-		},
-		null,
-		2,
-	) + '\n',
-)

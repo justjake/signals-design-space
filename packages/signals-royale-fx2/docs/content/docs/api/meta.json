@@ -1,4 +1,4 @@
 {
 	"title": "API reference",
-	"pages": ["reference"]
+	"pages": ["core", "react", "ssr", "debug"]
 }
