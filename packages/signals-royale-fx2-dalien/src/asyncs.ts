@@ -67,7 +67,9 @@ export interface ThenableBox {
  * before.
  */
 export interface Suspension {
+	/** Stable promise thrown to Suspense during this pending span. */
 	promise: Promise<void>
+	/** Resolve the span after its awaited value settles; null after resolution. */
 	resolve: ((cause?: TraceEventId) => void) | null
 }
 

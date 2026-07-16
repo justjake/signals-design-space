@@ -458,6 +458,7 @@ export interface TraceFields {
 export interface SpanEndAttrs {
 	changed?: boolean
 }
+/** Close a trace span and optionally record its outcome. */
 export type EndSpanFn = (id: TraceEventId, attrs?: SpanEndAttrs) => void
 
 /**
@@ -478,6 +479,12 @@ export interface TraceSink {
 export let emitEvent: EmitFn | null = null
 export let startSpan: EmitFn | null = null
 export let endSpan: EndSpanFn | null = null
+/**
+ * Install or detach the engine's low-level trace sink.
+ *
+ * Only one sink is active at a time. Passing `null` returns every emit site to
+ * its detached, single-null-check path.
+ */
 export function setTracer(sink: TraceSink | null): void {
 	emitEvent = sink?.emitEvent ?? null
 	startSpan = sink?.startSpan ?? null
@@ -1766,10 +1773,15 @@ function createGraphCore(
 		}
 	}
 
+	/**
+	 * Begin a manual batch. Pair every call with endBatch; prefer batch when
+	 * the work fits in one callback.
+	 */
 	function startBatch(): void {
 		batchDepth++
 	}
 
+	/** End a manual batch and flush when the outermost batch closes. */
 	function endBatch(): void {
 		if (batchDepth === 0) {
 			throw new Error('endBatch() without a matching startBatch()')
@@ -1780,6 +1792,12 @@ function createGraphCore(
 		}
 	}
 
+	/**
+	 * Run `fn` as one propagation batch and return its result.
+	 *
+	 * Writes still update their atoms in order, but dependent computeds,
+	 * effects, and subscribers settle only after the outermost batch closes.
+	 */
 	function batch<T>(fn: () => T): T {
 		startBatch()
 		try {
@@ -2343,6 +2361,7 @@ function createGraphCore(
 		return node.value as T
 	}
 
+	/** Run `fn` without adding its signal reads to the active dependency list. */
 	function untracked<T>(fn: () => T): T {
 		const prev = activeConsumer
 		activeConsumer = null
@@ -2766,6 +2785,10 @@ function createGraphCore(
 		return () => disposeEffect(w)
 	}
 
+	/**
+	 * Run `fn` as an effect owner and return one disposer for every effect it
+	 * creates, including effects created by their handlers.
+	 */
 	function makeScope(fn: () => void): () => void {
 		// A scope anchor: owns child effects, takes no deliveries of its own.
 		// Pinned like every watcher, because pin identity is the liveness test.
