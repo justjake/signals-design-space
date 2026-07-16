@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { Backend, EventId, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
 import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, isUnstable, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
@@ -53,6 +53,37 @@ const METRIC_COLS: { key: MetricKey; label: string; tip: string }[] = [
 	{ key: 'unchanged', label: 'unchanged', tip: 'Share of recomputes that produced the same result — downstream work stopped. Click to rank.' },
 ]
 
+/**
+ * A collapsible inspector section (progressive disclosure): click the header to
+ * fold a section you don't need, so a long inspector stays scannable. `closed`
+ * holds the folded section ids; the section reveals its body when open.
+ */
+function Sec({
+	id,
+	title,
+	tip,
+	closed,
+	onToggle,
+	children,
+}: {
+	id: string
+	title: ReactNode
+	tip?: string
+	closed: ReadonlySet<string>
+	onToggle: (id: string) => void
+	children: ReactNode
+}) {
+	const isClosed = closed.has(id)
+	return (
+		<div className="insp-section">
+			<h3 className="sec-toggle" data-tip={tip} onClick={() => onToggle(id)}>
+				<span className="sec-caret">{isClosed ? '▸' : '▾'}</span> {title}
+			</h3>
+			{isClosed ? null : children}
+		</div>
+	)
+}
+
 function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: NodeId) => void }) {
 	return (
 		<ul className="linklist">
@@ -98,6 +129,15 @@ export function GraphView({
 	// moving the canvas; navigating to an off-canvas node recenters here.
 	const [focus, setFocus] = useState<NodeId | undefined>(undefined)
 	const [copied, setCopied] = useState(false)
+	// Folded inspector sections (progressive disclosure).
+	const [secClosed, setSecClosed] = useState<ReadonlySet<string>>(() => new Set())
+	const toggleSec = (id: string) =>
+		setSecClosed((s) => {
+			const n = new Set(s)
+			if (n.has(id)) n.delete(id)
+			else n.add(id)
+			return n
+		})
 	// Resizable pane sizes (px).
 	const [nodeListH, setNodeListH] = useState(168)
 	const [drawerH, setDrawerH] = useState(200)
@@ -563,8 +603,7 @@ export function GraphView({
 							<div className="insp-desc">{KIND_TIP[model.node.kind].replace(/^[^:]+:\s*/, '')}</div>
 						</div>
 
-						<div className="insp-section">
-							<h3>Value</h3>
+						<Sec id="value" title="Value" closed={secClosed} onToggle={toggleSec}>
 							<div className="value-preview">
 								<Code>{model.node.valueFull ?? model.node.valuePreview ?? '—'}</Code>
 							</div>
@@ -573,21 +612,27 @@ export function GraphView({
 									{model.node.pending}
 								</div>
 							) : undefined}
-						</div>
+						</Sec>
 
 						{model.node.source !== undefined ? (
-							<div className="insp-section">
-								<h3>Source</h3>
+							<Sec id="source" title="Source" closed={secClosed} onToggle={toggleSec}>
 								<div className="value-preview">
 									<Code>{model.node.source}</Code>
 								</div>
-							</div>
+							</Sec>
 						) : undefined}
 
-						<div className="insp-section">
-							<h3 data-tip="How this node spent the recorded window: how long its own work took, and whether recomputes produced a new result (work flowed downstream) or the same result (downstream work stopped).">
-								Evaluation <span className="win">recorded window</span>
-							</h3>
+						<Sec
+							id="eval"
+							tip="How this node spent the recorded window: how long its own work took, and whether recomputes produced a new result (work flowed downstream) or the same result (downstream work stopped)."
+							title={
+								<>
+									Evaluation <span className="win">recorded window</span>
+								</>
+							}
+							closed={secClosed}
+							onToggle={toggleSec}
+						>
 							<div className="kv">
 								<span className="k">last event</span>
 								<span className="v">
@@ -631,18 +676,26 @@ export function GraphView({
 									⚠ unstable — never memoizes (a new object each run)
 								</div>
 							) : undefined}
-						</div>
+						</Sec>
 
-						<div className="insp-section">
-							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
-								Last caused by{eventSel !== undefined ? ` · #${eventSel}` : ''}
-							</h3>
+						<Sec
+							id="why"
+							tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it."
+							title={<>Last caused by{eventSel !== undefined ? ` · #${eventSel}` : ''}</>}
+							closed={secClosed}
+							onToggle={toggleSec}
+						>
 							<CauseSpine chain={whyChain} onPick={(e) => openEventInLog(e.id)} />
-						</div>
+						</Sec>
 
 						{lastCaused.length > 0 ? (
-							<div className="insp-section">
-								<h3 data-tip="Everything the node’s most recent event caused, directly and transitively.">What it caused · {lastCaused.length}</h3>
+							<Sec
+								id="caused"
+								tip="Everything the node’s most recent event caused, directly and transitively."
+								title={`What it caused · ${lastCaused.length}`}
+								closed={secClosed}
+								onToggle={toggleSec}
+							>
 								<ul className="caused-tree">
 									{lastCaused.map((t) => (
 										<li key={t.row.id} style={{ paddingLeft: (t.depth - 1) * 14 }}>
@@ -650,31 +703,43 @@ export function GraphView({
 										</li>
 									))}
 								</ul>
-							</div>
+							</Sec>
 						) : undefined}
 
 						{inspStack !== undefined ? <StackTrace frames={inspStack} /> : undefined}
-						<div className="insp-section">
-							<h3>
-								Upstream{' '}
-								<span className="win">
-									{model.depsTotal} direct
-									{model.depsTransitive > model.depsTotal ? ` · ${model.depsTransitive.toLocaleString()} transitive` : ''}
-								</span>
-							</h3>
+						<Sec
+							id="upstream"
+							title={
+								<>
+									Upstream{' '}
+									<span className="win">
+										{model.depsTotal} direct
+										{model.depsTransitive > model.depsTotal ? ` · ${model.depsTransitive.toLocaleString()} transitive` : ''}
+									</span>
+								</>
+							}
+							closed={secClosed}
+							onToggle={toggleSec}
+						>
 							<NeighborList items={model.deps} onPick={pick} />
-						</div>
+						</Sec>
 
-						<div className="insp-section">
-							<h3>
-								Downstream{' '}
-								<span className="win">
-									{model.subsTotal} direct
-									{model.subsTransitive > model.subsTotal ? ` · ${model.subsTransitive.toLocaleString()} transitive` : ''}
-								</span>
-							</h3>
+						<Sec
+							id="downstream"
+							title={
+								<>
+									Downstream{' '}
+									<span className="win">
+										{model.subsTotal} direct
+										{model.subsTransitive > model.subsTotal ? ` · ${model.subsTransitive.toLocaleString()} transitive` : ''}
+									</span>
+								</>
+							}
+							closed={secClosed}
+							onToggle={toggleSec}
+						>
 							<NeighborList items={model.subs} onPick={pick} />
-						</div>
+						</Sec>
 					</aside>
 				)}
 			</div>

@@ -274,6 +274,9 @@ export const PANEL_CSS = `
   .insp-section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
   .insp-section h3 { margin: 0 0 6px; font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
   .insp-section h3 .win { float: right; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+  .insp-section h3.sec-toggle { cursor: pointer; user-select: none; }
+  .sec-caret { display: inline-block; width: 9px; margin-right: 1px; color: var(--faint); }
+  .insp-section h3.sec-toggle:hover .sec-caret { color: var(--text); }
   .kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 4px; font: 11px var(--mono); }
   .kv .k { color: var(--muted); }
   .kv .v { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
