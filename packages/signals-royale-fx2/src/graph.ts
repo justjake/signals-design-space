@@ -1594,7 +1594,13 @@ function recompute(node: EvaluatedNode<unknown>): void {
 	let hasError = false
 	let error: unknown
 	let value: unknown
-	const compute = startSpan !== null ? startSpan('compute', node, node.causeEvent) : NO_EVENT
+	// A computed's first run is a lazy eval on read, so nothing has propagated a
+	// cause to it yet (causeEvent is NO_EVENT) and the compute would orphan. Fall
+	// back to the active operation's cause (currentCause) — the write or fold in
+	// flight — so a first "new result" chains back to what triggered it. Outside
+	// an operation currentCause is NO_EVENT, so this never mis-attributes.
+	const computeCause = node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause
+	const compute = startSpan !== null ? startSpan('compute', node, computeCause) : NO_EVENT
 	const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
 	try {
 		value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
@@ -2119,8 +2125,10 @@ export function observeNode(
 		onNotify: notify,
 		onDraftWake: draftWake,
 		pokePass: 0,
-		label,
 	}
+	// Attach a label only when supplied, so an unlabeled watcher keeps its exact
+	// object shape (hidden class) — no cost for the non-devtools path.
+	if (label !== undefined) sub.label = label
 	try {
 		if ((node.flags & Flag.KindAtom) !== 0) {
 			peekAtom(node as AtomNode<unknown>)

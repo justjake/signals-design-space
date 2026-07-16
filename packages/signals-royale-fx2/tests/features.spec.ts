@@ -565,7 +565,7 @@ describe('causality tracer', () => {
 		t.stop()
 	})
 
-	test('draft chains: retire event points at the draft last write, opens the fold writes', () => {
+	test('draft chains: retire and its fold writes both chain to the draft last write', () => {
 		const t = attachTracer()
 		const a = createAtom(1, { label: 'a' })
 		const d = openDraft()
@@ -575,8 +575,11 @@ describe('causality tracer', () => {
 		const retire = events.find((e) => e.kind === 'transition-retire')!
 		const draftWrite = events.find((e) => e.id === retire.cause)!
 		expect(draftWrite.kind).toBe('update')
+		// The base-state fold is attributed to the drafted write it applies (its
+		// intent), not to the retirement bookkeeping, so the devtools reads
+		// "set a ← your write" rather than "set a ← transition-retire".
 		const foldWrite = [...events].reverse().find((e) => e.kind === 'set' && e.label === 'a')!
-		expect(foldWrite.cause).toBe(retire.id)
+		expect(foldWrite.cause).toBe(draftWrite.id)
 		t.stop()
 	})
 })
