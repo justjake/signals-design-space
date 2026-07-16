@@ -10,7 +10,7 @@ const repoPackages = path.resolve(packageRoot, '..')
 export default defineConfig({
 	vite: {
 		resolve: {
-			dedupe: ['react', 'react-dom', 'fumadocs-ui'],
+			dedupe: ['react', 'react-dom', 'scheduler', 'fumadocs-ui'],
 			alias: {
 				'signals-royale-fx2/debug': path.join(packageRoot, 'src/debug/index.ts'),
 				'signals-royale-fx2/react': path.join(packageRoot, 'src/react/index.ts'),
