@@ -59,9 +59,11 @@ import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts
 import {
 	currentCause,
 	emitEvent,
+	endSpan,
 	Flag,
 	NO_EVENT,
 	observeNode,
+	startSpan,
 	type GraphChangeClock,
 	type ProducerNode,
 	type RenderWatcherNode,
@@ -112,6 +114,9 @@ interface UseValueState {
 	 * subscription, not the producer it watches. undefined before the first
 	 * subscription: the mount render falls back to the node. */
 	watcher: RenderWatcherNode | undefined
+	/** The open 'render' span for the current render, closed at commit so the
+	 * devtools times the render→commit pass. NO_EVENT when none is open. */
+	renderEvent: TraceEventId
 	/**
 	 * What the committed tree shows for this hook. Advances only in the
 	 * layout effect, so a transition's speculative values never enter it
@@ -259,6 +264,7 @@ export function useValue<T>(x: Signal<T>): T {
 			// Capture the owning component's name once, only when tracing is on.
 			watcherLabel: emitEvent !== null ? renderingComponentName() : undefined,
 			watcher: undefined,
+			renderEvent: NO_EVENT,
 			committed: { ids: NO_IDS, value: undefined, live: false },
 		}
 		stateRef.current = state
@@ -366,7 +372,11 @@ export function useValue<T>(x: Signal<T>): T {
 		if (renderCause === NO_EVENT) {
 			renderCause = node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause
 		}
-		emitEvent('render', state.watcher ?? node, renderCause, { root: connection })
+		// Open a 'render' span: emit now, close at commit (below), so the devtools
+		// times the render→commit pass and can draw it as a span on the timeline.
+		// The built-in tracer wires no endSpan, so a render still reads as one
+		// point event there.
+		state.renderEvent = startSpan !== null ? startSpan('render', state.watcher ?? node, renderCause, { root: connection }) : NO_EVENT
 	}
 	// Advance the committed stash at commit time. No dependency array: the
 	// effect runs on every commit with that render's resolution, and a
@@ -376,6 +386,11 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
+		// Close the render span opened above, so the devtools times the pass.
+		if (state.renderEvent !== NO_EVENT) {
+			endSpan?.(state.renderEvent)
+			state.renderEvent = NO_EVENT
+		}
 	})
 	return value as T
 }
