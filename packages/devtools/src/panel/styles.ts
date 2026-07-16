@@ -247,6 +247,10 @@ export const PANEL_CSS = `
   .insp-kind .sw { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
   .insp-name { font: 600 15px var(--mono); margin-top: 4px; }
   .insp-id { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
+  /* plain-language kind description under the header (same text as the tooltip) */
+  .insp-desc { font: 10.5px/1.5 var(--mono); color: var(--faint); margin-top: 6px; }
+  /* copy-as-markdown floated to the right of the kind label */
+  .insp-kind .copy-md { margin-left: auto; }
   .insp-section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
   .insp-section h3 { margin: 0 0 6px; font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
   .insp-section h3 .win { float: right; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }

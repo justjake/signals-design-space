@@ -476,6 +476,7 @@ export function LogView({
 							<div className="cz-sub">
 								+{((sel.t - (opRoot?.t ?? sel.t)) / 1000).toFixed(3)}ms into the operation
 							</div>
+							<div className="insp-desc">{kindTip(sel.kind)}</div>
 						</div>
 						<div className="cz-section">
 							<h3 data-tip="The chain that led here, in stack-trace order: the selected entry on top, each cause beneath it, the user input at the bottom.">

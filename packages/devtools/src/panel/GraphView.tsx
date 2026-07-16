@@ -469,14 +469,15 @@ export function GraphView({
 							<div className="insp-kind" style={{ color: kindVar(model.node.kind) }}>
 								<span className="sw" />
 								{KIND_LABEL[model.node.kind]}
+								<button className="srclink2 copy-md" onClick={copyNode}>
+									⧉ {copied ? 'copied' : 'copy as markdown'}
+								</button>
 							</div>
 							<div className="insp-name">{model.name}</div>
 							<div className="insp-id">
 								{model.node.kind} · {fmtId('node', model.node.id)} · engine fx2
 							</div>
-							<button className="srclink2" onClick={copyNode}>
-								⧉ {copied ? 'copied' : 'copy as markdown'}
-							</button>
+							<div className="insp-desc">{KIND_TIP[model.node.kind]}</div>
 						</div>
 
 						<div className="insp-section">
