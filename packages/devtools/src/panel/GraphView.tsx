@@ -429,7 +429,7 @@ export function GraphView({
 						<ResizeHandle dir="v" onDelta={(d) => setDrawerH((h) => clampSize(h - d, 80, 520))} />
 					) : null}
 					{effectiveFocus !== null ? (
-						<section className="drawer" aria-label="Log entries for the focused node" style={drawerOpen ? { maxHeight: drawerH } : { maxHeight: 'none' }}>
+						<section className="drawer" aria-label="Log entries for the focused node" style={drawerOpen ? { height: drawerH, maxHeight: drawerH } : { maxHeight: 'none' }}>
 							<div className="drawer-head">
 								Log <span className="name">{model?.name}</span> · {drawer.length} entries
 								<span className="spacer" />

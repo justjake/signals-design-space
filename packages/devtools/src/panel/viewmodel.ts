@@ -158,6 +158,11 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<number>): TreeRo
 			roots.push(r)
 		}
 	}
+	// Newest-first within each level while a parent still precedes its children:
+	// sort roots and every sibling list by descending id. A cause always has a
+	// lower id than its effects, so this never reorders a parent after a child.
+	roots.sort((a, b) => b.id - a.id)
+	for (const list of childrenOf.values()) list.sort((a, b) => b.id - a.id)
 	const out: TreeRow[] = []
 	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean) => {
 		if (depth > 40) return // guard against a pathological chain
