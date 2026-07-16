@@ -1,10 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
 import { fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 
 const NODE_H = 40
+const DEFAULT_PER_COL = 6
+/** Viewport rectangle in canvas coordinates (an SVG viewBox). */
+interface Box {
+	x: number
+	y: number
+	w: number
+	h: number
+}
 
 const KIND_LABEL: Record<NodeKind, string> = { atom: 'Atom', computed: 'Computed', watcher: 'Watcher', effect: 'Effect' }
 const KIND_TIP: Record<NodeKind, string> = {
@@ -63,6 +71,17 @@ export function GraphView({
 	const [drawerOpen, setDrawerOpen] = useState(true)
 	const [history, setHistory] = useState<number[]>([])
 	const [copied, setCopied] = useState(false)
+	// Selection (inspected + highlighted) is separate from focus (what the
+	// canvas lays out around): a single click selects without moving anything;
+	// a double-click re-focuses and relayouts. So clicking a node never shifts
+	// the picture.
+	const [selected, setSelected] = useState<number | null>(null)
+	// Per-column node cap; a frontier stub raises it to reveal more.
+	const [perCol, setPerCol] = useState(DEFAULT_PER_COL)
+	// Pan/zoom viewBox; null means "fit the whole focus set".
+	const [view, setView] = useState<Box | null>(null)
+	const svgRef = useRef<SVGSVGElement | null>(null)
+	const panRef = useRef<{ cx: number; cy: number; vx: number; vy: number } | null>(null)
 
 	// Cap the listed window: the list is a searchable index into a possibly
 	// huge graph, not a full render. Narrow with search; the canvas is the
@@ -74,19 +93,67 @@ export function GraphView({
 	const effectiveFocus = focus ?? rows[0]?.id ?? allRows[0]?.id ?? null
 	const moreThanListed = counts.nodes - allRows.length
 
-	// Track the focus walk for the breadcrumb.
+	// Moving focus resets selection, expansion, viewport, and the breadcrumb.
 	useEffect(() => {
-		if (effectiveFocus === null) return
-		setHistory((h) => (h[h.length - 1] === effectiveFocus ? h : [...h.slice(-6), effectiveFocus]))
+		setSelected(effectiveFocus)
+		setPerCol(DEFAULT_PER_COL)
+		setView(null)
+		if (effectiveFocus !== null) {
+			setHistory((h) => (h[h.length - 1] === effectiveFocus ? h : [...h.slice(-6), effectiveFocus]))
+		}
 	}, [effectiveFocus])
 
-	const model = effectiveFocus === null ? null : inspectorModel(backend, effectiveFocus)
-	const layout = effectiveFocus === null ? null : layoutFocus(backend, effectiveFocus, depth)
-	const drawer = effectiveFocus === null ? [] : logRows(backend, { node: effectiveFocus }, 40)
+	const sel = selected ?? effectiveFocus
+	const model = sel === null ? null : inspectorModel(backend, sel)
+	const layout = effectiveFocus === null ? null : layoutFocus(backend, effectiveFocus, depth, perCol)
+	const drawer = sel === null ? [] : logRows(backend, { node: sel }, 40)
+
+	// Current viewBox: an explicit pan/zoom box, else fit the whole layout.
+	const base: Box | null = layout ? { x: 0, y: 0, w: layout.width, h: layout.height } : null
+	const vb = view ?? base
+	// Live refs so the once-installed wheel listener never reads a stale box.
+	const vbRef = useRef<Box | null>(vb)
+	vbRef.current = vb
+	const baseRef = useRef<Box | null>(base)
+	baseRef.current = base
+
+	// Cull to the viewport (+ margin): only draw nodes/edges near the viewBox,
+	// so a deep set stays cheap when zoomed in.
+	const M = 40
+	const inBox = (x0: number, y0: number, x1: number, y1: number, v: Box) =>
+		x0 <= v.x + v.w + M && x1 >= v.x - M && y0 <= v.y + v.h + M && y1 >= v.y - M
+	const visNodes = layout && vb ? layout.nodes.filter((n) => inBox(n.x, n.y, n.x + n.w, n.y + NODE_H, vb)) : (layout?.nodes ?? [])
+	const visEdges = layout && vb ? layout.edges.filter((e) => inBox(e.minX, e.minY, e.maxX, e.maxY, vb)) : (layout?.edges ?? [])
+
+	// Zoom around a view-space point, keeping it fixed; clamps to sane extents.
+	const zoomAround = (factor: number, px: number, py: number) => {
+		const v = vbRef.current
+		const b = baseRef.current
+		if (v === null || b === null) return
+		const w = Math.max(160, Math.min(b.w * 2.5, v.w * factor))
+		const h = w * (v.h / v.w)
+		setView({ x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (h / v.h), w, h })
+	}
+	// Native, non-passive wheel so we can preventDefault the pane scroll.
+	useEffect(() => {
+		const svg = svgRef.current
+		if (svg === null) return
+		const onWheel = (e: WheelEvent) => {
+			const v = vbRef.current
+			if (v === null) return
+			e.preventDefault()
+			const r = svg.getBoundingClientRect()
+			const px = v.x + ((e.clientX - r.left) / r.width) * v.w
+			const py = v.y + ((e.clientY - r.top) / r.height) * v.h
+			zoomAround(e.deltaY < 0 ? 0.83 : 1.2, px, py)
+		}
+		svg.addEventListener('wheel', onWheel, { passive: false })
+		return () => svg.removeEventListener('wheel', onWheel)
+	}, [])
 
 	const copyNode = () => {
-		if (effectiveFocus === null) return
-		void copyText(nodeMarkdown(backend, effectiveFocus)).then((ok) => {
+		if (sel === null) return
+		void copyText(nodeMarkdown(backend, sel)).then((ok) => {
 			setCopied(ok)
 			if (ok) setTimeout(() => setCopied(false), 1200)
 		})
@@ -119,8 +186,19 @@ export function GraphView({
 					))}
 				</div>
 				<div className="spacer" />
-				<button className="tbtn" onClick={() => setDepth(depth === 1 ? 2 : 1)}>
+				<button className="tbtn" data-tip="How many levels of dependencies/subscribers to lay out around the focus." onClick={() => setDepth(depth >= 3 ? 1 : depth + 1)}>
 					Depth: {depth}
+				</button>
+				<span role="group" aria-label="Zoom" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+					<button className="tbtn mode" aria-label="Zoom out" onClick={() => zoomAround(1.25, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
+						−
+					</button>
+					<button className="tbtn mode" aria-label="Zoom in" onClick={() => zoomAround(0.8, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
+						+
+					</button>
+				</span>
+				<button className="tbtn" data-tip="Reset pan and zoom to fit the whole focus set." onClick={() => setView(null)}>
+					Fit
 				</button>
 			</div>
 
@@ -187,7 +265,27 @@ export function GraphView({
 						{layout === null ? (
 							<div className="canvas-status">no node focused</div>
 						) : (
-							<svg viewBox={`0 0 ${layout.width} ${layout.height}`} aria-label={`Focus graph: ${layout.shown} of ${counts.nodes} nodes`}>
+							<svg
+								ref={svgRef}
+								viewBox={vb ? `${vb.x} ${vb.y} ${vb.w} ${vb.h}` : '0 0 100 100'}
+								aria-label={`Focus graph: ${layout.shown} of ${counts.nodes} nodes`}
+								style={{ cursor: panRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}
+								onPointerDown={(e) => {
+									if ((e.target as Element).closest('.node, .stub') !== null || vb === null) return
+									panRef.current = { cx: e.clientX, cy: e.clientY, vx: vb.x, vy: vb.y }
+									e.currentTarget.setPointerCapture(e.pointerId)
+								}}
+								onPointerMove={(e) => {
+									const p = panRef.current
+									const svg = svgRef.current
+									if (p === null || vb === null || svg === null) return
+									const r = svg.getBoundingClientRect()
+									setView({ ...vb, x: p.vx - ((e.clientX - p.cx) / r.width) * vb.w, y: p.vy - ((e.clientY - p.cy) / r.height) * vb.h })
+								}}
+								onPointerUp={() => {
+									panRef.current = null
+								}}
+							>
 								<defs>
 									<marker id="signals-devtools-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
 										<path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--border-strong)" />
@@ -196,20 +294,21 @@ export function GraphView({
 										<path d="M0,0.5 L8,4 L0,7.5 z" fill="var(--thread)" />
 									</marker>
 								</defs>
-								{layout.edges.map((e, i) => (
+								{visEdges.map((e, i) => (
 									// eslint-disable-next-line react/no-array-index-key -- edges are positional
 									<path key={i} className={e.hot ? 'thread' : `edge${e.dim ? ' dim' : ''}`} d={e.d} />
 								))}
-								{layout.nodes.map((n) => (
+								{visNodes.map((n) => (
 									<g
 										key={`${n.id}:${n.lastEventId}`}
-										className={`node ${n.kind}${n.focus ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}`}
+										className={`node ${n.kind}${n.id === sel ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}`}
 										transform={`translate(${n.x},${n.y})`}
 										role="button"
 										tabIndex={0}
 										aria-label={`${KIND_LABEL[n.kind]} ${n.label}`}
-										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''}`}
-										onClick={() => setFocus(n.id)}
+										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''} Click to inspect, double-click to focus.`}
+										onClick={() => setSelected(n.id)}
+										onDoubleClick={() => setFocus(n.id)}
 									>
 										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : null}
 										<rect width={n.w} height={NODE_H} rx={5} />
@@ -223,7 +322,7 @@ export function GraphView({
 								))}
 								{layout.stubs.map((s, i) => (
 									// eslint-disable-next-line react/no-array-index-key -- stubs are positional
-									<g key={i} className="stub" transform={`translate(${s.x},${s.y})`} role="button" tabIndex={0} onClick={() => setDepth(depth + 1)}>
+									<g key={i} className="stub" transform={`translate(${s.x},${s.y})`} role="button" tabIndex={0} onClick={() => setPerCol((p) => p + 12)}>
 										<rect width={s.w} height={24} />
 										<text x={8} y={16}>
 											⊞ <tspan className="count">{s.count}</tspan> more {s.dir === 'deps' ? 'deps' : 'subscribers'}
@@ -234,7 +333,7 @@ export function GraphView({
 						)}
 						{layout !== null && model !== null ? (
 							<div className="canvas-status">
-								showing <b>{layout.shown}</b> of <b>{counts.nodes}</b> nodes · focus <b>{model.name}</b> · depth {depth}
+								drawn <b>{visNodes.length}</b> · set <b>{layout.shown}</b> of <b>{counts.nodes}</b> · focus <b>{model.name}</b> · depth {depth} · scroll to zoom, drag to pan
 							</div>
 						) : null}
 					</div>
@@ -244,7 +343,7 @@ export function GraphView({
 							<div className="drawer-head">
 								Log <span className="name">{model?.name}</span> · {drawer.length} entries
 								<span className="spacer" />
-								<button onClick={() => openInLog(effectiveFocus)}>Open in Log ↗</button>
+								<button onClick={() => sel !== null && openInLog(sel)}>Open in Log ↗</button>
 								<button aria-expanded={true} onClick={() => setDrawerOpen(false)}>
 									▾ hide
 								</button>
@@ -323,15 +422,15 @@ export function GraphView({
 						</div>
 
 						<div className="insp-section">
-							<h3 data-tip="The chain of entries that led to this node's most recent activity, from the operation root down.">
+							<h3 data-tip="The chain that led to this node's most recent activity, in stack-trace order: this node on top, each cause beneath, user input at the bottom.">
 								Why this ran
 							</h3>
 							{model.why.length === 0 ? (
 								<div className="sumline">no recorded activity yet</div>
 							) : (
 								<ol className="spine">
-									{model.why.map((e, i) => (
-										<li key={e.id} className={i === model.why.length - 1 ? 'terminus' : undefined}>
+									{[...model.why].reverse().map((e, i) => (
+										<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
 											<div className="knot" />
 											<div className="ev">
 												<span className="id">#{e.id}</span>

@@ -40,6 +40,11 @@ export interface PlacedEdge {
 	d: string
 	hot: boolean
 	dim: boolean
+	/** Axis-aligned bounds of the curve, for viewport culling. */
+	minX: number
+	minY: number
+	maxX: number
+	maxY: number
 }
 
 export interface FrontierStub {
@@ -85,6 +90,7 @@ function walk(
 	focusId: number,
 	dir: 'deps' | 'subs',
 	depth: number,
+	maxPerCol: number,
 	placed: Set<number>,
 ): { columns: number[][]; overflow: number[] } {
 	const columns: number[][] = []
@@ -103,7 +109,7 @@ function walk(
 			}
 		}
 		if (next.length === 0) break
-		const cap = next.length > MAX_PER_COL ? MAX_PER_COL - 1 : next.length
+		const cap = next.length > maxPerCol ? maxPerCol - 1 : next.length
 		const shown = next.slice(0, cap)
 		if (next.length > cap) overflow[level] = next.length - cap
 		for (const id of shown) placed.add(id)
@@ -151,14 +157,15 @@ export function glyphFor(kind: NodeKind): string {
 	return GLYPH[kind]
 }
 
-/** Build the layout for the neighborhood of `focusId`. */
-export function layoutFocus(backend: Backend, focusId: number, depth: number): GraphLayout | null {
+/** Build the layout for the neighborhood of `focusId`. `maxPerCol` caps each
+ * column (the rest collapse into a frontier stub); raise it to expand. */
+export function layoutFocus(backend: Backend, focusId: number, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | null {
 	const focus = backend.node(focusId)
 	if (focus === null) return null
 	const hot = hotSet(backend)
 	const placed = new Set<number>([focusId])
-	const up = walk(backend, focusId, 'deps', depth, placed)
-	const down = walk(backend, focusId, 'subs', depth, placed)
+	const up = walk(backend, focusId, 'deps', depth, maxPerCol, placed)
+	const down = walk(backend, focusId, 'subs', depth, maxPerCol, placed)
 
 	// Columns left→right: farthest upstream level … focus … farthest downstream.
 	const columns: { ids: number[]; overflow: number; dir: 'deps' | 'subs' | 'focus' }[] = []
@@ -204,6 +211,10 @@ export function layoutFocus(backend: Backend, focusId: number, depth: number): G
 				d: `M ${x1},${y1} C ${mx},${y1} ${mx},${y2} ${x2},${y2}`,
 				hot: bothHot,
 				dim: !bothHot && !p.focus && !s.focus,
+				minX: Math.min(x1, x2),
+				minY: Math.min(y1, y2),
+				maxX: Math.max(x1, x2),
+				maxY: Math.max(y1, y2),
 			})
 		}
 	}
