@@ -32,9 +32,9 @@ export function App({
 	// mount, not a frame late.
 	const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null)
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
-	const [focus, setFocus] = useState<NodeId | null>(null)
+	const [focus, setFocus] = useState<NodeId | undefined>(undefined)
 	const [logQuery, setLogQuery] = useState('')
-	const [logSelect, setLogSelect] = useState<EventId | null>(null)
+	const [logSelect, setLogSelect] = useState<EventId | undefined>(undefined)
 	const [themeOpen, setThemeOpen] = useState(false)
 
 	const inspect = (id: NodeId) => {
@@ -77,7 +77,7 @@ export function App({
 					<button className="theme-btn" data-tip="Dock the panel to the side or the bottom." onClick={onToggleDock}>
 						{dock === 'bottom' ? '⇥ side' : '⤓ bottom'}
 					</button>
-				) : null}
+				) : undefined}
 				<button className="theme-btn" onClick={() => setThemeOpen(true)}>
 					Theme
 				</button>
@@ -89,7 +89,7 @@ export function App({
 					<button className="theme-btn" aria-label="Close devtools" style={{ marginLeft: 8 }} onClick={onClose}>
 						✕
 					</button>
-				) : null}
+				) : undefined}
 			</header>
 
 			{tab === 'graph' ? (

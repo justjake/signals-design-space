@@ -11,14 +11,14 @@ import { inspectorModel, type LogRow } from './viewmodel.ts'
 /** A node's identity, value, edges, and why-it-last-ran chain, as markdown. */
 export function nodeMarkdown(backend: Backend, id: NodeId): string {
 	const m = inspectorModel(backend, id)
-	if (m === null) return `(node #${id} is gone)`
+	if (m === undefined) return `(node #${id} is gone)`
 	const n = m.node
 	const lines: string[] = []
 	lines.push(`## ${m.name} — ${n.kind}#${n.id}`)
 	lines.push('')
 	lines.push(`- value: ${n.valuePreview ?? '—'}`)
 	lines.push(`- status: ${n.status}${n.stale ? ' (stale)' : ''}`)
-	if (n.pending !== null) lines.push(`- pending: ${n.pending}`)
+	if (n.pending !== undefined) lines.push(`- pending: ${n.pending}`)
 	lines.push(`- recomputes: ${n.recomputes}`)
 	lines.push('')
 	lines.push(`### Upstream — ${m.deps.length} direct`)

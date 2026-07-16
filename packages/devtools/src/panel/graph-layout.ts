@@ -70,14 +70,14 @@ function hotSet(backend: Backend): Set<NodeId> {
 	const last = backend.events({}, 1)[0]
 	const set = new Set<NodeId>()
 	if (last === undefined) return set
-	for (const e of backend.causeChain(last.id)) if (e.node !== null) set.add(e.node)
+	for (const e of backend.causeChain(last.id)) if (e.node !== undefined) set.add(e.node)
 	return set
 }
 
 function subLine(n: NodeDetails): string {
 	if (n.status === 'error') return n.pending ?? '! error'
 	if (n.status === 'suspended') return `⧗ ${n.pending ?? 'suspended'}`
-	if (n.valuePreview !== null) return `· ${n.valuePreview}`
+	if (n.valuePreview !== undefined) return `· ${n.valuePreview}`
 	return ''
 }
 
@@ -101,7 +101,7 @@ function walk(
 		const seen = new Set<NodeId>()
 		for (const id of frontier) {
 			const n = backend.node(id)
-			if (n === null) continue
+			if (n === undefined) continue
 			for (const nb of dir === 'deps' ? n.deps : n.subs) {
 				if (placed.has(nb) || seen.has(nb)) continue
 				seen.add(nb)
@@ -132,7 +132,7 @@ function place(
 	let y = centerY - total / 2
 	for (const id of ids) {
 		const n = backend.node(id)
-		if (n !== null) {
+		if (n !== undefined) {
 			out.push({
 				id,
 				x,
@@ -159,9 +159,9 @@ export function glyphFor(kind: NodeKind): string {
 
 /** Build the layout for the neighborhood of `focusId`. `maxPerCol` caps each
  * column (the rest collapse into a frontier stub); raise it to expand. */
-export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | null {
+export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | undefined {
 	const focus = backend.node(focusId)
-	if (focus === null) return null
+	if (focus === undefined) return undefined
 	const hot = hotSet(backend)
 	const placed = new Set<NodeId>([focusId])
 	const up = walk(backend, focusId, 'deps', depth, maxPerCol, placed)
@@ -197,7 +197,7 @@ export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, ma
 	const edges: PlacedEdge[] = []
 	for (const p of nodes) {
 		const details = backend.node(p.id)
-		if (details === null) continue
+		if (details === undefined) continue
 		for (const subId of details.subs) {
 			const s = byId.get(subId)
 			if (s === undefined) continue

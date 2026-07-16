@@ -7,7 +7,7 @@ import { useRef } from 'react'
  * stores the size. Pointer capture keeps the drag alive off the handle.
  */
 export function ResizeHandle({ dir, onDelta }: { dir: 'v' | 'h'; onDelta: (delta: number) => void }) {
-	const last = useRef<number | null>(null)
+	const last = useRef<number | undefined>(undefined)
 	return (
 		<div
 			className={`resizer resizer-${dir}`}
@@ -18,13 +18,13 @@ export function ResizeHandle({ dir, onDelta }: { dir: 'v' | 'h'; onDelta: (delta
 				e.currentTarget.setPointerCapture(e.pointerId)
 			}}
 			onPointerMove={(e) => {
-				if (last.current === null) return
+				if (last.current === undefined) return
 				const cur = dir === 'v' ? e.clientY : e.clientX
 				onDelta(cur - last.current)
 				last.current = cur
 			}}
 			onPointerUp={(e) => {
-				last.current = null
+				last.current = undefined
 				e.currentTarget.releasePointerCapture(e.pointerId)
 			}}
 		/>

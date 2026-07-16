@@ -31,15 +31,15 @@ describe('panel view-model', () => {
 			expect(compute).toBeDefined()
 			expect(compute.cls).toBe('compute')
 			// A compute is a span: it closes with a duration the collector timed.
-			expect(compute.took).not.toBeNull()
+			expect(compute.took).not.toBeUndefined()
 			expect(compute.took!).toBeGreaterThanOrEqual(0)
 			// A write is instantaneous — no span, no duration.
-			expect(write.took).toBeNull()
+			expect(write.took).toBeUndefined()
 			// Compute shows the actual new result, not just "new result".
 			expect(compute.summary.startsWith('new result · ')).toBe(true)
 			// Rows carry a real wall-clock time and inter-entry deltas.
 			expect(rows[0].time).toMatch(/^\d\d:\d\d:\d\d\.\d\d\d$/)
-			expect(rows.some((r) => r.delta !== null)).toBe(true)
+			expect(rows.some((r) => r.delta !== undefined)).toBe(true)
 
 			// Node rows for the graph view.
 			const nrows = nodeRows(collector, '', 50)

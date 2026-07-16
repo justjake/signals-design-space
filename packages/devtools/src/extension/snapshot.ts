@@ -39,7 +39,7 @@ export function buildSnapshot(backend: Backend, opts?: { events?: number; nodes?
 	const nodes: NodeDetails[] = []
 	for (const g of graph) {
 		const d = backend.node(g.id)
-		if (d !== null) nodes.push(d)
+		if (d !== undefined) nodes.push(d)
 	}
 	return { counts: backend.counts(), events, nodes }
 }
@@ -106,7 +106,7 @@ export class SnapshotBackend implements Backend {
 		return out
 	}
 
-	node(id: NodeId): NodeDetails | null {
-		return this.byNode.get(id) ?? null
+	node(id: NodeId): NodeDetails | undefined {
+		return this.byNode.get(id) ?? undefined
 	}
 }

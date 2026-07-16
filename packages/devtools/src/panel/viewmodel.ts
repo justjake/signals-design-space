@@ -25,29 +25,29 @@ export interface LogRow {
 	id: EventId
 	kind: string
 	cls: KindClass
-	/** Node id this entry is about; null for engine entries. */
-	node: NodeId | null
-	/** Node label, or `kind#id` when unlabeled, or null for engine entries. */
-	name: string | null
+	/** Node id this entry is about; undefined for engine entries. */
+	node: NodeId | undefined
+	/** Node label, or `kind#id` when unlabeled, or undefined for engine entries. */
+	name: string | undefined
 	/** One-line, plain-words summary of the entry's data. */
 	summary: string
 	/** µs since attach. */
 	t: number
 	cause: EventId
 	/** Duration in µs, where the entry is a closed span (compute/effect). */
-	took: number | null
+	took: number | undefined
 	/** Short real wall-clock timestamp (HH:MM:SS.mmm). */
 	time: string
-	/** µs since the previous entry in the stream; null for the first. */
-	delta: number | null
-	/** App stack captured at an operation root; null otherwise. */
-	stack: StackFrame[] | null
+	/** µs since the previous entry in the stream; undefined for the first. */
+	delta: number | undefined
+	/** App stack captured at an operation root; undefined otherwise. */
+	stack: StackFrame[] | undefined
 }
 
-function nodeName(backend: Backend, id: NodeId | null): string | null {
-	if (id === null) return null
+function nodeName(backend: Backend, id: NodeId | undefined): string | undefined {
+	if (id === undefined) return undefined
 	const n = backend.node(id)
-	if (n === null) return `#${id}`
+	if (n === undefined) return `#${id}`
 	return n.label ?? `${n.kind}#${id}`
 }
 
@@ -73,14 +73,14 @@ function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
 		cls: kindClass(e.kind),
 		node: e.node,
 		// Engine-level entries have no node; a captured DOM origin labels itself.
-		name: nodeName(backend, e.node) ?? (typeof e.data.label === 'string' ? e.data.label : null),
+		name: nodeName(backend, e.node) ?? (typeof e.data.label === 'string' ? e.data.label : undefined),
 		summary: summarize(e),
 		t: e.t,
 		cause: e.cause,
-		took: typeof e.data.took === 'number' ? e.data.took : null,
+		took: typeof e.data.took === 'number' ? e.data.took : undefined,
 		time: formatClock(e.wall),
-		delta: null,
-		stack: Array.isArray(e.data.stack) ? (e.data.stack as StackFrame[]) : null,
+		delta: undefined,
+		stack: Array.isArray(e.data.stack) ? (e.data.stack as StackFrame[]) : undefined,
 	}
 }
 
@@ -107,15 +107,15 @@ export function fmtId(space: 'node' | 'event' | 'suspense', id: number): string 
 }
 
 /** Compact µs/ms duration, or empty when no duration was recorded. */
-export function fmtTook(us: number | null): string {
-	if (us === null) return ''
+export function fmtTook(us: number | undefined): string {
+	if (us === undefined) return ''
 	if (us < 1000) return `${us}µs`
 	return `${(us / 1000).toFixed(us < 10000 ? 1 : 0)}ms`
 }
 
 /** Signed inter-entry gap ("+23µs", "+1.2ms"), or empty for the first entry. */
-export function fmtDelta(us: number | null): string {
-	if (us === null) return ''
+export function fmtDelta(us: number | undefined): string {
+	if (us === undefined) return ''
 	return `+${fmtTook(us)}`
 }
 
@@ -224,7 +224,7 @@ export interface NodeRow {
 	stale: boolean
 	recomputes: number
 	/** The node's most recent entry, for the "last event" column. */
-	last: { id: EventId; kind: string } | null
+	last: { id: EventId; kind: string } | undefined
 }
 
 export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[] {
@@ -238,7 +238,7 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 		status: n.status,
 		stale: n.stale,
 		recomputes: n.recomputes,
-		last: n.lastEventId > 0 ? { id: n.lastEventId, kind: n.lastKind ?? '' } : null,
+		last: n.lastEventId > 0 ? { id: n.lastEventId, kind: n.lastKind ?? '' } : undefined,
 	}))
 }
 
@@ -264,7 +264,7 @@ function neighbors(backend: Backend, ids: NodeId[]): NeighborRef[] {
 	for (const id of ids) {
 		if (out.length >= NEIGHBOR_CAP) break
 		const n = backend.node(id)
-		if (n === null) continue
+		if (n === undefined) continue
 		out.push({ id, name: n.label ?? `${n.kind}#${id}`, kind: n.kind, status: n.status })
 	}
 	return out
@@ -283,13 +283,13 @@ export interface InspectorModel {
 	subsTotal: number
 	/** Cause chain of the node's most recent entry, root first. */
 	why: LogRow[]
-	/** The node's most recent entry, or null if it has none in the window. */
-	last: LogRow | null
+	/** The node's most recent entry, or undefined if it has none in the window. */
+	last: LogRow | undefined
 }
 
-export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | null {
+export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | undefined {
 	const node = backend.node(id)
-	if (node === null) return null
+	if (node === undefined) return undefined
 	// The node's most recent entry anchors the "why" chain.
 	const lastEvent = backend.events({ node: id }, 1)[0]
 	const why = lastEvent ? backend.causeChain(lastEvent.id).map((e) => toRow(backend, e)) : []
@@ -301,6 +301,6 @@ export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | n
 		depsTotal: node.deps.length,
 		subsTotal: node.subs.length,
 		why,
-		last: lastEvent ? toRow(backend, lastEvent) : null,
+		last: lastEvent ? toRow(backend, lastEvent) : undefined,
 	}
 }

@@ -52,10 +52,10 @@ function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: No
 						<span className="meta" style={{ color: statusVar(n.status) }}>
 							{n.status}
 						</span>
-					) : null}
+					) : undefined}
 				</li>
 			))}
-			{items.length === 0 ? <li style={{ color: 'var(--faint)' }}>none</li> : null}
+			{items.length === 0 ? <li style={{ color: 'var(--faint)' }}>none</li> : undefined}
 		</ul>
 	)
 }
@@ -68,8 +68,8 @@ export function GraphView({
 	openEventInLog,
 }: {
 	backend: Backend
-	focus: NodeId | null
-	setFocus: (id: NodeId | null) => void
+	focus: NodeId | undefined
+	setFocus: (id: NodeId | undefined) => void
 	openInLog: (id: NodeId) => void
 	openEventInLog: (eventId: EventId) => void
 }) {
@@ -87,18 +87,18 @@ export function GraphView({
 	// Selection (inspected + highlighted) is separate from focus (what the canvas
 	// lays out around): clicking a node that's already shown just inspects it in
 	// place (no relayout, no shift); clicking one that's off-canvas re-centers.
-	const [selected, setSelected] = useState<NodeId | null>(null)
+	const [selected, setSelected] = useState<NodeId | undefined>(undefined)
 	// A specific event picked from the drawer to inspect in the sidebar; null
 	// falls back to the node's most recent event.
-	const [eventSel, setEventSel] = useState<EventId | null>(null)
+	const [eventSel, setEventSel] = useState<EventId | undefined>(undefined)
 	// Optional status filter for the node list (error / suspended).
-	const [statusOnly, setStatusOnly] = useState<NodeStatus | null>(null)
+	const [statusOnly, setStatusOnly] = useState<NodeStatus | undefined>(undefined)
 	// Per-column node cap; a frontier stub raises it to reveal more.
 	const [perCol, setPerCol] = useState(DEFAULT_PER_COL)
-	// Pan/zoom viewBox; null means "fit the whole focus set".
-	const [view, setView] = useState<Box | null>(null)
+	// Pan/zoom viewBox; undefined means "fit the whole focus set".
+	const [view, setView] = useState<Box | undefined>(undefined)
 	const svgRef = useRef<SVGSVGElement | null>(null)
-	const panRef = useRef<{ cx: number; cy: number; vx: number; vy: number } | null>(null)
+	const panRef = useRef<{ cx: number; cy: number; vx: number; vy: number } | undefined>(undefined)
 
 	// Cap the listed window: the list is a searchable index into a possibly
 	// huge graph, not a full render. Narrow with search; the canvas is the
@@ -106,8 +106,8 @@ export function GraphView({
 	const LIST_CAP = 100
 	const counts = backend.counts()
 	const allRows = nodeRows(backend, query, LIST_CAP)
-	const rows = allRows.filter((n) => kindOn[n.kind] && (statusOnly === null || n.status === statusOnly))
-	const effectiveFocus = focus ?? rows[0]?.id ?? allRows[0]?.id ?? null
+	const rows = allRows.filter((n) => kindOn[n.kind] && (statusOnly === undefined || n.status === statusOnly))
+	const effectiveFocus = focus ?? rows[0]?.id ?? allRows[0]?.id ?? undefined
 	const moreThanListed = counts.nodes - allRows.length
 	// Status counts over the listed window (a searchable slice, not the whole
 	// graph) — enough to surface errored/suspended nodes to filter to.
@@ -117,9 +117,9 @@ export function GraphView({
 	// Moving focus resets selection, expansion, viewport, and the breadcrumb.
 	useEffect(() => {
 		setSelected(effectiveFocus)
-		setEventSel(null)
+		setEventSel(undefined)
 		setPerCol(DEFAULT_PER_COL)
-		setView(null)
+		setView(undefined)
 	}, [effectiveFocus])
 
 	// Back/forward history tracks the inspected node (`selected`) — the thing you
@@ -128,7 +128,7 @@ export function GraphView({
 	// own selection isn't re-recorded.
 	const navigating = useRef(false)
 	useEffect(() => {
-		if (selected === null) return
+		if (selected === undefined) return
 		if (navigating.current) {
 			navigating.current = false
 			return
@@ -144,7 +144,7 @@ export function GraphView({
 		navigating.current = true
 		setNav((n) => ({ ...n, at }))
 		setSelected(nav.trail[at])
-		setEventSel(null)
+		setEventSel(undefined)
 	}
 	const goBack = () => {
 		if (nav.at > 0) goTo(nav.at - 1)
@@ -154,27 +154,27 @@ export function GraphView({
 	}
 
 	const sel = selected ?? effectiveFocus
-	const model = sel === null ? null : inspectorModel(backend, sel)
-	const layout = effectiveFocus === null ? null : layoutFocus(backend, effectiveFocus, depth, perCol)
-	const drawer = sel === null ? [] : logRows(backend, { node: sel }, 40)
+	const model = sel === undefined ? undefined : inspectorModel(backend, sel)
+	const layout = effectiveFocus === undefined ? undefined : layoutFocus(backend, effectiveFocus, depth, perCol)
+	const drawer = sel === undefined ? [] : logRows(backend, { node: sel }, 40)
 
 	// One click behaves the same for a canvas node or a list row: inspect it in
 	// place; only re-center the canvas if it isn't already shown, so inspecting
 	// a visible node never shifts the graph. (No separate "focus" gesture.)
 	const pick = (id: NodeId) => {
 		setSelected(id)
-		setEventSel(null)
-		if (layout !== null && !layout.nodes.some((n) => n.id === id)) setFocus(id)
+		setEventSel(undefined)
+		if (layout !== undefined && !layout.nodes.some((n) => n.id === id)) setFocus(id)
 	}
 	// The "why this ran" chain shown in the inspector: a drawer-picked event if
 	// there is one, else the node's most recent event.
-	const whyChain = eventSel !== null ? causeRows(backend, eventSel) : (model?.why ?? [])
+	const whyChain = eventSel !== undefined ? causeRows(backend, eventSel) : (model?.why ?? [])
 	// The node's most recent *causing* event — a write or recompute, not a leaf
 	// notify/render — and the consequence tree it produced, mirroring the log's
 	// "what this caused" into the graph sidebar.
-	const lastCause = sel !== null ? backend.events({ node: sel, classes: ['write', 'compute'] }, 1)[0] : undefined
+	const lastCause = sel !== undefined ? backend.events({ node: sel, classes: ['write', 'compute'] }, 1)[0] : undefined
 	const lastCaused = lastCause !== undefined ? causedTree(logRows(backend, {}, 1000), lastCause.id) : []
-	const inspStack = whyChain.find((e) => e.stack !== null)?.stack ?? null
+	const inspStack = whyChain.find((e) => e.stack !== undefined)?.stack ?? undefined
 
 	// Flash a node or row only when its last event actually advances — never on
 	// reveal, relayout, or selection.
@@ -182,12 +182,12 @@ export function GraphView({
 	const flashRows = useFlashOnChange(rows.map((n) => [n.id, n.last?.id ?? 0]))
 
 	// Current viewBox: an explicit pan/zoom box, else fit the whole layout.
-	const base: Box | null = layout ? { x: 0, y: 0, w: layout.width, h: layout.height } : null
+	const base: Box | undefined = layout ? { x: 0, y: 0, w: layout.width, h: layout.height } : undefined
 	const vb = view ?? base
 	// Live refs so the once-installed wheel listener never reads a stale box.
-	const vbRef = useRef<Box | null>(vb)
+	const vbRef = useRef<Box | undefined>(vb)
 	vbRef.current = vb
-	const baseRef = useRef<Box | null>(base)
+	const baseRef = useRef<Box | undefined>(base)
 	baseRef.current = base
 
 	// Cull to the viewport (+ margin): only draw nodes/edges near the viewBox,
@@ -202,7 +202,7 @@ export function GraphView({
 	const zoomAround = (factor: number, px: number, py: number) => {
 		const v = vbRef.current
 		const b = baseRef.current
-		if (v === null || b === null) return
+		if (v === undefined || b === undefined) return
 		const w = Math.max(160, Math.min(b.w * 2.5, v.w * factor))
 		const h = w * (v.h / v.w)
 		const next = { x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (h / v.h), w, h }
@@ -219,7 +219,7 @@ export function GraphView({
 		const onWheel = (e: WheelEvent) => {
 			const v = vbRef.current
 			const b = baseRef.current
-			if (v === null || b === null) return
+			if (v === undefined || b === undefined) return
 			e.preventDefault()
 			const rect = svg.getBoundingClientRect()
 			const scale = Math.min(rect.width / v.w, rect.height / v.h)
@@ -246,7 +246,7 @@ export function GraphView({
 	}, [])
 
 	const copyNode = () => {
-		if (sel === null) return
+		if (sel === undefined) return
 		void copyText(nodeMarkdown(backend, sel)).then((ok) => {
 			setCopied(ok)
 			if (ok) setTimeout(() => setCopied(false), 1200)
@@ -282,7 +282,7 @@ export function GraphView({
 						className={`kchip ${statusOnly === 'error' ? 'on' : ''}`}
 						data-tip="Show only errored nodes — their last recompute threw."
 						aria-pressed={statusOnly === 'error'}
-						onClick={() => setStatusOnly(statusOnly === 'error' ? null : 'error')}
+						onClick={() => setStatusOnly(statusOnly === 'error' ? undefined : 'error')}
 					>
 						<span className="sw" style={{ background: 'var(--danger)' }} />
 						error · {errCount}
@@ -291,7 +291,7 @@ export function GraphView({
 						className={`kchip ${statusOnly === 'suspended' ? 'on' : ''}`}
 						data-tip="Show only suspended nodes — a recompute is awaiting async."
 						aria-pressed={statusOnly === 'suspended'}
-						onClick={() => setStatusOnly(statusOnly === 'suspended' ? null : 'suspended')}
+						onClick={() => setStatusOnly(statusOnly === 'suspended' ? undefined : 'suspended')}
 					>
 						<span className="sw" style={{ background: 'var(--suspended)' }} />
 						suspended · {suspCount}
@@ -345,7 +345,7 @@ export function GraphView({
 					<ResizeHandle dir="v" onDelta={(d) => setNodeListH((h) => clampSize(h + d, 60, 460))} />
 
 					<div className="canvas-wrap">
-						{layout !== null ? (
+						{layout !== undefined ? (
 							<div className="canvas-controls">
 								<span role="group" aria-label="Navigate history" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
 									<button className="tbtn mode" data-tip="Back to the previous focused node." aria-label="Back" disabled={nav.at <= 0} onClick={goBack}>
@@ -366,12 +366,12 @@ export function GraphView({
 										+
 									</button>
 								</span>
-								<button className="tbtn" data-tip="Reset pan and zoom to fit the whole focus set." onClick={() => setView(null)}>
+								<button className="tbtn" data-tip="Reset pan and zoom to fit the whole focus set." onClick={() => setView(undefined)}>
 									Fit
 								</button>
 							</div>
-						) : null}
-						{layout === null ? (
+						) : undefined}
+						{layout === undefined ? (
 							<div className="canvas-status">no node focused</div>
 						) : (
 							<svg
@@ -381,14 +381,14 @@ export function GraphView({
 								aria-label={`Focus graph: ${layout.shown} of ${counts.nodes} nodes`}
 								style={{ cursor: panRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}
 								onPointerDown={(e) => {
-									if ((e.target as Element).closest('.node, .stub') !== null || vb === null) return
+									if ((e.target as Element).closest('.node, .stub') !== null || vb === undefined) return
 									panRef.current = { cx: e.clientX, cy: e.clientY, vx: vb.x, vy: vb.y }
 									e.currentTarget.setPointerCapture(e.pointerId)
 								}}
 								onPointerMove={(e) => {
 									const p = panRef.current
 									const svg = svgRef.current
-									if (p === null || vb === null || svg === null) return
+									if (p === undefined || vb === undefined || svg === null) return
 									const r = svg.getBoundingClientRect()
 									const nx = p.vx - ((e.clientX - p.cx) / r.width) * vb.w
 									const ny = p.vy - ((e.clientY - p.cy) / r.height) * vb.h
@@ -399,7 +399,7 @@ export function GraphView({
 									setView({ ...vb, x: clampSize(nx, -vb.w * 0.5, bw - vb.w * 0.5), y: clampSize(ny, -vb.h * 0.5, bh - vb.h * 0.5) })
 								}}
 								onPointerUp={() => {
-									panRef.current = null
+									panRef.current = undefined
 								}}
 							>
 								<defs>
@@ -425,7 +425,7 @@ export function GraphView({
 										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''}`}
 										onClick={() => pick(n.id)}
 									>
-										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : null}
+										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : undefined}
 										<rect width={n.w} height={NODE_H} rx={5} />
 										<text x={8} y={16}>
 											<tspan className="glyph">{glyphFor(n.kind)}</tspan> {n.label}
@@ -446,22 +446,22 @@ export function GraphView({
 								))}
 							</svg>
 						)}
-						{layout !== null && model !== null ? (
+						{layout !== undefined && model !== undefined ? (
 							<div className="canvas-status">
 								drawn <b>{visNodes.length}</b> · set <b>{layout.shown}</b> of <b>{counts.nodes}</b> · focus <b>{model.name}</b> · depth {depth} · pinch to zoom, drag or scroll to pan
 							</div>
-						) : null}
+						) : undefined}
 					</div>
 
-					{effectiveFocus !== null && drawerOpen ? (
+					{effectiveFocus !== undefined && drawerOpen ? (
 						<ResizeHandle dir="v" onDelta={(d) => setDrawerH((h) => clampSize(h - d, 80, 520))} />
-					) : null}
-					{effectiveFocus !== null ? (
+					) : undefined}
+					{effectiveFocus !== undefined ? (
 						<section className="drawer" aria-label="Log entries for the focused node" style={drawerOpen ? { height: drawerH, maxHeight: drawerH } : { maxHeight: 'none' }}>
 							<div className="drawer-head">
 								Log <span className="name">{model?.name}</span> · {drawer.length} entries
 								<span className="spacer" />
-								<button onClick={() => sel !== null && openInLog(sel)}>Open in Log ↗</button>
+								<button onClick={() => sel !== undefined && openInLog(sel)}>Open in Log ↗</button>
 								<button aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>
 									{drawerOpen ? '▾ hide' : '▸ show'}
 								</button>
@@ -492,16 +492,16 @@ export function GraphView({
 												no entries yet
 											</td>
 										</tr>
-									) : null}
+									) : undefined}
 								</tbody>
 							</table>
-							) : null}
+							) : undefined}
 						</section>
-					) : null}
+					) : undefined}
 				</div>
 
 				<ResizeHandle dir="h" onDelta={(d) => setInspectorW((w) => clampSize(w - d, 220, 640))} />
-				{model === null ? (
+				{model === undefined ? (
 					<aside className="inspector" aria-label="Node inspector" style={{ width: inspectorW }}>
 						<div className="insp-section" style={{ color: 'var(--muted)' }}>
 							No nodes yet — interact with the app to populate the graph.
@@ -527,19 +527,19 @@ export function GraphView({
 						<div className="insp-section">
 							<h3>Value</h3>
 							<div className="value-preview">{model.node.valueFull ?? model.node.valuePreview ?? '—'}</div>
-							{model.node.pending !== null ? (
+							{model.node.pending !== undefined ? (
 								<div className="sumline" style={{ color: statusVar(model.node.status) }}>
 									{model.node.pending}
 								</div>
-							) : null}
+							) : undefined}
 						</div>
 
-						{model.node.source !== null ? (
+						{model.node.source !== undefined ? (
 							<div className="insp-section">
 								<h3 data-tip="How this node was created — its stringified compute/effect function.">Source</h3>
 								<div className="value-preview">{model.node.source}</div>
 							</div>
-						) : null}
+						) : undefined}
 
 						<div className="insp-section">
 							<h3 data-tip="How this node spent the recorded window: how long its own work took, and whether recomputes produced a new result (work flowed downstream) or the same result (downstream work stopped).">
@@ -551,18 +551,18 @@ export function GraphView({
 									{model.last ? (
 										<>
 											<EventRef row={model.last} showName={false} />
-											{model.last.took !== null ? ` · ${fmtTook(model.last.took)}` : ''}
+											{model.last.took !== undefined ? ` · ${fmtTook(model.last.took)}` : ''}
 										</>
 									) : (
 										'—'
 									)}
 								</span>
-								{model.node.equals !== null ? (
+								{model.node.equals !== undefined ? (
 									<>
 										<span className="k" data-tip="The equality function that decides whether a recompute changed the value.">equals</span>
 										<span className="v">{model.node.equals}</span>
 									</>
-								) : null}
+								) : undefined}
 								<span className="k" data-tip="Total time spent running this node’s own function in the recorded window.">run time</span>
 								<span className="v">{fmtTook(model.node.selfUs)} · {model.node.recomputes} {model.node.recomputes === 1 ? 'run' : 'runs'}</span>
 								<span className="k">status</span>
@@ -571,20 +571,20 @@ export function GraphView({
 							{model.node.newResults + model.node.sameResults > 0 ? (
 								<>
 									<div className="memo-bar" role="img" aria-label={`${model.node.newResults + model.node.sameResults} recomputes: ${model.node.newResults} new, ${model.node.sameResults} same`}>
-										{model.node.newResults > 0 ? <span style={{ width: `${(model.node.newResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--computed)' }} /> : null}
-										{model.node.sameResults > 0 ? <span style={{ width: `${(model.node.sameResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--system)' }} /> : null}
+										{model.node.newResults > 0 ? <span style={{ width: `${(model.node.newResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--computed)' }} /> : undefined}
+										{model.node.sameResults > 0 ? <span style={{ width: `${(model.node.sameResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--system)' }} /> : undefined}
 									</div>
 									<div className="memo-legend">
 										<span><span className="sw" style={{ background: 'var(--computed)' }} /><b>{model.node.newResults}×</b> new result — flowed downstream</span>
 										<span><span className="sw" style={{ background: 'var(--system)' }} /><b>{model.node.sameResults}×</b> same result — downstream work stopped</span>
 									</div>
 								</>
-							) : null}
+							) : undefined}
 						</div>
 
 						<div className="insp-section">
 							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
-								Last caused by{eventSel !== null ? ` · #${eventSel}` : ''}
+								Last caused by{eventSel !== undefined ? ` · #${eventSel}` : ''}
 							</h3>
 							<CauseSpine chain={whyChain} onPick={(e) => openEventInLog(e.id)} />
 						</div>
@@ -600,9 +600,9 @@ export function GraphView({
 									))}
 								</ul>
 							</div>
-						) : null}
+						) : undefined}
 
-						{inspStack !== null ? <StackTrace frames={inspStack} /> : null}
+						{inspStack !== undefined ? <StackTrace frames={inspStack} /> : undefined}
 						<div className="insp-section">
 							<h3>
 								Upstream <span className="win">{model.depsTotal} direct</span>

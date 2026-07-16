@@ -27,10 +27,10 @@ const DEFAULT: Record<Key, string> = {
 	base0C: '#4fb9c9', base0D: '#5e9fe8', base0E: '#bf8eda', base0F: '#df84a8',
 }
 
-function norm(h: string): string | null {
+function norm(h: string): string | undefined {
 	let s = h.trim()
 	if (!s.startsWith('#')) s = '#' + s
-	return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null
+	return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : undefined
 }
 
 /** `root` is the `.signals-devtools-root` element the vars live on. */
@@ -76,8 +76,8 @@ export function ThemeDialog({ open, onClose, root }: { open: boolean; onClose: (
 		let n = 0
 		for (const k of KEYS) {
 			const v = pal[k]
-			const hex = typeof v === 'string' ? norm(v) : null
-			if (hex !== null) {
+			const hex = typeof v === 'string' ? norm(v) : undefined
+			if (hex !== undefined) {
 				next[k] = hex
 				n++
 			}

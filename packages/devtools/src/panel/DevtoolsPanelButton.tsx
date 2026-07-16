@@ -109,7 +109,7 @@ export function DevtoolsPanelButton({
 	const [dock, setDock] = useState<'right' | 'bottom'>(saved.dock ?? 'right')
 	const [size, setSize] = useState(() => saved.size ?? Math.round(window.innerWidth * 0.46))
 	const [pos, setPos] = useState(() => (saved.pos ? snap(saved.pos.x, saved.pos.y) : cornerPos(defaultCorner)))
-	const drag = useRef<{ gx: number; gy: number; moved: boolean } | null>(null)
+	const drag = useRef<{ gx: number; gy: number; moved: boolean } | undefined>(undefined)
 
 	useEffect(() => {
 		try {
@@ -145,15 +145,15 @@ export function DevtoolsPanelButton({
 				}}
 				onPointerMove={(e) => {
 					const d = drag.current
-					if (d === null) return
+					if (d === undefined) return
 					if (Math.abs(e.clientX - (d.gx + pos.x)) + Math.abs(e.clientY - (d.gy + pos.y)) > 3) d.moved = true
 					setPos(snap(e.clientX - d.gx, e.clientY - d.gy))
 				}}
 				onPointerUp={(e) => {
 					const d = drag.current
-					drag.current = null
+					drag.current = undefined
 					e.currentTarget.releasePointerCapture(e.pointerId)
-					if (d !== null && !d.moved) setOpen((o) => !o)
+					if (d !== undefined && !d.moved) setOpen((o) => !o)
 				}}
 				style={{ left: pos.x, top: pos.y, width: BTN_W, cursor: drag.current?.moved ? 'grabbing' : 'pointer' }}
 			>
@@ -182,14 +182,14 @@ export function DevtoolsPanelButton({
 						</Suspense>
 					</div>
 				</div>
-			) : null}
+			) : undefined}
 		</>
 	)
 }
 
 /** Inner-edge resize grip for the overlay pane (inline-styled; no panel CSS). */
 function Grip({ dock, onResize }: { dock: 'right' | 'bottom'; onResize: (delta: number) => void }) {
-	const last = useRef<number | null>(null)
+	const last = useRef<number | undefined>(undefined)
 	return (
 		<div
 			role="separator"
@@ -198,14 +198,14 @@ function Grip({ dock, onResize }: { dock: 'right' | 'bottom'; onResize: (delta: 
 				e.currentTarget.setPointerCapture(e.pointerId)
 			}}
 			onPointerMove={(e) => {
-				if (last.current === null) return
+				if (last.current === undefined) return
 				const cur = dock === 'right' ? e.clientX : e.clientY
 				// Inner edge: dragging toward the page grows the pane.
 				onResize(dock === 'right' ? last.current - cur : last.current - cur)
 				last.current = cur
 			}}
 			onPointerUp={(e) => {
-				last.current = null
+				last.current = undefined
 				e.currentTarget.releasePointerCapture(e.pointerId)
 			}}
 			style={{

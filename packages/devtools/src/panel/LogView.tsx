@@ -83,18 +83,18 @@ function NameCell({
 		<button className="causeref" onClick={(e) => { e.stopPropagation(); onCause() }}>
 			⤷{fmtId('event', row.cause)}
 		</button>
-	) : null
+	) : undefined
 	const name =
-		row.name === null ? (
+		row.name === undefined ? (
 			<span style={{ color: 'var(--faint)' }}>—</span>
 		) : (
 			<>
 				<span className="lname">{row.name}</span>
-				{nodeId !== null ? (
+				{nodeId !== undefined ? (
 					<button className="nid" onClick={(e) => { e.stopPropagation(); onNode(nodeId) }}>
 						{fmtId('node', nodeId)}
 					</button>
-				) : null}
+				) : undefined}
 			</>
 		)
 	return (
@@ -116,21 +116,21 @@ export function LogView({
 	query: string
 	setQuery: (q: string) => void
 	inspect: (id: NodeId) => void
-	/** An event to select from outside (e.g. a graph spine link); null = none. */
-	selectEvent?: EventId | null
+	/** An event to select from outside (e.g. a graph spine link); undefined = none. */
+	selectEvent?: EventId | undefined
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	const [on, setOn] = useState<Record<string, boolean>>({ write: true, compute: true, render: true, effect: true, internals: false })
-	const [paused, setPaused] = useState<LogRow[] | null>(null)
+	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
-	const [selected, setSelected] = useState<EventId | null>(null)
+	const [selected, setSelected] = useState<EventId | undefined>(undefined)
 	const [copied, setCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
-	// Timeline brush: [t0, t1] in µs, or null for the full window.
-	const [brush, setBrush] = useState<[number, number] | null>(null)
+	// Timeline brush: [t0, t1] in µs, or undefined for the full window.
+	const [brush, setBrush] = useState<[number, number] | undefined>(undefined)
 	const tlRef = useRef<SVGSVGElement | null>(null)
-	const brushing = useRef<number | null>(null)
+	const brushing = useRef<number | undefined>(undefined)
 	const selRowRef = useRef<HTMLTableRowElement | null>(null)
 
 	// Scroll the selected entry into view (e.g. after a jump-to-cause).
@@ -140,14 +140,14 @@ export function LogView({
 
 	// Select an event requested from outside (a graph "last caused by" link).
 	useEffect(() => {
-		if (selectEvent != null) setSelected(selectEvent)
+		if (selectEvent !== undefined) setSelected(selectEvent)
 	}, [selectEvent])
 
 	// Esc clears the timeline window (a click on the strip clears it too).
 	useEffect(() => {
-		if (brush === null) return
+		if (brush === undefined) return
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') setBrush(null)
+			if (e.key === 'Escape') setBrush(undefined)
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
@@ -162,7 +162,7 @@ export function LogView({
 	const live = logRows(backend, { classes }, LIMIT)
 	const base = (paused ?? live).filter((r) => r.id > floor)
 	const rows = base.filter(
-		(r) => matchesSearch(r, query) && (brush === null || (r.t >= brush[0] && r.t <= brush[1])),
+		(r) => matchesSearch(r, query) && (brush === undefined || (r.t >= brush[0] && r.t <= brush[1])),
 	)
 
 	// Tree mode: resolve any cause referenced but outside the visible window
@@ -179,7 +179,7 @@ export function LogView({
 		}
 		if (extra.size > 0) treeInput = [...extra.values(), ...rows]
 	}
-	const tree = mode === 'tree' ? logTree(treeInput, collapsed) : null
+	const tree = mode === 'tree' ? logTree(treeInput, collapsed) : undefined
 	const treeRows = tree
 	const toggleCollapsed = (id: EventId) =>
 		setCollapsed((prev) => {
@@ -231,20 +231,20 @@ export function LogView({
 	// The cause chain resolves from the backend, so a selected entry outside the
 	// visible window (e.g. jumped-to via ⤷) still shows — its own entry is the
 	// chain's last element.
-	const spine = selected === null ? [] : causeRows(backend, selected)
-	const sel = selected === null ? null : (rows.find((r) => r.id === selected) ?? spine[spine.length - 1] ?? null)
+	const spine = selected === undefined ? [] : causeRows(backend, selected)
+	const sel = selected === undefined ? undefined : (rows.find((r) => r.id === selected) ?? spine[spine.length - 1] ?? undefined)
 	const opRoot = spine[0] ?? sel
-	const opGroup = sel === null ? undefined : ops.get(rootOf(sel.id))
-	const opEntries = opGroup?.count ?? (sel === null ? 0 : 1)
+	const opGroup = sel === undefined ? undefined : ops.get(rootOf(sel.id))
+	const opEntries = opGroup?.count ?? (sel === undefined ? 0 : 1)
 	// Total wall time the whole operation spanned (root → last consequence) — the
 	// "how big was this tree" number you trace back from a slow update.
 	const opTotalUs = opGroup ? opGroup.maxT - opGroup.minT : 0
 	// The consequence tree of the selected entry: everything it caused, directly
 	// and transitively, within the window, nested (bounded for huge fan-outs).
 	// logTree roots it at sel and orders siblings newest-first; we show depth ≥ 1.
-	const caused = sel === null ? [] : causedTree(base, sel.id)
+	const caused = sel === undefined ? [] : causedTree(base, sel.id)
 	// The app stack captured at the operation root (the first chain entry with one).
-	const opStack = spine.find((e) => e.stack !== null)?.stack ?? null
+	const opStack = spine.find((e) => e.stack !== undefined)?.stack ?? undefined
 
 	const copy = () => {
 		void copyText(logMarkdown(rows)).then((ok) => {
@@ -258,11 +258,11 @@ export function LogView({
 			<div className="controls">
 				<button
 					className="tbtn"
-					aria-pressed={paused !== null}
+					aria-pressed={paused !== undefined}
 					style={{ minWidth: 84, textAlign: 'left' }}
-					onClick={() => setPaused(paused === null ? live : null)}
+					onClick={() => setPaused(paused === undefined ? live : undefined)}
 				>
-					{paused === null ? '⏸ Pause' : '▶ Resume'}
+					{paused === undefined ? '⏸ Pause' : '▶ Resume'}
 				</button>
 				<button className="tbtn" onClick={() => setFloor(live.length ? live[live.length - 1].id : 0)}>
 					Clear
@@ -290,7 +290,7 @@ export function LogView({
 					>
 						{collapsed.size > 0 ? 'Expand all' : 'Collapse to roots'}
 					</button>
-				) : null}
+				) : undefined}
 				<input
 					className="search"
 					type="search"
@@ -313,11 +313,11 @@ export function LogView({
 					))}
 				</div>
 				<div className="spacer" />
-				{brush !== null ? (
-					<button className="tbtn" onClick={() => setBrush(null)}>
+				{brush !== undefined ? (
+					<button className="tbtn" onClick={() => setBrush(undefined)}>
 						✕ time window
 					</button>
-				) : null}
+				) : undefined}
 				<button className="tbtn" onClick={copy}>
 					⧉ {copied ? 'Copied' : 'Copy as markdown'}
 				</button>
@@ -338,16 +338,16 @@ export function LogView({
 					}}
 					onPointerMove={(e) => {
 						const start = brushing.current
-						if (start === null) return
+						if (start === undefined) return
 						const t = tAt(e.clientX)
 						setBrush([Math.min(start, t), Math.max(start, t)])
 					}}
 					onPointerUp={(e) => {
 						const start = brushing.current
-						brushing.current = null
+						brushing.current = undefined
 						e.currentTarget.releasePointerCapture(e.pointerId)
 						// A click (negligible drag) clears the window.
-						if (start !== null && Math.abs(tAt(e.clientX) - start) < span * 0.01) setBrush(null)
+						if (start !== undefined && Math.abs(tAt(e.clientX) - start) < span * 0.01) setBrush(undefined)
 					}}
 				>
 					{[...ops.entries()]
@@ -359,8 +359,8 @@ export function LogView({
 					{base.map((r) => (
 						<rect key={r.id} x={x(r.t)} y={44} width={2} height={8} fill={`var(--${classVar(r.cls)})`} />
 					))}
-					{brush !== null ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : null}
-					{brush === null && sel !== null ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : null}
+					{brush !== undefined ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : undefined}
+					{brush === undefined && sel !== undefined ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : undefined}
 				</svg>
 			</div>
 
@@ -390,7 +390,7 @@ export function LogView({
 											<td className="id">{fmtId('event', r.id)}</td>
 											<td className="t">
 												{r.time}
-												{r.delta !== null ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : null}
+												{r.delta !== undefined ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : undefined}
 											</td>
 											<td>
 												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
@@ -430,7 +430,7 @@ export function LogView({
 											</td>
 											<td className="t">
 												{t.row.time}
-												{t.row.delta !== null ? <span className="tdelta"> {fmtDelta(t.row.delta)}</span> : null}
+												{t.row.delta !== undefined ? <span className="tdelta"> {fmtDelta(t.row.delta)}</span> : undefined}
 											</td>
 											<td>
 												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
@@ -446,13 +446,13 @@ export function LogView({
 										no entries {query || brush ? 'match the filter' : 'yet'}
 									</td>
 								</tr>
-							) : null}
+							) : undefined}
 						</tbody>
 					</table>
 				</div>
 
-				{sel !== null ? <ResizeHandle dir="h" onDelta={(d) => setCzW((w) => clampSize(w - d, 220, 640))} /> : null}
-				{sel !== null ? (
+				{sel !== undefined ? <ResizeHandle dir="h" onDelta={(d) => setCzW((w) => clampSize(w - d, 220, 640))} /> : undefined}
+				{sel !== undefined ? (
 					<aside className="causality" aria-label="Caused by" style={{ width: czW }}>
 						<div className="cz-head">
 							<div className="cz-kicker">Selected entry</div>
@@ -474,18 +474,18 @@ export function LogView({
 								renderExtra={(t) => (
 									<div className="impact-card">
 										whole operation: <b>{opEntries} entries</b>
-										{opTotalUs > 0 ? <> · <b>{fmtTook(opTotalUs)}</b></> : null}
+										{opTotalUs > 0 ? <> · <b>{fmtTook(opTotalUs)}</b></> : undefined}
 										<br />
-										{t.node !== null ? (
+										{t.node !== undefined ? (
 											<button className="srclink" onClick={() => inspect(t.node!)}>
 												view {t.name} in graph →
 											</button>
-										) : null}
+										) : undefined}
 									</div>
 								)}
 							/>
 						</div>
-						{opStack !== null ? <StackTrace frames={opStack} /> : null}
+						{opStack !== undefined ? <StackTrace frames={opStack} /> : undefined}
 						{caused.length > 0 ? (
 							<div className="cz-section">
 								<h3 data-tip="Everything this entry caused, directly and transitively — its consequence tree.">What this caused · {caused.length}</h3>
@@ -497,9 +497,9 @@ export function LogView({
 									))}
 								</ul>
 							</div>
-						) : null}
+						) : undefined}
 					</aside>
-				) : null}
+				) : undefined}
 			</div>
 		</>
 	)

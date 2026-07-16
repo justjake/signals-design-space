@@ -30,14 +30,14 @@ import { kindClass } from './protocol.ts'
  */
 export interface NodeProvider {
 	kind(id: NodeId): NodeKind | undefined
-	label(id: NodeId): string | null
-	value(id: NodeId): { preview: string | null; status: NodeStatus; stale: boolean; pending: string | null } | undefined
+	label(id: NodeId): string | undefined
+	value(id: NodeId): { preview: string | undefined; status: NodeStatus; stale: boolean; pending: string | undefined } | undefined
 	/** A deeper, multi-line value preview for the inspector (on-demand only). */
-	valueFull(id: NodeId): string | null | undefined
+	valueFull(id: NodeId): string | undefined
 	/** Name of the node's equality fn, for the inspector; null if none/anonymous. */
-	equals(id: NodeId): string | null
-	/** A synthesized creation signature (stringified fn), or null. */
-	source(id: NodeId): string | null
+	equals(id: NodeId): string | undefined
+	/** A synthesized creation signature (stringified fn), or undefined. */
+	source(id: NodeId): string | undefined
 	deps(id: NodeId): NodeId[]
 	subs(id: NodeId): NodeId[]
 }
@@ -97,7 +97,7 @@ export class Collector implements Backend {
 	 */
 	record(
 		kind: string,
-		node: NodeId | null,
+		node: NodeId | undefined,
 		cause: EventId,
 		nodeKind: NodeKind | undefined,
 		data: Record<string, unknown>,
@@ -122,7 +122,7 @@ export class Collector implements Backend {
 			this.ringHead = (this.ringHead + 1) % this.capacity
 		}
 		this.byId.set(id, evt)
-		if (node !== null && nodeKind !== undefined) {
+		if (node !== undefined && nodeKind !== undefined) {
 			let st = this.nodes.get(node)
 			if (st === undefined) {
 				st = { kind: nodeKind, recomputes: 0, changes: 0, selfUs: 0, newResults: 0, sameResults: 0, lastEventId: id, lastKind: kind }
@@ -153,14 +153,14 @@ export class Collector implements Backend {
 		if (changed !== undefined) {
 			e.data.changed = changed
 			// Show the new result: peek the node's just-updated value inertly.
-			if (changed && e.node !== null) {
+			if (changed && e.node !== undefined) {
 				const v = this.provider.value(e.node)?.preview
-				if (v != null) e.data.value = v
+				if (v !== undefined) e.data.value = v
 			}
 		}
 		// Fold the span's duration/outcome into the node's retained stats so the
 		// inspector's evaluation metrics survive ring eviction.
-		if (e.node !== null) {
+		if (e.node !== undefined) {
 			const st = this.nodes.get(e.node)
 			if (st !== undefined) {
 				const cls = kindClass(e.kind)
@@ -234,17 +234,17 @@ export class Collector implements Backend {
 		return chain.reverse()
 	}
 
-	private snapshot(id: NodeId): GraphNode | null {
+	private snapshot(id: NodeId): GraphNode | undefined {
 		const st = this.nodes.get(id)
 		const kind = st?.kind ?? this.provider.kind(id)
-		if (kind === undefined) return null
+		if (kind === undefined) return undefined
 		const v = this.provider.value(id)
 		return {
 			id,
 			kind,
 			label: this.provider.label(id),
 			status: v?.status ?? 'ok',
-			valuePreview: v?.preview ?? null,
+			valuePreview: v?.preview ?? undefined,
 			stale: v?.stale ?? false,
 			recomputes: st?.recomputes ?? 0,
 			changes: st?.changes ?? 0,
@@ -252,7 +252,7 @@ export class Collector implements Backend {
 			newResults: st?.newResults ?? 0,
 			sameResults: st?.sameResults ?? 0,
 			lastEventId: st?.lastEventId ?? (0 as EventId),
-			lastKind: st?.lastKind ?? null,
+			lastKind: st?.lastKind ?? undefined,
 		}
 	}
 
@@ -262,23 +262,23 @@ export class Collector implements Backend {
 		for (const id of this.nodes.keys()) {
 			if (out.length >= cap) break
 			const snap = this.snapshot(id)
-			if (snap === null) continue
+			if (snap === undefined) continue
 			const hay = `${snap.label ?? ''} ${snap.kind}`.toLowerCase()
 			if (q === '' || hay.includes(q)) out.push(snap)
 		}
 		return out
 	}
 
-	node(id: NodeId): NodeDetails | null {
+	node(id: NodeId): NodeDetails | undefined {
 		const snap = this.snapshot(id)
-		if (snap === null) return null
+		if (snap === undefined) return undefined
 		const v = this.provider.value(id)
 		return {
 			...snap,
 			deps: this.provider.deps(id),
 			subs: this.provider.subs(id),
-			pending: v?.pending ?? null,
-			valueFull: this.provider.valueFull(id) ?? null,
+			pending: v?.pending ?? undefined,
+			valueFull: this.provider.valueFull(id) ?? undefined,
 			equals: this.provider.equals(id),
 			source: this.provider.source(id),
 		}

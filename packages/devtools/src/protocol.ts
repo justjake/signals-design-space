@@ -51,10 +51,10 @@ export interface StackFrame {
 export interface GraphNode {
 	id: NodeId
 	kind: NodeKind
-	label: string | null
+	label: string | undefined
 	status: NodeStatus
 	/** Short, structured-clone-safe preview of the current value. */
-	valuePreview: string | null
+	valuePreview: string | undefined
 	/** True when the cached value is stale (a dep changed, no recompute yet). */
 	stale: boolean
 	/** Retained per-node stats reduced from the event stream. */
@@ -70,10 +70,10 @@ export interface GraphNode {
 	sameResults: number
 	/**
 	 * The node's most recent entry — retained, so listing a node never scans
-	 * the ring. 0 / null when the node has no entry in the window.
+	 * the ring. 0 / undefined when the node has no entry in the window.
 	 */
 	lastEventId: EventId
-	lastKind: string | null
+	lastKind: string | undefined
 }
 
 /** A dependency edge: data flows dep → sub. */
@@ -92,8 +92,8 @@ export interface DevtoolsEvent {
 	t: number
 	/** Wall-clock (epoch ms) when recorded, for a real timestamp in the UI. */
 	wall: number
-	/** Node this entry is about; null for engine-level entries. */
-	node: NodeId | null
+	/** Node this entry is about; undefined for engine-level entries. */
+	node: NodeId | undefined
 	/** Kind-specific fields the adapter passed through (phase, error preview…). */
 	data: Record<string, unknown>
 }
@@ -103,16 +103,16 @@ export interface NodeDetails extends GraphNode {
 	deps: NodeId[]
 	subs: NodeId[]
 	/** Error message / awaited-source preview when status !== 'ok'. */
-	pending: string | null
+	pending: string | undefined
 	/** A deeper, multi-line value preview for the inspector (the list/canvas use
-	 * the short `valuePreview`). Null when the node has no value. */
-	valueFull: string | null
-	/** Name of the node's equality function (atoms/computeds), or null when it
-	 * has none or the function is anonymous. */
-	equals: string | null
+	 * the short `valuePreview`). Undefined when the node has no value. */
+	valueFull: string | undefined
+	/** Name of the node's equality function (atoms/computeds), or undefined when
+	 * it has none or the function is anonymous. */
+	equals: string | undefined
 	/** A synthesized "how this was created" signature (stringified compute/
-	 * effect fn), or null for nodes without one (e.g. plain atoms). */
-	source: string | null
+	 * effect fn), or undefined for nodes without one (e.g. plain atoms). */
+	source: string | undefined
 }
 
 export interface Counts {
@@ -141,7 +141,7 @@ export interface Backend {
 	/** Label/kind substring match, capped. */
 	search(query: string, cap: number): GraphNode[]
 	/** Inspector payload for one node (inert field peek + edge walk). */
-	node(id: NodeId): NodeDetails | null
+	node(id: NodeId): NodeDetails | undefined
 	/** Subscribe to flushes; returns an unsubscribe. */
 	subscribe(listener: () => void): () => void
 }

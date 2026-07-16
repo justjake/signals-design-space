@@ -165,7 +165,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		},
 		label(id) {
 			const node = deref(id)
-			return (node?.label as string | undefined) ?? null
+			return node?.label as string | undefined
 		},
 		value(id) {
 			const node = deref(id)
@@ -178,16 +178,16 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 					preview: snap.uninitialized ? 'uninitialized' : preview(snap.value),
 					status: snap.status as NodeStatus,
 					stale: snap.stale,
-					pending: snap.pending == null ? null : errorPreview(snap.pending),
+					pending: snap.pending == null ? undefined : errorPreview(snap.pending),
 				}
 			}
-			return { preview: null, status: nodeStatus(node) as NodeStatus, stale: false, pending: null }
+			return { preview: undefined, status: nodeStatus(node) as NodeStatus, stale: false, pending: undefined }
 		},
 		valueFull(id) {
 			const node = deref(id)
 			if (node === undefined) return undefined
 			const kind = kindOf(node)
-			if (kind !== 'atom' && kind !== 'computed') return null
+			if (kind !== 'atom' && kind !== 'computed') return undefined
 			const snap = inspect(node as ProducerNode)
 			if (snap.uninitialized) return 'uninitialized'
 			try {
@@ -202,29 +202,29 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 			// reference check (Object.is, name "is"), which is the norm and not
 			// worth a row on every node. Anonymous/absent → null.
 			const node = deref(id)
-			if (node === undefined) return null
+			if (node === undefined) return undefined
 			const fn = (node as { equals?: (a: unknown, b: unknown) => boolean }).equals
-			return typeof fn === 'function' && fn.name !== '' && fn.name !== 'is' ? fn.name : null
+			return typeof fn === 'function' && fn.name !== '' && fn.name !== 'is' ? fn.name : undefined
 		},
 		source(id) {
 			// Synthesize a "how this was created" signature from the node's
 			// stringified function(s), read inertly. Computeds carry the compute
 			// fn; effects also carry the handler; plain atoms have neither.
 			const node = deref(id)
-			if (node === undefined) return null
-			const trunc = (f: unknown): string | null => {
-				if (typeof f !== 'function') return null
+			if (node === undefined) return undefined
+			const trunc = (f: unknown): string | undefined => {
+				if (typeof f !== 'function') return undefined
 				const s = (f as { toString(): string }).toString()
 				return s.length > 240 ? `${s.slice(0, 240)}…` : s
 			}
 			const fn = trunc((node as { fn?: unknown }).fn)
 			const kind = kindOf(node)
-			if (kind === 'computed') return fn !== null ? `computed(${fn})` : null
+			if (kind === 'computed') return fn !== undefined ? `computed(${fn})` : undefined
 			if (kind === 'effect') {
 				const handler = trunc((node as { handler?: unknown }).handler)
-				return fn !== null ? `effect(${fn}${handler !== null ? `, ${handler}` : ''})` : null
+				return fn !== undefined ? `effect(${fn}${handler !== undefined ? `, ${handler}` : ''})` : undefined
 			}
-			return null
+			return undefined
 		},
 		deps(id) {
 			const node = deref(id)
@@ -244,7 +244,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 	// emitEvent (points) and startSpan (compute/effect opens) both record an
 	// entry the same way; endSpan closes a span so the collector can time it.
 	const emit = (kind: string, node: ReactiveNode | null, cause: TraceEventId, fields?: TraceFields): TraceEventId => {
-		const nodeIdNum = node !== null ? register(node) : null
+		const nodeIdNum = node !== null ? register(node) : undefined
 		const nodeKind = node !== null ? kindOf(node) : undefined
 		const data = fields !== undefined ? fieldsToData(fields) : {}
 		let parent = cause as unknown as EventId
@@ -252,7 +252,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		// fires, so peek it inertly and diff against the last we recorded. The
 		// engine never sends values — value inspection lives here — so the diff
 		// costs nothing when the devtools isn't attached and can't leak.
-		if (nodeIdNum !== null && (kind === 'set' || kind === 'update')) {
+		if (nodeIdNum !== undefined && (kind === 'set' || kind === 'update')) {
 			const next = provider.value(nodeIdNum)?.preview
 			if (next != null) {
 				const prev = lastValue.get(nodeIdNum)
@@ -272,7 +272,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 					const key = `${ev.type}@${ev.timeStamp}`
 					if (key !== lastDomKey) {
 						lastDomKey = key
-						lastDomId = collector.record('dom-event', null, 0 as EventId, undefined, { label: describeEvent(ev) })
+						lastDomId = collector.record('dom-event', undefined, 0 as EventId, undefined, { label: describeEvent(ev) })
 					}
 					parent = lastDomId
 				}
