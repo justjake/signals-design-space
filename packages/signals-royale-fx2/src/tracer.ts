@@ -62,6 +62,13 @@ class ObjectIds extends WeakMap<object, number> {
 	}
 }
 
+/**
+ * Bounded in-memory causality trace for the active signals engine.
+ *
+ * Constructing a tracer does not activate it; use {@link attachTracer} for
+ * normal use. The public methods also support debug tooling that needs to
+ * inspect or format retained events.
+ */
 export class Tracer {
 	private ring: TraceEvent[]
 	private head = 0
@@ -81,6 +88,7 @@ export class Tracer {
 		this.firstEventId = nextTraceEventId
 	}
 
+	/** Record one event when this tracer is active and return its event id. */
 	emit(
 		kind: string,
 		node: ReactiveNode | null,
@@ -140,6 +148,7 @@ export class Tracer {
 		return out
 	}
 
+	/** Find a retained event by id, or `undefined` after ring eviction. */
 	find(id: TraceEventId): TraceEvent | undefined {
 		for (let i = this.size - 1; i >= 0; i--) {
 			const evt = this.ring[(this.head + i) % this.ring.length]
@@ -153,6 +162,7 @@ export class Tracer {
 		return undefined
 	}
 
+	/** Format one event as a compact, human-readable trace line. */
 	format(evt: TraceEvent): string {
 		const label = evt.label !== undefined ? ` ${JSON.stringify(evt.label)}` : ''
 		const root = evt.rootId !== undefined ? ` root=${evt.rootId}` : ''
@@ -188,6 +198,7 @@ export class Tracer {
 		return chain
 	}
 
+	/** Detach this tracer if active and ignore later attempts to emit into it. */
 	stop(): void {
 		this.stopped = true
 		if (activeTracer === this) {
@@ -217,6 +228,7 @@ export function attachTracer(opts?: TracerOptions): Tracer {
 	return tracer
 }
 
+/** Return the currently attached built-in tracer, or `null` when detached. */
 export function getActiveTracer(): Tracer | null {
 	return activeTracer
 }

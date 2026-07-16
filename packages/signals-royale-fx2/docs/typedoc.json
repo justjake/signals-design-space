@@ -1,0 +1,32 @@
+{
+	"$schema": "./node_modules/typedoc-plugin-markdown/typedoc-plugin-markdown.schema.json",
+	"name": "signals-royale-fx2 API",
+	"entryPoints": [
+		"../src/index.ts",
+		"../src/react/index.ts",
+		"../src/ssr.ts",
+		"../src/debug/index.ts"
+	],
+	"entryPointStrategy": "resolve",
+	"tsconfig": "tsconfig.typedoc.json",
+	"plugin": ["typedoc-plugin-markdown", "typedoc-plugin-frontmatter"],
+	"out": "content/docs/api/reference",
+	"router": "module",
+	"entryFileName": "index",
+	"fileExtension": ".mdx",
+	"readme": "none",
+	"cleanOutputDir": true,
+	"disableSources": true,
+	"excludeInternal": false,
+	"useTsLinkResolution": true,
+	"validation": {
+		"invalidLink": true,
+		"notDocumented": true,
+		"notExported": false
+	},
+	"requiredToBeDocumented": ["Class", "Function", "Interface", "TypeAlias", "Variable"],
+	"treatValidationWarningsAsErrors": true,
+	"frontmatterGlobals": {
+		"description": "Generated from the package's TSDoc comments."
+	}
+}

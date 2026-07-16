@@ -1,0 +1,24 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["DOM", "DOM.Iterable", "ES2022"],
+		"jsx": "react-jsx",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"paths": {
+			"signals-royale-fx2": ["../src/index.ts"],
+			"signals-royale-fx2/react": ["../src/react/index.ts"],
+			"signals-royale-fx2/ssr": ["../src/ssr.ts"],
+			"signals-royale-fx2/debug": ["../src/debug/index.ts"],
+			"signals-devtools/fx2": ["../../devtools/src/fx2.ts"],
+			"signals-devtools/button": ["../../devtools/src/panel/DevtoolsPanelButton.tsx"]
+		},
+		"types": ["node", "react", "react-dom"]
+	},
+	"include": [".source", "src", "*.ts", "*.tsx"]
+}

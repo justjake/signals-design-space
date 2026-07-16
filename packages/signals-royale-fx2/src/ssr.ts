@@ -35,6 +35,13 @@ export function installState<T>(atom: Atom<T>, value: T): void {
 	node.value = value
 }
 
+/**
+ * Restore atom state previously produced by {@link serializeAtomState}.
+ *
+ * Arrays use their numeric positions and records use their own keys. Missing
+ * keys are ignored. Restoration uses {@link installState}, so it does not run
+ * lazy initializers or notify subscribers.
+ */
 export function initializeAtomState(
 	json: string,
 	atoms: AtomMap,

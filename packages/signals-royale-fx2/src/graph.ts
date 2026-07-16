@@ -344,6 +344,7 @@ export interface TraceFields {
 export interface SpanEndAttrs {
 	changed?: boolean
 }
+/** Close a trace span and optionally record its outcome. */
 export type EndSpanFn = (id: TraceEventId, attrs?: SpanEndAttrs) => void
 
 /**
@@ -364,6 +365,12 @@ export interface TraceSink {
 export let emitEvent: EmitFn | null = null
 export let startSpan: EmitFn | null = null
 export let endSpan: EndSpanFn | null = null
+/**
+ * Install or detach the engine's low-level trace sink.
+ *
+ * Only one sink is active at a time. Passing `null` returns every emit site to
+ * its detached, single-null-check path.
+ */
 export function setTracer(sink: TraceSink | null): void {
 	emitEvent = sink?.emitEvent ?? null
 	startSpan = sink?.startSpan ?? null
@@ -1212,10 +1219,15 @@ export function invalidateComputed(node: EvaluatedNode<unknown>, cause: TraceEve
 	}
 }
 
+/**
+ * Begin a manual batch. Pair every call with {@link endBatch}; prefer
+ * {@link batch} when the work fits in one callback.
+ */
 export function startBatch(): void {
 	batchDepth++
 }
 
+/** End a manual batch and flush when the outermost batch closes. */
 export function endBatch(): void {
 	if (batchDepth === 0) {
 		throw new Error('endBatch() without a matching startBatch()')
@@ -1226,6 +1238,12 @@ export function endBatch(): void {
 	}
 }
 
+/**
+ * Run `fn` as one propagation batch and return its result.
+ *
+ * Writes still update their atoms in order, but dependent computeds, effects,
+ * and subscribers settle only after the outermost batch closes.
+ */
 export function batch<T>(fn: () => T): T {
 	startBatch()
 	try {
@@ -1778,6 +1796,7 @@ export function readComputed<T>(node: ComputedNode<T>): T {
 	return node.value as T
 }
 
+/** Run `fn` without adding its signal reads to the active dependency list. */
 export function untracked<T>(fn: () => T): T {
 	const prev = activeConsumer
 	activeConsumer = null
@@ -2047,6 +2066,10 @@ export function makeEffect(
 	return () => disposeEffect(w)
 }
 
+/**
+ * Run `fn` as an effect owner and return one disposer for every effect it
+ * creates, including effects created by their handlers.
+ */
 export function makeScope(fn: () => void): () => void {
 	const owner: EffectOwner = { flags: Flag.Watched, children: undefined }
 	const prevOwner = activeEffectOwner

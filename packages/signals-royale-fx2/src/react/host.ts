@@ -66,6 +66,7 @@ export interface ReactRootConnection {
 
 /** Returned by registerReactSignals(): tears the registration down. */
 export interface ReactSignalsHandle {
+	/** Remove the engine hooks installed by {@link registerReactSignals}. */
 	dispose(): void
 }
 

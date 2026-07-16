@@ -1,0 +1,20 @@
+---
+title: Getting started
+description: Create reactive state and read it from React.
+---
+
+Install the package and create an atom outside your components:
+
+```tsx
+import { createAtom } from 'signals-royale-fx2'
+import { useValue } from 'signals-royale-fx2/react'
+
+const count = createAtom(0, { label: 'count' })
+
+export function Counter() {
+	const value = useValue(count)
+	return <button onClick={() => count.update((n) => n + 1)}>Count: {value}</button>
+}
+```
+
+<Playground />

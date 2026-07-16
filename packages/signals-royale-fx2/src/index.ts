@@ -274,10 +274,26 @@ function peekComputed<T>(this: Computed<T> & ComputedNode<T>): T {
 /** Any reactive value that can be tracked automatically. */
 export type Signal<T> = Atom<T> | Computed<T>
 
+/**
+ * Create a writable signal.
+ *
+ * Passing a function creates a lazy atom: the initializer runs once, on the
+ * first read, write, or subscription. Use `opts.equals` to change which writes
+ * count as a value change and `opts.onObserved` to tie an external resource to
+ * the atom's observed lifetime.
+ */
 export function createAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
 	return new Atom(initial, opts)
 }
 
+/**
+ * Create a writable signal whose `dispatch` method applies one reducer.
+ *
+ * A dispatch inside a React transition records the reducer application, then
+ * replays it over intervening urgent writes in dispatch order. Keep the
+ * reducer pure for the same reason React reducers and state updaters must be
+ * pure.
+ */
 export function reducerAtom<S, A>(
 	reduce: (state: S, action: A) => S,
 	initial: S | (() => S),
@@ -289,6 +305,13 @@ export function reducerAtom<S, A>(
 	return node
 }
 
+/**
+ * Create a lazy, cached value derived from other signals.
+ *
+ * Reads performed by `fn` become dependencies for that evaluation. The next
+ * read recomputes only after one of those dependencies changes. `use` unwraps
+ * stable thenables and `previous` is the last settled value, when one exists.
+ */
 export function createComputed<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	opts?: ComputedOptions<T>,
@@ -441,6 +464,7 @@ export function isPendingPassive(node: ProducerNode, world: World | null): boole
 
 /** Installed by the React bindings: throws when called during a render. */
 let renderWriteGuard: (() => void) | null = null
+/** @internal Install the React binding's write-during-render check. */
 export function setRenderWriteGuard(fn: (() => void) | null): void {
 	renderWriteGuard = fn
 }
@@ -448,6 +472,13 @@ function guardRenderWrite(): void {
 	renderWriteGuard?.()
 }
 
+/**
+ * Set an atom through its equality cutoff.
+ *
+ * Outside a transition the value changes immediately. Inside a React
+ * transition the value is recorded in that transition's draft and stays
+ * hidden from the committed tree until the transition lands.
+ */
 export function set<T>(x: Atom<T>, value: T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
@@ -469,6 +500,13 @@ export function set<T>(x: Atom<T>, value: T): void {
 	}
 }
 
+/**
+ * Update an atom from its previous value.
+ *
+ * Transition updates record `fn`, not its immediate result, so it can replay
+ * over urgent writes that happen before the transition commits. Keep the
+ * updater pure because React may replay it.
+ */
 export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 	assertSignalWriteAllowed()
 	guardRenderWrite()
@@ -495,6 +533,7 @@ export function update<T>(x: Atom<T>, fn: (prev: T) => T): void {
 	}
 }
 
+/** Read an atom or computed and track it in the active reactive evaluation. */
 export function read<T>(x: Signal<T>): T {
 	nodeOf(x) // validate the handle before dispatching to its read method
 	return x.get()
@@ -731,6 +770,7 @@ export type { TraceEvent }
  */
 let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null
 
+/** @internal Install the React binding's current-render snapshot provider. */
 export function setRenderWorldProvider(
 	fn: (() => readonly DraftId[] | 'base' | null) | null,
 ): void {

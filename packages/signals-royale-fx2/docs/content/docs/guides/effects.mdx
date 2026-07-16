@@ -1,0 +1,17 @@
+---
+title: Effects
+description: React to settled signal values without mixing tracking and side effects.
+---
+
+An effect separates the tracked source from its untracked handler:
+
+```ts
+const stop = effect(
+	() => total.get(),
+	(value, previous) => console.log({ value, previous }),
+)
+
+stop()
+```
+
+<Playground />
