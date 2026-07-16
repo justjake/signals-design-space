@@ -19,6 +19,28 @@ const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip
 ]
 const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async']
 
+/** Per-kind tooltip text for the row chips. Unknown kinds fall back to a
+ * generic error/verbatim hint so a future kind still explains itself. */
+const KIND_TIPS: Record<string, string> = {
+	'dom-event': 'The DOM event that started this operation.',
+	set: 'atom.set(value): the atom was assigned a new value.',
+	update: 'atom.update(fn): the atom was computed from its previous value.',
+	compute: 'A computed re-ran its function because an input changed.',
+	effect: 'An effect ran after changes committed.',
+	notify: 'A watcher was told its inputs changed (re-render scheduled).',
+	render: 'A component rendered a committed value.',
+	settle: 'An awaited async value resolved.',
+	retry: 'A suspended computation retried after its await resolved.',
+	'compute-suspend': 'A recompute paused awaiting a Promise.',
+	'transition-open': 'A transition began; its updates render in the background.',
+	'transition-commit': 'A transition committed to the UI.',
+	'transition-retire': 'A committed transition folded into base state.',
+	'transition-discard': 'A transition was abandoned.',
+}
+function kindTip(kind: string): string {
+	return KIND_TIPS[kind] ?? (kind.endsWith('-error') ? 'This step threw an error.' : kind)
+}
+
 function matchesSearch(r: LogRow, query: string): boolean {
 	if (query === '') return true
 	const name = (r.name ?? '').toLowerCase()
@@ -258,7 +280,7 @@ export function LogView({
 												{r.delta !== null ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : null}
 											</td>
 											<td>
-												<span className={`chip ${r.cls}`}>{r.kind}</span>
+												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
 											</td>
 											<NameCell row={r} guides={null} onCause={() => setSelected(r.cause)} />
 											<td className="data">{r.summary}</td>
@@ -280,7 +302,7 @@ export function LogView({
 												{t.row.delta !== null ? <span className="tdelta"> {fmtDelta(t.row.delta)}</span> : null}
 											</td>
 											<td>
-												<span className={`chip ${t.row.cls}`}>{t.row.kind}</span>
+												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
 											</td>
 											<NameCell row={t.row} guides={t.depth === 0 ? null : t.guides} onCause={() => setSelected(t.row.cause)} />
 											<td className="data">{t.row.summary}</td>

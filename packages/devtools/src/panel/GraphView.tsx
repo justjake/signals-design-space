@@ -7,6 +7,12 @@ import { copyText, nodeMarkdown } from './markdown.ts'
 const NODE_H = 40
 
 const KIND_LABEL: Record<NodeKind, string> = { atom: 'Atom', computed: 'Computed', watcher: 'Watcher', effect: 'Effect' }
+const KIND_TIP: Record<NodeKind, string> = {
+	atom: 'Atom: holds a value you set directly.',
+	computed: 'Computed: derives its value from other nodes; recomputes when they change.',
+	watcher: 'Watcher: a UI subscription — usually a component that re-renders when its inputs change.',
+	effect: 'Effect: code that runs after changes commit (persistence, document.title, …).',
+}
 function kindVar(kind: NodeKind): string {
 	return `var(--${kind === 'atom' ? 'atom' : kind === 'computed' ? 'computed' : kind === 'watcher' ? 'watcher' : 'effect'})`
 }
@@ -202,6 +208,7 @@ export function GraphView({
 										role="button"
 										tabIndex={0}
 										aria-label={`${KIND_LABEL[n.kind]} ${n.label}`}
+										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''}`}
 										onClick={() => setFocus(n.id)}
 									>
 										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : null}

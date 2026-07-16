@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { Backend } from '../protocol.ts'
 import { useBackend } from './store.ts'
 import { PANEL_CSS } from './styles.ts'
 import { ThemeDialog } from './ThemeDialog.tsx'
+import { Tooltips } from './Tooltips.tsx'
 import { GraphView } from './GraphView.tsx'
 import { LogView } from './LogView.tsx'
 
@@ -13,7 +14,9 @@ import { LogView } from './LogView.tsx'
  */
 export function App({ backend }: { backend: Backend }) {
 	const events = useBackend(backend) // re-render on each collector flush
-	const rootRef = useRef<HTMLDivElement>(null)
+	// Callback-ref → state so children (tooltips, theme) get the root element on
+	// mount, not a frame late.
+	const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null)
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
 	const [focus, setFocus] = useState<number | null>(null)
 	const [logNode, setLogNode] = useState<number | null>(null)
@@ -29,7 +32,7 @@ export function App({ backend }: { backend: Backend }) {
 	}
 
 	return (
-		<div className="signals-devtools-root" ref={rootRef}>
+		<div className="signals-devtools-root" ref={setRootEl}>
 			<style>{PANEL_CSS}</style>
 			<header className="chrome">
 				<div className="brand">
@@ -60,7 +63,8 @@ export function App({ backend }: { backend: Backend }) {
 				<LogView backend={backend} node={logNode} setNode={setLogNode} inspect={inspect} />
 			)}
 
-			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootRef.current} />
+			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootEl} />
+			<Tooltips root={rootEl} />
 		</div>
 	)
 }

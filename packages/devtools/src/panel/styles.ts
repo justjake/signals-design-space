@@ -282,6 +282,7 @@ export const PANEL_CSS = `
   /* tooltips */
   [data-tip] { cursor: help; }
   th[data-tip], .cz-section h3[data-tip], .insp-section h3[data-tip], .kv .k[data-tip], .crumbs span[data-tip] { text-decoration: underline dotted var(--faint); text-underline-offset: 3px; }
+  .svgtip { position: fixed; z-index: 2147483000; max-width: 256px; padding: 7px 10px; font: 11px/1.45 var(--sans); color: var(--text); background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 5px; box-shadow: 0 6px 24px rgba(0,0,0,.55); pointer-events: none; }
 
   /* theme dialog */
   .theme-dialog { width: 440px; max-width: 92vw; padding: 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
