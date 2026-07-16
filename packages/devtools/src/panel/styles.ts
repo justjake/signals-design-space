@@ -152,6 +152,12 @@ export const PANEL_CSS = `
   tr.op-head td { background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding-top: 5px; padding-bottom: 5px; }
   tr.op-head:hover td { background: var(--surface-2); }
   tr.op-head .data { overflow: visible; max-width: none; width: auto; white-space: nowrap; }
+  /* Mark where each operation starts, and tint alternate operation subtrees so
+     the eye can group a tree and see where one operation ends and the next
+     begins. The zebra sits on the row; op-head/selected td backgrounds (opaque
+     / !important) paint over it, so heads and the selection stay distinct. */
+  tr.op-head td:first-child { box-shadow: inset 2px 0 0 var(--border-strong); }
+  .log.tree tbody tr.op-alt { background: color-mix(in srgb, var(--base05) 5%, transparent); }
   .op-title { font-weight: 500; }
   .op-title .tw { color: var(--faint); font-weight: 400; }
   .caret { color: var(--muted); width: 16px; font-size: 13px; line-height: 1; display: inline-block; text-align: center; padding: 0; cursor: pointer; }

@@ -137,6 +137,9 @@ export interface TreeRow {
 	guides: Guide[]
 	/** Direct children — drives the expand caret on operation roots. */
 	children: number
+	/** 0-based index of the operation (root) this row belongs to, so the table
+	 * can shade whole operation subtrees alternately for scanning. */
+	op: number
 }
 
 /**
@@ -166,7 +169,7 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeR
 	roots.sort((a, b) => b.id - a.id)
 	for (const list of childrenOf.values()) list.sort((a, b) => b.id - a.id)
 	const out: TreeRow[] = []
-	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean) => {
+	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean, op: number) => {
 		if (depth > 40) return // guard against a pathological chain
 		const guides: Guide[] = []
 		for (let i = 0; i < depth; i++) {
@@ -174,12 +177,12 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeR
 			else guides.push(isLast ? 'elbow' : 'tee')
 		}
 		const kids = childrenOf.get(row.id) ?? []
-		out.push({ row, depth, guides, children: kids.length })
+		out.push({ row, depth, guides, children: kids.length, op })
 		if (collapsed?.has(row.id)) return
 		const nextTrail = trail.concat(!isLast)
-		kids.forEach((k, i) => walk(k, depth + 1, nextTrail, i === kids.length - 1))
+		kids.forEach((k, i) => walk(k, depth + 1, nextTrail, i === kids.length - 1, op))
 	}
-	roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1))
+	roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1, i))
 	return out
 }
 

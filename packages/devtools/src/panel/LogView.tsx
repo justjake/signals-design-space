@@ -437,7 +437,7 @@ export function LogView({
 										<tr
 											key={t.row.id}
 											ref={t.row.id === selected ? selRowRef : undefined}
-											className={`${t.depth === 0 && t.children > 0 ? 'op-head' : ''} ${t.row.id === selected ? 'selected' : ''}${flashing.has(t.row.id) ? ' flash' : ''}`.trim() || undefined}
+											className={`${t.op % 2 === 1 ? 'op-alt ' : ''}${t.depth === 0 && t.children > 0 ? 'op-head ' : ''}${t.row.id === selected ? 'selected ' : ''}${flashing.has(t.row.id) ? 'flash' : ''}`.trim() || undefined}
 											aria-selected={t.row.id === selected}
 											onClick={() => onSelect(t.row.id)}
 										>
