@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
-import { causeRows, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
+import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
 
 const LIMIT = 1000
@@ -45,25 +45,21 @@ function Guides({ guides }: { guides: Guide[] }) {
 function NameCell({
 	row,
 	guides,
-	onName,
 	onCause,
 }: {
 	row: LogRow
 	guides: Guide[] | null
-	onName: () => void
 	onCause: () => void
 }) {
+	// The whole row selects (the <tr> handles the click); the cause ref is the
+	// one secondary action, so it stops propagation and jumps instead.
 	const cause = row.cause > 0 ? (
 		<button className="causeref" title="jump to cause" onClick={(e) => { e.stopPropagation(); onCause() }}>
 			⤷#{row.cause}
 		</button>
 	) : null
 	const name =
-		row.name === null ? (
-			<span style={{ color: 'var(--faint)' }}>—</span>
-		) : (
-			<button onClick={(e) => { e.stopPropagation(); onName() }}>{row.name}</button>
-		)
+		row.name === null ? <span style={{ color: 'var(--faint)' }}>—</span> : <span className="lname">{row.name}</span>
 	if (guides === null) {
 		return (
 			<td className="name">
@@ -249,7 +245,7 @@ export function LogView({
 						</thead>
 						<tbody>
 							{mode === 'flat'
-								? rows.map((r) => (
+								? [...rows].reverse().map((r) => (
 										<tr
 											key={r.id}
 											className={r.id === selected ? 'selected' : undefined}
@@ -257,11 +253,14 @@ export function LogView({
 											onClick={() => setSelected(r.id)}
 										>
 											<td className="id">#{r.id}</td>
-											<td className="t">{(r.t / 1000).toFixed(3)}ms</td>
+											<td className="t">
+												{r.time}
+												{r.delta !== null ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : null}
+											</td>
 											<td>
 												<span className={`chip ${r.cls}`}>{r.kind}</span>
 											</td>
-											<NameCell row={r} guides={null} onName={() => r.node !== null && inspect(r.node)} onCause={() => setSelected(r.cause)} />
+											<NameCell row={r} guides={null} onCause={() => setSelected(r.cause)} />
 											<td className="data">{r.summary}</td>
 											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
@@ -276,16 +275,14 @@ export function LogView({
 											<td className="id">
 												{t.depth === 0 && t.children > 0 ? <span className="caret">▾</span> : null}#{t.row.id}
 											</td>
-											<td className="t">{(t.row.t / 1000).toFixed(3)}ms</td>
+											<td className="t">
+												{t.row.time}
+												{t.row.delta !== null ? <span className="tdelta"> {fmtDelta(t.row.delta)}</span> : null}
+											</td>
 											<td>
 												<span className={`chip ${t.row.cls}`}>{t.row.kind}</span>
 											</td>
-											<NameCell
-												row={t.row}
-												guides={t.depth === 0 ? null : t.guides}
-												onName={() => t.row.node !== null && inspect(t.row.node)}
-												onCause={() => setSelected(t.row.cause)}
-											/>
+											<NameCell row={t.row} guides={t.depth === 0 ? null : t.guides} onCause={() => setSelected(t.row.cause)} />
 											<td className="data">{t.row.summary}</td>
 											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>
@@ -313,10 +310,12 @@ export function LogView({
 							</div>
 						</div>
 						<div className="cz-section">
-							<h3 data-tip="The chain of entries that led to the selected one, from the operation root down.">Why this ran</h3>
+							<h3 data-tip="The chain that led here, in stack-trace order: the selected entry on top, each cause beneath it, the user input at the bottom.">
+								Why this ran
+							</h3>
 							<ol className="spine">
-								{spine.map((e, i) => (
-									<li key={e.id} className={i === spine.length - 1 ? 'terminus' : undefined}>
+								{[...spine].reverse().map((e, i) => (
+									<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
 										<div className="knot" />
 										<div className="ev">
 											<span className="id">#{e.id}</span>
@@ -325,7 +324,7 @@ export function LogView({
 											</button>
 										</div>
 										{e.summary ? <div className="because">{e.summary}</div> : null}
-										{i === spine.length - 1 ? (
+										{i === 0 ? (
 											<div className="impact-card">
 												whole operation: <b>{opEntries} entries</b>
 												<br />

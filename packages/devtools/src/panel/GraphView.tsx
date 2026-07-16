@@ -247,7 +247,7 @@ export function GraphView({
 									{drawer.map((r) => (
 										<tr key={r.id}>
 											<td className="id">#{r.id}</td>
-											<td className="t">{(r.t / 1000).toFixed(3)}ms</td>
+											<td className="t">{r.time}</td>
 											<td>
 												<span className={`chip ${r.cls}`}>{r.kind}</span>
 											</td>

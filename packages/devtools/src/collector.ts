@@ -96,6 +96,7 @@ export class Collector implements Backend {
 			kind,
 			cause: cause > 0 && cause < id ? cause : 0,
 			t: Math.round(this.now() - this.t0),
+			wall: Date.now(),
 			node,
 			data,
 		}
@@ -135,7 +136,14 @@ export class Collector implements Backend {
 		const e = this.byId.get(id)
 		if (e === undefined) return
 		e.data.took = Math.max(0, Math.round(this.now() - this.t0) - e.t)
-		if (changed !== undefined) e.data.changed = changed
+		if (changed !== undefined) {
+			e.data.changed = changed
+			// Show the new result: peek the node's just-updated value inertly.
+			if (changed && e.node !== null) {
+				const v = this.provider.value(e.node)?.preview
+				if (v != null) e.data.value = v
+			}
+		}
 		this.scheduleFlush()
 	}
 

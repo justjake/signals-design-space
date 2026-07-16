@@ -59,6 +59,18 @@ function errorPreview(e: unknown): string {
 	return preview(e)
 }
 
+/** Short label for the DOM event behind an operation: "click button#submit". */
+function describeEvent(ev: Event): string {
+	const t = ev.target
+	if (t instanceof Element) {
+		let where = t.tagName.toLowerCase()
+		if (t.id) where += `#${t.id}`
+		else if (typeof t.className === 'string' && t.className.trim()) where += `.${t.className.trim().split(/\s+/)[0]}`
+		return `${ev.type} ${where}`
+	}
+	return ev.type
+}
+
 export interface Fx2Devtools {
 	collector: Collector
 	detach(): void
@@ -76,6 +88,9 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 	// (short strings) are held — never a node or a live value — so this can't
 	// leak the graph. Pruned with the node.
 	const lastValue = new Map<number, string>()
+	// Dedup key + id of the DOM event currently attributed as an operation root.
+	let lastDomKey = ''
+	let lastDomId = 0
 	const finalizer =
 		typeof FinalizationRegistry !== 'undefined'
 			? new FinalizationRegistry<number>((id) => {
@@ -148,6 +163,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		const nodeIdNum = node !== null ? register(node) : null
 		const nodeKind = node !== null ? kindOf(node) : undefined
 		const data = fields !== undefined ? fieldsToData(fields) : {}
+		let parent = cause as unknown as number
 		// Value diff on a write: the atom already holds the new value when this
 		// fires, so peek it inertly and diff against the last we recorded. The
 		// engine never sends values — value inspection lives here — so the diff
@@ -160,8 +176,22 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 				data.next = next
 				lastValue.set(nodeIdNum, next)
 			}
+			// A root write with no engine cause is the start of an operation;
+			// attribute it to the DOM event being dispatched, so the causal chain
+			// begins at the user input. One origin per event, shared by its writes.
+			if (parent === 0) {
+				const ev = (globalThis as { event?: Event }).event
+				if (ev != null && typeof ev.type === 'string') {
+					const key = `${ev.type}@${ev.timeStamp}`
+					if (key !== lastDomKey) {
+						lastDomKey = key
+						lastDomId = collector.record('dom-event', null, 0, undefined, { label: describeEvent(ev) })
+					}
+					parent = lastDomId
+				}
+			}
 		}
-		return collector.record(kind, nodeIdNum, cause as unknown as number, nodeKind, data) as unknown as TraceEventId
+		return collector.record(kind, nodeIdNum, parent, nodeKind, data) as unknown as TraceEventId
 	}
 	setTracer({
 		emitEvent: emit,

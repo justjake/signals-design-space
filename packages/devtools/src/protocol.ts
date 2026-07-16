@@ -63,8 +63,10 @@ export interface DevtoolsEvent {
 	kind: string
 	/** Provoking entry id; 0 = operation root. */
 	cause: number
-	/** µs since the collector attached. */
+	/** µs since the collector attached — monotonic, for durations and deltas. */
 	t: number
+	/** Wall-clock (epoch ms) when recorded, for a real timestamp in the UI. */
+	wall: number
 	/** Node this entry is about; null for engine-level entries. */
 	node: number | null
 	/** Kind-specific fields the adapter passed through (phase, error preview…). */

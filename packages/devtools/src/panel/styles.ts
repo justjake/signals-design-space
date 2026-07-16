@@ -117,7 +117,9 @@ export const PANEL_CSS = `
   .log td { padding: 4px 10px; border-bottom: 1px solid var(--row-line); vertical-align: baseline; white-space: nowrap; }
   .log tr:hover td { background: var(--surface); }
   .log .id { color: var(--faint); width: 48px; }
-  .log .t { color: var(--muted); width: 84px; }
+  .log .t { color: var(--muted); width: 92px; }
+  .log .t .tdelta { display: block; color: var(--faint); font-size: 9.5px; }
+  .log .name .lname { color: var(--text); }
   .log .took { color: var(--muted); width: 56px; text-align: right; }
   .log .data { color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 40%; }
   .log .name button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }

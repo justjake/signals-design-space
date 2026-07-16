@@ -33,6 +33,10 @@ export interface LogRow {
 	cause: number
 	/** Duration in µs, where the entry is a closed span (compute/effect). */
 	took: number | null
+	/** Short real wall-clock timestamp (HH:MM:SS.mmm). */
+	time: string
+	/** µs since the previous entry in the stream; null for the first. */
+	delta: number | null
 }
 
 function nodeName(backend: Backend, id: number | null): string | null {
@@ -47,8 +51,9 @@ function summarize(e: DevtoolsEvent): string {
 	if (typeof d.error === 'string') return d.error
 	// A write carries a value diff (previewed strings from the adapter).
 	if (typeof d.next === 'string') return typeof d.prev === 'string' ? `${d.prev} → ${d.next}` : `→ ${d.next}`
-	// A closed compute reports whether its result changed.
-	if (typeof d.changed === 'boolean') return d.changed ? 'new result' : 'same result'
+	// A closed compute reports whether its result changed, and to what.
+	if (typeof d.changed === 'boolean')
+		return d.changed ? (typeof d.value === 'string' ? `new result · ${d.value}` : 'new result') : 'same result'
 	const parts: string[] = []
 	if (typeof d.phase === 'string') parts.push(d.phase)
 	if (typeof d.status === 'string') parts.push(d.status)
@@ -62,16 +67,23 @@ function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
 		kind: e.kind,
 		cls: kindClass(e.kind),
 		node: e.node,
-		name: nodeName(backend, e.node),
+		// Engine-level entries have no node; a captured DOM origin labels itself.
+		name: nodeName(backend, e.node) ?? (typeof e.data.label === 'string' ? e.data.label : null),
 		summary: summarize(e),
 		t: e.t,
 		cause: e.cause,
 		took: typeof e.data.took === 'number' ? e.data.took : null,
+		time: formatClock(e.wall),
+		delta: null,
 	}
 }
 
 export function logRows(backend: Backend, filter: EventFilter, limit: number): LogRow[] {
-	return backend.events(filter, limit).map((e) => toRow(backend, e))
+	const rows = backend.events(filter, limit).map((e) => toRow(backend, e))
+	// Rows are chronological (oldest first): each entry's delta is the µs gap
+	// from the one before it in the stream.
+	for (let i = 1; i < rows.length; i++) rows[i].delta = rows[i].t - rows[i - 1].t
+	return rows
 }
 
 /** The cause chain leading to `eventId`, resolved to rows, root first. */
@@ -84,6 +96,19 @@ export function fmtTook(us: number | null): string {
 	if (us === null) return ''
 	if (us < 1000) return `${us}µs`
 	return `${(us / 1000).toFixed(us < 10000 ? 1 : 0)}ms`
+}
+
+/** Signed inter-entry gap ("+23µs", "+1.2ms"), or empty for the first entry. */
+export function fmtDelta(us: number | null): string {
+	if (us === null) return ''
+	return `+${fmtTook(us)}`
+}
+
+/** Short real wall-clock timestamp, HH:MM:SS.mmm. */
+export function formatClock(ms: number): string {
+	const d = new Date(ms)
+	const p2 = (n: number) => String(n).padStart(2, '0')
+	return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
 }
 
 /**
