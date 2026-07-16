@@ -8,9 +8,14 @@ import type { StackFrame } from '../protocol.ts'
  * lets you pick the editor and a project-root prefix, remembered in
  * localStorage. Choose "no links" to just read the frames.
  */
+// `path` is absolute (starts with "/"), so it follows `file` directly — the
+// editor scheme is `cursor://file` + "/abs/path", e.g.
+// `cursor://file/Users/me/app/src/App.tsx:12:3`. An extra slash
+// (`file//Users…`) makes the editor read the whole tail as a filename and drop
+// the line/column.
 const EDITORS: Record<string, (path: string, line: number, col: number) => string> = {
-	cursor: (p, l, c) => `cursor://file/${p}:${l}:${c}`,
-	vscode: (p, l, c) => `vscode://file/${p}:${l}:${c}`,
+	cursor: (p, l, c) => `cursor://file${p}:${l}:${c}`,
+	vscode: (p, l, c) => `vscode://file${p}:${l}:${c}`,
 	webstorm: (p, l) => `webstorm://open?file=${encodeURIComponent(p)}&line=${l}`,
 	none: () => '',
 }
@@ -28,6 +33,14 @@ function set(key: string, value: string): void {
 	} catch {
 		/* private mode — settings just won't persist */
 	}
+}
+
+/** The dev server's filesystem root, if the `signals-devtools/vite` plugin
+ * published it — used as the default project root so links open real files
+ * with no setup. A path typed into the panel is stored separately and wins. */
+function injectedProjectRoot(): string {
+	const r = (globalThis as { __SIGNALS_DEVTOOLS_PROJECT_ROOT__?: string }).__SIGNALS_DEVTOOLS_PROJECT_ROOT__
+	return typeof r === 'string' ? r : ''
 }
 
 /** The runtime file is usually a URL; reduce it to a path and prefix the
@@ -52,7 +65,7 @@ function basename(file: string): string {
 
 export function StackTrace({ frames }: { frames: StackFrame[] }) {
 	const [editor, setEditor] = useState(() => get('signals-devtools-editor', 'cursor'))
-	const [root, setRoot] = useState(() => get('signals-devtools-root', ''))
+	const [root, setRoot] = useState(() => get('signals-devtools-root', injectedProjectRoot()))
 	const link = EDITORS[editor] ?? EDITORS.cursor
 	return (
 		<div className="cz-section">

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
+import { signalsDevtools } from 'signals-devtools/vite'
 import { defineConfig, type Connect, type Plugin } from 'vite'
 
 const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
@@ -35,6 +36,9 @@ function redirectDirEntries(dirs: readonly string[]): Plugin {
 export default defineConfig(({ mode }) => ({
 	plugins: [
 		react(),
+		// Publishes the dev server's filesystem root so the fx2 devtools'
+		// stack-trace links open real files without anyone typing a project path.
+		signalsDevtools(),
 		redirectDirEntries(['/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/control']),
 	],
 	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
