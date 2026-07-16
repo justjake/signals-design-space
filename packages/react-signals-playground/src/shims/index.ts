@@ -21,7 +21,8 @@
 import type { ConcurrentSignalsShim } from './interface'
 import { implementations } from './implementations'
 
-// First non-empty segment: '/' → '', '/alt-a/' and '/alt-a/index.html' → 'alt-a'.
+// First non-empty segment: '/alt-a/' and '/alt-a/index.html' → 'alt-a'. The
+// bare root never reaches this module — it serves only the redirect stub.
 // Assumes the app is served at base '/', like vite dev and vite preview here.
 const segment = window.location.pathname.split('/').find((part) => part !== '') ?? ''
 const entry = implementations.find((impl) => impl.segment === segment)

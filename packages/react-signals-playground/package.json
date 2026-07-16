@@ -2,7 +2,7 @@
 	"name": "react-signals-playground",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Vite + React playground that renders one shared App under four entrypoints, each backed by a different concurrent-signals implementation. App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+	"description": "Vite + React playground that renders one shared App under one entrypoint per concurrent-signals implementation, each at its own named path; '/' redirects to the default (royale-fx2). App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
 	"license": "MIT",
 	"type": "module",
 	"imports": {

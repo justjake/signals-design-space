@@ -58,7 +58,8 @@ export default defineConfig<{ entry: BatteryEntry }>({
 	webServer: {
 		// Fresh build every run: the battery verifies source, never a stale dist.
 		command: `pnpm build && pnpm preview --port ${PREVIEW_PORT} --strictPort`,
-		url: `http://localhost:${PREVIEW_PORT}/`,
+		// The bare root 301s to the default implementation; poll a real page.
+		url: `http://localhost:${PREVIEW_PORT}/royale-fx2/`,
 		cwd: packageDir,
 		reuseExistingServer: !process.env.CI,
 		timeout: 180_000,

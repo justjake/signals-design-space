@@ -18,7 +18,7 @@ export interface BatteryEntry {
 	readonly label: string
 	/** Shim `name` — the impl-name HUD tile must show exactly this. */
 	readonly name: string
-	/** Page path for this implementation ('/', '/alt-a/', ...). */
+	/** Page path for this implementation ('/royale-fx2/', '/alt-a/', ...). */
 	readonly path: string
 	/** How this implementation holds a transition open on async data. */
 	readonly holdStyle: HoldStyle

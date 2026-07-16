@@ -1,10 +1,14 @@
 # react-signals-playground
 
-One React app, four concurrent-signals implementations. Every component imports its whole reactive surface — signals, hooks, transitions — from the single specifier `#concurrent-signals-shim`, and the page path decides which implementation that specifier resolves to. The app never names an implementation, so the same tree exercises each engine unchanged.
+One React app, six concurrent-signals implementations. Every component imports its whole reactive surface — signals, hooks, transitions — from the single specifier `#concurrent-signals-shim`, and the page path decides which implementation that specifier resolves to. The app never names an implementation, so the same tree exercises each engine unchanged.
+
+Every implementation lives at its own named path; the bare `/` only redirects to the default (`/royale-fx2/`) — a 301 from the dev/preview servers, and the root `index.html` stub on static hosts.
 
 | path | implementation |
 | --- | --- |
-| `/` | `cosignals` + `cosignals-react` |
+| `/royale-fx2/` | `signals-royale-fx2` (the default; `/` redirects here) |
+| `/royale-fx2-dalien/` | `signals-royale-fx2-dalien` (the typed-array arena fork) |
+| `/cosignals/` | `cosignals` + `cosignals-react` |
 | `/alt-a/` | `cosignals-alt-a` (`cosignals-alt-a/react` bindings) |
 | `/alt-b/` | `cosignals-alt-b` (`cosignals-alt-b/react` bindings) |
 | `/solid-react/` | `concurrent-solid-react` (Solid 2.0 core hosted in React) |
@@ -14,7 +18,7 @@ One React app, four concurrent-signals implementations. Every component imports 
 - `package.json` `"imports"` maps `#concurrent-signals-shim` → `src/shims/index.ts` (Vite and TypeScript both resolve subpath imports natively).
 - `src/shims/implementations.ts` is the one table of implementations: URL segment, tab label, shim name, and a typed loader per row. The selector resolves the page's implementation from it, and the app's tab bar renders one tab per row, so the loader and the navigation can never disagree.
 - `src/shims/index.ts` picks the row matching the first path segment and binds it with a top-level-await dynamic import; every importer of the specifier waits on that await, so app code always sees a fully bound implementation.
-- Each implementation adapts to one common typed surface (`src/shims/interface.ts`: `name`, `register`, `createAtom`, `createComputed`, `useSignal`, `useComputed`, `useSignalEffect`, `startSignalTransition`, `transitionHoldStyle`) in its own file: `src/shims/cosignals.ts`, `alt-a.ts`, `alt-b.ts`, `solid-react.ts`.
+- Each implementation adapts to one common typed surface (`src/shims/interface.ts`: `name`, `register`, `createAtom`, `createComputed`, `useSignal`, `useComputed`, `useSignalEffect`, `startSignalTransition`, `transitionHoldStyle`) in its own file: `src/shims/royale-fx2.ts`, `royale-fx2-dalien.ts`, `cosignals.ts`, `alt-a.ts`, `alt-b.ts`, `solid-react.ts`.
 
 Runtime selection was chosen over per-entry "select the implementation before the shim initializes" side-effect modules for one reason: isolation. These engines are module singletons that claim exclusive React protocol registrations (one batch-id allocator per page), so the non-selected implementations must never initialize. A selector that re-exports synchronously would need static imports of all implementations — initializing every engine on every page — so preserving isolation forces a dynamic import somewhere; doing it in the selector needs no per-entry files and no reliance on import evaluation order. Vite code-splits each implementation into its own chunk, and only the selected chunk ever loads (verify in devtools: one `shims/*` chunk per page). The same isolation is why the implementation tabs are plain `<a href>` full-page navigations: each entry is its own module graph, and a client-side switch cannot swap engines.
 

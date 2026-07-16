@@ -5,6 +5,7 @@
  * at once, so the loader and the navigation can never disagree about what
  * exists.
  */
+import { DEFAULT_SEGMENT } from './default-segment'
 import type { ConcurrentSignalsShim } from './interface'
 
 export interface Implementation {
@@ -19,15 +20,6 @@ export interface Implementation {
 }
 
 export const implementations: readonly Implementation[] = [
-	{ segment: '', label: 'cosignals', name: 'cosignals', load: () => import('./cosignals') },
-	{ segment: 'alt-a', label: 'alt-a', name: 'cosignals-alt-a', load: () => import('./alt-a') },
-	{ segment: 'alt-b', label: 'alt-b', name: 'cosignals-alt-b', load: () => import('./alt-b') },
-	{
-		segment: 'solid-react',
-		label: 'solid-react',
-		name: 'concurrent-solid-react',
-		load: () => import('./solid-react'),
-	},
 	{
 		segment: 'royale-fx2',
 		label: 'royale-fx2',
@@ -40,9 +32,32 @@ export const implementations: readonly Implementation[] = [
 		name: 'signals-royale-fx2-dalien',
 		load: () => import('./royale-fx2-dalien'),
 	},
+	{ segment: 'cosignals', label: 'cosignals', name: 'cosignals', load: () => import('./cosignals') },
+	{ segment: 'alt-a', label: 'alt-a', name: 'cosignals-alt-a', load: () => import('./alt-a') },
+	{ segment: 'alt-b', label: 'alt-b', name: 'cosignals-alt-b', load: () => import('./alt-b') },
+	{
+		segment: 'solid-react',
+		label: 'solid-react',
+		name: 'concurrent-solid-react',
+		load: () => import('./solid-react'),
+	},
 ]
+
+const defaultRow = implementations.find((impl) => impl.segment === DEFAULT_SEGMENT)
+if (defaultRow === undefined) {
+	throw new Error(
+		`react-signals-playground: DEFAULT_SEGMENT "${DEFAULT_SEGMENT}" has no implementation row`,
+	)
+}
+/**
+ * The implementation `/` redirects to (named in ./default-segment.ts; kept
+ * first in the table so it also leads the tab bar). Every implementation
+ * lives under its own named path; the bare root only forwards here — a
+ * server redirect in dev/preview, the root index.html stub on static hosts.
+ */
+export const defaultImplementation: Implementation = defaultRow
 
 /** The entry URL for an implementation; segments map to directory entries served with a trailing slash. */
 export function implementationHref(impl: Implementation): string {
-	return impl.segment === '' ? '/' : `/${impl.segment}/`
+	return `/${impl.segment}/`
 }

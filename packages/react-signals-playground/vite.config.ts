@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { signalsDevtools } from 'signals-devtools/vite'
 import { defineConfig, type Connect, type Plugin } from 'vite'
+import { DEFAULT_SEGMENT } from './src/shims/default-segment'
 
 const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
 
@@ -22,9 +23,18 @@ const COI_HEADERS = {
 function redirectDirEntries(dirs: readonly string[]): Plugin {
 	const middleware: Connect.NextHandleFunction = (req, res, next) => {
 		const [path = '', query] = (req.url ?? '').split('?')
+		const suffix = query === undefined ? '' : `?${query}`
+		// The bare root forwards to the default implementation. Static hosts
+		// get the same behavior from the root index.html redirect stub.
+		if (path === '/' || path === '/index.html') {
+			res.statusCode = 301
+			res.setHeader('Location', `/${DEFAULT_SEGMENT}/${suffix}`)
+			res.end()
+			return
+		}
 		if (dirs.includes(path)) {
 			res.statusCode = 301
-			res.setHeader('Location', `${path}/${query === undefined ? '' : `?${query}`}`)
+			res.setHeader('Location', `${path}/${suffix}`)
 			res.end()
 			return
 		}
@@ -47,11 +57,12 @@ export default defineConfig(({ mode }) => ({
 		// Publishes the dev server's filesystem root so the fx2 devtools'
 		// stack-trace links open real files without anyone typing a project path.
 		signalsDevtools(),
-		redirectDirEntries(['/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/royale-fx2-dalien', '/control']),
+		redirectDirEntries(['/cosignals', '/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/royale-fx2-dalien', '/control']),
 	],
-	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
-	// Disabling the SPA fallback makes an unmapped path 404 instead of
-	// silently serving the cosignals page under the wrong URL.
+	// MPA: every implementation is its own html entry under a named path;
+	// the root entry is only the redirect stub. Disabling the SPA fallback
+	// makes an unmapped path 404 instead of silently serving some page under
+	// the wrong URL.
 	server: { headers: COI_HEADERS },
 	preview: { headers: COI_HEADERS },
 	appType: 'mpa',
@@ -78,7 +89,9 @@ export default defineConfig(({ mode }) => ({
 	build: {
 		rollupOptions: {
 			input: {
-				cosignals: entry('index.html'),
+				// The bare-root redirect stub (static hosts; dev/preview 301 first).
+				root: entry('index.html'),
+				cosignals: entry('cosignals/index.html'),
 				'alt-a': entry('alt-a/index.html'),
 				'alt-b': entry('alt-b/index.html'),
 				'solid-react': entry('solid-react/index.html'),
