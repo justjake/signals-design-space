@@ -84,7 +84,14 @@ function NameCell({
 		</button>
 	) : null
 	const name =
-		row.name === null ? <span style={{ color: 'var(--faint)' }}>—</span> : <span className="lname">{row.name}</span>
+		row.name === null ? (
+			<span style={{ color: 'var(--faint)' }}>—</span>
+		) : (
+			<>
+				<span className="lname">{row.name}</span>
+				{row.node !== null ? <span className="nid">{fmtId('node', row.node)}</span> : null}
+			</>
+		)
 	if (guides === null) {
 		return (
 			<td className="name">
