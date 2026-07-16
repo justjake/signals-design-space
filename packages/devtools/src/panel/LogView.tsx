@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
 import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
@@ -124,6 +124,10 @@ export function LogView({
 	const [selected, setSelected] = useState<number | null>(null)
 	const [copied, setCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
+	// Timeline brush: [t0, t1] in µs, or null for the full window.
+	const [brush, setBrush] = useState<[number, number] | null>(null)
+	const tlRef = useRef<SVGSVGElement | null>(null)
+	const brushing = useRef<number | null>(null)
 
 	const classes = useMemo(() => {
 		const set = new Set<KindClass>(ALWAYS_ON)
@@ -133,7 +137,9 @@ export function LogView({
 
 	const live = logRows(backend, { node: node ?? undefined, classes }, LIMIT)
 	const base = (paused ?? live).filter((r) => r.id > floor)
-	const rows = base.filter((r) => matchesSearch(r, query))
+	const rows = base.filter(
+		(r) => matchesSearch(r, query) && (brush === null || (r.t >= brush[0] && r.t <= brush[1])),
+	)
 
 	const tree = mode === 'tree' ? logTree(rows) : null
 	const treeRows = tree === null ? null : collapse ? tree.filter((t) => t.depth === 0) : tree
@@ -168,6 +174,14 @@ export function LogView({
 	const minT = base.length ? base[0].t : 0
 	const span = Math.max(1, (base.length ? base[base.length - 1].t : 1) - minT)
 	const x = (t: number) => 40 + ((t - minT) / span) * 1120
+	// Inverse of x: a client x-coordinate on the timeline → a time (µs), clamped.
+	const tAt = (clientX: number): number => {
+		const el = tlRef.current
+		if (el === null) return minT
+		const r = el.getBoundingClientRect()
+		const sx = ((clientX - r.left) / r.width) * 1200
+		return Math.max(minT, Math.min(minT + span, minT + ((sx - 40) / 1120) * span))
+	}
 
 	const sel = selected === null ? null : rows.find((r) => r.id === selected) ?? null
 	const spine = sel === null ? [] : causeRows(backend, sel.id)
@@ -224,6 +238,11 @@ export function LogView({
 					))}
 				</div>
 				<div className="spacer" />
+				{brush !== null ? (
+					<button className="tbtn" onClick={() => setBrush(null)}>
+						✕ time window
+					</button>
+				) : null}
 				{node !== null ? (
 					<button className="tbtn" onClick={() => setNode(null)}>
 						✕ node filter
@@ -240,17 +259,43 @@ export function LogView({
 			</div>
 
 			<div className="timeline">
-				<svg viewBox="0 0 1200 56" preserveAspectRatio="none" aria-label="Timeline of recorded entries">
+				<svg
+					ref={tlRef}
+					viewBox="0 0 1200 56"
+					preserveAspectRatio="none"
+					aria-label="Timeline — drag to select a time window, click to clear"
+					style={{ cursor: 'crosshair', touchAction: 'none' }}
+					onPointerDown={(e) => {
+						const t = tAt(e.clientX)
+						brushing.current = t
+						setBrush([t, t])
+						e.currentTarget.setPointerCapture(e.pointerId)
+					}}
+					onPointerMove={(e) => {
+						const start = brushing.current
+						if (start === null) return
+						const t = tAt(e.clientX)
+						setBrush([Math.min(start, t), Math.max(start, t)])
+					}}
+					onPointerUp={(e) => {
+						const start = brushing.current
+						brushing.current = null
+						e.currentTarget.releasePointerCapture(e.pointerId)
+						// A click (negligible drag) clears the window.
+						if (start !== null && Math.abs(tAt(e.clientX) - start) < span * 0.01) setBrush(null)
+					}}
+				>
 					{[...ops.entries()]
 						.filter(([, g]) => g.count > 1)
 						.map(([root, g]) => {
 							const x0 = x(g.minT)
 							return <rect key={root} className="tl-span" x={x0} y={6} width={Math.max(3, x(g.maxT) - x0)} height={9} fill="var(--border-strong)" />
 						})}
-					{rows.map((r) => (
+					{base.map((r) => (
 						<rect key={r.id} x={x(r.t)} y={44} width={2} height={8} fill={`var(--${classVar(r.cls)})`} />
 					))}
-					{sel !== null ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : null}
+					{brush !== null ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : null}
+					{brush === null && sel !== null ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : null}
 				</svg>
 			</div>
 
