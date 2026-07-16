@@ -416,8 +416,8 @@ promote is behavioral → covered by falsify-first probes A/B]
 
 - **Worlds overlay**: drafts, rebase logs, replay, world memos and the
   quiescence sweep (worlds.ts throughout); `resolveEnvelope`/`draftEvaluate`
-  render-time evaluation stays untracked under `withWorld` (worlds.ts
-  475-549) — it creates no links and never touches the tiers.
+  render-time evaluation stays untracked under `graph.withWorld` — it creates
+  no links and never touches the tiers.
 - **`pokeAndWakeLeafObservers` / `pokeLeafObservers`** (467-526): code and
   call sites (worlds.ts 171, 237, 262; index.ts 496-500) untouched; their
   reachability semantics survive because the watched subs closure is
@@ -580,13 +580,14 @@ Envelope record on EVERY base-state read — even the trivial value case — and
 `node.asyncState` already encoded the same 3-state machine. One model
 replaces both: node-resident state read through one protocol.
 
-**The state shape** — `ResolvedState` (asyncs.ts), and nodes ARE it:
+**The state view** — `ResolvedState` (asyncs.ts), which producer nodes satisfy
+directly:
 
 ```ts
 interface ResolvedState {
   flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
-  throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
+  throwable?: ErrorBox | Suspension | null; // present on async memo states
 }
 ```
 
@@ -594,14 +595,15 @@ interface ResolvedState {
   0b0100_0000, `DerivedSuspended` 0b1000_0000; exclusive field with
   `Flag.AsyncMask`, clear-then-set exactly like `Flag.StaleMask`,
   both-clear = value state.
-- `node.throwable` is initialized `null` at construction on EVERY node kind
-  including cells and watchers (shape discipline: no post-construction
-  property addition). Cells never set the bits but share the uniform
-  `{ flags, value, throwable }` read protocol — which is what deletes the
-  base-world cell wrapper allocation. The slot stores the Suspension RECORD,
-  not its promise: the engine needs `.settled` for the identity-reuse rule
-  and `.resolve` at settlement; the promise is what gets thrown. It stores
-  the ErrorBox, not the error alone: box identity is the
+- Only consumers that evaluate (deriveds and effect nodes) keep a stable
+  `throwable` slot, initialized to `null`, because an evaluation can move
+  between value, error, and suspended states. Cells never set the async bits
+  and omit the slot. Both still satisfy the state-view protocol directly,
+  which deletes the base-world cell wrapper allocation. The slot stores the
+  Suspension record, not its promise: nullable `.resolve` owns pendingness. A
+  resolver permits identity reuse and performs settlement; `null` marks the
+  suspension settled. The promise is what gets thrown. It stores the
+  ErrorBox, not the error alone. Box identity preserves the
   rethrow-same-reference contract, and `sameError` reuse plus memo
   reconciliation compare through it.
 - `node.asyncState` is deleted. Park/settle/error transitions
@@ -613,11 +615,10 @@ interface ResolvedState {
   (`!isUninitialized(node.value)`), so no information was lost; unwrap
   sites preserve the old normalize-to-undefined behavior via the sentinel
   check (`stateValue` in index.ts).
-- WorldMemo records keep the second-resolution role, reshaped to the same
-  `{ flags, value, throwable }` (same bit constants, small word — only the
-  async bits are ever set). `reconcileStates` (was `reconcileEnvelopes`) is
-  flag/value/throwable compares preserving `equals()`, suspension-identity
-  and box-identity semantics exactly.
+- WorldMemo records keep the second-resolution role. Plain records contain
+  `{ flags, value }`; error and suspended records also carry `throwable`.
+  `statesEqual` first reads `Flag.AsyncMask`, then compares the fields for that
+  state, preserving `equals()`, suspension identity, and box identity exactly.
 - `resolveEnvelope` → `resolveState`: the base world freshens the node
   (`peekCell`/`ensureFresh`) and returns THE NODE as the state view — zero
   allocation; drafted worlds return memo records as before.
@@ -625,17 +626,16 @@ interface ResolvedState {
   `isPendingPassive` all read the protocol: value → `value`; error → throw
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
-- The `Envelope` type export is gone; `ResolvedState`, `ErrorBox`,
-  `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
-  `isUninitialized` are the replacement protocol exports. No alias
-  survives — one name per concept, and every importer (worlds, index,
-  react hooks/host, tests, the oracle) consumes the new shape directly.
+- The `Envelope` type export is gone. `ResolvedState`, `Suspension`, `Flag`
+  (with `Flag.AsyncMask`), and `isUninitialized` are the replacement
+  protocol exports. `ErrorBox` and `isErrorBox` remain internal because
+  only the engine and React bindings consume error snapshots.
 - `committedSnapshot`'s per-call `{ engineErrorBox }` marker allocation is
   gone (it was also identity-unstable — a fresh object per `getSnapshot`
   call is a useSyncExternalStore hazard): the snapshot returns the ErrorBox
   itself, identity-stable for the whole error span, and `useCommitted`
-  detects it with `isErrorBox` (a WeakSet brand — no shape change to the
-  box, no marker field to collide with user values).
+  detects it with the class identity. The box itself is the brand; there is
+  no parallel registry or marker field.
 
 **What still allocates on reads, honestly:** drafted-world resolutions
 allocate one memo record per (node, world-signature) per clock change
@@ -688,13 +688,18 @@ document's sections above describe the code at landing time. The mapping:
   `Watcher`→`Watching` (alien's name), `Check`→`StaleCheck`,
   `Dirty`→`StaleDirty`, `DerivedError`→`AsyncError`,
   `DerivedSuspended`→`AsyncSuspended`.
-- New capability bits route dispatch (never callback presence):
-  `WatchRender` (render-notify queue), `WatchRunEffect` (validated effect
-  queue), `WatchDraft` (draft pings/wakes). Component subscription =
-  `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`;
-  scope anchor = `Watching` alone. The `scheduled`/`computing` bools became
-  the `Scheduled`/`Computing` bits; the `disposed` bool is gone — watcher
-  disposal is `Watching` set with `Watched` clear.
+- Capability bits route dispatch (never callback presence): `WatchRender`
+  owns render notifications and draft pings/wakes; `WatchRunEffect` owns
+  effect delivery. Component subscription = `Watching|WatchRender`; effect =
+  `Watching|WatchRunEffect`; scope anchor = `Watching` alone. The
+  `scheduled`/`computing` bools became the `Scheduled`/`Computing` bits; the
+  `disposed` bool is gone — watcher disposal is `Watching` set with `Watched`
+  clear, and pin identity (the pinned-handle table entry still naming the
+  handle) is the liveness test every post-dispose path uses.
+- `activeEffectOwner` points to the scope anchor or effect whose body or
+  handler runs. Both collect nested effects through lazy `children`; the
+  pin-identity liveness check prevents a self-disposed owner from accepting
+  more.
 - `pokeLeafObservers`/`pokeAndWakeLeafObservers` became ONE iterative
   `pokeDraftWatchers(node, cause, wake?)` sharing the wave's cursor +
   frame-stack skeleton, deduped by a per-node pokePass reading against the
@@ -706,8 +711,9 @@ document's sections above describe the code at landing time. The mapping:
 - The per-node uSES counter is now `storeVersion` — THE useSyncExternalStore
   snapshot; bump = subscribers re-render. Its base-clock companion (a second
   per-node counter that served the unscoped hook mode) is deleted with that
-  mode: every scope-consuming hook now requires a SignalScope and throws
-  without one, so the silent-fold delivery channel is always the render-pass
+  mode: every provider-dependent hook now requires a
+  `SignalsFrameworkProvider` and throws without one, so the silent-fold
+  delivery channel is always the render-pass
   world. Settlement and discard bump through one helper
   (`bumpStoreVersionLoud`) that bypasses suppression: suppression exists
   only for silent draft folds, and those two carry information no render
@@ -719,3 +725,39 @@ document's sections above describe the code at landing time. The mapping:
 - worlds.ts intents lost their write-only `seq` field (`OpSeq` died with
   it): the intent array IS dispatch order; retirement flips visibility,
   never position.
+
+## 14. Split effects (as built, later round)
+
+A later round replaced the single-body effect with a compute + handler
+pair and moved watcher validation to drain sites; sections above describe
+the code at their own landing time. The mapping (full design:
+docs/effects.md):
+
+- `runWatcher`'s per-watcher validation loop is gone. One dynamically
+  tracked `EffectNode` owns both its dependencies and delivery state while
+  sharing the computed evaluator. `ensureFresh` validates that node, then
+  the drain compares its settled value against the last value the handler
+  received. `validAtGraphChange` lives on both computeds and effects.
+- Only render-subscription watchers retain a pinned dependency: the node
+  they observe. They never re-track.
+- `WatchSchedule` and `makeScheduledEffect` (the React re-render handshake
+  and its world-source twin watcher) are deleted. `effectQueue` became
+  three lane queues (sync / useLayoutEffect / useEffect) drained two-phase:
+  pull all computes, then cleanups, then handlers. The write path only
+  marks and enqueues.
+- Per-root committed views (`committedWorlds`, `connection.committedIds`,
+  the provider `container` prop) are gone, and `committed()`/`useCommitted`
+  with them: the committed view is implicit — base state — and effects
+  observe base state only. (`committedSnapshot` and its ErrorBox identity
+  discussion in section 12 died with the hook.)
+- One clock (a further round): `draftChangeClock` merged into
+  `graphChangeClock` — draft opens/appends/retires/discards and thenable
+  settlement tick the same counter base writes do, so world memos and the
+  world cache key their fast paths on one comparison. A
+  `baseChangedAtGraphChange` watermark reading preserves the narrower
+  "did base state change" question for the single-draft write cutoff;
+  `draftRevisionByAtom` stamps became readings of the one clock; the
+  `setOnSettlement` seam died (settlement ticks directly). The unwrap
+  protocol described in section 12 lives in one place now:
+  `unwrapResolved(state, park)` in asyncs.ts, with `unwrapForEval` and
+  the read-site copies deleted; `isErrorBox` left with its last consumer.

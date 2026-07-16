@@ -19,7 +19,7 @@ uSES provided three things beyond a subscription:
    ruling: "it should behave like useState"). One indicator is exempt by
    the same logic React itself uses: `useIsPending`'s flip dispatches
    OUTSIDE any ambient transition (`dispatchUrgent`), mirroring
-   `useTransition`, whose isPending update is scheduled before the scope —
+   `useTransition`, whose isPending update is scheduled before the transition —
    an indicator must not be held by the transition it indicates.
 2. **The commit-time snapshot compare** ("did the store move between my
    render and my subscription attaching?"). Replaced by the extended
@@ -51,10 +51,10 @@ so it advances exactly at commits. Targeting the committed tree (not the
 latest render) is load-bearing three ways:
 
 - **Fold silence is exact.** A carrier's committed world resolves the
-  folded value it already shows → equal → no dispatch. A scope that never
+  folded value it already shows → equal → no dispatch. A root that never
   carried the draft resolves news → repair. Per-subscriber comparison
   replaced the global suppression flag, `retireDraft`'s silent option, and
-  `confirmCommit`'s loudness decision — all deleted.
+  `confirmRootCommit`'s loudness decision — all deleted.
 - **A held pass's speculation stays in the draft channel.** A late append
   to a draft the hook carries changes the PASS's resolution, not the
   committed tree's; the draft channel re-dispatches the id (in the owning
@@ -88,13 +88,16 @@ run/validation watermark.
 1. **Tick-then-stamp** (`writeCell`, `invalidateDerived`): the clock ticks
    first; the change is stamped with the new reading. A pre-tick stamp
    could compare equal to a subscriber that validated before the write.
-2. **Real changes only** (`recompute`, batch net-revert): equality-cutoff
-   recomputes do not advance `changedAt`; a batch whose writes net-revert
-   restores the pre-batch reading. Both port the old version discipline.
-3. **Freshen-then-stamp** (`ensureFresh`, `runWatcher`): a dep is freshened
-   before its reading is compared (a lazy dep recomputes mid-walk, stamping
-   with the current clock), and the subscriber's `validAt` is stamped only
-   after every dep was freshened and compared.
+2. **Real computed changes only** (`recompute`): equality-cutoff
+   recomputes do not advance `changedAt`. Atom writes always retain their
+   new reading, including writes later reverted in the same batch; moving
+   that reading backwards is unsound after an intermediate computed read.
+3. **Freshen-then-stamp** (`ensureFresh`; at landing time also the watcher
+   validation loop, deleted when effects split into compute + handler — see
+   docs/effects.md): a dep is freshened before its reading is compared (a
+   lazy dep recomputes mid-walk, stamping with the current clock), and the
+   consumer's `validAt` is stamped only after every dep was freshened and
+   compared.
 
 ### The one place edge stamps were smarter
 
@@ -110,11 +113,15 @@ current reading. (Found by test T12; the fix is the `validate` guard in
 `useSyncExternalStore` (both uses), `storeVersion` + its brand + three
 constructor inits + wave/write bump sites, `storeVersionSuppressed`,
 `withSuppressedStoreVersion`, `bumpStoreVersionLoud`, `retireDraft`'s
-`silent` option, `confirmCommit`'s `foldReachedEveryScope` loudness
+`silent` option, `confirmRootCommit`'s `foldReachedEveryScope` loudness
 decision, `NodeVersion` + `node.version` + `link.version` and every
-compare/stamp site. The counter taxonomy is now: two clocks
+compare/stamp site. The counter taxonomy at landing time: two clocks
 (`graphChangeClock`, `draftChangeClock`), readings (`changedAt<Clock>`,
-`validAt<Clock>`), two pass identities (`evalPass`, `pokePass`).
+`validAt<Clock>`), two pass identities (`evalPass`, `pokePass`). A later
+round merged the clocks: one `graphChangeClock` ticks for base writes,
+settlement, and draft activity alike, with a `baseChangedAtGraphChange`
+watermark reading distinguishing base changes where a consumer needs the
+narrower question (the single-draft write cutoff).
 
 ## Probes and falsification
 
@@ -137,8 +144,8 @@ compare/stamp site. The counter taxonomy is now: two clocks
 
 ## SSR note
 
-Server rendering works (SignalScope is a useReducer component; its layout
-effect is client-only). Hydration consistency is the standard signals-SSR
-seeding concern — give the client engine the values the server rendered —
-and the post-hydration gap is case 2 above. `getServerSnapshot` machinery
-is not needed and has no analog here.
+Server rendering works (`SignalsFrameworkProvider` is a `useReducer`
+component; its layout effect is client-only). Hydration consistency is the
+standard signals-SSR seeding concern — give the client engine the values
+the server rendered — and the post-hydration gap is case 2 above.
+`getServerSnapshot` machinery is not needed and has no analog here.
