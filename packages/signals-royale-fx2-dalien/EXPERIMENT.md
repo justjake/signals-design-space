@@ -323,3 +323,47 @@ at parity and is now 1.74, and createComputations moved from ~0.94 to
 The next optimization round starts from a profile of updateSignals and
 createComputations; none of these suspects is load-bearing for
 correctness, so each can be A/B'd in isolation.
+
+### Recovery round (2026-07-15, later): 1.13 back to ~1.07-1.09
+
+A whole-suite profile put chainResolve at 9% of self time and recompute
+at 16%; three changes, each gated on the full 414-test suite:
+
+- **Shallow validation stays on recursion frames.** ensureFresh entered
+  chainResolve for ANY watched single-dep StaleCheck node — including
+  every single-dep effect pull, the write-heavy rows' hot path. It now
+  engages only at recursion depth 16, like the source package: one
+  reading compare per shallow level, handles held by the frames (which
+  is also what resolves the levels above a mid-climb restructure), and
+  chainResolve absorbs only the deep tail. This alone took updateSignals
+  from 1.74 to ~1.15.
+- **chainResolve records ids, not handles.** The descent path lives in a
+  persistent integer scratch; climb compares are integer loads, a pinned
+  handle resolves only on levels that actually recompute, and early
+  climb bails (start disposed, interior unpinned by re-entrant user
+  code) return false so the caller's generic frames finish the rest.
+- **Class-expression watcher handles and a phase-free one-entry drain.**
+  Watcher handles are constructed with one stable shape instead of
+  Object.create plus incremental stores, the disposed probe moved off
+  recompute's entry onto the two guarded ensureFresh sites (as
+  pin-identity tests gated by the entry flags), and a one-entry drain
+  round — a plain write waking one effect — runs pull, cleanup, and
+  handler over one local survivor with no phase bookkeeping
+  (write-to-handler micro: 1.19x → ~1.07x).
+
+Attribution for what remains, from a three-way driver (pre-port fork /
+current fork / current source) over every create/dispose shape: the
+fork's effect lifecycle is unchanged from before the port (13.6 vs 12.4
+ms on 200k single-dep create+dispose, within noise at every fan-in), so
+the createComputations row's move from ~1.38 to ~1.68 measures the
+source package's own effect-tax round, not a fork regression. The last
+pre-port ratio recorded against a contemporaneous source tree was
+1.1272.
+
+Two 3-round isolated runs at the final code (fork `9c8057b`), elevated
+shared load: geometric means **1.0913 and 1.0699** (aggregates 1.0708,
+1.0531). The loss profile matches the pre-port frontier's shape —
+equality-cutoff chains ~1.31 (was 1.34), wide fan-out 1.15-1.18 (was
+~1.43), cellx 1.01-1.16, effect create+dispose the one row above its
+old band (1.68, attributed above) — and every large dynamic-graph row
+still wins (0.85-0.94).
