@@ -14,6 +14,7 @@ import {
 	createAtom,
 	type Computed,
 	type Signal,
+	type UseFn,
 } from '../src/index.ts'
 import {
 	BASE_WORLD,
@@ -698,6 +699,45 @@ describe('computeds across worlds', () => {
 		const next = stateIn(c, [draft.id]) as { flags: number; throwable: unknown }
 		expect(next.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
 		expect(next.throwable).not.toBe(first.throwable)
+		discardDraft(draft.id)
+	})
+
+	test('nested world evaluations keep distinct suspension owners', async () => {
+		const gate = deferred<number>()
+		const inner = createComputed((use) => use(gate.promise))
+		const outer = createComputed(() => inner.get())
+		const draft = openDraft()
+
+		const outerPending = stateIn(outer, [draft.id]) as {
+			flags: number
+			throwable: unknown
+		}
+		const innerPending = stateIn(inner, [draft.id]) as {
+			flags: number
+			throwable: unknown
+		}
+		expect(outerPending.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(innerPending.flags & Flag.AsyncSuspended).toBe(Flag.AsyncSuspended)
+		expect(outerPending.throwable).not.toBe(innerPending.throwable)
+		expect(stateIn(outer, [draft.id])).toBe(outerPending)
+
+		gate.resolve(7)
+		await tick()
+		expect(stateIn(outer, [draft.id])).toEqual(valueState(7))
+		discardDraft(draft.id)
+	})
+
+	test('a world use function cannot escape its evaluation', () => {
+		let escaped!: UseFn
+		const computed = createComputed((use) => {
+			escaped = use
+			return 1
+		})
+		const draft = openDraft()
+		expect(stateIn(computed, [draft.id])).toEqual(valueState(1))
+		expect(() => escaped(Promise.resolve(2))).toThrow(
+			'use() called outside a computed evaluation',
+		)
 		discardDraft(draft.id)
 	})
 

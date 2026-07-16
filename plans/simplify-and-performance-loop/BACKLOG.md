@@ -14,13 +14,12 @@ condition still leaves a useful direction.
 
 ## Current priority by concept convergence
 
-No exact new simplification is selected. Resurvey the accepted post-Round-124
+No exact new simplification is selected. Resurvey the accepted post-Round-125
 layout before promoting another broader lead; do not force a performance-only
 representation or reopen a recorded retry without its stated natural change.
 
 ## Other unmeasured broader leads
 
-- Remove `draftEvaluate`'s per-evaluation `worldUse` closure and captured suspension cell only if one saved/restored ambient suspension owner is clearer and allocation-free under nested/reentrant evaluation; keep the Round 37 synchronous, fulfilled, suspension, and error controls.
 - Specialize atom world memos only if direct revision/value fields reduce net types, branches, and code while preserving certificate inheritance, memo identity, retirement, retained heap, and GC behavior; do not add a parallel memo representation for speed alone.
 - Avoid allocating a computed world state that equality immediately replaces with the prior state; preserve error/suspension identity, custom equality, trace order, and world memo stability.
 - Encode dependency-link membership in an existing detached pointer sentinel only if promotion, trimming, disposal, and GC invariants remain direct; retry the Round 19 narrow/wide lifecycle and dynamic-tracking controls.

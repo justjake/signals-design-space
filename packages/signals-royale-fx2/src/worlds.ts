@@ -967,36 +967,55 @@ export function resolveStateUntracked(node: ProducerNode, world: World): Resolve
  * own cached value or dependency edges. Reads inside the body resolve the
  * same world (via withWorld) and record into the certificate.
  */
+const WORLD_PARKED = Symbol('world-parked')
+
+/**
+ * The park function of the draft evaluation in progress, if any. Reads
+ * of pending values inside that evaluation forward through it.
+ */
+export let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
+
+/**
+ * The suspension owned by the draft evaluation in progress. Keeping it
+ * beside currentPark lets every evaluation share one use function.
+ */
+let currentWorldSuspension: Suspension | null = null
+
+function worldUse(t: PromiseLike<unknown>): unknown {
+	if (currentPark !== worldUse) {
+		throw new Error('use() called outside a computed evaluation')
+	}
+	const box = trackThenable(t)
+	if (box.status === 'fulfilled') {
+		return box.result
+	}
+	if (box.status === 'rejected') {
+		throw box.result
+	}
+	currentWorldSuspension ??= makeSuspension()
+	box.parkedSuspensions!.add(currentWorldSuspension)
+	throw WORLD_PARKED
+}
+
 function draftEvaluate(
 	node: ComputedNode<unknown>,
 	world: World,
 	prev: ResolvedState | undefined,
 	certificate: Certificate,
 ): ResolvedState {
+	const prevPark = currentPark
+	const prevSuspension = currentWorldSuspension
+	const prevCertificate = activeCertificate
+	const previousCertificateCount = certificate.count
+	currentPark = worldUse
 	// Reuse the previous pending span's suspension: Suspense retries must
 	// observe one stable thenable per span.
-	let suspension =
+	currentWorldSuspension =
 		prev !== undefined &&
 		(prev.flags & Flag.AsyncSuspended) !== 0 &&
 		(prev.throwable as Suspension).resolve !== null
 			? (prev.throwable as Suspension)
 			: null
-	const worldUse = (t: PromiseLike<unknown>): unknown => {
-		const box = trackThenable(t)
-		if (box.status === 'fulfilled') {
-			return box.result
-		}
-		if (box.status === 'rejected') {
-			throw box.result
-		}
-		suspension ??= makeSuspension()
-		box.parkedSuspensions!.add(suspension)
-		throw WORLD_PARKED
-	}
-	const prevPark = currentPark
-	const prevCertificate = activeCertificate
-	const previousCertificateCount = certificate.count
-	currentPark = worldUse
 	activeCertificate = certificate
 	certificate.count = 0
 	node.flags |= Flag.DraftComputing
@@ -1009,7 +1028,7 @@ function draftEvaluate(
 		if (e === WORLD_PARKED) {
 			// The node's base value doubles as the stale value to serve; the
 			// uninitialized sentinel means there is none yet.
-			return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension! }
+			return { flags: Flag.AsyncSuspended, value: node.value, throwable: currentWorldSuspension! }
 		}
 		if (
 			prev !== undefined &&
@@ -1022,19 +1041,12 @@ function draftEvaluate(
 	} finally {
 		clearInactiveCertificateEntries(certificate, previousCertificateCount)
 		activeCertificate = prevCertificate
+		currentWorldSuspension = prevSuspension
 		currentPark = prevPark
 		setActiveEvaluation(prevEvaluation)
 		node.flags &= ~Flag.DraftComputing
 	}
 }
-
-const WORLD_PARKED = Symbol('world-parked')
-
-/**
- * The park function of the draft evaluation in progress, if any. Reads
- * of pending values inside that evaluation forward through it.
- */
-export let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
 
 // ---------------------------------------------------------------------------
 // Ambient views: worlds for reads happening outside any render pass.
