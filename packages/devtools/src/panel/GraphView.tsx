@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Backend, EventId, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
-import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, isUnstable, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { Code } from './highlight.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
@@ -346,6 +346,11 @@ export function GraphView({
 										<td>
 											<span className="dot" style={{ background: kindVar(n.kind) }} />
 											{n.name}
+											{isUnstable(n.kind, n.newResults, n.sameResults, n.value === '—' ? undefined : n.value) ? (
+												<span className="unstable-mark" data-tip="Unstable: returns a new object every run and never memoizes — its subscribers re-run on every change.">
+													⚠
+												</span>
+											) : undefined}
 										</td>
 										<td>{n.kind}</td>
 										<td className="dimtxt" style={n.status === 'error' ? { color: 'var(--danger)' } : n.status === 'suspended' ? { color: 'var(--suspended)' } : undefined}>
@@ -617,6 +622,14 @@ export function GraphView({
 										<span><span className="sw" style={{ background: 'var(--system)' }} /><b>{model.node.sameResults}×</b> same result — downstream work stopped</span>
 									</div>
 								</>
+							) : undefined}
+							{isUnstable(model.node.kind, model.node.newResults, model.node.sameResults, model.node.valuePreview) ? (
+								<div
+									className="sumline unstable"
+									data-tip="This computed returns a fresh object every run, so its equality check never cuts off — every change re-runs its subscribers. A stable reference or a custom equals would let it memoize."
+								>
+									⚠ unstable — never memoizes (a new object each run)
+								</div>
 							) : undefined}
 						</div>
 

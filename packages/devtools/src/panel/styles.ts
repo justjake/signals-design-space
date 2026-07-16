@@ -307,6 +307,8 @@ export const PANEL_CSS = `
   .caused-tree li { padding: 2px 0; white-space: nowrap; }
   .sumline { font: 10.5px var(--mono); color: var(--muted); margin: 6px 0 4px; }
   .sumline b { color: var(--text); font-weight: 500; }
+  .sumline.unstable { color: var(--base09); }
+  .unstable-mark { color: var(--base09); margin-left: 5px; cursor: help; }
 
   /* causality panel */
   .cz-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }

@@ -238,6 +238,26 @@ export interface NodeRow {
 	last: { id: EventId; kind: string } | undefined
 }
 
+/**
+ * "Unstable": a computed that returns a reference value (object / array /
+ * function / instance) yet has never hit its equality cutoff — every re-eval
+ * produced a new, non-equal result (sameResults 0 across ≥2 evals). Such a node
+ * defeats memoization: its subscribers re-run on every change, because a fresh
+ * object is never Object.is-equal to the last. A stable ref or a custom equals
+ * fixes it. Object-ness is read from the value preview — the engine doesn't tag
+ * value type — so this is a heuristic, deliberately narrow (primitives, which
+ * legitimately change, never count).
+ */
+export function isUnstable(kind: NodeKind, newResults: number, sameResults: number, preview: string | undefined): boolean {
+	if (kind !== 'computed' || sameResults !== 0 || newResults < 2 || preview === undefined) return false
+	return (
+		preview.startsWith('{') ||
+		preview.startsWith('Array(') ||
+		preview.startsWith('ƒ') ||
+		(/^[A-Z]/.test(preview) && preview !== 'NaN' && preview !== 'Infinity')
+	)
+}
+
 export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[] {
 	// Uses the node's retained last-event pointer — never scans the event ring,
 	// so listing stays cheap at 100k nodes.
