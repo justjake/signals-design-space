@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
-import { fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { causeRows, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
+import { useFlashOnChange } from './useFlash.ts'
 
 const NODE_H = 40
 const DEFAULT_PER_COL = 6
@@ -42,7 +43,9 @@ function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: nu
 			{items.map((n) => (
 				<li key={n.id}>
 					<span className="sw" style={{ background: kindVar(n.kind) }} />
-					<button onClick={() => onPick(n.id)}>{n.name}</button>
+					<button data-tip={`${n.kind} ${n.name}${n.status !== 'ok' ? ` · ${n.status}` : ''}`} onClick={() => onPick(n.id)}>
+						{n.name}
+					</button>
 					{n.status !== 'ok' ? (
 						<span className="meta" style={{ color: statusVar(n.status) }}>
 							{n.status}
@@ -81,6 +84,11 @@ export function GraphView({
 	// a double-click re-focuses and relayouts. So clicking a node never shifts
 	// the picture.
 	const [selected, setSelected] = useState<number | null>(null)
+	// A specific event picked from the drawer to inspect in the sidebar; null
+	// falls back to the node's most recent event.
+	const [eventSel, setEventSel] = useState<number | null>(null)
+	// Optional status filter for the node list (error / suspended).
+	const [statusOnly, setStatusOnly] = useState<NodeStatus | null>(null)
 	// Per-column node cap; a frontier stub raises it to reveal more.
 	const [perCol, setPerCol] = useState(DEFAULT_PER_COL)
 	// Pan/zoom viewBox; null means "fit the whole focus set".
@@ -94,13 +102,18 @@ export function GraphView({
 	const LIST_CAP = 100
 	const counts = backend.counts()
 	const allRows = nodeRows(backend, query, LIST_CAP)
-	const rows = allRows.filter((n) => kindOn[n.kind])
+	const rows = allRows.filter((n) => kindOn[n.kind] && (statusOnly === null || n.status === statusOnly))
 	const effectiveFocus = focus ?? rows[0]?.id ?? allRows[0]?.id ?? null
 	const moreThanListed = counts.nodes - allRows.length
+	// Status counts over the listed window (a searchable slice, not the whole
+	// graph) — enough to surface errored/suspended nodes to filter to.
+	const errCount = allRows.filter((n) => n.status === 'error').length
+	const suspCount = allRows.filter((n) => n.status === 'suspended').length
 
 	// Moving focus resets selection, expansion, viewport, and the breadcrumb.
 	useEffect(() => {
 		setSelected(effectiveFocus)
+		setEventSel(null)
 		setPerCol(DEFAULT_PER_COL)
 		setView(null)
 		if (effectiveFocus !== null) {
@@ -112,6 +125,23 @@ export function GraphView({
 	const model = sel === null ? null : inspectorModel(backend, sel)
 	const layout = effectiveFocus === null ? null : layoutFocus(backend, effectiveFocus, depth, perCol)
 	const drawer = sel === null ? [] : logRows(backend, { node: sel }, 40)
+
+	// One click behaves the same for a canvas node or a list row: inspect it in
+	// place; only re-center the canvas if it isn't already shown, so inspecting
+	// a visible node never shifts the graph. (No separate "focus" gesture.)
+	const pick = (id: number) => {
+		setSelected(id)
+		setEventSel(null)
+		if (layout !== null && !layout.nodes.some((n) => n.id === id)) setFocus(id)
+	}
+	// The "why this ran" chain shown in the inspector: a drawer-picked event if
+	// there is one, else the node's most recent event.
+	const whyChain = eventSel !== null ? causeRows(backend, eventSel) : (model?.why ?? [])
+
+	// Flash a node or row only when its last event actually advances — never on
+	// reveal, relayout, or selection.
+	const flashNodes = useFlashOnChange(layout ? layout.nodes.map((n) => [n.id, n.lastEventId]) : [])
+	const flashRows = useFlashOnChange(rows.map((n) => [n.id, n.last?.id ?? 0]))
 
 	// Current viewBox: an explicit pan/zoom box, else fit the whole layout.
 	const base: Box | null = layout ? { x: 0, y: 0, w: layout.width, h: layout.height } : null
@@ -150,7 +180,11 @@ export function GraphView({
 			const r = svg.getBoundingClientRect()
 			const px = v.x + ((e.clientX - r.left) / r.width) * v.w
 			const py = v.y + ((e.clientY - r.top) / r.height) * v.h
-			zoomAround(e.deltaY < 0 ? 0.83 : 1.2, px, py)
+			// Proportional to scroll amount so a trackpad's small deltas nudge
+			// gently and a mouse wheel's larger notch zooms more. deltaY > 0
+			// (scroll down) zooms out (larger viewBox).
+			const factor = 1.0018 ** Math.max(-160, Math.min(160, e.deltaY))
+			zoomAround(factor, px, py)
 		}
 		svg.addEventListener('wheel', onWheel, { passive: false })
 		return () => svg.removeEventListener('wheel', onWheel)
@@ -189,22 +223,25 @@ export function GraphView({
 							{c.label} · {counts.byKind[c.kind] ?? 0}
 						</button>
 					))}
+					<button
+						className={`kchip ${statusOnly === 'error' ? 'on' : ''}`}
+						data-tip="Show only errored nodes — their last recompute threw."
+						aria-pressed={statusOnly === 'error'}
+						onClick={() => setStatusOnly(statusOnly === 'error' ? null : 'error')}
+					>
+						<span className="sw" style={{ background: 'var(--danger)' }} />
+						error · {errCount}
+					</button>
+					<button
+						className={`kchip ${statusOnly === 'suspended' ? 'on' : ''}`}
+						data-tip="Show only suspended nodes — a recompute is awaiting async."
+						aria-pressed={statusOnly === 'suspended'}
+						onClick={() => setStatusOnly(statusOnly === 'suspended' ? null : 'suspended')}
+					>
+						<span className="sw" style={{ background: 'var(--suspended)' }} />
+						suspended · {suspCount}
+					</button>
 				</div>
-				<div className="spacer" />
-				<button className="tbtn" data-tip="How many levels of dependencies/subscribers to lay out around the focus." onClick={() => setDepth(depth >= 3 ? 1 : depth + 1)}>
-					Depth: {depth}
-				</button>
-				<span role="group" aria-label="Zoom" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-					<button className="tbtn mode" aria-label="Zoom out" onClick={() => zoomAround(1.25, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
-						−
-					</button>
-					<button className="tbtn mode" aria-label="Zoom in" onClick={() => zoomAround(0.8, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
-						+
-					</button>
-				</span>
-				<button className="tbtn" data-tip="Reset pan and zoom to fit the whole focus set." onClick={() => setView(null)}>
-					Fit
-				</button>
 			</div>
 
 			<nav className="crumbs" aria-label="Focus history">
@@ -238,13 +275,14 @@ export function GraphView({
 							<tbody>
 								{rows.map((n) => (
 									<tr
-										key={`${n.id}:${n.last?.id ?? 0}`}
-										className={n.id === effectiveFocus ? 'selected' : undefined}
-										aria-selected={n.id === effectiveFocus}
+										key={n.id}
+										className={`${n.id === sel ? 'selected' : ''}${flashRows.has(n.id) ? ' flash' : ''}`.trim() || undefined}
+										aria-selected={n.id === sel}
+										onClick={() => pick(n.id)}
 									>
 										<td>
 											<span className="dot" style={{ background: kindVar(n.kind) }} />
-											<button onClick={() => setFocus(n.id)}>{n.name}</button>
+											{n.name}
 										</td>
 										<td>{n.kind}</td>
 										<td className="dimtxt" style={n.status === 'error' ? { color: 'var(--danger)' } : n.status === 'suspended' ? { color: 'var(--suspended)' } : undefined}>
@@ -268,6 +306,24 @@ export function GraphView({
 					<ResizeHandle dir="v" onDelta={(d) => setNodeListH((h) => clampSize(h + d, 60, 460))} />
 
 					<div className="canvas-wrap">
+						{layout !== null ? (
+							<div className="canvas-controls">
+								<button className="tbtn" data-tip="How many levels of dependencies/subscribers to lay out around the focus." onClick={() => setDepth(depth >= 3 ? 1 : depth + 1)}>
+									Depth: {depth}
+								</button>
+								<span role="group" aria-label="Zoom" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+									<button className="tbtn mode" aria-label="Zoom out" onClick={() => zoomAround(1.25, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
+										−
+									</button>
+									<button className="tbtn mode" aria-label="Zoom in" onClick={() => zoomAround(0.8, (vb?.x ?? 0) + (vb?.w ?? 0) / 2, (vb?.y ?? 0) + (vb?.h ?? 0) / 2)}>
+										+
+									</button>
+								</span>
+								<button className="tbtn" data-tip="Reset pan and zoom to fit the whole focus set." onClick={() => setView(null)}>
+									Fit
+								</button>
+							</div>
+						) : null}
 						{layout === null ? (
 							<div className="canvas-status">no node focused</div>
 						) : (
@@ -286,7 +342,13 @@ export function GraphView({
 									const svg = svgRef.current
 									if (p === null || vb === null || svg === null) return
 									const r = svg.getBoundingClientRect()
-									setView({ ...vb, x: p.vx - ((e.clientX - p.cx) / r.width) * vb.w, y: p.vy - ((e.clientY - p.cy) / r.height) * vb.h })
+									const nx = p.vx - ((e.clientX - p.cx) / r.width) * vb.w
+									const ny = p.vy - ((e.clientY - p.cy) / r.height) * vb.h
+									// Clamp so the content can't be panned entirely off-screen: at
+									// least part of the layout always stays in the viewBox.
+									const bw = base?.w ?? vb.w
+									const bh = base?.h ?? vb.h
+									setView({ ...vb, x: clampSize(nx, -vb.w * 0.5, bw - vb.w * 0.5), y: clampSize(ny, -vb.h * 0.5, bh - vb.h * 0.5) })
 								}}
 								onPointerUp={() => {
 									panRef.current = null
@@ -306,15 +368,14 @@ export function GraphView({
 								))}
 								{visNodes.map((n) => (
 									<g
-										key={`${n.id}:${n.lastEventId}`}
-										className={`node ${n.kind}${n.id === sel ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}`}
+										key={n.id}
+										className={`node ${n.kind}${n.id === sel ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}${flashNodes.has(n.id) ? ' flash' : ''}`}
 										transform={`translate(${n.x},${n.y})`}
 										role="button"
 										tabIndex={0}
 										aria-label={`${KIND_LABEL[n.kind]} ${n.label}`}
-										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''} Click to inspect, double-click to focus.`}
-										onClick={() => setSelected(n.id)}
-										onDoubleClick={() => setFocus(n.id)}
+										data-tip={`${KIND_TIP[n.kind]}${n.status !== 'ok' ? ` Currently ${n.status}.` : ''}`}
+										onClick={() => pick(n.id)}
 									>
 										{n.hot ? <rect className="ring" width={n.w} height={NODE_H} rx={5} fill="none" stroke="var(--thread)" strokeWidth={2} opacity={0} /> : null}
 										<rect width={n.w} height={NODE_H} rx={5} />
@@ -347,20 +408,27 @@ export function GraphView({
 					{effectiveFocus !== null && drawerOpen ? (
 						<ResizeHandle dir="v" onDelta={(d) => setDrawerH((h) => clampSize(h - d, 80, 520))} />
 					) : null}
-					{effectiveFocus !== null && drawerOpen ? (
-						<section className="drawer" aria-label="Log entries for the focused node" style={{ maxHeight: drawerH }}>
+					{effectiveFocus !== null ? (
+						<section className="drawer" aria-label="Log entries for the focused node" style={drawerOpen ? { maxHeight: drawerH } : { maxHeight: 'none' }}>
 							<div className="drawer-head">
 								Log <span className="name">{model?.name}</span> · {drawer.length} entries
 								<span className="spacer" />
 								<button onClick={() => sel !== null && openInLog(sel)}>Open in Log ↗</button>
-								<button aria-expanded={true} onClick={() => setDrawerOpen(false)}>
-									▾ hide
+								<button aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>
+									{drawerOpen ? '▾ hide' : '▸ show'}
 								</button>
 							</div>
+							{drawerOpen ? (
 							<table>
 								<tbody>
 									{drawer.map((r) => (
-										<tr key={r.id}>
+										<tr
+											key={r.id}
+											className={r.id === eventSel ? 'selected' : undefined}
+											aria-selected={r.id === eventSel}
+											style={{ cursor: 'pointer' }}
+											onClick={() => setEventSel(r.id)}
+										>
 											<td className="id">#{r.id}</td>
 											<td className="t">{r.time}</td>
 											<td>
@@ -379,6 +447,7 @@ export function GraphView({
 									) : null}
 								</tbody>
 							</table>
+							) : null}
 						</section>
 					) : null}
 				</div>
@@ -432,19 +501,22 @@ export function GraphView({
 						</div>
 
 						<div className="insp-section">
-							<h3 data-tip="The chain that led to this node's most recent activity, in stack-trace order: this node on top, each cause beneath, user input at the bottom.">
-								Why this ran
+							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
+								Why this ran{eventSel !== null ? ` · #${eventSel}` : ''}
 							</h3>
-							{model.why.length === 0 ? (
+							{whyChain.length === 0 ? (
 								<div className="sumline">no recorded activity yet</div>
 							) : (
 								<ol className="spine">
-									{[...model.why].reverse().map((e, i) => (
+									{[...whyChain].reverse().map((e, i) => (
 										<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
 											<div className="knot" />
 											<div className="ev">
 												<span className="id">#{e.id}</span>
-												<button onClick={() => e.node !== null && setFocus(e.node)}>
+												<button
+													data-tip={`#${e.id} ${e.kind}${e.name ? ` ${e.name}` : ''}${e.summary ? ` · ${e.summary}` : ''}`}
+													onClick={() => e.node !== null && pick(e.node)}
+												>
 													{e.kind} {e.name ?? ''}
 												</button>
 											</div>
@@ -459,7 +531,7 @@ export function GraphView({
 							<h3>
 								Upstream <span className="win">{model.depsTotal} direct</span>
 							</h3>
-							<NeighborList items={model.deps} onPick={setFocus} />
+							<NeighborList items={model.deps} onPick={pick} />
 						</div>
 
 						<div className="insp-section">

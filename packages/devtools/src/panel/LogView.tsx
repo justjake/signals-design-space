@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
 import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
@@ -77,7 +77,7 @@ function NameCell({
 	// The whole row selects (the <tr> handles the click); the cause ref is the
 	// one secondary action, so it stops propagation and jumps instead.
 	const cause = row.cause > 0 ? (
-		<button className="causeref" title="jump to cause" onClick={(e) => { e.stopPropagation(); onCause() }}>
+		<button className="causeref" onClick={(e) => { e.stopPropagation(); onCause() }}>
 			⤷#{row.cause}
 		</button>
 	) : null
@@ -106,21 +106,20 @@ function NameCell({
 
 export function LogView({
 	backend,
-	node,
-	setNode,
+	query,
+	setQuery,
 	inspect,
 }: {
 	backend: Backend
-	node: number | null
-	setNode: (id: number | null) => void
+	query: string
+	setQuery: (q: string) => void
 	inspect: (id: number) => void
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
-	const [query, setQuery] = useState('')
 	const [on, setOn] = useState<Record<string, boolean>>({ write: true, compute: true, render: true, effect: true, internals: false })
 	const [paused, setPaused] = useState<LogRow[] | null>(null)
 	const [floor, setFloor] = useState(0)
-	const [collapse, setCollapse] = useState(false)
+	const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
 	const [selected, setSelected] = useState<number | null>(null)
 	const [copied, setCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
@@ -128,6 +127,22 @@ export function LogView({
 	const [brush, setBrush] = useState<[number, number] | null>(null)
 	const tlRef = useRef<SVGSVGElement | null>(null)
 	const brushing = useRef<number | null>(null)
+	const selRowRef = useRef<HTMLTableRowElement | null>(null)
+
+	// Scroll the selected entry into view (e.g. after a jump-to-cause).
+	useEffect(() => {
+		selRowRef.current?.scrollIntoView({ block: 'nearest' })
+	}, [selected])
+
+	// Esc clears the timeline window (a click on the strip clears it too).
+	useEffect(() => {
+		if (brush === null) return
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') setBrush(null)
+		}
+		window.addEventListener('keydown', onKey)
+		return () => window.removeEventListener('keydown', onKey)
+	}, [brush])
 
 	const classes = useMemo(() => {
 		const set = new Set<KindClass>(ALWAYS_ON)
@@ -135,14 +150,35 @@ export function LogView({
 		return [...set]
 	}, [on])
 
-	const live = logRows(backend, { node: node ?? undefined, classes }, LIMIT)
+	const live = logRows(backend, { classes }, LIMIT)
 	const base = (paused ?? live).filter((r) => r.id > floor)
 	const rows = base.filter(
 		(r) => matchesSearch(r, query) && (brush === null || (r.t >= brush[0] && r.t <= brush[1])),
 	)
 
-	const tree = mode === 'tree' ? logTree(rows) : null
-	const treeRows = tree === null ? null : collapse ? tree.filter((t) => t.depth === 0) : tree
+	// Tree mode: resolve any cause referenced but outside the visible window
+	// (still in the ring) and prepend its ancestry, so rows nest under the real
+	// event instead of orphaning. Then nest, honoring the collapsed set.
+	let treeInput = rows
+	if (mode === 'tree') {
+		const inWindow = new Set(rows.map((r) => r.id))
+		const extra = new Map<number, LogRow>()
+		for (const r of rows) {
+			if (r.cause > 0 && !inWindow.has(r.cause) && !extra.has(r.cause)) {
+				for (const anc of causeRows(backend, r.cause)) if (!inWindow.has(anc.id)) extra.set(anc.id, anc)
+			}
+		}
+		if (extra.size > 0) treeInput = [...extra.values(), ...rows]
+	}
+	const tree = mode === 'tree' ? logTree(treeInput, collapsed) : null
+	const treeRows = tree
+	const toggleCollapsed = (id: number) =>
+		setCollapsed((prev) => {
+			const next = new Set(prev)
+			if (next.has(id)) next.delete(id)
+			else next.add(id)
+			return next
+		})
 
 	// Group entries by operation root in one pass, following cause pointers
 	// within the shown set. Drives the timeline spans and the op entry count —
@@ -183,10 +219,15 @@ export function LogView({
 		return Math.max(minT, Math.min(minT + span, minT + ((sx - 40) / 1120) * span))
 	}
 
-	const sel = selected === null ? null : rows.find((r) => r.id === selected) ?? null
-	const spine = sel === null ? [] : causeRows(backend, sel.id)
+	// The cause chain resolves from the backend, so a selected entry outside the
+	// visible window (e.g. jumped-to via ⤷) still shows — its own entry is the
+	// chain's last element.
+	const spine = selected === null ? [] : causeRows(backend, selected)
+	const sel = selected === null ? null : (rows.find((r) => r.id === selected) ?? spine[spine.length - 1] ?? null)
 	const opRoot = spine[0] ?? sel
 	const opEntries = sel === null ? 0 : ops.get(rootOf(sel.id))?.count ?? 1
+	// Entries this one directly caused (children), from the visible window.
+	const children = sel === null ? [] : base.filter((r) => r.cause === sel.id)
 
 	const copy = () => {
 		void copyText(logMarkdown(rows)).then((ok) => {
@@ -201,6 +242,7 @@ export function LogView({
 				<button
 					className="tbtn"
 					aria-pressed={paused !== null}
+					style={{ minWidth: 84, textAlign: 'left' }}
 					onClick={() => setPaused(paused === null ? live : null)}
 				>
 					{paused === null ? '⏸ Pause' : '▶ Resume'}
@@ -216,6 +258,22 @@ export function LogView({
 						Flat
 					</button>
 				</span>
+				{mode === 'tree' ? (
+					<button
+						className="tbtn"
+						aria-pressed={collapsed.size > 0}
+						onClick={() =>
+							setCollapsed((prev) => {
+								if (prev.size > 0) return new Set()
+								const next = new Set<number>()
+								for (const t of tree ?? []) if (t.depth === 0 && t.children > 0) next.add(t.row.id)
+								return next
+							})
+						}
+					>
+						{collapsed.size > 0 ? 'Expand all' : 'Collapse to roots'}
+					</button>
+				) : null}
 				<input
 					className="search"
 					type="search"
@@ -241,16 +299,6 @@ export function LogView({
 				{brush !== null ? (
 					<button className="tbtn" onClick={() => setBrush(null)}>
 						✕ time window
-					</button>
-				) : null}
-				{node !== null ? (
-					<button className="tbtn" onClick={() => setNode(null)}>
-						✕ node filter
-					</button>
-				) : null}
-				{mode === 'tree' ? (
-					<button className="tbtn" aria-pressed={collapse} onClick={() => setCollapse(!collapse)}>
-						Collapse to roots
 					</button>
 				) : null}
 				<button className="tbtn" onClick={copy}>
@@ -317,6 +365,7 @@ export function LogView({
 								? [...rows].reverse().map((r) => (
 										<tr
 											key={r.id}
+											ref={r.id === selected ? selRowRef : undefined}
 											className={r.id === selected ? 'selected' : undefined}
 											aria-selected={r.id === selected}
 											onClick={() => setSelected(r.id)}
@@ -337,12 +386,25 @@ export function LogView({
 								: treeRows!.map((t) => (
 										<tr
 											key={t.row.id}
+											ref={t.row.id === selected ? selRowRef : undefined}
 											className={`${t.depth === 0 && t.children > 0 ? 'op-head' : ''} ${t.row.id === selected ? 'selected' : ''}`.trim() || undefined}
 											aria-selected={t.row.id === selected}
 											onClick={() => setSelected(t.row.id)}
 										>
 											<td className="id">
-												{t.depth === 0 && t.children > 0 ? <span className="caret">▾</span> : null}#{t.row.id}
+												{t.children > 0 ? (
+												<button
+													className="caret"
+													aria-label={collapsed.has(t.row.id) ? 'Expand' : 'Collapse'}
+													onClick={(e) => {
+														e.stopPropagation()
+														toggleCollapsed(t.row.id)
+													}}
+												>
+													{collapsed.has(t.row.id) ? '▸' : '▾'}
+												</button>
+											) : null}
+											#{t.row.id}
 											</td>
 											<td className="t">
 												{t.row.time}
@@ -359,7 +421,7 @@ export function LogView({
 							{rows.length === 0 ? (
 								<tr>
 									<td className="data" colSpan={6} style={{ color: 'var(--faint)', fontStyle: 'italic' }}>
-										no entries {node !== null ? 'for this node ' : ''}yet
+										no entries {query || brush ? 'match the filter' : 'yet'}
 									</td>
 								</tr>
 							) : null}
@@ -409,6 +471,22 @@ export function LogView({
 								))}
 							</ol>
 						</div>
+						{children.length > 0 ? (
+							<div className="cz-section">
+								<h3 data-tip="Entries this one directly caused (its children in the causal tree).">What this caused · {children.length}</h3>
+								<ul className="linklist">
+									{children.map((c) => (
+										<li key={c.id}>
+											<span className="sw" style={{ background: `var(--${classVar(c.cls)})` }} />
+											<button onClick={() => setSelected(c.id)}>
+												{c.kind} {c.name ?? ''}
+											</button>
+											<span className="meta">#{c.id}</span>
+										</li>
+									))}
+								</ul>
+							</div>
+						) : null}
 					</aside>
 				) : null}
 			</div>

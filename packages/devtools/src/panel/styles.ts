@@ -95,6 +95,7 @@ export const PANEL_CSS = `
   .canvas-wrap { flex: 1; position: relative; overflow: auto; min-height: 0; }
   .canvas-wrap svg { display: block; width: 100%; height: 100%; min-height: 280px; }
   .canvas-status { position: absolute; left: 10px; bottom: 8px; font: 10.5px var(--mono); color: var(--faint); pointer-events: none; }
+  .canvas-controls { position: absolute; top: 8px; right: 8px; z-index: 6; display: flex; gap: 4px; }
   .canvas-status b { color: var(--muted); font-weight: 500; }
 
   /* node list */
@@ -138,7 +139,8 @@ export const PANEL_CSS = `
   tr.op-head .data { overflow: visible; max-width: none; width: auto; white-space: nowrap; }
   .op-title { font-weight: 500; }
   .op-title .tw { color: var(--faint); font-weight: 400; }
-  .caret { color: var(--faint); width: 10px; display: inline-block; }
+  .caret { color: var(--muted); width: 16px; font-size: 13px; line-height: 1; display: inline-block; text-align: center; padding: 0; cursor: pointer; }
+  .caret:hover { color: var(--text); }
   tr.selected td { background: color-mix(in srgb, var(--thread) 8%, var(--bg)) !important; }
   tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
   tr.endrow td { color: var(--faint); }
@@ -170,6 +172,7 @@ export const PANEL_CSS = `
 
   /* graph canvas: nodes, edges, thread, clusters, stubs, badges */
   .layer-label { font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; fill: var(--faint); }
+  .node, .stub, .cluster { cursor: pointer; }
   .node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
   .node text { font: 500 10.5px var(--mono); fill: var(--text); }
   .node .glyph { font: 600 10px var(--mono); }
@@ -319,12 +322,13 @@ export const PANEL_CSS = `
      animation replays once, fading a tint away. New log entries flash on
      insert the same way. */
   .log tbody tr { animation: signals-devtools-flash .8s ease-out; }
-  .nodelist tbody tr { animation: signals-devtools-flash .8s ease-out; }
-  .node rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
+  .nodelist tbody tr { cursor: pointer; }
+  .nodelist tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
+  .node.flash rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
 
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
-    .log tbody tr, .nodelist tbody tr, .node rect:not(.ring) { animation: none; }
+    .log tbody tr, .nodelist tbody tr.flash, .node.flash rect:not(.ring) { animation: none; }
     .thread-anim { opacity: 0; }
   }
 }

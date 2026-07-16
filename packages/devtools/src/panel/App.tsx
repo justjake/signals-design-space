@@ -33,15 +33,19 @@ export function App({
 	const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null)
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
 	const [focus, setFocus] = useState<number | null>(null)
-	const [logNode, setLogNode] = useState<number | null>(null)
+	const [logQuery, setLogQuery] = useState('')
 	const [themeOpen, setThemeOpen] = useState(false)
 
 	const inspect = (id: number) => {
 		setFocus(id)
 		setTab('graph')
 	}
+	// "Open in Log" pre-populates the visible search filter with the node's name
+	// — no hidden per-node state; it's the log, filtered, and you can see and
+	// clear the filter.
 	const openInLog = (id: number) => {
-		setLogNode(id)
+		const n = backend.node(id)
+		setLogQuery(`name:${n?.label ?? `${n?.kind ?? 'node'}#${id}`}`)
 		setTab('log')
 	}
 
@@ -84,7 +88,7 @@ export function App({
 			{tab === 'graph' ? (
 				<GraphView backend={backend} focus={focus} setFocus={setFocus} openInLog={openInLog} />
 			) : (
-				<LogView backend={backend} node={logNode} setNode={setLogNode} inspect={inspect} />
+				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={inspect} />
 			)}
 
 			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootEl} />

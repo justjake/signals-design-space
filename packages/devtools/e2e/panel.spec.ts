@@ -7,7 +7,8 @@ test('inline panel shows the live fx2 graph + log and updates on interaction', a
 	// Graph is the default tab: nodes are discovered, listed, and inspectable.
 	await expect(panel.getByRole('button', { name: 'Graph', exact: true })).toHaveAttribute('aria-current', 'page')
 	await expect(panel).toContainText('doubled')
-	await panel.getByRole('button', { name: 'doubled', exact: true }).first().click()
+	// Click the node-list row to inspect it (the whole row selects).
+	await panel.locator('.nodelist tbody tr').filter({ hasText: 'doubled' }).first().click()
 	await expect(panel).toContainText('Value')
 	await expect(panel).toContainText('Upstream')
 	await expect(panel).toContainText('Downstream')

@@ -126,11 +126,13 @@ export interface TreeRow {
 
 /**
  * Nest entries under the entry that caused them. Entries whose cause is 0, or
- * whose cause isn't in `rows` (filtered out or evicted), are operation roots.
- * Children always follow their cause in time (the collector guarantees
- * cause < id), so a depth-first walk emits a stable, readable tree.
+ * whose cause isn't in `rows` (the caller resolves out-of-window causes first,
+ * so this is only a truly-evicted cause), are operation roots. Children always
+ * follow their cause in time (the collector guarantees cause < id), so a
+ * depth-first walk emits a stable, readable tree. A row whose id is in
+ * `collapsed` is emitted, but its subtree is not.
  */
-export function logTree(rows: LogRow[]): TreeRow[] {
+export function logTree(rows: LogRow[], collapsed?: ReadonlySet<number>): TreeRow[] {
 	const present = new Set(rows.map((r) => r.id))
 	const childrenOf = new Map<number, LogRow[]>()
 	const roots: LogRow[] = []
@@ -153,6 +155,7 @@ export function logTree(rows: LogRow[]): TreeRow[] {
 		}
 		const kids = childrenOf.get(row.id) ?? []
 		out.push({ row, depth, guides, children: kids.length })
+		if (collapsed?.has(row.id)) return
 		const nextTrail = trail.concat(!isLast)
 		kids.forEach((k, i) => walk(k, depth + 1, nextTrail, i === kids.length - 1))
 	}
