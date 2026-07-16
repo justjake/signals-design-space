@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Backend, EventId, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
 import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
+import { Code } from './highlight.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
@@ -551,7 +552,9 @@ export function GraphView({
 
 						<div className="insp-section">
 							<h3>Value</h3>
-							<div className="value-preview">{model.node.valueFull ?? model.node.valuePreview ?? '—'}</div>
+							<div className="value-preview">
+								<Code>{model.node.valueFull ?? model.node.valuePreview ?? '—'}</Code>
+							</div>
 							{model.node.pending !== undefined ? (
 								<div className="sumline" style={{ color: statusVar(model.node.status) }}>
 									{model.node.pending}
@@ -562,7 +565,9 @@ export function GraphView({
 						{model.node.source !== undefined ? (
 							<div className="insp-section">
 								<h3>Source</h3>
-								<div className="value-preview">{model.node.source}</div>
+								<div className="value-preview">
+									<Code>{model.node.source}</Code>
+								</div>
 							</div>
 						) : undefined}
 

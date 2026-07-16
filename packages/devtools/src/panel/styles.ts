@@ -271,6 +271,11 @@ export const PANEL_CSS = `
   .kv .k { color: var(--muted); }
   .kv .v { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .value-preview { font: 11px var(--mono); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; color: var(--text); white-space: pre-wrap; overflow-x: auto; }
+  .value-preview .tok-str { color: var(--base0B); }
+  .value-preview .tok-num, .value-preview .tok-lit { color: var(--base09); }
+  .value-preview .tok-kw { color: var(--base0E); }
+  .value-preview .tok-key { color: var(--base0D); }
+  .value-preview .tok-com { color: var(--base03); font-style: italic; }
   .memo-bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 6px 0; }
   .memo-bar span { display: block; }
   .memo-legend { font: 10.5px var(--mono); color: var(--muted); display: grid; row-gap: 2px; }
