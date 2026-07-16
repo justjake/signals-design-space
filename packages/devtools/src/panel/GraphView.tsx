@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
-import { causeRows, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
@@ -290,7 +290,7 @@ export function GraphView({
 										<td className="dimtxt" style={n.status === 'error' ? { color: 'var(--danger)' } : n.status === 'suspended' ? { color: 'var(--suspended)' } : undefined}>
 											{n.value}
 										</td>
-										<td className="dimtxt">{n.last ? `#${n.last.id} ${n.last.kind}` : '—'}</td>
+										<td className="dimtxt">{n.last ? `${fmtId('event', n.last.id)} ${n.last.kind}` : '—'}</td>
 									</tr>
 								))}
 							</tbody>
@@ -431,7 +431,7 @@ export function GraphView({
 											style={{ cursor: 'pointer' }}
 											onClick={() => setEventSel(r.id)}
 										>
-											<td className="id">#{r.id}</td>
+											<td className="id">{fmtId('event', r.id)}</td>
 											<td className="t">{r.time}</td>
 											<td>
 												<span className={`chip ${r.cls}`}>{r.kind}</span>
@@ -470,7 +470,7 @@ export function GraphView({
 							</div>
 							<div className="insp-name">{model.name}</div>
 							<div className="insp-id">
-								{model.node.kind}#{model.node.id} · engine fx2
+								{model.node.kind} · {fmtId('node', model.node.id)} · engine fx2
 							</div>
 							<button className="srclink2" onClick={copyNode}>
 								⧉ {copied ? 'copied' : 'copy as markdown'}

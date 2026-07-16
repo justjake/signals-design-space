@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { LogRow } from './viewmodel.ts'
+import { fmtId } from './viewmodel.ts'
 
 /**
  * One event, rendered the same everywhere it's named: a color-coded kind chip,
@@ -17,7 +18,7 @@ export function EventRef({ row, onClick, showName = true }: { row: LogRow; onCli
 		<>
 			<span className={`chip ${row.cls}`}>{row.kind}</span>
 			{showName && row.name !== null ? <span className="lname">{row.name}</span> : null}
-			<span className="eid">#{row.id}</span>
+			<span className="eid">{fmtId('event', row.id)}</span>
 		</>
 	)
 	return onClick ? (

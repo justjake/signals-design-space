@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
-import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
+import { causeRows, fmtDelta, fmtId, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { copyText, logMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
@@ -80,7 +80,7 @@ function NameCell({
 	// one secondary action, so it stops propagation and jumps instead.
 	const cause = row.cause > 0 ? (
 		<button className="causeref" onClick={(e) => { e.stopPropagation(); onCause() }}>
-			⤷#{row.cause}
+			⤷{fmtId('event', row.cause)}
 		</button>
 	) : null
 	const name =
@@ -374,7 +374,7 @@ export function LogView({
 											aria-selected={r.id === selected}
 											onClick={() => setSelected(r.id)}
 										>
-											<td className="id">#{r.id}</td>
+											<td className="id">{fmtId('event', r.id)}</td>
 											<td className="t">
 												{r.time}
 												{r.delta !== null ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : null}
@@ -408,7 +408,7 @@ export function LogView({
 													{collapsed.has(t.row.id) ? '▸' : '▾'}
 												</button>
 											) : null}
-											#{t.row.id}
+											{fmtId('event', t.row.id)}
 											</td>
 											<td className="t">
 												{t.row.time}

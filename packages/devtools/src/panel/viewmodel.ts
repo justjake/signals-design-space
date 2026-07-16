@@ -95,6 +95,15 @@ export function causeRows(backend: Backend, eventId: number): LogRow[] {
 	return backend.causeChain(eventId).map((e) => toRow(backend, e))
 }
 
+/**
+ * Render a numeric id with a one/two-letter namespace prefix so ids from
+ * different spaces can't be mistaken for one another: G = graph node, L = log
+ * event, Su = suspense. Everything monospace, so the prefix aligns.
+ */
+export function fmtId(space: 'node' | 'event' | 'suspense', id: number): string {
+	return `${space === 'node' ? 'G' : space === 'event' ? 'L' : 'Su'}${id}`
+}
+
 /** Compact µs/ms duration, or empty when no duration was recorded. */
 export function fmtTook(us: number | null): string {
 	if (us === null) return ''
