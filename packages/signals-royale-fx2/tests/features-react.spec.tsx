@@ -17,9 +17,12 @@ import {
 import {
 	attachTracer,
 	createComputed,
+	effect,
+	endBatch,
 	nodeOf,
 	read,
 	createAtom,
+	startBatch,
 	update,
 	type Atom,
 } from 'signals-royale-fx2'
@@ -180,7 +183,7 @@ describe('scenario 15 — causality traces', () => {
 		let events = tracer.events()
 		const write = events.find((event) => event.kind === 'set' && event.label === 'key')!
 		const compute = events.find((event) => event.kind === 'compute' && event.label === 'data')!
-		expect(compute.cause).toBe(0)
+		expect(compute.cause).toBe(write.id) // the background recompute chains through the drafted write
 		expect(compute.draftId).toBeUndefined()
 		expect(compute.world).toEqual([write.draftId])
 		const suspended = events.find(
@@ -204,14 +207,15 @@ describe('scenario 15 — causality traces', () => {
 		const ready = events.find(
 			(event) => event.kind === 'retry' && event.cause === settled.id,
 		)!
+		const woken = events.find((event) => event.kind === 'transition-notify')!
 		const rendered = events.find((event) => event.kind === 'render')!
-		const delivery = events.find(
-			(event) => event.kind === 'notify' && event.cause === rendered.id,
-		)!
 		const commit = events.find((event) => event.kind === 'transition-commit')!
 		expect(settled.status).toBe('fulfilled')
 		expect(ready.suspensionId).toBe(suspended.suspensionId)
-		expect(delivery.rootId).toBe(encountered.rootId)
+		expect(woken.cause).toBe(write.id) // the drafted write causes the wake
+		expect(rendered.cause).toBe(woken.id) // the wake causes the transition render
+		expect(rendered.rootId).toBe(encountered.rootId)
+		expect(commit.cause).toBe(write.id) // the commit chains to the transition's write
 		expect(commit.rootId).toBe(encountered.rootId)
 		expect(events.some((event) => event.kind === 'retry-schedule')).toBe(false)
 		expect(events.some((event) => event.kind === 'render-retry')).toBe(false)
@@ -372,13 +376,17 @@ describe('scenario 15 — causality traces', () => {
 		})
 		expect(text(first.container)).toBe('ready')
 		expect(text(second.container)).toBe('ready')
-		const deliveredRoots = new Set<number>()
+		const settled = tracer.events().find((event) => event.kind === 'settle')!
+		const renderedRoots = new Set<number>()
 		for (const event of tracer.events()) {
-			if (event.kind === 'notify' && event.label === 'shared') {
-				deliveredRoots.add(event.rootId!)
+			if (event.kind === 'render' && event.label === 'shared') {
+				// Each root's converging render chains to the settlement that
+				// produced the value, never to another root's render.
+				expect(event.cause).toBe(settled.id)
+				renderedRoots.add(event.rootId!)
 			}
 		}
-		expect(deliveredRoots).toEqual(rootIds)
+		expect(renderedRoots).toEqual(rootIds)
 		expect(
 			tracer.events().some(
 				(event) => event.kind === 'retry' && event.suspensionId === suspensionId,
@@ -420,28 +428,121 @@ describe('scenario 15 — causality traces', () => {
 		second.stop()
 	})
 
-	test('replacing a tracer after render sanitizes the later committed delivery', async () => {
+	test('replacing a tracer between a write and its delivery sanitizes the stale cause', async () => {
 		const value = createAtom(1, { label: 'commit-replacement' })
-		const first = attachTracer()
-		let second: ReturnType<typeof attachTracer> | undefined
 		function App() {
-			const rendered = useValue(value)
-			if (second === undefined) {
-				first.stop()
-				second = attachTracer()
-			}
-			return <span>{rendered}</span>
+			return <span>{useValue(value)}</span>
 		}
 		const mounted = await h.mount(<App />)
-		expect(text(mounted.container)).toBe('1')
-		expect(first.events().some((event) => event.kind === 'render')).toBe(true)
+		const first = attachTracer()
+		let second!: ReturnType<typeof attachTracer>
+		await act(() => {
+			startBatch()
+			try {
+				value.set(2) // recorded by the first tracer; stamps the watcher's cause
+				first.stop()
+				second = attachTracer()
+			} finally {
+				endBatch() // delivery runs here, emitting into the second tracer
+			}
+		})
+		expect(text(mounted.container)).toBe('2')
+		expect(first.events().some((event) => event.kind === 'set')).toBe(true)
 		expect(first.whyLastDelivery(nodeOf(value))).toEqual([
 			'(no delivery recorded for this node)',
 		])
-		const delivery = second!.events().find((event) => event.kind === 'notify')!
-		expect(delivery.cause).toBe(0)
-		expect(second!.whyLastDelivery(nodeOf(value))[0]).toMatch(/notify/)
-		second!.stop()
+		const delivery = second.events().find((event) => event.kind === 'notify')!
+		expect(delivery.cause).toBe(0) // the write belongs to the first session
+		const rendered = second.events().find((event) => event.kind === 'render')!
+		expect(rendered.cause).toBe(delivery.id) // the chain still holds within the session
+		expect(second.whyLastDelivery(nodeOf(value))[0]).toMatch(/notify/)
+		second.stop()
+	})
+
+	test('a base write causes the notify, and the notify causes the render', async () => {
+		const a = createAtom(1, { label: 'count' })
+		function App() {
+			return <span>{useValue(a)}</span>
+		}
+		const { container } = await h.mount(<App />)
+		const tracer = attachTracer()
+		await act(() => {
+			a.set(2)
+		})
+		expect(text(container)).toBe('2')
+		const events = tracer.events()
+		const write = events.find((event) => event.kind === 'set' && event.label === 'count')!
+		const woken = events.find((event) => event.kind === 'notify' && event.label === 'count')!
+		const rendered = events.find((event) => event.kind === 'render' && event.label === 'count')!
+		expect(woken.cause).toBe(write.id) // the state change causes the notify
+		expect(rendered.cause).toBe(woken.id) // the notify causes the render
+		for (const event of events) {
+			if (event.cause !== 0) {
+				expect(event.cause).toBeLessThan(event.id)
+			}
+		}
+		tracer.stop()
+	})
+
+	test('a mount render roots itself: no notify preceded it, and it never cites one', async () => {
+		const tracer = attachTracer()
+		const a = createAtom(5, { label: 'mounted' })
+		function App() {
+			return <span>{useValue(a)}</span>
+		}
+		const { container } = await h.mount(<App />)
+		expect(text(container)).toBe('5')
+		const events = tracer.events()
+		expect(events.some((event) => event.kind === 'notify')).toBe(false)
+		const rendered = events.find((event) => event.kind === 'render' && event.label === 'mounted')!
+		expect(rendered.cause).toBe(0) // nothing woke this render
+		tracer.stop()
+	})
+
+	test('a transition roots at the ambient operation and its whole subtree chains to it', async () => {
+		const trigger = createAtom(0, { label: 'trigger' })
+		const key = createAtom(0, { label: 'key' })
+		function App() {
+			return <span>k:{useValue(key)}</span>
+		}
+		const { container } = await h.mount(<App />)
+		// The handler's run is the operation in flight when the transition
+		// opens — the same seam a devtools adapter uses to attribute a DOM
+		// event — so the transition's subtree roots under the triggering write.
+		const dispose = effect(trigger, (v) => {
+			if (v === 1) {
+				startSignalTransition(() => key.set(1))
+			}
+		})
+		const tracer = attachTracer()
+		await act(() => {
+			trigger.set(1)
+		})
+		expect(text(container)).toBe('k:1')
+		const events = tracer.events()
+		const triggerWrite = events.find(
+			(event) => event.kind === 'set' && event.label === 'trigger',
+		)!
+		const run = events.find((event) => event.kind === 'effect')!
+		expect(run.cause).toBe(triggerWrite.id)
+		const open = events.find((event) => event.kind === 'transition-open')!
+		expect(open.cause).toBe(run.id) // the transition roots at the ambient operation
+		const draftWrite = events.find((event) => event.kind === 'set' && event.label === 'key')!
+		expect(draftWrite.cause).toBe(open.id)
+		expect(draftWrite.draftId).toBe(open.draftId)
+		const woken = events.find((event) => event.kind === 'transition-notify')!
+		expect(woken.cause).toBe(draftWrite.id)
+		const rendered = events.find((event) => event.kind === 'render' && event.label === 'key')!
+		expect(rendered.cause).toBe(woken.id) // the transition render answers the wake
+		const commit = events.find((event) => event.kind === 'transition-commit')!
+		expect(commit.cause).toBe(draftWrite.id)
+		for (const event of events) {
+			if (event.cause !== 0) {
+				expect(event.cause).toBeLessThan(event.id)
+			}
+		}
+		dispose()
+		tracer.stop()
 	})
 })
 

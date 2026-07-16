@@ -57,6 +57,7 @@ import {
 } from '../index.ts'
 import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
+	currentCause,
 	emitEvent,
 	Flag,
 	NO_EVENT,
@@ -88,6 +89,19 @@ interface UseValueState {
 	/** What the hook's most recent render resolved (committed or not). */
 	rendered: RenderedResolution
 	repairPending: boolean
+	/**
+	 * Trace id of the 'notify' whose dispatch the next base-world render
+	 * answers; that render is caused by it and consumes it. NO_EVENT when
+	 * nothing scheduled the render (mount, a parent-driven pass).
+	 */
+	notifyEvent: TraceEventId
+	/**
+	 * Trace id of the latest 'transition-notify' delivered to this hook.
+	 * Draft-world renders chain to it without consuming it: a transition
+	 * re-renders its passes (suspend, rebase, retry) and every pass answers
+	 * the same wake.
+	 */
+	draftNotifyEvent: TraceEventId
 	/** Best-effort React component name that owns this hook, for labeling the
 	 * watcher in the devtools; captured once, only when a tracer is attached. */
 	watcherLabel: string | undefined
@@ -233,6 +247,8 @@ export function useValue<T>(x: Signal<T>): T {
 			delivered: new Set(),
 			rendered: { ids: NO_IDS, value: undefined, live: false },
 			repairPending: false,
+			notifyEvent: NO_EVENT,
+			draftNotifyEvent: NO_EVENT,
 			// Capture the owning component's name once, only when tracing is on.
 			watcherLabel: emitEvent !== null ? renderingComponentName() : undefined,
 			committed: { ids: NO_IDS, value: undefined, live: false },
@@ -256,10 +272,11 @@ export function useValue<T>(x: Signal<T>): T {
 				return
 			}
 			state.delivered.add(id)
-			emitEvent?.('transition-notify', node, cause, {
-				draftId: id,
-				root: connection,
-			})
+			state.draftNotifyEvent =
+				emitEvent?.('transition-notify', node, cause, {
+					draftId: id,
+					root: connection,
+				}) ?? NO_EVENT
 			dispatchDraftWake(id, wake)
 		},
 		[connection, node, state, wake],
@@ -273,21 +290,28 @@ export function useValue<T>(x: Signal<T>): T {
 	// "would the committed tree show anything different if re-rendered
 	// now?". The dispatch inherits the ambient scheduling context —
 	// exactly useState's semantics for the write that caused it.
-	const onNotify = useCallback(() => {
-		// The connection's first-child marker confirms before descendant layout
-		// effects. During that narrow window this render is the one committing,
-		// so compare against it directly; outside it, never trust speculative
-		// render state over the last completed commit.
-		const stash = connection.committing ? state.rendered : state.committed
-		if (!stash.live || state.repairPending) {
-			return
-		}
-		if (!resolutionDiffers(node, stash)) {
-			return
-		}
-		state.repairPending = true
-		wake(REPAIR_WAKE)
-	}, [node, connection, state, wake])
+	const onNotify = useCallback(
+		(cause: TraceEventId) => {
+			// The connection's first-child marker confirms before descendant layout
+			// effects. During that narrow window this render is the one committing,
+			// so compare against it directly; outside it, never trust speculative
+			// render state over the last completed commit.
+			const stash = connection.committing ? state.rendered : state.committed
+			if (!stash.live || state.repairPending) {
+				return
+			}
+			if (!resolutionDiffers(node, stash)) {
+				return
+			}
+			state.repairPending = true
+			// The state change that woke this watcher (the write/settle/fold the
+			// invalidation stamped) causes the notify; the render this dispatch
+			// produces is caused by the notify in turn.
+			state.notifyEvent = emitEvent?.('notify', node, cause, { root: connection }) ?? NO_EVENT
+			wake(REPAIR_WAKE)
+		},
+		[node, connection, state, wake],
+	)
 	// Subscribe in a layout effect so correctSubscription repairs a value
 	// that changed during a time-sliced mount before the frame can paint.
 	useLayoutEffect(() => {
@@ -304,10 +328,24 @@ export function useValue<T>(x: Signal<T>): T {
 	stash.ids = ids
 	stash.value = value
 	stash.live = true
-	const renderEvent =
-		emitEvent?.('render', node, node.causeEvent, {
-			root: connection,
-		}) ?? NO_EVENT
+	if (emitEvent !== null) {
+		// A draft-world render is caused by the transition-notify that woke
+		// this hook; a base-world render consumes and answers the notify that
+		// scheduled it. A render nothing scheduled (mount, a parent-driven
+		// pass) roots at the node's last recorded state change — never at
+		// another render.
+		let renderCause: TraceEventId
+		if (world.drafts.length !== 0) {
+			renderCause = state.draftNotifyEvent
+		} else {
+			renderCause = state.notifyEvent
+			state.notifyEvent = NO_EVENT
+		}
+		if (renderCause === NO_EVENT) {
+			renderCause = node.causeEvent !== NO_EVENT ? node.causeEvent : currentCause
+		}
+		emitEvent('render', node, renderCause, { root: connection })
+	}
 	// Advance the committed stash at commit time. No dependency array: the
 	// effect runs on every commit with that render's resolution, and a
 	// suspended render never reaches it.
@@ -316,7 +354,6 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
-		emitEvent?.('notify', node, renderEvent, { root: connection })
 	})
 	return value as T
 }

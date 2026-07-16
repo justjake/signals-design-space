@@ -217,8 +217,14 @@ export function openDraft(): Draft {
 		cutoffAtGraphChange: alone ? currentGraphChange() : 0,
 		world: { drafts, sig: String(id) },
 		atoms: new Set(),
+		// The transition roots at the operation in flight — the DOM-event
+		// origin a devtools adapter attributed, or the write/effect whose
+		// first drafted write opened it — so the whole causal subtree of the
+		// transition chains back to what the user did.
 		openEvent:
-			emitEvent !== null ? emitEvent('transition-open', null, NO_EVENT, { draftId: id }) : NO_EVENT,
+			emitEvent !== null
+				? emitEvent('transition-open', null, currentCause, { draftId: id })
+				: NO_EVENT,
 		lastWriteEvent: NO_EVENT,
 	}
 	drafts.push(draft)

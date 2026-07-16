@@ -492,10 +492,11 @@ export interface EffectNode extends EvaluatedNode<unknown>, EffectOwner {
 export interface RenderWatcherNode extends ConsumerNode {
 	/**
 	 * Render subscribers: delivery callback, run after sync effects
-	 * settle. The callback decides whether the delivery becomes a
-	 * re-render.
+	 * settle, with this watcher's causeEvent — the state change (write,
+	 * settle, fold) whose invalidation scheduled it. The callback decides
+	 * whether the delivery becomes a re-render.
 	 */
-	onNotify: (() => void) | undefined
+	onNotify: ((cause: TraceEventId) => void) | undefined
 	/**
 	 * Draft-wake callback: receives the id and cause of a transition draft
 	 * whose new write touches this subscriber's sources. Separate from
@@ -1147,7 +1148,12 @@ export function pokeDraftWatchers(
 						if ((w.flags & Flag.StaleMask) === 0) {
 							w.flags |= Flag.StaleCheck
 						}
-						w.causeEvent = cause
+						// A cause-less poke (a root commit with no tracer, a rebase
+						// after an equality no-op) keeps the previous attribution
+						// instead of wiping a pending delivery's cause.
+						if (cause !== NO_EVENT) {
+							w.causeEvent = cause
+						}
 						if (wake !== undefined && w.onDraftWake !== undefined) {
 							;(wakes ??= []).push(w)
 						}
@@ -1155,6 +1161,14 @@ export function pokeDraftWatchers(
 				} else if ((flags & Flag.KindComputed) !== 0) {
 					const subSubs = (sub as ComputedNode<unknown>).subs
 					if (subSubs !== undefined) {
+						// Stamp traversed computeds for tracing: a draft-world
+						// evaluation (the write-time cutoff below, or a transition
+						// render) opens its compute span with causeEvent, so a
+						// background recompute chains through the draft activity
+						// that disturbed it.
+						if (cause !== NO_EVENT) {
+							sub.causeEvent = cause
+						}
 						const subChanged = valueChanged?.(sub as ComputedNode<unknown>) ?? true
 						cur = subSubs
 						if (cur.nextSub !== undefined) {
@@ -1408,7 +1422,7 @@ export function flush(): void {
 				for (let i = 0; i < n; i++) {
 					const w = delivering[i]!
 					if ((w.flags & Flag.Watched) !== 0) {
-						w.onNotify!()
+						w.onNotify!(w.causeEvent)
 					}
 				}
 			} finally {
@@ -2114,7 +2128,7 @@ export function makeScope(fn: () => void): () => void {
  */
 export function observeNode(
 	node: ProducerNode,
-	notify: () => void,
+	notify: (cause: TraceEventId) => void,
 	draftWake?: (id: DraftId, cause: TraceEventId) => void,
 	label?: string,
 ): () => void {
