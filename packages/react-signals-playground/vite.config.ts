@@ -5,6 +5,14 @@ import { defineConfig, type Connect, type Plugin } from 'vite'
 
 const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
 
+// Cross-origin isolation: without it browsers clamp performance.now() to ~1ms,
+// so the devtools' span timings round to 0µs. Isolation raises precision to
+// ~5µs. Every resource here is same-origin, so require-corp is safe.
+const COI_HEADERS = {
+	'Cross-Origin-Opener-Policy': 'same-origin',
+	'Cross-Origin-Embedder-Policy': 'require-corp',
+}
+
 /**
  * Static hosts serve a directory's index.html at both `/dir` and `/dir/`
  * (via a redirect); vite's dev and preview servers 404 the bare form under
@@ -44,6 +52,8 @@ export default defineConfig(({ mode }) => ({
 	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
 	// Disabling the SPA fallback makes an unmapped path 404 instead of
 	// silently serving the cosignals page under the wrong URL.
+	server: { headers: COI_HEADERS },
+	preview: { headers: COI_HEADERS },
 	appType: 'mpa',
 	// concurrent-solid-react's vendored Solid core guards its dev-mode
 	// diagnostics behind the __DEV__ compile-time constant (see that
