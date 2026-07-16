@@ -34,6 +34,12 @@ export const implementations: readonly Implementation[] = [
 		name: 'signals-royale-fx2',
 		load: () => import('./royale-fx2'),
 	},
+	{
+		segment: 'royale-fx2-dalien',
+		label: 'royale-fx2-dalien',
+		name: 'signals-royale-fx2-dalien',
+		load: () => import('./royale-fx2-dalien'),
+	},
 ]
 
 /** The entry URL for an implementation; segments map to directory entries served with a trailing slash. */

@@ -30,6 +30,7 @@ const HOLD_STYLES: Record<string, HoldStyle> = {
 	'alt-b': 'suspense',
 	'solid-react': 'defer-write',
 	'royale-fx2': 'suspense',
+	'royale-fx2-dalien': 'suspense',
 }
 
 export const ENTRIES: readonly BatteryEntry[] = implementations.map((impl) => {

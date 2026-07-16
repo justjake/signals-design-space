@@ -25,7 +25,8 @@
 		"signals-devtools": "workspace:*",
 		"signals-royale-fx2": "workspace:*",
 		"react": "*",
-		"react-dom": "*"
+		"react-dom": "*",
+		"signals-royale-fx2-dalien": "workspace:*"
 	},
 	"devDependencies": {
 		"@playwright/test": "1.61.1",

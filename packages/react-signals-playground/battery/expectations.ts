@@ -38,6 +38,7 @@ const TABLE: Record<string, PerImpl> = {
 	// ambient-W0 branch like alt-a/alt-b.
 	'RCC-RT1.scope-read': {
 		'royale-fx2': { kind: 'variant', variant: 'scope-drafts-hidden' },
+		'royale-fx2-dalien': { kind: 'variant', variant: 'scope-drafts-hidden' },
 	},
 	'RCC-RT4-newest': {
 		cosignals: { kind: 'variant', variant: 'newest' },
@@ -45,6 +46,7 @@ const TABLE: Record<string, PerImpl> = {
 		'alt-b': { kind: 'skip', reason: 'ruled drafts-hidden (ambient-W0)' },
 		'solid-react': { kind: 'skip', reason: 'ruled drafts-hidden (documented in package README)' },
 		'royale-fx2': { kind: 'skip', reason: 'drafts are hidden from outside-render reads' },
+		'royale-fx2-dalien': { kind: 'skip', reason: 'drafts are hidden from outside-render reads' },
 	},
 	'RCC-RT4-drafts-hidden': {
 		cosignals: { kind: 'skip', reason: 'ruled newest (scenario R15)' },
@@ -52,6 +54,7 @@ const TABLE: Record<string, PerImpl> = {
 		'alt-b': { kind: 'variant', variant: 'drafts-hidden' },
 		'solid-react': { kind: 'variant', variant: 'drafts-hidden (ruled; README-documented)' },
 		'royale-fx2': { kind: 'variant', variant: 'drafts-hidden' },
+		'royale-fx2-dalien': { kind: 'variant', variant: 'drafts-hidden' },
 	},
 	// RCC-EF1.count-hold: solid-react's tracked effects previously deferred
 	// urgent-commit runs until an unrelated held transition ended; fixed

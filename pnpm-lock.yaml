@@ -430,6 +430,9 @@ importers:
       signals-royale-fx2:
         specifier: workspace:*
         version: link:../signals-royale-fx2
+      signals-royale-fx2-dalien:
+        specifier: workspace:*
+        version: link:../signals-royale-fx2-dalien
     devDependencies:
       '@playwright/test':
         specifier: 1.61.1

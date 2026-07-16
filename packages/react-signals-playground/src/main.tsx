@@ -21,6 +21,7 @@ if (container === null) {
 // panel on first open. Dynamically imported so default loads — and the
 // battery — never fetch the devtools. ?devtools=1 opens it on load.
 if (location.pathname.includes('royale-fx2')) {
+	const engine = location.pathname.includes('royale-fx2-dalien') ? 'dalien' : 'fx2'
 	const open = new URLSearchParams(location.search).has('devtools')
 	if (open) {
 		// ?devtools: attach the collector before the first render (top-level await),
@@ -29,9 +30,9 @@ if (location.pathname.includes('royale-fx2')) {
 		// tracer is attached. Gated on the flag so the default load and the battery
 		// never pay for tracing.
 		const m = await import('./devtools-button')
-		m.mountDevtoolsButton(true)
+		await m.mountDevtoolsButton(true, engine)
 	} else {
-		void import('./devtools-button').then((m) => m.mountDevtoolsButton(false))
+		void import('./devtools-button').then((m) => m.mountDevtoolsButton(false, engine))
 	}
 }
 

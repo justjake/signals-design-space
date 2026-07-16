@@ -3,6 +3,7 @@
  * isolation, clean registration, and baseline liveness. Everything else in
  * the battery assumes these hold.
  */
+import { ENTRIES } from '../entries'
 import { expect, test } from '../fixtures'
 import { clockTicks, gotoApp, testidText } from '../helpers'
 
@@ -44,11 +45,14 @@ test('META-ISOLATION: only the selected implementation chunk is requested (chunk
 		requested.some((url) => chunkOf(entry.label).test(url)),
 		`no chunk for ${entry.label} in ${requested.filter((u) => /assets|shims/.test(u)).join(', ')}`,
 	).toBe(true)
-	const others = ['cosignals', 'alt-a', 'alt-b', 'solid-react', 'royale-fx2'].filter(
-		(label) => label !== entry.label,
-	)
+	const others = ENTRIES.map((e) => e.label).filter((label) => label !== entry.label)
 	for (const other of others) {
-		const loaded = requested.filter((url) => chunkOf(other).test(url))
+		// Labels can prefix one another (royale-fx2 / royale-fx2-dalien), and a
+		// built chunk is named label-hash, so a prefix label's matcher also hits
+		// the longer label's chunk: discount whatever is this page's own chunk.
+		const loaded = requested.filter(
+			(url) => chunkOf(other).test(url) && !chunkOf(entry.label).test(url),
+		)
 		expect(loaded, `foreign implementation chunk loaded: ${other}`).toEqual([])
 	}
 })

@@ -47,7 +47,7 @@ export default defineConfig(({ mode }) => ({
 		// Publishes the dev server's filesystem root so the fx2 devtools'
 		// stack-trace links open real files without anyone typing a project path.
 		signalsDevtools(),
-		redirectDirEntries(['/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/control']),
+		redirectDirEntries(['/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/royale-fx2-dalien', '/control']),
 	],
 	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
 	// Disabling the SPA fallback makes an unmapped path 404 instead of
@@ -83,6 +83,7 @@ export default defineConfig(({ mode }) => ({
 				'alt-b': entry('alt-b/index.html'),
 				'solid-react': entry('solid-react/index.html'),
 				'royale-fx2': entry('royale-fx2/index.html'),
+				'royale-fx2-dalien': entry('royale-fx2-dalien/index.html'),
 				// The vanilla-React control page (the battery's host-baseline group).
 				control: entry('control/index.html'),
 			},
