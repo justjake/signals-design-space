@@ -403,7 +403,9 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 		expect(draftId).toBeDefined()
 		expect(rootId).toBeDefined()
 		for (const wake of wakesBeforeRender) {
-			expect(wake).toMatchObject({ label: 'burst-computed', draftId, rootId })
+			// The wake is recorded against the subscribing watcher, not the watched
+			// computed — and these watchers mounted before the tracer, so unlabeled.
+			expect(wake).toMatchObject({ draftId, rootId })
 			expect(tracer.find(wake.cause)).toMatchObject({
 				kind: 'set',
 				label: 'burst',
@@ -452,9 +454,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
 			tracer.stop()
 		}
 		expect(text(container)).toBe('s:0;r:0;')
+		// The wake is recorded against the late reader's watcher, not the computed
+		// it watches. Only LateReader mounted under the tracer, so its watcher is
+		// the sole labeled one; the pre-tracer Suspender watcher is unlabeled.
 		const wakes: TraceEvent[] = []
 		for (const event of tracer.events()) {
-			if (event.kind === 'transition-notify' && event.label === 'late-computed') {
+			if (event.kind === 'transition-notify' && event.label !== undefined) {
 				wakes.push(event)
 			}
 		}

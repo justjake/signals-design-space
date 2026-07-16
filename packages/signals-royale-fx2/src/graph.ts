@@ -2167,7 +2167,7 @@ export function observeNode(
 	notify: (cause: TraceEventId) => void,
 	draftWake?: (id: DraftId, cause: TraceEventId) => void,
 	label?: string,
-): () => void {
+): (() => void) & { watcher: RenderWatcherNode } {
 	const sub: RenderWatcherNode = {
 		flags: Flag.Watching | Flag.WatchRender | Flag.Watched,
 		deps: undefined,
@@ -2217,5 +2217,9 @@ export function observeNode(
 		}
 		throw error
 	}
-	return () => disposeWatcher(sub)
+	// The disposer stays the whole return value (most callers just call it); the
+	// watcher node rides along as a property for the render hook, which records
+	// notify/render/transition-notify against it — so those events belong to the
+	// component's subscription, not to the producer it watches.
+	return Object.assign(() => disposeWatcher(sub), { watcher: sub })
 }

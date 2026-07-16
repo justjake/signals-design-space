@@ -472,10 +472,12 @@ describe('scenario 15 — causality traces', () => {
 		expect(text(container)).toBe('2')
 		const events = tracer.events()
 		const write = events.find((event) => event.kind === 'set' && event.label === 'count')!
-		const woken = events.find((event) => event.kind === 'notify' && event.label === 'count')!
-		const rendered = events.find((event) => event.kind === 'render' && event.label === 'count')!
+		// notify/render belong to the watcher (the component's subscription), not
+		// the atom it reads — so they never carry the atom's 'count' label.
+		const woken = events.find((event) => event.kind === 'notify')!
+		expect(woken.label).not.toBe('count') // recorded against the watcher, not the atom
 		expect(woken.cause).toBe(write.id) // the state change causes the notify
-		expect(rendered.cause).toBe(woken.id) // the notify causes the render
+		expect(events.some((event) => event.kind === 'render' && event.cause === woken.id)).toBe(true) // and the notify causes a render
 		for (const event of events) {
 			if (event.cause !== 0) {
 				expect(event.cause).toBeLessThan(event.id)
@@ -532,8 +534,8 @@ describe('scenario 15 — causality traces', () => {
 		expect(draftWrite.draftId).toBe(open.draftId)
 		const woken = events.find((event) => event.kind === 'transition-notify')!
 		expect(woken.cause).toBe(draftWrite.id)
-		const rendered = events.find((event) => event.kind === 'render' && event.label === 'key')!
-		expect(rendered.cause).toBe(woken.id) // the transition render answers the wake
+		// The transition render answers the wake; it's on the watcher, not 'key'.
+		expect(events.some((event) => event.kind === 'render' && event.cause === woken.id)).toBe(true)
 		const commit = events.find((event) => event.kind === 'transition-commit')!
 		expect(commit.cause).toBe(draftWrite.id)
 		for (const event of events) {
