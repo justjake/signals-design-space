@@ -69,11 +69,9 @@ function Guides({ guides }: { guides: Guide[] }) {
 
 function NameCell({
 	row,
-	guides,
 	onCause,
 }: {
 	row: LogRow
-	guides: Guide[] | null
 	onCause: () => void
 }) {
 	// The whole row selects (the <tr> handles the click); the cause ref is the
@@ -92,23 +90,10 @@ function NameCell({
 				{row.node !== null ? <span className="nid">{fmtId('node', row.node)}</span> : null}
 			</>
 		)
-	if (guides === null) {
-		return (
-			<td className="name">
-				{name}
-				{cause}
-			</td>
-		)
-	}
 	return (
 		<td className="name">
-			<div className="kcell">
-				<Guides guides={guides} />
-				<span className="ntext">
-					{name}
-					{cause}
-				</span>
-			</div>
+			{name}
+			{cause}
 		</td>
 	)
 }
@@ -389,7 +374,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
 											</td>
-											<NameCell row={r} guides={null} onCause={() => setSelected(r.cause)} />
+											<NameCell row={r} onCause={() => setSelected(r.cause)} />
 											<td className="data">{r.summary}</td>
 											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
@@ -403,19 +388,24 @@ export function LogView({
 											onClick={() => setSelected(t.row.id)}
 										>
 											<td className="id">
-												{t.children > 0 ? (
-												<button
-													className="caret"
-													aria-label={collapsed.has(t.row.id) ? 'Expand' : 'Collapse'}
-													onClick={(e) => {
-														e.stopPropagation()
-														toggleCollapsed(t.row.id)
-													}}
-												>
-													{collapsed.has(t.row.id) ? '▸' : '▾'}
-												</button>
-											) : null}
-											{fmtId('event', t.row.id)}
+												<span className="treecell">
+													<Guides guides={t.guides} />
+													{t.children > 0 ? (
+														<button
+															className="caret"
+															aria-label={collapsed.has(t.row.id) ? 'Expand' : 'Collapse'}
+															onClick={(e) => {
+																e.stopPropagation()
+																toggleCollapsed(t.row.id)
+															}}
+														>
+															{collapsed.has(t.row.id) ? '▸' : '▾'}
+														</button>
+													) : (
+														<span className="caret-spacer" />
+													)}
+													<span className="lid">{fmtId('event', t.row.id)}</span>
+												</span>
 											</td>
 											<td className="t">
 												{t.row.time}
@@ -424,7 +414,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
 											</td>
-											<NameCell row={t.row} guides={t.depth === 0 ? null : t.guides} onCause={() => setSelected(t.row.cause)} />
+											<NameCell row={t.row} onCause={() => setSelected(t.row.cause)} />
 											<td className="data">{t.row.summary}</td>
 											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>

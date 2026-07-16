@@ -142,6 +142,15 @@ export const PANEL_CSS = `
   .op-title .tw { color: var(--faint); font-weight: 400; }
   .caret { color: var(--muted); width: 16px; font-size: 13px; line-height: 1; display: inline-block; text-align: center; padding: 0; cursor: pointer; }
   .caret:hover { color: var(--text); }
+  /* tree mode: the causal tree lives in the leading id column — a gutter of
+     connector lines (one per ancestor level), then the caret and the L{id}.
+     Nesting reads from the left edge; the id column grows with depth while the
+     when/kind/name/took columns stay aligned so their values still scan. */
+  .log.tree .id { width: auto; white-space: nowrap; vertical-align: stretch; }
+  .treecell { display: flex; align-items: stretch; min-height: 18px; }
+  .treecell .caret, .treecell .caret-spacer { flex: none; align-self: center; }
+  .caret-spacer { display: inline-block; width: 16px; }
+  .treecell .lid { align-self: center; margin-left: 1px; }
   tr.selected td { background: color-mix(in srgb, var(--thread) 8%, var(--bg)) !important; }
   tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
   tr.endrow td { color: var(--faint); }
@@ -356,8 +365,10 @@ export const PANEL_CSS = `
      reachable rather than the row clipping them off the right edge. */
   .chrome .rec { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .toolbar, .controls { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
-  .toolbar .kind-filters, .controls .kind-filters, .kchip, .search, .crumbs { flex: none; }
+  .toolbar > *, .controls > * { flex: none; }
+  .toolbar .spacer, .controls .spacer { flex: 1 1 0; min-width: 0; }
   .crumbs { overflow-x: auto; white-space: nowrap; }
+  .crumbs > * { flex: none; }
 
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
