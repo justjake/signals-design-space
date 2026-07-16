@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Backend, EventId, KindClass, NodeId } from '../protocol.ts'
 import { causedTree, causeRows, fmtDelta, fmtId, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
-import { copyText, logMarkdown } from './markdown.ts'
+import { causalityMarkdown, copyText, logMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
 import { StackTrace } from './StackTrace.tsx'
 
@@ -135,6 +135,7 @@ export function LogView({
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
 	const [copied, setCopied] = useState(false)
+	const [czCopied, setCzCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
 	// Timeline brush: [t0, t1] in µs, or undefined for the full window.
 	const [brush, setBrush] = useState<[number, number] | undefined>(undefined)
@@ -511,7 +512,22 @@ export function LogView({
 				{sel !== undefined ? (
 					<aside className="causality" aria-label="Caused by" style={{ width: czW }}>
 						<div className="cz-head">
-							<div className="cz-kicker">Selected entry</div>
+							<div className="cz-kicker">
+								Selected entry
+								<button
+									className="srclink2"
+									style={{ float: 'right' }}
+									data-tip="Copy this event's cause chain and consequences as markdown — paste into a chat to explain why it happened."
+									onClick={() => {
+										void copyText(causalityMarkdown(spine, caused)).then((ok) => {
+											setCzCopied(ok)
+											if (ok) setTimeout(() => setCzCopied(false), 1200)
+										})
+									}}
+								>
+									⧉ {czCopied ? 'copied' : 'copy'}
+								</button>
+							</div>
 							<div className="cz-title">
 								<EventRef row={sel} />
 							</div>

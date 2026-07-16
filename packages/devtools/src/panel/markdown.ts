@@ -6,7 +6,7 @@
  * Everything here comes from real recorded data; nothing is fabricated.
  */
 import type { Backend, NodeId } from '../protocol.ts'
-import { inspectorModel, type LogRow } from './viewmodel.ts'
+import { inspectorModel, type LogRow, type TreeRow } from './viewmodel.ts'
 
 /** A node's identity, value, edges, and why-it-last-ran chain, as markdown. */
 export function nodeMarkdown(backend: Backend, id: NodeId): string {
@@ -44,6 +44,22 @@ export function logMarkdown(rows: LogRow[]): string {
 		const cause = r.cause > 0 ? ` ⤷#${r.cause}` : ''
 		const summary = r.summary ? ` — ${r.summary}` : ''
 		lines.push(`- #${r.id} \`${r.kind}\` **${name}** (${when})${cause}${summary}`)
+	}
+	return lines.join('\n')
+}
+
+/** One selected event's causal chain and consequences, as agent-ready markdown —
+ * "why did this happen, and what did it cause". `spine` is root-first; `caused`
+ * is the consequence tree (depth ≥ 1). */
+export function causalityMarkdown(spine: LogRow[], caused: TreeRow[]): string {
+	const line = (r: LogRow, indent = 0) =>
+		`${'  '.repeat(indent)}- #${r.id} \`${r.kind}\`${r.name != null ? ` **${r.name}**` : ''}${r.summary ? ` — ${r.summary}` : ''}`
+	const lines: string[] = ['## Why this happened', '']
+	if (spine.length === 0) lines.push('- (no recorded cause)')
+	for (const r of spine) lines.push(line(r))
+	if (caused.length > 0) {
+		lines.push('', '## What it caused', '')
+		for (const t of caused) lines.push(line(t.row, Math.max(0, t.depth - 1)))
 	}
 	return lines.join('\n')
 }
