@@ -306,10 +306,10 @@ export function GraphView({
 						<table>
 							<thead>
 								<tr>
-									<th>name</th>
-									<th>kind</th>
-									<th>value</th>
-									<th>last event</th>
+									<th data-tip="The node's label, or kind#id when it has none.">name</th>
+									<th data-tip="atom · computed · watcher · effect.">kind</th>
+									<th data-tip="Current value preview — or the error / pending reason when the node isn't ok.">value</th>
+									<th data-tip="The node's most recent recorded event.">last event</th>
 									{metricsOn
 										? METRIC_COLS.map((c) => (
 												<th
@@ -643,14 +643,22 @@ export function GraphView({
 						{inspStack !== undefined ? <StackTrace frames={inspStack} /> : undefined}
 						<div className="insp-section">
 							<h3>
-								Upstream <span className="win">{model.depsTotal} direct</span>
+								Upstream{' '}
+								<span className="win">
+									{model.depsTotal} direct
+									{model.depsTransitive > model.depsTotal ? ` · ${model.depsTransitive.toLocaleString()} transitive` : ''}
+								</span>
 							</h3>
 							<NeighborList items={model.deps} onPick={pick} />
 						</div>
 
 						<div className="insp-section">
 							<h3>
-								Downstream <span className="win">{model.subsTotal} direct</span>
+								Downstream{' '}
+								<span className="win">
+									{model.subsTotal} direct
+									{model.subsTransitive > model.subsTotal ? ` · ${model.subsTransitive.toLocaleString()} transitive` : ''}
+								</span>
 							</h3>
 							<NeighborList items={model.subs} onPick={pick} />
 						</div>

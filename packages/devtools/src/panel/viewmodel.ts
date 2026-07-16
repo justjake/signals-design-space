@@ -296,10 +296,33 @@ export interface InspectorModel {
 	subs: NeighborRef[]
 	depsTotal: number
 	subsTotal: number
+	/** Size of the transitive dependency / subscriber closure (bounded), so the
+	 * inspector can show "N direct · M transitive". */
+	depsTransitive: number
+	subsTransitive: number
 	/** Cause chain of the node's most recent entry, root first. */
 	why: LogRow[]
 	/** The node's most recent entry, or undefined if it has none in the window. */
 	last: LogRow | undefined
+}
+
+/**
+ * Size of the transitive dep/sub closure reachable from `seeds`, bounded by
+ * `cap` so a huge graph can't stall the inspector (the count reads as "cap+"
+ * when it saturates). Iterative to avoid deep recursion on long chains.
+ */
+function transitiveCount(backend: Backend, seeds: NodeId[], dir: 'deps' | 'subs', cap = 2000): number {
+	const seen = new Set<NodeId>()
+	const stack = [...seeds]
+	while (stack.length > 0 && seen.size < cap) {
+		const next = stack.pop()!
+		if (seen.has(next)) continue
+		seen.add(next)
+		const n = backend.node(next)
+		if (n === undefined) continue
+		for (const nb of dir === 'deps' ? n.deps : n.subs) if (!seen.has(nb)) stack.push(nb)
+	}
+	return seen.size
 }
 
 export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | undefined {
@@ -315,6 +338,8 @@ export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | u
 		subs: neighbors(backend, node.subs),
 		depsTotal: node.deps.length,
 		subsTotal: node.subs.length,
+		depsTransitive: transitiveCount(backend, node.deps, 'deps'),
+		subsTransitive: transitiveCount(backend, node.subs, 'subs'),
 		why,
 		last: lastEvent ? toRow(backend, lastEvent) : undefined,
 	}
