@@ -15,6 +15,7 @@ import {
 	type NodeDetails,
 	type NodeKind,
 	type NodeStatus,
+	type StackFrame,
 } from '../protocol.ts'
 
 /** A log-table row: verbatim kind + its color class + the node's display name. */
@@ -37,6 +38,8 @@ export interface LogRow {
 	time: string
 	/** µs since the previous entry in the stream; null for the first. */
 	delta: number | null
+	/** App stack captured at an operation root; null otherwise. */
+	stack: StackFrame[] | null
 }
 
 function nodeName(backend: Backend, id: number | null): string | null {
@@ -75,6 +78,7 @@ function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
 		took: typeof e.data.took === 'number' ? e.data.took : null,
 		time: formatClock(e.wall),
 		delta: null,
+		stack: Array.isArray(e.data.stack) ? (e.data.stack as StackFrame[]) : null,
 	}
 }
 

@@ -3,6 +3,7 @@ import type { Backend, KindClass } from '../protocol.ts'
 import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { copyText, logMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
+import { StackTrace } from './StackTrace.tsx'
 
 const LIMIT = 1000
 
@@ -228,6 +229,8 @@ export function LogView({
 	const opEntries = sel === null ? 0 : ops.get(rootOf(sel.id))?.count ?? 1
 	// Entries this one directly caused (children), from the visible window.
 	const children = sel === null ? [] : base.filter((r) => r.cause === sel.id)
+	// The app stack captured at the operation root (the first chain entry with one).
+	const opStack = spine.find((e) => e.stack !== null)?.stack ?? null
 
 	const copy = () => {
 		void copyText(logMarkdown(rows)).then((ok) => {
@@ -471,6 +474,7 @@ export function LogView({
 								))}
 							</ol>
 						</div>
+						{opStack !== null ? <StackTrace frames={opStack} /> : null}
 						{children.length > 0 ? (
 							<div className="cz-section">
 								<h3 data-tip="Entries this one directly caused (its children in the causal tree).">What this caused · {children.length}</h3>

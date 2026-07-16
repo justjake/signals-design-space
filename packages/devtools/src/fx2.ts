@@ -24,7 +24,7 @@ import {
 	type TraceFields,
 } from 'signals-royale-fx2/debug'
 import { Collector, type NodeProvider } from './collector.ts'
-import type { NodeKind, NodeStatus } from './protocol.ts'
+import type { NodeKind, NodeStatus, StackFrame } from './protocol.ts'
 
 const PREVIEW_MAX = 60
 
@@ -75,6 +75,24 @@ function deepPreview(v: unknown, depth: number): string {
 	const rows = keys.slice(0, 6).map((k) => `  ${k}: ${indent(deepPreview((v as Record<string, unknown>)[k], depth - 1))},`)
 	if (keys.length > 6) rows.push(`  … ${keys.length - 6} more`)
 	return `{\n${rows.join('\n')}\n}`
+}
+
+/** Capture the current JS stack, keeping the app's own frames (engine,
+ * adapter, framework, and node_modules frames are dropped) so an operation
+ * root can be traced back to the code that triggered it. */
+function captureStack(): StackFrame[] {
+	const raw = new Error().stack
+	if (raw == null) return []
+	const out: StackFrame[] = []
+	for (const line of raw.split('\n')) {
+		const m = line.match(/at (?:(.*?) \()?(.*?):(\d+):(\d+)\)?\s*$/)
+		if (m === null) continue
+		const file = m[2]
+		if (/node_modules|signals-devtools|signals-royale-fx2|\/react-dom|\/react-jsx|\breact\.development\b/.test(file)) continue
+		out.push({ fn: m[1] || '<anonymous>', file, line: Number(m[3]), col: Number(m[4]) })
+		if (out.length >= 12) break
+	}
+	return out
 }
 
 /** Short label for the DOM event behind an operation: "click button#submit". */
@@ -207,10 +225,13 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 				data.next = next
 				lastValue.set(nodeIdNum, next)
 			}
-			// A root write with no engine cause is the start of an operation;
-			// attribute it to the DOM event being dispatched, so the causal chain
-			// begins at the user input. One origin per event, shared by its writes.
+			// A root write with no engine cause is the start of an operation:
+			// capture the app stack that led here, and attribute it to the DOM
+			// event being dispatched so the causal chain begins at the user input.
+			// One origin per event, shared by its writes.
 			if (parent === 0) {
+				const stack = captureStack()
+				if (stack.length > 0) data.stack = stack
 				const ev = (globalThis as { event?: Event }).event
 				if (ev != null && typeof ev.type === 'string') {
 					const key = `${ev.type}@${ev.timeStamp}`

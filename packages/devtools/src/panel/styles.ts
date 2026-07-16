@@ -276,6 +276,16 @@ export const PANEL_CSS = `
   .impact-card { margin-top: 8px; font: 11px/1.7 var(--mono); color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; }
   .impact-card b { color: var(--text); font-weight: 500; }
 
+  /* stack trace */
+  .stack { list-style: none; margin: 0; padding: 0; font: 10.5px var(--mono); }
+  .stack li { display: flex; gap: 10px; padding: 2px 0; white-space: nowrap; }
+  .stack .fn { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .stack .loc { color: var(--faint); flex: none; margin-left: auto; }
+  .stack a.srclink { flex: none; margin-left: auto; }
+  .stack-editor { margin-top: 8px; font: 10.5px var(--mono); color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .stack-editor select, .stack-root { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: 10.5px var(--mono); padding: 2px 5px; }
+  .stack-root { flex: 1; min-width: 0; }
+
   /* spine (shared causal thread motif) */
   .spine { list-style: none; margin: 0; padding: 0; position: relative; }
   .spine::before { content: ""; position: absolute; left: 7px; top: 10px; bottom: 10px; width: 2px; background: linear-gradient(var(--thread), color-mix(in srgb, var(--thread) 70%, transparent)); box-shadow: 0 0 6px color-mix(in srgb, var(--thread) 40%, transparent); border-radius: 1px; }

@@ -27,6 +27,15 @@ export type KindClass =
 export type NodeKind = 'atom' | 'computed' | 'watcher' | 'effect'
 export type NodeStatus = 'ok' | 'suspended' | 'error'
 
+/** One parsed frame of a captured JS stack (app frames only). */
+export interface StackFrame {
+	fn: string
+	/** Source location as the runtime reported it (a URL in the browser). */
+	file: string
+	line: number
+	col: number
+}
+
 /**
  * A graph node as the panel sees it. `id` is adapter-scoped; pair with the
  * engine id for global uniqueness.

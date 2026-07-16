@@ -4,6 +4,7 @@ import { causeRows, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
+import { StackTrace } from './StackTrace.tsx'
 import { useFlashOnChange } from './useFlash.ts'
 
 const NODE_H = 40
@@ -79,10 +80,9 @@ export function GraphView({
 	const [nodeListH, setNodeListH] = useState(168)
 	const [drawerH, setDrawerH] = useState(200)
 	const [inspectorW, setInspectorW] = useState(320)
-	// Selection (inspected + highlighted) is separate from focus (what the
-	// canvas lays out around): a single click selects without moving anything;
-	// a double-click re-focuses and relayouts. So clicking a node never shifts
-	// the picture.
+	// Selection (inspected + highlighted) is separate from focus (what the canvas
+	// lays out around): clicking a node that's already shown just inspects it in
+	// place (no relayout, no shift); clicking one that's off-canvas re-centers.
 	const [selected, setSelected] = useState<number | null>(null)
 	// A specific event picked from the drawer to inspect in the sidebar; null
 	// falls back to the node's most recent event.
@@ -137,6 +137,7 @@ export function GraphView({
 	// The "why this ran" chain shown in the inspector: a drawer-picked event if
 	// there is one, else the node's most recent event.
 	const whyChain = eventSel !== null ? causeRows(backend, eventSel) : (model?.why ?? [])
+	const inspStack = whyChain.find((e) => e.stack !== null)?.stack ?? null
 
 	// Flash a node or row only when its last event actually advances — never on
 	// reveal, relayout, or selection.
@@ -527,6 +528,7 @@ export function GraphView({
 							)}
 						</div>
 
+						{inspStack !== null ? <StackTrace frames={inspStack} /> : null}
 						<div className="insp-section">
 							<h3>
 								Upstream <span className="win">{model.depsTotal} direct</span>
