@@ -34,6 +34,24 @@ function loadState(): Partial<Persisted> {
 	}
 }
 
+// Launcher chrome, injected inline (the panel's stylesheet is lazy). On-brand
+// with the panel: base16 surface, mono, a glowing status dot (gold when closed,
+// red when recording/open).
+const LAUNCH_CSS = `
+@keyframes signals-devtools-launchpulse { 50% { opacity: .4; } }
+.signals-devtools-launch {
+  position: fixed; z-index: 2147483001; display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 14px; border-radius: 8px; box-sizing: border-box;
+  font: 600 12px "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .02em;
+  color: #d4d3cf; background: #202020; border: 1px solid #383836;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45); touch-action: none; cursor: pointer;
+  transition: border-color .15s, color .15s, box-shadow .15s;
+}
+.signals-devtools-launch:hover { color: #f0efed; border-color: #7d7a75; box-shadow: 0 6px 22px rgba(0,0,0,.55); }
+.signals-devtools-launch .dot { width: 8px; height: 8px; border-radius: 50%; background: #eac26b; box-shadow: 0 0 8px #eac26b; animation: signals-devtools-launchpulse 1.8s ease-in-out infinite; flex: none; }
+.signals-devtools-launch.open .dot { background: #e97366; box-shadow: 0 0 8px #e97366; }
+`
+
 export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
 const BTN_W = 140
 const BTN_H = 30
@@ -79,7 +97,7 @@ export function DevtoolsPanelButton({
 	backend,
 	defaultCorner = 'bottom-right',
 	defaultOpen = false,
-	label = '⚙ signals',
+	label = 'signals',
 }: {
 	backend: Backend
 	defaultCorner?: Corner
@@ -101,6 +119,16 @@ export function DevtoolsPanelButton({
 		}
 	}, [open, dock, size, pos])
 
+	// Inject the launcher's stylesheet once (the panel's own CSS is lazy).
+	useEffect(() => {
+		const id = 'signals-devtools-launch-css'
+		if (document.getElementById(id) !== null) return
+		const el = document.createElement('style')
+		el.id = id
+		el.textContent = LAUNCH_CSS
+		document.head.appendChild(el)
+	}, [])
+
 	const overlay =
 		dock === 'right'
 			? { top: 0, right: 0, height: '100vh', width: size }
@@ -109,6 +137,7 @@ export function DevtoolsPanelButton({
 	return (
 		<>
 			<button
+				className={`signals-devtools-launch${open ? ' open' : ''}`}
 				aria-label="Toggle signals devtools"
 				onPointerDown={(e) => {
 					drag.current = { gx: e.clientX - pos.x, gy: e.clientY - pos.y, moved: false }
@@ -126,24 +155,10 @@ export function DevtoolsPanelButton({
 					e.currentTarget.releasePointerCapture(e.pointerId)
 					if (d !== null && !d.moved) setOpen((o) => !o)
 				}}
-				style={{
-					position: 'fixed',
-					left: pos.x,
-					top: pos.y,
-					width: BTN_W,
-					height: BTN_H,
-					zIndex: 2147483001,
-					padding: '0 12px',
-					font: '12px system-ui, sans-serif',
-					background: '#1c2028',
-					color: '#d6dbe4',
-					border: '1px solid #2b313d',
-					borderRadius: 6,
-					cursor: drag.current?.moved ? 'grabbing' : 'pointer',
-					touchAction: 'none',
-				}}
+				style={{ left: pos.x, top: pos.y, width: BTN_W, cursor: drag.current?.moved ? 'grabbing' : 'pointer' }}
 			>
-				{open ? '✕ signals' : label}
+				<span className="dot" />
+				{label}
 			</button>
 
 			{open ? (
