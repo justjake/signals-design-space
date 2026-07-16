@@ -2120,13 +2120,6 @@ function createGraphCore(
 	}
 
 	function recompute(node: DerivedNode<unknown>): void {
-		// A watcher disposed between its scheduling or validation and this
-		// call: its record is already reclaimed (possibly reused), so no
-		// record read below can be trusted and a dead compute must not run.
-		// The handle-owned mark is checked before any record access.
-		if ((node as Partial<EffectNode>).disposed === true) {
-			return
-		}
 		const mem = M
 		const clocks = graphClocks
 		const id = ensureNodeRecord(node)
@@ -2222,41 +2215,59 @@ function createGraphCore(
 	 * question is one reading compare against that single dependency, and
 	 * when the dependency is itself a single-dep possibly-stale derived, the
 	 * same holds one level down. So: walk DOWN the sole dependency edges
-	 * while that shape holds, recording the path in a reusable scratch
-	 * array; stop at the first node with nothing below to resolve (a cell,
-	 * or a Clean derived — compare-ready) or at a definitely-stale derived
-	 * (recompute it), or freshen generically where the deps branch; then
-	 * resolve UPWARD through the recorded path — per level, one
-	 * changedAt/validAt reading compare decides recompute vs
+	 * while that shape holds, recording the path of record ids in a
+	 * persistent integer scratch; stop at the first node with nothing below
+	 * to resolve (a cell, or a Clean derived — compare-ready) or at a
+	 * definitely-stale derived (recompute it), or freshen generically where
+	 * the deps branch; then resolve UPWARD through the recorded path — per
+	 * level, one changedAt/validAt reading compare decides recompute vs
 	 * clear-and-stamp, exactly what ensureFresh's loop would do for that
-	 * node, without its call frames. Recompute can run user code that
-	 * re-enters this function, so the scratch is segmented by a depth base,
-	 * exactly like nested call frames; consumed slots are cleared so the
-	 * scratch never retains nodes.
+	 * node, without its call frames. Ids, not handles: the climb's compares
+	 * are integer loads, a pinned handle resolves only on the levels that
+	 * actually recompute, and the consumed scratch retains nothing.
 	 *
-	 * Interior nodes need no Watched test: the start is watched, and a
-	 * watched node's dependency closure is watched (promote installs it) —
-	 * which also keeps every interior handle pinned (its unique subscriber
-	 * edge holds the pin).
+	 * Recompute can run user code that re-enters this function, so the
+	 * scratch is segmented by a depth base, exactly like nested call frames
+	 * — and every nested call may replace the (growable) scratch array, so
+	 * the local view refreshes after each one.
+	 *
+	 * Interior nodes need no Watched test and no liveness test: the start
+	 * is watched, a watched node's dependency closure is watched (promote
+	 * installs it), interiors are deriveds — which cannot be disposed — and
+	 * their subscriber edges keep them pinned. Only the START can die
+	 * mid-resolve (a lower recompute may run user code that disposes it, an
+	 * effect); its final pop re-checks pin identity before touching the
+	 * record.
 	 */
-	const chainNodes: Array<DerivedNode<unknown> | undefined> = []
+	let chainStack = new Int32Array(256)
 	let chainDepth = 0
+
+	function growChainStack(): Int32Array<ArrayBuffer> {
+		const bigger = new Int32Array(chainStack.length * 2)
+		bigger.set(chainStack)
+		chainStack = bigger
+		return bigger
+	}
 
 	function chainResolve(start: DerivedNode<unknown>): boolean {
 		const mem = M
 		const clocks = graphClocks
 		const pins = pinnedInternals
-		let node = start
-		let link = mem[node.id + NodeSlot.Deps]
+		let node = start.id
+		let link = mem[node + NodeSlot.Deps]
 		if (link === 0 || mem[link + LinkSlot.LinkNextDep] !== 0) {
 			return false
 		}
 		const base = chainDepth
+		let stack = chainStack
 		let depth = base
 		let dep = 0
 		try {
 			while (true) {
-				chainNodes[depth++] = node
+				if (depth === stack.length) {
+					stack = growChainStack()
+				}
+				stack[depth++] = node
 				dep = mem[link + LinkSlot.LinkDep]
 				const dflags = mem[dep + NodeSlot.Flags]
 				if (
@@ -2265,6 +2276,7 @@ function createGraphCore(
 				) {
 					chainDepth = depth
 					recompute(pins[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
+					stack = chainStack
 					break
 				}
 				if (
@@ -2279,46 +2291,55 @@ function createGraphCore(
 					// climb the recorded path above it.
 					chainDepth = depth
 					ensureFresh(pins[dep >> RECORD_SHIFT] as DerivedNode<unknown>)
+					stack = chainStack
 					break
 				}
-				node = pins[dep >> RECORD_SHIFT] as DerivedNode<unknown>
+				node = dep
 				link = next
 			}
 			do {
-				node = chainNodes[--depth]!
-				chainNodes[depth] = undefined
-				const id = node.id
-				if (depth === base && (node as Partial<EffectNode>).disposed === true) {
-					// The start effect was disposed by a recompute below it; its
-					// record is already reclaimed (possibly reused) and must not
-					// be stamped. Interior nodes are deriveds and cannot be
-					// disposed, so only the final pop needs the mark.
-					break
+				const id = stack[--depth]
+				if (depth === base && pins[id >> RECORD_SHIFT] !== start) {
+					// The start was disposed by a recompute below it; its record
+					// is already reclaimed (possibly reused) and must not be
+					// touched. The caller's generic path owns whatever remains.
+					return false
 				}
 				if (
 					clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
 					validAtColumn[id >> RECORD_SHIFT]
 				) {
-					chainDepth = depth
-					recompute(node)
+					if (depth === base) {
+						chainDepth = depth
+						recompute(start)
+					} else {
+						const handle = pins[id >> RECORD_SHIFT] as DerivedNode<unknown> | undefined
+						if (handle === undefined) {
+							// Restructured by re-entrant user code below (a start
+							// dispose or a branch switch freed this level's last
+							// inbound link). Everything resolved so far stays
+							// resolved; the caller's generic path — whose frames
+							// hold handles — finishes the rest.
+							return false
+						}
+						chainDepth = depth
+						recompute(handle)
+						stack = chainStack
+					}
 				} else {
 					mem[id + NodeSlot.Flags] &= ~Flag.StaleMask
 					validAtColumn[id >> RECORD_SHIFT] = graphChangeClock
 				}
 				dep = id
 			} while (depth !== base)
-			chainDepth = base
 			return true
 		} finally {
-			while (depth !== base) {
-				chainNodes[--depth] = undefined
-			}
 			chainDepth = base
 		}
 	}
 
 	/** Bring a derived up to date; exact recompute counts are the contract. */
-	function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags): void {
+	function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags, depth = 0): void {
 		const mem = M
 		const clocks = graphClocks
 		const pins = pinnedInternals
@@ -2329,7 +2350,16 @@ function createGraphCore(
 			if ((flags & Flag.StaleMask) === 0) {
 				return
 			}
-			if ((flags & Flag.StaleDirty) === 0 && node.value !== UNINITIALIZED && chainResolve(node)) {
+			// Shallow validation stays on this function's own frames (one
+			// reading compare per level, handles held by the recursion);
+			// chainResolve absorbs only the deep tail, iteratively, so a
+			// 150k-node chain costs 16 frames plus one descent-and-climb.
+			if (
+				depth === 16 &&
+				(flags & Flag.StaleDirty) === 0 &&
+				node.value !== UNINITIALIZED &&
+				chainResolve(node)
+			) {
 				return
 			}
 		} else if ((flags & Flag.StaleMask) === 0 && validAtOf(id) === graphChangeClock) {
@@ -2355,19 +2385,29 @@ function createGraphCore(
 				(dflags & Flag.KindDerived) !== 0 &&
 				(dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
 			) {
-				ensureFresh(pins[depId >> RECORD_SHIFT] as DerivedNode<unknown>, dflags)
+				ensureFresh(
+					pins[depId >> RECORD_SHIFT] as DerivedNode<unknown>,
+					dflags,
+					depth === 16 ? 0 : depth + 1,
+				)
 			}
 			if (clocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {
+				// An effect can have been disposed by the dep freshening above
+				// (a computed body may call its disposer); its record is
+				// already reclaimed — possibly reused — and a dead compute
+				// must not run. The entry flags predate any user code, so
+				// Watching reliably gates the pin check to watchers, whose
+				// liveness pin identity owns.
+				if ((flags & Flag.Watching) !== 0 && pins[id >> RECORD_SHIFT] !== node) {
+					return
+				}
 				recompute(node)
 				return
 			}
 		}
-		// A validated effect can have been disposed by the dep freshening
-		// above (a computed body may call its disposer); its record is
-		// already reclaimed — possibly reused — and must not be stamped. The
-		// entry flags predate any user code, so Watching reliably gates the
-		// handle-mark load to watchers.
-		if ((flags & Flag.Watching) !== 0 && (node as Partial<EffectNode>).disposed === true) {
+		// The same dispose window guards the validation stamp: a reclaimed
+		// (possibly reused) record must not have its marks cleared.
+		if ((flags & Flag.Watching) !== 0 && pins[id >> RECORD_SHIFT] !== node) {
 			return
 		}
 		setFlags(node, flagsOf(node) & ~Flag.StaleMask)
@@ -2758,6 +2798,67 @@ function createGraphCore(
 	}
 
 	/**
+	 * Watcher handles are class expressions extending ReactiveNode: the
+	 * constructor assigns every handle-owned field (a single stable shape,
+	 * which V8 allocates like a literal after warmup — measured faster here
+	 * than Object.create plus incremental stores), and the prototype
+	 * supplies the record-backed getters (flags, deps, observerCount, …).
+	 */
+	const EffectHandle = class extends ReactiveNode implements EffectNode {
+		declare value: unknown
+		declare fn: (use: UseFn, previous: unknown) => unknown
+		declare equals: EqualsFn<unknown>
+		declare handler: (value: unknown, previous: unknown) => void | (() => void)
+		declare lastHandled: unknown
+		declare lane: Lane
+		declare cleanup: (() => void) | undefined
+		declare children: EffectNode[] | undefined
+		declare disposed: boolean
+		constructor(
+			fn: (use: UseFn, previous: unknown) => unknown,
+			handler: (value: unknown, previous: unknown) => void | (() => void),
+			lane: Lane,
+			equals: EqualsFn<unknown>,
+			label: string | undefined,
+		) {
+			super()
+			this.depsTail = 0
+			this.throwable = null
+			this.label = label
+			this.value = UNINITIALIZED
+			this.fn = fn
+			this.equals = equals
+			this.handler = handler
+			this.lastHandled = UNINITIALIZED
+			this.lane = lane
+			this.cleanup = undefined
+			this.children = undefined
+			this.disposed = false
+		}
+	}
+
+	const RenderWatcherHandle = class extends ReactiveNode implements RenderWatcherNode {
+		declare onNotify: (() => void) | undefined
+		declare onDraftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined
+		constructor(
+			notify: () => void,
+			draftWake: ((id: DraftId, cause: TraceEventId) => void) | undefined,
+		) {
+			super()
+			this.onNotify = notify
+			this.onDraftWake = draftWake
+		}
+	}
+
+	const ScopeHandle = class extends ReactiveNode implements ScopeNode {
+		declare children: EffectNode[] | undefined
+		constructor() {
+			super()
+			this.children = undefined
+		}
+	}
+
+	/**
 	 * Create an effect whose one node owns dynamic evaluation and delivery.
 	 * The first run is synchronous when the computation settles; a parked
 	 * first evaluation stays silent, and its settlement delivers through the
@@ -2772,22 +2873,8 @@ function createGraphCore(
 	): () => void {
 		// Effects are born watched (the bit means ALIVE on watchers) and with
 		// eager records — they are roots with edges from their first run.
-		// Capability bits are creation-fixed. The prototype supplies the
-		// record-backed getters (flags, deps, observerCount, …); only
-		// handle-owned state becomes own properties.
-		const w = Object.create(ReactiveNode.prototype) as EffectNode
-		w.depsTail = 0
-		w.throwable = null
-		w.label = label
-		w.value = UNINITIALIZED
-		w.fn = fn
-		w.equals = equals
-		w.handler = handler
-		w.lastHandled = UNINITIALIZED
-		w.lane = lane
-		w.cleanup = undefined
-		w.children = undefined
-		w.disposed = false
+		// Capability bits are creation-fixed.
+		const w: EffectNode = new EffectHandle(fn, handler, lane, equals, label)
 		const id = allocNode(w, Flag.Watching | Flag.WatchRunEffect | Flag.Watched | Flag.StaleDirty)
 		pinnedInternals[id >> RECORD_SHIFT] = w
 		M[id + NodeSlot.EffectLane] = lane
@@ -2827,8 +2914,7 @@ function createGraphCore(
 	function makeScope(fn: () => void): () => void {
 		// A scope anchor: owns child effects, takes no deliveries of its own.
 		// Pinned like every watcher, because pin identity is the liveness test.
-		const w = Object.create(ReactiveNode.prototype) as ScopeNode
-		w.children = undefined
+		const w: ScopeNode = new ScopeHandle()
 		const id = allocNode(w, Flag.Watching | Flag.Watched)
 		pinnedInternals[id >> RECORD_SHIFT] = w
 		const prevOwner = activeEffectOwner
@@ -2876,9 +2962,7 @@ function createGraphCore(
 		const pins = pinnedInternals
 		// A render watcher owns only its callbacks; the pinned link and every
 		// record field live behind the prototype's record-backed getters.
-		const sub = Object.create(ReactiveNode.prototype) as RenderWatcherNode
-		sub.onNotify = notify
-		sub.onDraftWake = draftWake
+		const sub: RenderWatcherNode = new RenderWatcherHandle(notify, draftWake)
 		const subId = allocNode(sub, Flag.Watching | Flag.WatchRender | Flag.Watched)
 		pins[subId >> RECORD_SHIFT] = sub
 		try {
