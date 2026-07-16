@@ -102,6 +102,9 @@ export interface NodeDetails extends GraphNode {
 	/** Name of the node's equality function (atoms/computeds), or null when it
 	 * has none or the function is anonymous. */
 	equals: string | null
+	/** A synthesized "how this was created" signature (stringified compute/
+	 * effect fn), or null for nodes without one (e.g. plain atoms). */
+	source: string | null
 }
 
 export interface Counts {

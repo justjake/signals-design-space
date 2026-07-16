@@ -492,6 +492,13 @@ export function GraphView({
 							) : null}
 						</div>
 
+						{model.node.source !== null ? (
+							<div className="insp-section">
+								<h3 data-tip="How this node was created — its stringified compute/effect function.">Source</h3>
+								<div className="value-preview">{model.node.source}</div>
+							</div>
+						) : null}
+
 						<div className="insp-section">
 							<h3 data-tip="How this node spent the recorded window: how long its own work took, and whether recomputes produced a new result (work flowed downstream) or the same result (downstream work stopped).">
 								Evaluation <span className="win">recorded window</span>

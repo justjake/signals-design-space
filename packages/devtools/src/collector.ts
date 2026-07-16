@@ -34,6 +34,8 @@ export interface NodeProvider {
 	valueFull(id: number): string | null | undefined
 	/** Name of the node's equality fn, for the inspector; null if none/anonymous. */
 	equals(id: number): string | null
+	/** A synthesized creation signature (stringified fn), or null. */
+	source(id: number): string | null
 	deps(id: number): number[]
 	subs(id: number): number[]
 }
@@ -276,6 +278,7 @@ export class Collector implements Backend {
 			pending: v?.pending ?? null,
 			valueFull: this.provider.valueFull(id) ?? null,
 			equals: this.provider.equals(id),
+			source: this.provider.source(id),
 		}
 	}
 }

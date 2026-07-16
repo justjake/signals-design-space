@@ -207,6 +207,26 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 			const fn = (node as { equals?: (a: unknown, b: unknown) => boolean }).equals
 			return typeof fn === 'function' && fn.name !== '' && fn.name !== 'is' ? fn.name : null
 		},
+		source(id) {
+			// Synthesize a "how this was created" signature from the node's
+			// stringified function(s), read inertly. Computeds carry the compute
+			// fn; effects also carry the handler; plain atoms have neither.
+			const node = deref(id)
+			if (node === undefined) return null
+			const trunc = (f: unknown): string | null => {
+				if (typeof f !== 'function') return null
+				const s = (f as { toString(): string }).toString()
+				return s.length > 240 ? `${s.slice(0, 240)}…` : s
+			}
+			const fn = trunc((node as { fn?: unknown }).fn)
+			const kind = kindOf(node)
+			if (kind === 'computed') return fn !== null ? `computed(${fn})` : null
+			if (kind === 'effect') {
+				const handler = trunc((node as { handler?: unknown }).handler)
+				return fn !== null ? `effect(${fn}${handler !== null ? `, ${handler}` : ''})` : null
+			}
+			return null
+		},
 		deps(id) {
 			const node = deref(id)
 			if (node === undefined) return []
