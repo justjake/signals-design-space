@@ -22,6 +22,7 @@ export type KindClass =
 	| 'batch'
 	| 'async'
 	| 'error'
+	| 'hot'
 	| 'system'
 
 export type NodeKind = 'atom' | 'computed' | 'watcher' | 'effect'
@@ -144,6 +145,14 @@ export interface Backend {
 	node(id: NodeId): NodeDetails | undefined
 	/** Subscribe to flushes; returns an unsubscribe. */
 	subscribe(listener: () => void): () => void
+	/**
+	 * Toggle the hot algorithm channel (propagate/check/pull) — very high
+	 * volume, off by default. Optional: only in-realm backends wired to a live
+	 * engine offer it; a snapshot backend cannot reach back to toggle.
+	 */
+	setHotMode?(on: boolean): void
+	/** Whether the hot algorithm channel is currently recording. */
+	hotMode?(): boolean
 }
 
 /**
@@ -186,6 +195,10 @@ export function kindClass(kind: string): KindClass {
 		case 'flush-error':
 		case 'policy-error':
 			return 'error'
+		case 'propagate':
+		case 'check':
+		case 'pull':
+			return 'hot'
 		default:
 			return 'system'
 	}

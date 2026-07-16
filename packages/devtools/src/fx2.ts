@@ -17,6 +17,7 @@ import {
 	NO_EVENT,
 	type ReactiveNode,
 	type ProducerNode,
+	setHotTracer,
 	setTracer,
 	subs as fx2Subs,
 	type TraceEventId,
@@ -286,6 +287,16 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		endSpan: (id, attrs) => collector.endSpan(id as unknown as EventId, attrs?.changed),
 	})
 
+	// Hot algorithm channel: the engine hook is installed only while hot mode
+	// is on (collector.setHotMode), so the disabled cost stays the engine's own
+	// per-site null check. Each hot event carries the node's registered id and
+	// the step string — the ring never holds a node, same as every other event.
+	collector.setHotSource((on) =>
+		setHotTracer(
+			on ? (node, step) => void collector.record(step, register(node), 0 as EventId, kindOf(node), {}) : null,
+		),
+	)
+
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
 	g.__SIGNALS_DEVTOOLS__ = collector
 
@@ -293,6 +304,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		collector,
 		detach() {
 			setTracer(null)
+			setHotTracer(null)
 			if (g.__SIGNALS_DEVTOOLS__ === collector) g.__SIGNALS_DEVTOOLS__ = undefined
 		},
 	}

@@ -377,6 +377,32 @@ export function setTracer(sink: TraceSink | null): void {
 	endSpan = sink?.endSpan ?? null
 }
 
+// ---------------------------------------------------------------------------
+// Hot algorithm channel. A second, independently gated hook for the
+// highest-volume internal steps: the invalidation wave, the dependency
+// validation walk, and the recompute. Deliberately NOT routed through the
+// emitEvent seam above — these steps would flood the causal log, and each
+// channel must attach and detach alone. Same discipline as the tracer seam:
+// a mutable module binding, detached cost is one null check per site.
+// ---------------------------------------------------------------------------
+
+/**
+ * One hot step: the invalidation wave pushing staleness marks ('propagate'),
+ * the dependency-validation walk ('check'), or a re-evaluation ('pull').
+ */
+export type HotStep = 'propagate' | 'check' | 'pull'
+/**
+ * The hot channel's hook. It receives the live node plus a step tag and must
+ * not retain the node — derive an id and drop the reference (the devtools
+ * adapter maps nodes to numeric ids through WeakRefs).
+ */
+export type HotFn = (node: ReactiveNode, step: HotStep) => void
+let hotHook: HotFn | null = null
+/** Install or detach the hot hook. `null` restores the detached null-check path. */
+export function setHotTracer(fn: HotFn | null): void {
+	hotHook = fn
+}
+
 /** The id recorded when an operation has no known cause. */
 export const NO_EVENT: TraceEventId = 0
 /**
@@ -1040,6 +1066,10 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
 	if (link === undefined) {
 		return
 	}
+	if (hotHook !== null) {
+		// Every link in a subscriber list shares its dep: the changed producer.
+		hotHook(link.dep, 'propagate')
+	}
 	let cur: Link = link
 	let next: Link | undefined = cur.nextSub
 	let stack: WaveFrame | undefined
@@ -1577,6 +1607,9 @@ const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
 }
 
 function recompute(node: EvaluatedNode<unknown>): void {
+	if (hotHook !== null) {
+		hotHook(node, 'pull')
+	}
 	if ((node.flags & Flag.ComputingMask) !== 0) {
 		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
 	}
@@ -1734,6 +1767,9 @@ export function ensureFresh(node: EvaluatedNode<unknown>): void {
 }
 
 function ensureFreshAt(node: EvaluatedNode<unknown>, depth: number): void {
+	if (hotHook !== null) {
+		hotHook(node, 'check')
+	}
 	const flags = node.flags
 	if ((flags & Flag.Watched) !== 0) {
 		// Watched: push marks are trustworthy (promotion validated the
