@@ -268,7 +268,58 @@ Two lifetime rules earned their own machinery during the port:
   finalizer drops the pin below it). This is the standing cost of numeric
   links + strong pins; a fix would need weak pins for unwatched edges.
 
-Typecheck and all 412 package tests (179 conformance cases, the oracle fuzz
-suite, GC/leak suite, React suites) pass at this point. Benchmarks not yet
-re-run against the rewritten source package; the isolated-graph protocol
-remains the gate.
+Typecheck and all 414 package tests (179 conformance cases, the oracle fuzz
+suite, GC/leak suite, React suites) pass at this point.
+
+### Post-port measurement (2026-07-15)
+
+Three-round isolated `milomg-reactivity-benchmark` A/B, this package at
+`4392ea4` against the source package's working tree near `51dbf9d`
+(both engines changed since the 1.06 stamp — the source package landed its
+own effect-tax and propagation work in the same window). Machine load was
+elevated (~15) but shared by the alternating protocol; ratios are the
+signal, absolute times are inflated.
+
+| Benchmark | source ms | fork ms | ratio |
+| --- | ---: | ---: | ---: |
+| createSignals | 1.32 | 1.04 | 0.79 |
+| createComputations | 58.82 | 108.06 | 1.84 |
+| updateSignals | 486.68 | 844.54 | 1.74 |
+| avoidablePropagation | 124.13 | 140.44 | 1.13 |
+| broadPropagation | 142.44 | 173.23 | 1.22 |
+| deepPropagation | 46.31 | 50.72 | 1.10 |
+| diamond | 104.74 | 123.63 | 1.18 |
+| mux | 94.16 | 104.64 | 1.11 |
+| repeatedObservers | 20.52 | 22.53 | 1.10 |
+| triangle | 30.72 | 38.06 | 1.24 |
+| unstable | 22.30 | 24.61 | 1.10 |
+| molBench | 15.26 | 15.34 | 1.01 |
+| cellx1000 | 6.34 | 8.03 | 1.27 |
+| cellx2500 | 18.95 | 25.62 | 1.35 |
+| 2-10x5 lazy80% | 186.00 | 210.33 | 1.13 |
+| 6-10x10 dyn25% lazy80% | 109.20 | 119.08 | 1.09 |
+| 4-1000x12 dyn5% | 267.55 | 270.80 | 1.01 |
+| 25-1000x5 | 308.13 | 263.57 | 0.86 |
+| 3-5x500 | 83.67 | 80.30 | 0.96 |
+| 6-100x15 dyn50% | 160.51 | 143.21 | 0.89 |
+
+Geometric mean 1.1310; aggregate 1.2098. The big-graph structure holds
+(signal creation and every large dynamic-graph row still win), but the
+effect-drain rows regressed well past the old frontier: updateSignals was
+at parity and is now 1.74, and createComputations moved from ~0.94 to
+1.84. Ranked suspects, unprofiled:
+
+- chainResolve now runs on every single-dep effect pull and pays a handle
+  store into the scratch path plus a pin lookup at level 0, even when the
+  dependency is a plain cell one compare would settle — the retired
+  stackless variant walked ints only;
+- per-drain delivery ceremony new to the split model (survivor handle
+  stores, the last-handled equality call, handler-context saves and the
+  unconditional cause swap) on top of what the old single tracked body
+  paid;
+- the disposed-mark probe at recompute entry (an absent-property load on
+  the hottest call).
+
+The next optimization round starts from a profile of updateSignals and
+createComputations; none of these suspects is load-bearing for
+correctness, so each can be A/B'd in isolation.
