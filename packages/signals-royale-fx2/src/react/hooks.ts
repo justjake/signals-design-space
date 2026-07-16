@@ -402,8 +402,11 @@ export function useValue<T>(x: Signal<T>): T {
  */
 export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 	requireRootConnection('useComputed') // fail with this hook's name, not useValue's
+	// Label the computed with its owning component (the one that created it and
+	// will drop it) so the devtools shows ownership, not "computed#id". Captured
+	// at creation, only when tracing is on — same owner rule as the watcher.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const c = useMemo(() => createComputed(fn), deps)
+	const c = useMemo(() => createComputed(fn, emitEvent !== null ? { label: renderingComponentName() } : undefined), deps)
 	return useValue(c)
 }
 
@@ -476,9 +479,15 @@ function useSignalPhaseEffect(
 	create: () => SignalEffectSpec<any>,
 	deps: React.DependencyList,
 ): void {
+	// Capture the owning component once, in the render phase (where the owner
+	// stack is available) and only when tracing, so an unlabeled effect shows
+	// its owner in the devtools instead of "effect#id". An explicit spec.label
+	// still wins — the label is the effect's purpose, the owner is who holds it.
+	const ownerRef = useRef<string | undefined>(undefined)
+	if (emitEvent !== null && ownerRef.current === undefined) ownerRef.current = renderingComponentName()
 	usePhaseEffect(() => {
 		const spec = create()
-		return effect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
+		return effect(spec.watch, spec.run, { equals: spec.equals, label: spec.label ?? ownerRef.current, schedule })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, deps)
 }
