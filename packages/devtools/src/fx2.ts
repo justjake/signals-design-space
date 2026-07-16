@@ -197,6 +197,16 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 				return preview(snap.value)
 			}
 		},
+		equals(id) {
+			// The equality fn is a static field on atoms/computeds; read its name
+			// inertly. Only surface a custom comparator — the default is fx2's
+			// reference check (Object.is, name "is"), which is the norm and not
+			// worth a row on every node. Anonymous/absent → null.
+			const node = deref(id)
+			if (node === undefined) return null
+			const fn = (node as { equals?: (a: unknown, b: unknown) => boolean }).equals
+			return typeof fn === 'function' && fn.name !== '' && fn.name !== 'is' ? fn.name : null
+		},
 		deps(id) {
 			const node = deref(id)
 			if (node === undefined) return []

@@ -32,6 +32,8 @@ export interface NodeProvider {
 	value(id: number): { preview: string | null; status: NodeStatus; stale: boolean; pending: string | null } | undefined
 	/** A deeper, multi-line value preview for the inspector (on-demand only). */
 	valueFull(id: number): string | null | undefined
+	/** Name of the node's equality fn, for the inspector; null if none/anonymous. */
+	equals(id: number): string | null
 	deps(id: number): number[]
 	subs(id: number): number[]
 }
@@ -40,6 +42,11 @@ interface DebugState {
 	kind: NodeKind
 	recomputes: number
 	changes: number
+	/** Cumulative µs across this node's own spans (recompute/effect). */
+	selfUs: number
+	/** Recompute outcomes: result changed vs. stayed equal. */
+	newResults: number
+	sameResults: number
 	lastEventId: number
 	lastKind: string
 }
@@ -114,7 +121,7 @@ export class Collector implements Backend {
 		if (node !== null && nodeKind !== undefined) {
 			let st = this.nodes.get(node)
 			if (st === undefined) {
-				st = { kind: nodeKind, recomputes: 0, changes: 0, lastEventId: id, lastKind: kind }
+				st = { kind: nodeKind, recomputes: 0, changes: 0, selfUs: 0, newResults: 0, sameResults: 0, lastEventId: id, lastKind: kind }
 				this.nodes.set(node, st)
 				this.kindCounts[nodeKind] = (this.kindCounts[nodeKind] ?? 0) + 1
 			}
@@ -137,13 +144,27 @@ export class Collector implements Backend {
 	endSpan(id: number, changed?: boolean): void {
 		const e = this.byId.get(id)
 		if (e === undefined) return
-		e.data.took = Math.max(0, Math.round(this.now() - this.t0) - e.t)
+		const took = Math.max(0, Math.round(this.now() - this.t0) - e.t)
+		e.data.took = took
 		if (changed !== undefined) {
 			e.data.changed = changed
 			// Show the new result: peek the node's just-updated value inertly.
 			if (changed && e.node !== null) {
 				const v = this.provider.value(e.node)?.preview
 				if (v != null) e.data.value = v
+			}
+		}
+		// Fold the span's duration/outcome into the node's retained stats so the
+		// inspector's evaluation metrics survive ring eviction.
+		if (e.node !== null) {
+			const st = this.nodes.get(e.node)
+			if (st !== undefined) {
+				const cls = kindClass(e.kind)
+				if (cls === 'compute' || cls === 'effect') st.selfUs += took
+				if (cls === 'compute' && changed !== undefined) {
+					if (changed) st.newResults++
+					else st.sameResults++
+				}
 			}
 		}
 		this.scheduleFlush()
@@ -223,6 +244,9 @@ export class Collector implements Backend {
 			stale: v?.stale ?? false,
 			recomputes: st?.recomputes ?? 0,
 			changes: st?.changes ?? 0,
+			selfUs: st?.selfUs ?? 0,
+			newResults: st?.newResults ?? 0,
+			sameResults: st?.sameResults ?? 0,
 			lastEventId: st?.lastEventId ?? 0,
 			lastKind: st?.lastKind ?? null,
 		}
@@ -251,6 +275,7 @@ export class Collector implements Backend {
 			subs: this.provider.subs(id),
 			pending: v?.pending ?? null,
 			valueFull: this.provider.valueFull(id) ?? null,
+			equals: this.provider.equals(id),
 		}
 	}
 }

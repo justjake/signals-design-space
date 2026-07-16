@@ -52,6 +52,14 @@ export interface GraphNode {
 	/** Retained per-node stats reduced from the event stream. */
 	recomputes: number
 	changes: number
+	/** Total µs spent running this node's own work (recompute/effect spans). */
+	selfUs: number
+	/**
+	 * Recompute outcomes over the window: how often the result changed (work
+	 * flowed downstream) vs. stayed equal (downstream work stopped).
+	 */
+	newResults: number
+	sameResults: number
 	/**
 	 * The node's most recent entry — retained, so listing a node never scans
 	 * the ring. 0 / null when the node has no entry in the window.
@@ -91,6 +99,9 @@ export interface NodeDetails extends GraphNode {
 	/** A deeper, multi-line value preview for the inspector (the list/canvas use
 	 * the short `valuePreview`). Null when the node has no value. */
 	valueFull: string | null
+	/** Name of the node's equality function (atoms/computeds), or null when it
+	 * has none or the function is anonymous. */
+	equals: string | null
 }
 
 export interface Counts {

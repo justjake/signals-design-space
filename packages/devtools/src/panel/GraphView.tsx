@@ -488,7 +488,9 @@ export function GraphView({
 						</div>
 
 						<div className="insp-section">
-							<h3>Evaluation</h3>
+							<h3 data-tip="How this node spent the recorded window: how long its own work took, and whether recomputes produced a new result (work flowed downstream) or the same result (downstream work stopped).">
+								Evaluation <span className="win">recorded window</span>
+							</h3>
 							<div className="kv">
 								<span className="k">last event</span>
 								<span className="v">
@@ -501,11 +503,29 @@ export function GraphView({
 										'—'
 									)}
 								</span>
-								<span className="k">recomputes</span>
-								<span className="v">{model.node.recomputes}</span>
+								{model.node.equals !== null ? (
+									<>
+										<span className="k" data-tip="The equality function that decides whether a recompute changed the value.">equals</span>
+										<span className="v">{model.node.equals}</span>
+									</>
+								) : null}
+								<span className="k" data-tip="Total time spent running this node’s own function in the recorded window.">run time</span>
+								<span className="v">{fmtTook(model.node.selfUs)} · {model.node.recomputes} {model.node.recomputes === 1 ? 'run' : 'runs'}</span>
 								<span className="k">status</span>
 								<span className="v">{model.node.stale ? 'stale' : model.node.status}</span>
 							</div>
+							{model.node.newResults + model.node.sameResults > 0 ? (
+								<>
+									<div className="memo-bar" role="img" aria-label={`${model.node.newResults + model.node.sameResults} recomputes: ${model.node.newResults} new, ${model.node.sameResults} same`}>
+										{model.node.newResults > 0 ? <span style={{ width: `${(model.node.newResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--computed)' }} /> : null}
+										{model.node.sameResults > 0 ? <span style={{ width: `${(model.node.sameResults / (model.node.newResults + model.node.sameResults)) * 100}%`, background: 'var(--system)' }} /> : null}
+									</div>
+									<div className="memo-legend">
+										<span><span className="sw" style={{ background: 'var(--computed)' }} /><b>{model.node.newResults}×</b> new result — flowed downstream</span>
+										<span><span className="sw" style={{ background: 'var(--system)' }} /><b>{model.node.sameResults}×</b> same result — downstream work stopped</span>
+									</div>
+								</>
+							) : null}
 						</div>
 
 						<div className="insp-section">
