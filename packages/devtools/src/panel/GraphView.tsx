@@ -169,24 +169,41 @@ export function GraphView({
 		if (v === null || b === null) return
 		const w = Math.max(160, Math.min(b.w * 2.5, v.w * factor))
 		const h = w * (v.h / v.w)
-		setView({ x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (h / v.h), w, h })
+		const next = { x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (h / v.h), w, h }
+		// Wheel events can arrive faster than React renders. Advance the live box
+		// immediately so every pinch delta compounds instead of replacing the last.
+		vbRef.current = next
+		setView(next)
 	}
-	// Native, non-passive wheel so we can preventDefault the pane scroll.
+	// Chromium exposes a macOS trackpad pinch as a ctrl+wheel gesture. Plain
+	// two-finger motion pans, matching the native canvas gesture vocabulary.
 	useEffect(() => {
 		const svg = svgRef.current
 		if (svg === null) return
 		const onWheel = (e: WheelEvent) => {
 			const v = vbRef.current
-			if (v === null) return
+			const b = baseRef.current
+			if (v === null || b === null) return
 			e.preventDefault()
-			const r = svg.getBoundingClientRect()
-			const px = v.x + ((e.clientX - r.left) / r.width) * v.w
-			const py = v.y + ((e.clientY - r.top) / r.height) * v.h
-			// Proportional to scroll amount so a trackpad's small deltas nudge
-			// gently and a mouse wheel's larger notch zooms more. deltaY > 0
-			// (scroll down) zooms out (larger viewBox).
-			const factor = 1.0018 ** Math.max(-160, Math.min(160, e.deltaY))
-			zoomAround(factor, px, py)
+			const rect = svg.getBoundingClientRect()
+			const scale = Math.min(rect.width / v.w, rect.height / v.h)
+			if (e.ctrlKey) {
+				const px = v.x + (e.clientX - rect.left - (rect.width - v.w * scale) / 2) / scale
+				const py = v.y + (e.clientY - rect.top - (rect.height - v.h * scale) / 2) / scale
+				// Base-2 scaling gives small trackpad deltas fine control while a fast
+				// pinch can still cross the canvas quickly. Positive delta zooms out.
+				const factor = 2 ** Math.max(-1, Math.min(1, e.deltaY * 0.02))
+				zoomAround(factor, px, py)
+				return
+			}
+
+			const next = {
+				...v,
+				x: clampSize(v.x + e.deltaX / scale, -v.w * 0.5, b.w - v.w * 0.5),
+				y: clampSize(v.y + e.deltaY / scale, -v.h * 0.5, b.h - v.h * 0.5),
+			}
+			vbRef.current = next
+			setView(next)
 		}
 		svg.addEventListener('wheel', onWheel, { passive: false })
 		return () => svg.removeEventListener('wheel', onWheel)
@@ -332,6 +349,7 @@ export function GraphView({
 							<svg
 								ref={svgRef}
 								viewBox={vb ? `${vb.x} ${vb.y} ${vb.w} ${vb.h}` : '0 0 100 100'}
+								preserveAspectRatio="xMidYMid meet"
 								aria-label={`Focus graph: ${layout.shown} of ${counts.nodes} nodes`}
 								style={{ cursor: panRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}
 								onPointerDown={(e) => {
@@ -402,7 +420,7 @@ export function GraphView({
 						)}
 						{layout !== null && model !== null ? (
 							<div className="canvas-status">
-								drawn <b>{visNodes.length}</b> · set <b>{layout.shown}</b> of <b>{counts.nodes}</b> · focus <b>{model.name}</b> · depth {depth} · scroll to zoom, drag to pan
+								drawn <b>{visNodes.length}</b> · set <b>{layout.shown}</b> of <b>{counts.nodes}</b> · focus <b>{model.name}</b> · depth {depth} · pinch to zoom, drag or scroll to pan
 							</div>
 						) : null}
 					</div>

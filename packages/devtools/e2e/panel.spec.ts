@@ -33,3 +33,53 @@ test('inline panel shows the live fx2 graph + log and updates on interaction', a
 	// The devtools captured the new activity: more log rows than before.
 	await expect.poll(async () => panel.locator('.log tbody tr').count()).toBeGreaterThan(rowsBefore)
 })
+
+test('graph trackpad gestures keep pinch focal point fixed and scroll to pan', async ({ page }) => {
+	await page.goto('/')
+	const svg = page.getByTestId('panel').locator('.canvas-wrap svg')
+	await expect(svg).toBeVisible()
+
+	const result = await svg.evaluate((element) => {
+		const graph = element as SVGSVGElement
+		const box = graph.getBoundingClientRect()
+		// WheelEvent coordinates are integer CSS pixels in Chromium.
+		const clientX = Math.round(box.left + box.width * 0.3)
+		const clientY = Math.round(box.top + box.height * 0.4)
+		const pointAtGesture = () => {
+			const matrix = graph.getScreenCTM()
+			if (matrix === null) throw new Error('SVG has no screen transform')
+			const point = new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse())
+			return { x: point.x, y: point.y }
+		}
+		const viewBox = () => graph.viewBox.baseVal
+		const before = { point: pointAtGesture(), x: viewBox().x, y: viewBox().y, width: viewBox().width, height: viewBox().height }
+
+		const pinch = { clientX, clientY, deltaY: -8, ctrlKey: true, bubbles: true, cancelable: true }
+		graph.dispatchEvent(new WheelEvent('wheel', pinch))
+		graph.dispatchEvent(new WheelEvent('wheel', pinch))
+
+		return new Promise<{
+			before: typeof before
+			afterPinch: typeof before
+			afterPan: typeof before
+		}>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
+			const afterPinch = { point: pointAtGesture(), x: viewBox().x, y: viewBox().y, width: viewBox().width, height: viewBox().height }
+			graph.dispatchEvent(new WheelEvent('wheel', { deltaX: 12, deltaY: 18, bubbles: true, cancelable: true }))
+			requestAnimationFrame(() => requestAnimationFrame(() => {
+				resolve({
+					before,
+					afterPinch,
+					afterPan: { point: pointAtGesture(), x: viewBox().x, y: viewBox().y, width: viewBox().width, height: viewBox().height },
+				})
+			}))
+		})))
+	})
+
+	expect(result.afterPinch.width).toBeLessThan(result.before.width)
+	expect(result.afterPinch.point.x).toBeCloseTo(result.before.point.x, 4)
+	expect(result.afterPinch.point.y).toBeCloseTo(result.before.point.y, 4)
+	expect(result.afterPan.width).toBeCloseTo(result.afterPinch.width, 6)
+	expect(result.afterPan.height).toBeCloseTo(result.afterPinch.height, 6)
+	expect(result.afterPan.x).toBeGreaterThan(result.afterPinch.x)
+	expect(result.afterPan.y).toBeGreaterThan(result.afterPinch.y)
+})
