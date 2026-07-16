@@ -70,10 +70,13 @@ function Guides({ guides }: { guides: Guide[] }) {
 function NameCell({
 	row,
 	onCause,
+	onNode,
 }: {
 	row: LogRow
 	onCause: () => void
+	onNode: (id: number) => void
 }) {
+	const nodeId = row.node
 	// The whole row selects (the <tr> handles the click); the cause ref is the
 	// one secondary action, so it stops propagation and jumps instead.
 	const cause = row.cause > 0 ? (
@@ -87,7 +90,11 @@ function NameCell({
 		) : (
 			<>
 				<span className="lname">{row.name}</span>
-				{row.node !== null ? <span className="nid">{fmtId('node', row.node)}</span> : null}
+				{nodeId !== null ? (
+					<button className="nid" onClick={(e) => { e.stopPropagation(); onNode(nodeId) }}>
+						{fmtId('node', nodeId)}
+					</button>
+				) : null}
 			</>
 		)
 	return (
@@ -374,7 +381,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
 											</td>
-											<NameCell row={r} onCause={() => setSelected(r.cause)} />
+											<NameCell row={r} onCause={() => setSelected(r.cause)} onNode={inspect} />
 											<td className="data">{r.summary}</td>
 											<td className="took">{fmtTook(r.took)}</td>
 										</tr>
@@ -414,7 +421,7 @@ export function LogView({
 											<td>
 												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
 											</td>
-											<NameCell row={t.row} onCause={() => setSelected(t.row.cause)} />
+											<NameCell row={t.row} onCause={() => setSelected(t.row.cause)} onNode={inspect} />
 											<td className="data">{t.row.summary}</td>
 											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>
