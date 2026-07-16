@@ -54,7 +54,9 @@ function nodeName(backend: Backend, id: NodeId | undefined): string | undefined 
 function summarize(e: DevtoolsEvent): string {
 	const d = e.data
 	if (typeof d.error === 'string') return d.error
-	// A write carries a value diff (previewed strings from the adapter).
+	// A write carries a value diff. Prefer the structural path diff
+	// ("todos[3].done: false → true") when present; else the whole-value preview.
+	if (typeof d.diff === 'string') return d.diff
 	if (typeof d.next === 'string') return typeof d.prev === 'string' ? `${d.prev} → ${d.next}` : `→ ${d.next}`
 	// A closed compute reports whether its result changed, and to what.
 	if (typeof d.changed === 'boolean')

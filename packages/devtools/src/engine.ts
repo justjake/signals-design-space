@@ -118,6 +118,29 @@ function deepPreview(v: unknown, depth: number): string {
 	return `{\n${rows.join('\n')}\n}`
 }
 
+/** Changed leaf paths between two structured values — bounded in depth and
+ * count — formatted "path: prev → next" (e.g. "todos[3].done: false → true").
+ * Descends matching containers (both arrays, or both plain objects); a shape
+ * change or a changed leaf reports at its path. Inert: reads values, never the
+ * graph. */
+function diffPaths(prev: unknown, next: unknown, path: string, out: string[], depth: number): void {
+	if (out.length >= 12 || depth > 5 || Object.is(prev, next)) return
+	const pa = Array.isArray(prev)
+	const na = Array.isArray(next)
+	const po = !pa && prev !== null && typeof prev === 'object'
+	const no = !na && next !== null && typeof next === 'object'
+	if ((pa && na) || (po && no)) {
+		const keys = new Set<string>([...Object.keys(prev as object), ...Object.keys(next as object)])
+		for (const k of keys) {
+			if (out.length >= 12) break
+			const seg = pa ? `[${k}]` : path === '' ? k : `.${k}`
+			diffPaths((prev as Record<string, unknown>)[k], (next as Record<string, unknown>)[k], path + seg, out, depth + 1)
+		}
+	} else {
+		out.push(`${path || 'value'}: ${preview(prev)} → ${preview(next)}`)
+	}
+}
+
 /** Capture the current JS stack, keeping the app's own frames (engine,
  * adapter, framework, and node_modules frames are dropped) so an operation
  * root can be traced back to the code that triggered it. */
@@ -175,6 +198,12 @@ export function attachEngineDevtools(
 	// (short strings) are held — never a node or a live value — so this can't
 	// leak the graph. Pruned with the node.
 	const lastValue = new Map<NodeId, string>()
+	// The last structured value per node, for the write PATH diff. It's updated
+	// to the live value on every write, so between writes it holds the same
+	// object the engine does — no extra retention; only during a diff does it
+	// briefly hold the prior value. Pruned with the node: bounded and reclaimed,
+	// so not a leak. (The preview-only `lastValue` above stays for the summary.)
+	const lastFull = new Map<NodeId, unknown>()
 	// Dedup key + id of the DOM event currently attributed as an operation root.
 	let lastDomKey = ''
 	let lastDomId: EventId = 0 as EventId
@@ -183,6 +212,7 @@ export function attachEngineDevtools(
 			? new FinalizationRegistry<NodeId>((id) => {
 					registry.delete(id)
 					lastValue.delete(id)
+					lastFull.delete(id)
 					collector.forget(id)
 				})
 			: null
@@ -305,6 +335,29 @@ export function attachEngineDevtools(
 				if (prev !== undefined) data.prev = prev
 				data.next = next
 				lastValue.set(nodeIdNum, next)
+			}
+			// Path diff: for object values, diff the structured value against the
+			// last so a change reads as "todos[3].done: false → true", not just the
+			// whole-value preview. Structured peek is inert; held value tracks the
+			// live one between writes (no extra retention).
+			const nodeRef = deref(nodeIdNum)
+			if (nodeRef !== undefined) {
+				try {
+					const cur = engine.inspect(nodeRef).value
+					if (cur !== null && typeof cur === 'object') {
+						const before = lastFull.get(nodeIdNum)
+						if (before !== undefined) {
+							const paths: string[] = []
+							diffPaths(before, cur, '', paths, 0)
+							if (paths.length > 0) data.diff = paths.join('; ')
+						}
+						lastFull.set(nodeIdNum, cur)
+					} else {
+						lastFull.delete(nodeIdNum)
+					}
+				} catch {
+					/* an inert peek threw; skip the diff */
+				}
 			}
 			// A root write with no engine cause is the start of an operation:
 			// capture the app stack that led here, and attribute it to the DOM
