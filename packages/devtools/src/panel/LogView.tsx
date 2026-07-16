@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Backend, KindClass } from '../protocol.ts'
 import { causeRows, fmtDelta, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
+import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { copyText, logMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
 import { StackTrace } from './StackTrace.tsx'
@@ -448,31 +449,21 @@ export function LogView({
 							<h3 data-tip="The chain that led here, in stack-trace order: the selected entry on top, each cause beneath it, the user input at the bottom.">
 								Why this ran
 							</h3>
-							<ol className="spine">
-								{[...spine].reverse().map((e, i) => (
-									<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
-										<div className="knot" />
-										<div className="ev">
-											<span className="id">#{e.id}</span>
-											<button onClick={() => setSelected(e.id)}>
-												{e.kind} {e.name ?? ''}
+							<CauseSpine
+								chain={spine}
+								onPick={(e) => setSelected(e.id)}
+								renderExtra={(t) => (
+									<div className="impact-card">
+										whole operation: <b>{opEntries} entries</b>
+										<br />
+										{t.node !== null ? (
+											<button className="srclink" onClick={() => inspect(t.node!)}>
+												view {t.name} in graph →
 											</button>
-										</div>
-										{e.summary ? <div className="because">{e.summary}</div> : null}
-										{i === 0 ? (
-											<div className="impact-card">
-												whole operation: <b>{opEntries} entries</b>
-												<br />
-												{sel.node !== null ? (
-													<button className="srclink" onClick={() => inspect(sel.node!)}>
-														view {sel.name} in graph →
-													</button>
-												) : null}
-											</div>
 										) : null}
-									</li>
-								))}
-							</ol>
+									</div>
+								)}
+							/>
 						</div>
 						{opStack !== null ? <StackTrace frames={opStack} /> : null}
 						{children.length > 0 ? (
@@ -481,11 +472,7 @@ export function LogView({
 								<ul className="linklist">
 									{children.map((c) => (
 										<li key={c.id}>
-											<span className="sw" style={{ background: `var(--${classVar(c.cls)})` }} />
-											<button onClick={() => setSelected(c.id)}>
-												{c.kind} {c.name ?? ''}
-											</button>
-											<span className="meta">#{c.id}</span>
+											<EventRef row={c} onClick={() => setSelected(c.id)} />
 										</li>
 									))}
 								</ul>

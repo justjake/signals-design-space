@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
 import { causeRows, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
+import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
@@ -491,8 +492,14 @@ export function GraphView({
 							<div className="kv">
 								<span className="k">last event</span>
 								<span className="v">
-									{model.last ? `#${model.last.id} ${model.last.kind}` : '—'}
-									{model.last && model.last.took !== null ? ` · ${fmtTook(model.last.took)}` : ''}
+									{model.last ? (
+										<>
+											<EventRef row={model.last} showName={false} />
+											{model.last.took !== null ? ` · ${fmtTook(model.last.took)}` : ''}
+										</>
+									) : (
+										'—'
+									)}
 								</span>
 								<span className="k">recomputes</span>
 								<span className="v">{model.node.recomputes}</span>
@@ -505,27 +512,7 @@ export function GraphView({
 							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
 								Why this ran{eventSel !== null ? ` · #${eventSel}` : ''}
 							</h3>
-							{whyChain.length === 0 ? (
-								<div className="sumline">no recorded activity yet</div>
-							) : (
-								<ol className="spine">
-									{[...whyChain].reverse().map((e, i) => (
-										<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
-											<div className="knot" />
-											<div className="ev">
-												<span className="id">#{e.id}</span>
-												<button
-													data-tip={`#${e.id} ${e.kind}${e.name ? ` ${e.name}` : ''}${e.summary ? ` · ${e.summary}` : ''}`}
-													onClick={() => e.node !== null && pick(e.node)}
-												>
-													{e.kind} {e.name ?? ''}
-												</button>
-											</div>
-											{e.summary ? <div className="because">{e.summary}</div> : null}
-										</li>
-									))}
-								</ol>
-							)}
+							<CauseSpine chain={whyChain} onPick={(e) => e.node !== null && pick(e.node)} />
 						</div>
 
 						{inspStack !== null ? <StackTrace frames={inspStack} /> : null}

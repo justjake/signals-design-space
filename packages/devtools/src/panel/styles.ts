@@ -293,10 +293,17 @@ export const PANEL_CSS = `
   .spine li:last-child { padding-bottom: 0; }
   .spine .knot { position: absolute; left: 2px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--thread); }
   .spine li.terminus .knot { background: var(--thread); box-shadow: 0 0 8px var(--thread); }
-  .spine .ev { font: 11.5px var(--mono); display: flex; gap: 8px; align-items: baseline; }
-  .spine .ev .id { color: var(--faint); }
-  .spine .ev button { color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
-  .spine .ev button:hover { color: var(--thread); border-bottom-color: var(--thread); }
+  .spine .ev { font: 11.5px var(--mono); }
+  /* event reference: one vocabulary wherever an event is named — a
+     category-colored kind chip, the node it's about, and a dim #id. Ties the
+     causal spine and the inspector back to the log table's chips at a glance. */
+  .evref { display: inline-flex; align-items: baseline; gap: 6px; }
+  button.evref { border: none; padding: 0; text-align: left; }
+  .evref .chip { flex: none; }
+  .evref .lname { color: var(--text); }
+  button.evref .lname { border-bottom: 1px dotted var(--faint); }
+  button.evref:hover .lname { color: var(--thread); border-bottom-color: var(--thread); }
+  .evref .eid { color: var(--faint); font-size: 10px; }
   .spine .because { font: 10.5px var(--mono); color: var(--muted); margin-top: 2px; }
   .spine .because b { color: var(--text); font-weight: 500; }
 
