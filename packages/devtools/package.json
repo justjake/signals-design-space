@@ -21,6 +21,7 @@
 		"build:extension": "node scripts/build-extension.mjs"
 	},
 	"dependencies": {
+		"bippy": "^0.5.39",
 		"signals-royale-fx2": "workspace:*",
 		"signals-royale-fx2-dalien": "workspace:*"
 	},

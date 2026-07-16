@@ -21,12 +21,5 @@
 			"version": "10.33.0",
 			"onFail": "download"
 		}
-	},
-	"pnpm": {
-		"overrides": {
-			"react": "link:vendor/react/build/oss-experimental/react",
-			"react-dom": "link:vendor/react/build/oss-experimental/react-dom",
-			"scheduler": "link:vendor/react/build/oss-experimental/scheduler"
-		}
 	}
 }
