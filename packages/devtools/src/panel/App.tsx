@@ -11,8 +11,22 @@ import { LogView } from './LogView.tsx'
  * The devtools panel: chrome (brand · Graph/Log tabs · theme · recording),
  * then the active view. Selecting a node anywhere focuses the Graph tab on it;
  * a node's "Open in Log" jumps to the Log filtered to it.
+ *
+ * Standalone extras (dock toggle, close ✕) appear only when the host wires
+ * them — an inline/overlay launcher does; the Chrome extension panel doesn't
+ * (the browser owns docking and there's nothing to close).
  */
-export function App({ backend }: { backend: Backend }) {
+export function App({
+	backend,
+	dock,
+	onToggleDock,
+	onClose,
+}: {
+	backend: Backend
+	dock?: 'right' | 'bottom'
+	onToggleDock?: () => void
+	onClose?: () => void
+}) {
 	const events = useBackend(backend) // re-render on each collector flush
 	// Callback-ref → state so children (tooltips, theme) get the root element on
 	// mount, not a frame late.
@@ -48,6 +62,11 @@ export function App({ backend }: { backend: Backend }) {
 					</button>
 				</nav>
 				<div className="spacer" />
+				{onToggleDock ? (
+					<button className="theme-btn" data-tip="Dock the panel to the side or the bottom." onClick={onToggleDock}>
+						{dock === 'bottom' ? '⇥ side' : '⤓ bottom'}
+					</button>
+				) : null}
 				<button className="theme-btn" onClick={() => setThemeOpen(true)}>
 					Theme
 				</button>
@@ -55,6 +74,11 @@ export function App({ backend }: { backend: Backend }) {
 					<span className="pulse" />
 					recording · {events.toLocaleString()} entries
 				</div>
+				{onClose ? (
+					<button className="theme-btn" aria-label="Close devtools" style={{ marginLeft: 8 }} onClick={onClose}>
+						✕
+					</button>
+				) : null}
 			</header>
 
 			{tab === 'graph' ? (

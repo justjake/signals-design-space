@@ -7,7 +7,8 @@
 		"./protocol": "./src/protocol.ts",
 		"./collector": "./src/collector.ts",
 		"./fx2": "./src/fx2.ts",
-		"./panel": "./src/panel/mount.tsx"
+		"./panel": "./src/panel/mount.tsx",
+		"./button": "./src/panel/DevtoolsPanelButton.tsx"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
