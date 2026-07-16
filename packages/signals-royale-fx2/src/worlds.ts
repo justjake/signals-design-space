@@ -397,7 +397,12 @@ export function retireDraft(id: DraftId): void {
 					{ draftId: id },
 				)
 			: NO_EVENT
-	const prevCause = setCurrentCause(evt)
+	// Attribute the base-state fold to the drafted write it applies — the intent
+	// — rather than the retirement bookkeeping, so the trace reads "set X ← your
+	// write" instead of "set X ← transition-retire". The retire event still
+	// drives the watcher pokes below.
+	const foldCause = draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : evt
+	const prevCause = setCurrentCause(foldCause)
 	try {
 		startBatch()
 		try {
