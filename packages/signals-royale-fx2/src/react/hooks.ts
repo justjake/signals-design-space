@@ -56,6 +56,7 @@ import {
 } from '../index.ts'
 import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
+	emitEvent,
 	Flag,
 	NO_EVENT,
 	observeNode,
@@ -64,7 +65,6 @@ import {
 	type TraceEventId,
 } from '../graph.ts'
 import { BASE_WORLD, resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
-import { getActiveTracer } from '../tracer.ts'
 import {
 	correctSubscription,
 	dispatchDraftWake,
@@ -114,7 +114,7 @@ function requireRootConnection(hook: string): ReactRootConnection {
 			`${hook} was rendered without a SignalsFrameworkProvider above it. ` +
 				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.',
 		)
-		getActiveTracer()?.emit('policy-error', null, NO_EVENT, {
+		emitEvent?.('policy-error', null, NO_EVENT, {
 			error,
 			phase: 'missing-provider',
 		})
@@ -145,7 +145,7 @@ function unwrapState(
 	}
 	if (asyncBits === Flag.AsyncError) {
 		const error = (st.throwable as ErrorBox).error
-		getActiveTracer()?.emit('render-error', node, node.causeEvent, { error, root: connection })
+		emitEvent?.('render-error', node, node.causeEvent, { error, root: connection })
 		throw error
 	}
 	const suspension = st.throwable as Suspension
@@ -156,7 +156,7 @@ function unwrapState(
 	// This render path is about to throw the suspension promise. The root
 	// identifies the rendering connection; it does not claim that React catches
 	// the promise, parks work, or schedules a retry.
-	getActiveTracer()?.emit('render-suspend', node, NO_EVENT, {
+	emitEvent?.('render-suspend', node, NO_EVENT, {
 		root: connection,
 		suspension,
 	})
@@ -224,7 +224,7 @@ export function useValue<T>(x: Signal<T>): T {
 				return
 			}
 			state.delivered.add(id)
-			getActiveTracer()?.emit('transition-notify', node, cause, {
+			emitEvent?.('transition-notify', node, cause, {
 				draftId: id,
 				root: connection,
 			})
@@ -273,7 +273,7 @@ export function useValue<T>(x: Signal<T>): T {
 	stash.value = value
 	stash.live = true
 	const renderEvent =
-		getActiveTracer()?.emit('render', node, node.causeEvent, {
+		emitEvent?.('render', node, node.causeEvent, {
 			root: connection,
 		}) ?? NO_EVENT
 	// Advance the committed stash at commit time. No dependency array: the
@@ -284,7 +284,7 @@ export function useValue<T>(x: Signal<T>): T {
 		c.ids = ids
 		c.value = value
 		c.live = true
-		getActiveTracer()?.emit('notify', node, renderEvent, { root: connection })
+		emitEvent?.('notify', node, renderEvent, { root: connection })
 	})
 	return value as T
 }
