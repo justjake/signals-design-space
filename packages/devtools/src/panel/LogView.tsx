@@ -226,7 +226,11 @@ export function LogView({
 	const spine = selected === null ? [] : causeRows(backend, selected)
 	const sel = selected === null ? null : (rows.find((r) => r.id === selected) ?? spine[spine.length - 1] ?? null)
 	const opRoot = spine[0] ?? sel
-	const opEntries = sel === null ? 0 : ops.get(rootOf(sel.id))?.count ?? 1
+	const opGroup = sel === null ? undefined : ops.get(rootOf(sel.id))
+	const opEntries = opGroup?.count ?? (sel === null ? 0 : 1)
+	// Total wall time the whole operation spanned (root → last consequence) — the
+	// "how big was this tree" number you trace back from a slow update.
+	const opTotalUs = opGroup ? opGroup.maxT - opGroup.minT : 0
 	// Entries this one directly caused (children), from the visible window.
 	const children = sel === null ? [] : base.filter((r) => r.cause === sel.id)
 	// The app stack captured at the operation root (the first chain entry with one).
@@ -459,6 +463,7 @@ export function LogView({
 								renderExtra={(t) => (
 									<div className="impact-card">
 										whole operation: <b>{opEntries} entries</b>
+										{opTotalUs > 0 ? <> · <b>{fmtTook(opTotalUs)}</b></> : null}
 										<br />
 										{t.node !== null ? (
 											<button className="srclink" onClick={() => inspect(t.node!)}>
