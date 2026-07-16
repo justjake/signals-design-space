@@ -152,6 +152,7 @@ export const PANEL_CSS = `
   tr.op-head td { background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding-top: 5px; padding-bottom: 5px; }
   tr.op-head:hover td { background: var(--surface-2); }
   tr.op-head .data { overflow: visible; max-width: none; width: auto; white-space: nowrap; }
+  .op-rollup { color: var(--muted); }
   /* Mark where each operation starts, and tint alternate operation subtrees so
      the eye can group a tree and see where one operation ends and the next
      begins. The zebra sits on the row; op-head/selected td backgrounds (opaque

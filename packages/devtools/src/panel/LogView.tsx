@@ -236,12 +236,29 @@ export function LogView({
 		for (const s of seen) rootMemo.set(s, cur)
 		return cur
 	}
-	const ops = new Map<EventId, { minT: number; maxT: number; count: number }>()
+	const ops = new Map<EventId, { minT: number; maxT: number; count: number; renders: number; us: number }>()
 	for (const r of base) {
 		const root = rootOf(r.id)
+		const took = r.took ?? 0
+		const isRender = r.kind === 'render'
 		const g = ops.get(root)
-		if (g === undefined) ops.set(root, { minT: r.t, maxT: r.t, count: 1 })
-		else { g.maxT = r.t; g.count++ }
+		if (g === undefined) ops.set(root, { minT: r.t, maxT: r.t, count: 1, renders: isRender ? 1 : 0, us: took })
+		else {
+			g.maxT = r.t
+			g.count++
+			if (isRender) g.renders++
+			g.us += took
+		}
+	}
+	// One-line rollup for an operation-root row: the "how big was this tree"
+	// glance the log tree exists to give. Undefined for non-root rows.
+	const opRollup = (id: EventId): string | undefined => {
+		const g = ops.get(id)
+		if (g === undefined) return undefined
+		const parts = [`${g.count} ${g.count === 1 ? 'entry' : 'entries'}`]
+		if (g.renders > 0) parts.push(`${g.renders} rendered`)
+		if (g.maxT > g.minT) parts.push(fmtTook(g.maxT - g.minT))
+		return parts.join(' · ')
 	}
 
 	const minT = base.length ? base[0].t : 0
@@ -469,7 +486,13 @@ export function LogView({
 												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
 											</td>
 											<NameCell row={t.row} onCause={() => onSelect(t.row.cause)} onNode={inspect} />
-											<td className="data">{t.row.summary}</td>
+											<td className="data">
+												{t.depth === 0 && t.children > 0 ? (
+													<span className="op-rollup">{opRollup(t.row.id) ?? t.row.summary}</span>
+												) : (
+													t.row.summary
+												)}
+											</td>
 											<td className="took">{fmtTook(t.row.took)}</td>
 										</tr>
 									))}
