@@ -1838,6 +1838,15 @@ function createGraphCore(
 	 * tracked evaluation (an observeNode flush), and an effect's refresh must
 	 * not register into that consumer's dependency list.
 	 */
+	/** Out of line so the throw's construction stays out of drain bytecode. */
+	function throwDrainCycle(): never {
+		const error = new Error('effect drain did not settle (cycle?)')
+		if (emitEvent !== null) {
+			emitEvent('flush-error', null, currentCause, { error, phase: 'cycle' })
+		}
+		throw error
+	}
+
 	function drainLane(state: LaneState): void {
 		const mem = M
 		const pins = pinnedInternals
@@ -1854,15 +1863,55 @@ function createGraphCore(
 				state.head = end
 				const ids = state.ids
 				const gens = state.gens
+				// A one-entry round — every plain write that wakes one effect —
+				// needs none of the phase bookkeeping: the phases collapse to
+				// pull, cleanup, handler over one local survivor, with the same
+				// checks in the same order as the loops below.
+				if (end - start === 1) {
+					if (++guard > Limit.DrainRuns) {
+						throwDrainCycle()
+					}
+					const id = ids[start]
+					if (generationColumn[id >> RECORD_SHIFT] !== gens[start]) {
+						continue
+					}
+					const w = pins[id >> RECORD_SHIFT] as EffectNode
+					const flags: Flags = mem[id + NodeSlot.Flags]
+					mem[id + NodeSlot.Flags] = flags & ~Flag.Scheduled
+					if ((flags & Flag.Watched) === 0) {
+						continue
+					}
+					ensureFresh(w)
+					if (generationColumn[id >> RECORD_SHIFT] !== gens[start]) {
+						continue
+					}
+					const cflags: Flags = mem[id + NodeSlot.Flags]
+					if ((cflags & Flag.AsyncError) !== 0) {
+						throw (w.throwable as ErrorBox).error
+					}
+					if ((cflags & Flag.AsyncSuspended) !== 0) {
+						continue
+					}
+					if (w.lastHandled !== UNINITIALIZED && w.equals(w.value, w.lastHandled)) {
+						continue
+					}
+					if ((cflags & Flag.Scheduled) !== 0) {
+						continue // re-marked by its own pull; the next round delivers
+					}
+					runEffectCleanup(w)
+					if (
+						generationColumn[id >> RECORD_SHIFT] === gens[start] &&
+						(mem[id + NodeSlot.Flags] & Flag.Watched) !== 0
+					) {
+						runHandler(w)
+					}
+					continue
+				}
 				const handles = state.handles
 				// Phase 1: pull.
 				for (let i = start; i < end; i++) {
 					if (++guard > Limit.DrainRuns) {
-						const error = new Error('effect drain did not settle (cycle?)')
-						if (emitEvent !== null) {
-							emitEvent('flush-error', null, currentCause, { error, phase: 'cycle' })
-						}
-						throw error
+						throwDrainCycle()
 					}
 					const id = ids[i]
 					if (generationColumn[id >> RECORD_SHIFT] !== gens[i]) {
