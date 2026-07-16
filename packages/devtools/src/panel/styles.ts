@@ -343,6 +343,21 @@ export const PANEL_CSS = `
   .nodelist tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
   .node.flash rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
 
+  /* Narrow-safe chrome + toolbars: at any width the header and control rows
+     stay a single row of fixed-size items and the row scrolls, rather than
+     shrinking or reflowing into a cramped multi-line block when the panel is
+     docked to the bottom or the viewport is small. */
+  .chrome { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+  .chrome .brand, .chrome .tabs, .chrome .theme-btn { flex: none; }
+  .chrome .spacer { min-width: 0; }
+  /* The recording readout is the least essential item — let it be the one that
+     truncates when space is tight, so the tabs, dock/theme, and close ✕ stay
+     reachable rather than the row clipping them off the right edge. */
+  .chrome .rec { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .toolbar, .controls { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+  .toolbar .kind-filters, .controls .kind-filters, .kchip, .search, .crumbs { flex: none; }
+  .crumbs { overflow-x: auto; white-space: nowrap; }
+
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
     .log tbody tr, .nodelist tbody tr.flash, .node.flash rect:not(.ring) { animation: none; }
