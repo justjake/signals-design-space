@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"content": "node scripts/prepare-home.mjs && typedoc && node scripts/prepare-api.mjs",
+		"content": "node scripts/prepare-home.mjs && node scripts/check-examples.mjs && typedoc && node scripts/prepare-api.mjs",
 		"dev": "pnpm content && waku dev",
 		"build": "pnpm content && waku build",
 		"start": "waku start",

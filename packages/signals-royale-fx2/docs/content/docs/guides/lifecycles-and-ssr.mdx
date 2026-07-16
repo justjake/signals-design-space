@@ -1,0 +1,45 @@
+---
+title: Lifecycles and server rendering
+description: Own external resources while observed and move atom state across the server boundary.
+---
+
+## Observed resources
+
+`AtomOptions.onObserved` starts an external resource when the atom gains its
+first subscriber of any kind. Its cleanup runs after the last subscriber is
+gone. Subscription flaps within one tick coalesce, which avoids reconnecting
+for React Strict Mode's development remount.
+
+```ts
+const price = createAtom(0, {
+	onObserved: ({ set }) => {
+		const socket = subscribeToPrice(set)
+		return () => socket.close()
+	},
+})
+```
+
+<Playground name="lifecycle" />
+
+The callback receives explicit `get` and `set` operations for that atom. It
+runs outside dependency tracking; do not close over a render's snapshot.
+
+## Server state
+
+The `signals-royale-fx2/ssr` entry point serializes base atom values under
+positions or application-owned keys. Restore them into freshly created client
+atoms before their first read.
+
+```ts
+const json = serializeAtomState({ name, visits })
+
+// In the client bootstrap, using fresh atoms with the same keys:
+initializeAtomState(json, { name: clientName, visits: clientVisits })
+```
+
+<Playground name="ssr" />
+
+`installState` and `initializeAtomState` are not writes: they skip equality,
+propagation, effects, and lazy initializers. This is what hydration needs, but
+it also means installing into an already observed atom will not notify its
+subscribers.

@@ -17,6 +17,7 @@ export default defineConfig({
 				'signals-royale-fx2/ssr': path.join(packageRoot, 'src/ssr.ts'),
 				'signals-royale-fx2': path.join(packageRoot, 'src/index.ts'),
 				'signals-devtools/fx2': path.join(repoPackages, 'devtools/src/fx2.ts'),
+				'signals-devtools/panel': path.join(repoPackages, 'devtools/src/panel/App.tsx'),
 				'signals-devtools/button': path.join(
 					repoPackages,
 					'devtools/src/panel/DevtoolsPanelButton.tsx',

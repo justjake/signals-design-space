@@ -3,18 +3,41 @@ title: Getting started
 description: Create reactive state and read it from React.
 ---
 
-Install the package and create an atom outside your components:
+The root entry point has no React dependency. React hooks and the provider live
+under `signals-royale-fx2/react`.
+
+Register the bindings once, then place `SignalsFrameworkProvider` above every
+component that uses `useValue`, `useComputed`, or `useIsPending`. The provider
+is the channel React uses to decide which transition drafts each render can
+see. Do not nest providers.
 
 ```tsx
+import { createRoot } from 'react-dom/client'
 import { createAtom } from 'signals-royale-fx2'
-import { useValue } from 'signals-royale-fx2/react'
+import {
+	registerReactSignals,
+	wrapCreateRoot,
+	useComputed,
+	useValue,
+} from 'signals-royale-fx2/react'
 
 const count = createAtom(0, { label: 'count' })
 
 export function Counter() {
 	const value = useValue(count)
-	return <button onClick={() => count.update((n) => n + 1)}>Count: {value}</button>
+	const doubled = useComputed(() => count.get() * 2, [])
+	return <button onClick={() => count.update((n) => n + 1)}>{value} / {doubled}</button>
 }
+
+registerReactSignals()
+wrapCreateRoot(createRoot)(document.getElementById('app')!).render(<Counter />)
 ```
 
-<Playground />
+<Playground name="counter" />
+
+`wrapCreateRoot` installs the provider around every render. If another
+framework owns the root, render `<SignalsFrameworkProvider>` directly instead.
+
+Atoms normally belong outside components so state survives component
+lifetimes. Use `useAtom` when the state really belongs to one mounted component
+and should be reclaimed with it.

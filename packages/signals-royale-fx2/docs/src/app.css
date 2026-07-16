@@ -20,3 +20,52 @@
 	background: color-mix(in oklab, var(--color-fd-card) 92%, var(--color-fd-primary));
 	padding: 1rem;
 }
+
+.fx2-playground-heading,
+.fx2-demo-row {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+}
+
+.fx2-playground-heading {
+	justify-content: space-between;
+	margin-bottom: 1rem;
+}
+
+.fx2-playground button,
+.fx2-playground input {
+	border: 1px solid var(--color-fd-border);
+	border-radius: 0.4rem;
+	background: var(--color-fd-background);
+	padding: 0.4rem 0.65rem;
+}
+
+.fx2-playground button:hover {
+	border-color: var(--color-fd-primary);
+}
+
+.fx2-playground output {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+.fx2-demo-stack {
+	display: grid;
+	gap: 0.65rem;
+}
+
+.fx2-demo-stack code {
+	overflow-x: auto;
+	font-size: 0.8rem;
+}
+
+.fx2-devtools {
+	position: relative;
+	height: 32rem;
+	margin-top: 1rem;
+	overflow: hidden;
+	border: 1px solid var(--color-fd-border);
+	border-radius: 0.5rem;
+}

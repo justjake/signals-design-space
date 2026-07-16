@@ -16,6 +16,7 @@
 			"signals-royale-fx2/ssr": ["../src/ssr.ts"],
 			"signals-royale-fx2/debug": ["../src/debug/index.ts"],
 			"signals-devtools/fx2": ["../../devtools/src/fx2.ts"],
+			"signals-devtools/panel": ["../../devtools/src/panel/App.tsx"],
 			"signals-devtools/button": ["../../devtools/src/panel/DevtoolsPanelButton.tsx"]
 		},
 		"types": ["node", "react", "react-dom"]

@@ -1,4 +1,12 @@
 {
 	"title": "Guides",
-	"pages": ["getting-started", "effects"]
+	"pages": [
+		"getting-started",
+		"core-signals",
+		"effects",
+		"react-bindings",
+		"transitions-and-async",
+		"lifecycles-and-ssr",
+		"devtools"
+	]
 }

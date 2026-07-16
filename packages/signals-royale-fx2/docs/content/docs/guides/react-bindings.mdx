@@ -1,0 +1,33 @@
+---
+title: React bindings
+description: Subscribe components without turning every signal write into a synchronous external-store update.
+---
+
+`useValue(signal)` reads the snapshot assigned to the current render and
+subscribes the component. Notifications dispatch through React state, so a
+signal write gets the same priority as a `setState` made in the same place.
+
+`useComputed(fn, deps)` owns a computed for the component and returns its
+current value. The dependency list controls when the computed object is
+recreated; signal reads inside `fn` control when that computed becomes stale.
+
+```tsx
+function Counter() {
+	const count = useAtom(0, { label: 'counter' })
+	const value = useValue(count)
+	const doubled = useComputed(() => count.get() * 2, [count])
+
+	return <button onClick={() => count.update((n) => n + 1)}>{value} / {doubled}</button>
+}
+```
+
+<Playground name="counter" />
+
+`useIsPending` is delivered urgently so the indicator is not trapped inside
+the transition it describes. `useSignalTransition` returns that transition's
+React pending state and a function that classifies enclosed signal writes as
+one draft.
+
+The lower-level `registerReactSignals` handle can detach the integration. The
+test-only reset export clears engine and root bookkeeping without replacing
+existing atom handles; application code normally needs neither operation.
