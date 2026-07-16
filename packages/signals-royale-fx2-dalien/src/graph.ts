@@ -18,9 +18,10 @@
  *   reference makes the whole chain collectible — no registry needed for
  *   reads. Unwatched computeds validate lazily on read against the global
  *   graph change clock.
- * - Effects are the only long-lived graph roots a user can leak by dropping
- *   the disposer without calling it; a FinalizationRegistry on the disposer
- *   reclaims those.
+ * - Effects, effect scopes, and subscriptions are explicit resources: their
+ *   owners must call the returned disposer. A FinalizationRegistry reclaims
+ *   the records of dropped derived handles — their records own dep links a
+ *   dead handle must free — and nothing else.
  *
  * Counter taxonomy — every numeric counter is one of two kinds, and the
  * name says which:
@@ -124,13 +125,6 @@ export const enum Flag {
 	AsyncError = 0b0001_0000_0000,
 	/** Latest evaluation parked; node.throwable holds the Suspension. */
 	AsyncSuspended = 0b0010_0000_0000,
-	/**
-	 * Some evaluation of this node once parked on a thenable (never
-	 * cleared). A disposed effect with this bit may still sit in a pending
-	 * thenable's parked set, so its record defers to handle finalization
-	 * instead of returning to the pool at dispose (see disposeEffect).
-	 */
-	EverAsync = 0b0000_0010_0000,
 
 	// State.
 	/**
@@ -331,6 +325,13 @@ export interface EffectNode extends ReactiveNode {
 	cleanup: (() => void) | undefined
 	/** Direct child effects, allocated only when the first child is created. */
 	children: EffectNode[] | undefined
+	/**
+	 * Set at dispose, never cleared. Handle-owned so it stays readable after
+	 * the record returns to the pool: a pending thenable's parked set can
+	 * hold this handle past disposal, and settlement checks this mark before
+	 * addressing the record (see asyncs.ts settle).
+	 */
+	disposed: boolean
 }
 
 /** A store subscription pinned to one producer for its whole life. */
@@ -2119,6 +2120,13 @@ function createGraphCore(
 	}
 
 	function recompute(node: DerivedNode<unknown>): void {
+		// A watcher disposed between its scheduling or validation and this
+		// call: its record is already reclaimed (possibly reused), so no
+		// record read below can be trusted and a dead compute must not run.
+		// The handle-owned mark is checked before any record access.
+		if ((node as Partial<EffectNode>).disposed === true) {
+			return
+		}
 		const mem = M
 		const clocks = graphClocks
 		const id = ensureNodeRecord(node)
@@ -2192,12 +2200,19 @@ function createGraphCore(
 		}
 		// A computed whose evaluation wrote state is self-affecting: its inputs
 		// moved under it, so it never caches — every read re-evaluates.
-		mem[id + NodeSlot.Flags] =
+		const finalFlags: Flags =
 			(mem[id + NodeSlot.Flags] & ~Flag.StaleMask) |
 			(graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
+		mem[id + NodeSlot.Flags] = finalFlags
 		validAtColumn[id >> RECORD_SHIFT] = preGraphChange
 		if (compute !== NO_EVENT && endSpan !== null) {
 			endSpan(compute, { changed })
+		}
+		// An effect this very evaluation disposed (Watching set, Watched
+		// clear) kept its record for the stamps above; every write is done,
+		// so the record goes back to the pool here, at the unwind.
+		if ((finalFlags & (Flag.Watching | Flag.Watched)) === Flag.Watching) {
+			reclaimEffectRecord(id)
 		}
 	}
 
@@ -2273,6 +2288,13 @@ function createGraphCore(
 				node = chainNodes[--depth]!
 				chainNodes[depth] = undefined
 				const id = node.id
+				if (depth === base && (node as Partial<EffectNode>).disposed === true) {
+					// The start effect was disposed by a recompute below it; its
+					// record is already reclaimed (possibly reused) and must not
+					// be stamped. Interior nodes are deriveds and cannot be
+					// disposed, so only the final pop needs the mark.
+					break
+				}
 				if (
 					clocks[(dep >> ClockSlot.Shift) + ClockSlot.ChangedAt] >
 					validAtColumn[id >> RECORD_SHIFT]
@@ -2339,6 +2361,14 @@ function createGraphCore(
 				recompute(node)
 				return
 			}
+		}
+		// A validated effect can have been disposed by the dep freshening
+		// above (a computed body may call its disposer); its record is
+		// already reclaimed — possibly reused — and must not be stamped. The
+		// entry flags predate any user code, so Watching reliably gates the
+		// handle-mark load to watchers.
+		if ((flags & Flag.Watching) !== 0 && (node as Partial<EffectNode>).disposed === true) {
+			return
 		}
 		setFlags(node, flagsOf(node) & ~Flag.StaleMask)
 		// Invariant: the watermark is stamped only AFTER every dep was freshened
@@ -2498,12 +2528,29 @@ function createGraphCore(
 		return pinnedInternals[w.id >> RECORD_SHIFT] === w
 	}
 
+	/**
+	 * Return a disposed effect's record to the pool. Effect records dirty the
+	 * lane slot, the changedAt stamp (the shared evaluator writes it), the
+	 * validation watermark, and the dep list head — the last already zeroed
+	 * by unlinkAllDeps before this runs. Called from disposeEffect, or from
+	 * the unwinding recompute for an effect that disposed itself
+	 * mid-evaluation.
+	 */
+	function reclaimEffectRecord(id: ReactiveNodeId): void {
+		M[id + NodeSlot.EffectLane] = 0
+		graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
+		validAtColumn[id >> RECORD_SHIFT] = 0
+		pushFreeNode(id)
+	}
+
 	function disposeEffect(w: EffectNode): void {
 		if (!watcherAlive(w)) {
 			return
 		}
-		// Watching set + Watched clear = dead; a mid-evaluation dispose leaves
-		// this state on the (still-owned) record for trimDeps to see.
+		// The handle-owned mark for parties that hold the handle past this
+		// call (a pending thenable's parked set); the record-side state is
+		// Watching set + Watched clear.
+		w.disposed = true
 		setFlags(w, flagsOf(w) & ~Flag.Watched)
 		let failed = false
 		let failure: unknown
@@ -2536,25 +2583,12 @@ function createGraphCore(
 			w.depsTail = 0
 			const id = w.id
 			pinnedInternals[id >> RECORD_SHIFT] = undefined
-			M[id + NodeSlot.EffectLane] = 0
-			graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = 0
 			generationColumn[id >> RECORD_SHIFT]++
-			if ((M[id + NodeSlot.Flags] & (Flag.EverAsync | Flag.ComputingMask)) === 0) {
-				// No other party can still address this record: it goes straight
-				// back to the pool.
-				validAtColumn[id >> RECORD_SHIFT] = 0
-				pushFreeNode(id)
-			} else {
-				// The record must outlive this dispose call:
-				// - EverAsync: a pending thenable's parked set may hold the
-				//   handle, and its settlement writes must land on a record the
-				//   handle still owns;
-				// - Computing: this dispose ran inside the effect's own
-				//   evaluation, whose unwind still stamps the record.
-				// Keep the record until the handle itself is unreachable; the
-				// finalizer reclaims it.
-				queueNodeRegistration(w)
+			if ((M[id + NodeSlot.Flags] & Flag.ComputingMask) === 0) {
+				reclaimEffectRecord(id)
 			}
+			// else: this dispose ran inside the effect's own evaluation, whose
+			// unwind still stamps the record; recompute's tail reclaims it.
 		}
 		if (failed) {
 			throw failure
@@ -2753,6 +2787,7 @@ function createGraphCore(
 		w.lane = lane
 		w.cleanup = undefined
 		w.children = undefined
+		w.disposed = false
 		const id = allocNode(w, Flag.Watching | Flag.WatchRunEffect | Flag.Watched | Flag.StaleDirty)
 		pinnedInternals[id >> RECORD_SHIFT] = w
 		M[id + NodeSlot.EffectLane] = lane

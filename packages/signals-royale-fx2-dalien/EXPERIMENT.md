@@ -249,10 +249,14 @@ Two lifetime rules earned their own machinery during the port:
 - **Pin identity is watcher liveness.** A disposed watcher's record may be
   reclaimed and reused, so its flags word can never be read again; every
   post-dispose entry point (double dispose, owner-alive checks, wake and
-  notify delivery) tests `pinnedInternals[id] === handle` instead. Disposal
-  defers record reclaim to handle finalization when the effect ever parked
-  (a thenable's parked set may still invalidate it) or when it disposed
-  itself mid-evaluation (the unwinding evaluation still stamps the record).
+  notify delivery) tests `pinnedInternals[id] === handle` instead. Record
+  reclaim is immediate at dispose, in both cases where a party still holds
+  the handle: a pending thenable's parked set checks the handle-owned
+  `disposed` mark before settlement addresses the record (a dead effect is
+  terminal, so skipping it is also the right semantics), and an effect
+  disposed by its own evaluation leaves the record for that evaluation's
+  unwind to return after its final stamps. No effect record waits on the
+  collector; the FinalizationRegistry serves only dropped derived handles.
 - **Pins retain closure scope chains.** An unwatched chain keeps forward
   links, each link pins its dependency's handle, and a pinned handle retains
   its compute closure's whole scope chain. If that scope chain contains a

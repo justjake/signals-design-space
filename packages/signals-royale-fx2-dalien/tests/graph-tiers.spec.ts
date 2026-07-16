@@ -243,6 +243,39 @@ describe('two-tier graph: promote/demote structure', () => {
 		expect(runs).toBe(2)
 	})
 
+	test('a mid-compute self-dispose returns the record at the unwind, uncorrupted', () => {
+		const src = atom(0)
+		let stop = () => {}
+		let runs = 0
+		stop = syncEffect(() => {
+			runs++
+			const value = readCell(src)
+			if (value === 1) {
+				stop()
+			}
+			return value
+		})
+		const recordId = subscriberOf(src.subs!).id
+		writeCell(src, 1) // the compute disposes its own effect mid-evaluation
+		expect(runs).toBe(2)
+		// The unwinding evaluation stamped the record and then returned it to
+		// the pool, so the very next effect pops the same record and works.
+		const probeSrc = atom(0)
+		let probeRuns = 0
+		const stopProbe = syncEffect(
+			() => readCell(probeSrc),
+			() => {
+				probeRuns++
+			},
+		)
+		expect(subscriberOf(probeSrc.subs!).id).toBe(recordId)
+		writeCell(probeSrc, 1)
+		expect(probeRuns).toBe(2)
+		writeCell(src, 2) // the disposed effect never re-runs
+		expect(runs).toBe(2)
+		stopProbe()
+	})
+
 	test('atoms do not carry consumer-only graph state', () => {
 		const source = atom(1)
 		const computed = makeGraphComputed(() => readCell(source))

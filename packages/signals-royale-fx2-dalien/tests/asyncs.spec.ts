@@ -296,6 +296,49 @@ describe('pending as graph state', () => {
 		}
 		expect(didThrow).toBe(true)
 	})
+
+	test('settlement skips a disposed effect whose record was reclaimed and reused', () => {
+		// The parked set holds the effect HANDLE past disposal, and the
+		// record it names returns to the pool at dispose. Settlement must
+		// check the handle-owned disposed mark before addressing the record:
+		// without the check, it re-evaluates the dead compute against the
+		// record's new occupant, whose dependency list the dead evaluation's
+		// trim then severs.
+		const { thenable, fulfill } = controlledThenable<number>()
+		const trigger = createAtom(0)
+		let handlerRuns = 0
+		const stop = effect(
+			(use) => (trigger.get() === 0 ? 0 : (use(thenable) as number)),
+			() => {
+				handlerRuns++
+			},
+		)
+		trigger.set(1) // the sync drain pulls; the compute parks, silently
+		expect(handlerRuns).toBe(1) // the creation run only
+		stop() // dispose while parked: the record returns to the pool now
+		// The next effect reuses the freed record (the free stack is LIFO).
+		const probe = createAtom(0)
+		let probeComputeRuns = 0
+		let probeHandlerRuns = 0
+		const stopProbe = effect(
+			() => {
+				probeComputeRuns++
+				return probe.get()
+			},
+			() => {
+				probeHandlerRuns++
+			},
+		)
+		fulfill(42) // settles synchronously; must not touch the reused record
+		expect(handlerRuns).toBe(1) // the dead handler never fires
+		// Settlement never addressed the reused record: no forged staleness,
+		// no spurious pull of the record's new owner.
+		expect(probeComputeRuns).toBe(1)
+		probe.set(1) // the record's new owner still hears its dependency
+		expect(probeComputeRuns).toBe(2)
+		expect(probeHandlerRuns).toBe(2)
+		stopProbe()
+	})
 })
 
 describe('errors are reference-stable boxes', () => {

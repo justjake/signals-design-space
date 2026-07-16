@@ -214,6 +214,14 @@ function settle(box: ThenableBox, status: 'fulfilled' | 'rejected', result: unkn
 	startBatch()
 	try {
 		for (const node of nodes) {
+			// A disposed effect's record may already be reclaimed and reused,
+			// so its id must not be addressed; the handle-owned mark is the
+			// only safe liveness signal here. Skipping is also the right
+			// semantics: effects are terminal, so a dead one has no
+			// downstream and its compute must not re-run.
+			if ((node as { disposed?: boolean }).disposed === true) {
+				continue
+			}
 			invalidateDerived(node, cause)
 			try {
 				untracked(() => ensureFresh(node))
@@ -266,10 +274,7 @@ export function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>)
 		emitEvent('compute-suspend', consumer, currentCause, { suspension })
 	}
 	consumer.throwable = suspension
-	// EverAsync marks the node as a possible member of a parked set for the
-	// rest of its life; effect disposal keys its record-reclaim path on it.
-	graphMemory[consumer.id + NodeSlot.Flags] =
-		(flags & ~Flag.AsyncMask) | Flag.AsyncSuspended | Flag.EverAsync
+	graphMemory[consumer.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended
 	asyncPlaneUsed = true
 	throw PARKED
 }
