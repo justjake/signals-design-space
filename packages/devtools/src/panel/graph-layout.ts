@@ -31,6 +31,9 @@ export interface PlacedNode {
 	status: NodeStatus
 	hot: boolean
 	focus: boolean
+	/** Most recent entry id — the flash re-keys on this so a node flashes when
+	 * it updates. */
+	lastEventId: number
 }
 
 export interface PlacedEdge {
@@ -135,6 +138,7 @@ function place(
 				status: n.status,
 				hot: hot.has(id),
 				focus: id === focusId,
+				lastEventId: n.lastEventId,
 			})
 		}
 		y += ROW_GAP

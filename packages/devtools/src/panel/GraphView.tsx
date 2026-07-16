@@ -155,7 +155,7 @@ export function GraphView({
 							<tbody>
 								{rows.map((n) => (
 									<tr
-										key={n.id}
+										key={`${n.id}:${n.last?.id ?? 0}`}
 										className={n.id === effectiveFocus ? 'selected' : undefined}
 										aria-selected={n.id === effectiveFocus}
 									>
@@ -202,7 +202,7 @@ export function GraphView({
 								))}
 								{layout.nodes.map((n) => (
 									<g
-										key={n.id}
+										key={`${n.id}:${n.lastEventId}`}
 										className={`node ${n.kind}${n.focus ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}`}
 										transform={`translate(${n.x},${n.y})`}
 										role="button"

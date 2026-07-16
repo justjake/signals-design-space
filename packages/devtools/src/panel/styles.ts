@@ -17,6 +17,8 @@ export const PANEL_CSS = `
 @keyframes signals-devtools-blink { 50% { opacity: .35; } }
 @keyframes signals-devtools-travel { to { stroke-dashoffset: -140; } }
 @keyframes signals-devtools-nodepulse { 0%, 60% { opacity: 0; } 70% { opacity: .8; } 100% { opacity: 0; } }
+@keyframes signals-devtools-flash { from { background-color: color-mix(in srgb, var(--thread) 34%, transparent); } to { background-color: transparent; } }
+@keyframes signals-devtools-flash-svg { from { fill: color-mix(in srgb, var(--thread) 50%, var(--surface)); } to { fill: var(--surface); } }
 @scope (.signals-devtools-root) {
   :scope {
     --base00: #191919; --base01: #202020; --base02: #383836; --base03: #7d7a75;
@@ -307,8 +309,16 @@ export const PANEL_CSS = `
   .td-foot .tbtn { padding: 5px 12px; }
   .td-foot .td-apply { color: var(--bg); background: var(--thread); border-color: var(--thread); font-weight: 600; }
 
+  /* flash on update: a row/node re-mounts (keyed on its last event) → the
+     animation replays once, fading a tint away. New log entries flash on
+     insert the same way. */
+  .log tbody tr { animation: signals-devtools-flash .8s ease-out; }
+  .nodelist tbody tr { animation: signals-devtools-flash .8s ease-out; }
+  .node rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
+
   @media (prefers-reduced-motion: reduce) {
-    .thread-anim, .rec .pulse, .node.hot .ring { animation: none; }
+    .thread-anim, .rec .pulse, .node.hot .ring,
+    .log tbody tr, .nodelist tbody tr, .node rect:not(.ring) { animation: none; }
     .thread-anim { opacity: 0; }
   }
 }
