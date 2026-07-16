@@ -15,8 +15,14 @@ describe('panel view-model', () => {
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
+			// parity recomputes to the same value on 1 → 5, feeding sameResults.
+			const parity = createComputed(() => count.get() % 2, { label: 'parity' })
 			effect(
 				() => doubled.get(),
+				() => {},
+			)
+			effect(
+				() => parity.get(),
 				() => {},
 			)
 			set(count, 5)
@@ -47,6 +53,12 @@ describe('panel view-model', () => {
 			expect(dRow.kind).toBe('computed')
 			expect(dRow.value).toBe('10')
 			expect(dRow.recomputes).toBeGreaterThanOrEqual(1)
+			// The "+ metrics" columns read retained per-node stats off the row.
+			expect(dRow.selfUs).toBeGreaterThanOrEqual(0)
+			expect(dRow.newResults).toBeGreaterThanOrEqual(1)
+			expect(dRow.sameResults).toBe(0) // 2 → 10: every recompute changed
+			const pRow = nrows.find((n) => n.name === 'parity')!
+			expect(pRow.sameResults).toBeGreaterThanOrEqual(1) // 1 → 1: unchanged
 
 			// Inspector model: value, deps by name, and a why-chain rooted at 0.
 			const details = inspectorModel(collector, dRow.id)!

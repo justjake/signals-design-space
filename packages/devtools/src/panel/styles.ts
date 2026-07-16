@@ -111,6 +111,9 @@ export const PANEL_CSS = `
   .nodelist tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--computed); }
   .nodelist .dot { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 7px; }
   .nodelist .num { text-align: right; color: var(--muted); }
+  /* the "+ metrics" toggle cell: tighter padding so the button doesn't grow the header row */
+  .nodelist th.metrics-th { text-align: right; padding-top: 2px; padding-bottom: 2px; cursor: default; }
+  .nodelist th.metrics-th .tbtn { padding: 2px 8px; }
   .nodelist .own { color: var(--watcher); }
   .nodelist .dimtxt { color: var(--faint); }
   .nodelist tfoot td { color: var(--faint); font-style: italic; border-bottom: none; }

@@ -58,4 +58,52 @@ describe('inline host renders and live-updates from fx2', () => {
 			dt.detach()
 		}
 	})
+
+	it('reveals the metric columns only after "+ metrics" is toggled on', async () => {
+		const dt = attachFx2Devtools()
+		const el = document.createElement('div')
+		document.body.appendChild(el)
+		let handle: { unmount(): void } | undefined
+		try {
+			const count = createAtom(1, { label: 'count' })
+			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
+			effect(
+				() => doubled.get(),
+				() => {},
+			)
+			set(count, 5)
+
+			await act(async () => {
+				handle = mountDevtools(el, dt.collector)
+			})
+
+			const headers = () => [...el.querySelectorAll('.nodelist thead th')].map((th) => th.textContent?.trim() ?? '')
+			// Default columns are exactly name · kind · value · last event; the
+			// trailing header cell is the opt-in affordance, not a column.
+			expect(headers()).toEqual(['name', 'kind', 'value', 'last event', '+ metrics'])
+
+			await clickButton(el, '+ metrics')
+			expect(headers()).toEqual(['name', 'kind', 'value', 'last event', 'recomputes', 'run time', 'unchanged', '− metrics'])
+
+			// The metric cells carry the computed's numbers.
+			const row = [...el.querySelectorAll('.nodelist tbody tr')].find((r) => r.textContent?.includes('doubled'))!
+			const cells = [...row.querySelectorAll('td')].map((td) => td.textContent?.trim() ?? '')
+			expect(cells[4]).toMatch(/^\d+$/) // recomputes
+			expect(cells[5]).toMatch(/^\d+(\.\d+)?(µs|ms)$/) // run time via fmtTook
+			expect(cells[6]).toMatch(/^(\d+%)?$/) // unchanged ratio; blank before a recompute settles
+
+			// A metric header click ranks the list by it, descending.
+			const runTimeTh = () => [...el.querySelectorAll('.nodelist thead th')].find((t) => t.textContent?.trim() === 'run time') as HTMLElement
+			await act(async () => {
+				runTimeTh().click()
+			})
+			expect(runTimeTh().getAttribute('aria-sort')).toBe('descending')
+
+			await clickButton(el, '− metrics')
+			expect(headers()).toEqual(['name', 'kind', 'value', 'last event', '+ metrics'])
+		} finally {
+			if (handle) await act(async () => handle!.unmount())
+			dt.detach()
+		}
+	})
 })

@@ -223,6 +223,11 @@ export interface NodeRow {
 	status: GraphNode['status']
 	stale: boolean
 	recomputes: number
+	/** Total µs spent running the node's own work, for the "run time" column. */
+	selfUs: number
+	/** Recompute outcomes (changed vs. same result), for the "unchanged" column. */
+	newResults: number
+	sameResults: number
 	/** The node's most recent entry, for the "last event" column. */
 	last: { id: EventId; kind: string } | undefined
 }
@@ -238,6 +243,9 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 		status: n.status,
 		stale: n.stale,
 		recomputes: n.recomputes,
+		selfUs: n.selfUs,
+		newResults: n.newResults,
+		sameResults: n.sameResults,
 		last: n.lastEventId > 0 ? { id: n.lastEventId, kind: n.lastKind ?? '' } : undefined,
 	}))
 }

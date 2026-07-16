@@ -39,6 +39,19 @@ const KIND_CHIPS: { kind: NodeKind; label: string }[] = [
 	{ kind: 'effect', label: 'effect' },
 ]
 
+/**
+ * The "+ metrics" opt-in node-list columns (DESIGN §6 progressive disclosure);
+ * clicking a header ranks the listed window by that metric, descending.
+ * DESIGN §6's fourth column, "downstream cost", is a follow-on: it needs the
+ * trace-ring chain-walk attribution of DESIGN §4, which nothing computes yet.
+ */
+type MetricKey = 'recomputes' | 'selfUs' | 'unchanged'
+const METRIC_COLS: { key: MetricKey; label: string; tip: string }[] = [
+	{ key: 'recomputes', label: 'recomputes', tip: 'How many times this node ran in the recorded window. Click to rank.' },
+	{ key: 'selfUs', label: 'run time', tip: 'Total time spent running this node’s own function in the recorded window. Click to rank.' },
+	{ key: 'unchanged', label: 'unchanged', tip: 'Share of recomputes that produced the same result — downstream work stopped. Click to rank.' },
+]
+
 function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: NodeId) => void }) {
 	return (
 		<ul className="linklist">
@@ -93,6 +106,10 @@ export function GraphView({
 	const [eventSel, setEventSel] = useState<EventId | undefined>(undefined)
 	// Optional status filter for the node list (error / suspended).
 	const [statusOnly, setStatusOnly] = useState<NodeStatus | undefined>(undefined)
+	// "+ metrics" columns: off by default (progressive disclosure); rankBy is
+	// the metric header the list is sorted by, descending.
+	const [metricsOn, setMetricsOn] = useState(false)
+	const [rankBy, setRankBy] = useState<MetricKey | undefined>(undefined)
 	// Per-column node cap; a frontier stub raises it to reveal more.
 	const [perCol, setPerCol] = useState(DEFAULT_PER_COL)
 	// Pan/zoom viewBox; undefined means "fit the whole focus set".
@@ -108,6 +125,16 @@ export function GraphView({
 	const allRows = nodeRows(backend, query, LIST_CAP)
 	const rows = allRows.filter((n) => kindOn[n.kind] && (statusOnly === undefined || n.status === statusOnly))
 	const effectiveFocus = focus ?? rows[0]?.id ?? allRows[0]?.id ?? undefined
+	// Rank in place, after the focus fallback took rows[0], so sorting the list
+	// never relayouts the canvas. Nodes with no settled recompute rank as 0%.
+	if (metricsOn && rankBy !== undefined)
+		rows.sort((a, b) =>
+			rankBy === 'recomputes'
+				? b.recomputes - a.recomputes
+				: rankBy === 'selfUs'
+					? b.selfUs - a.selfUs
+					: (b.sameResults / (b.newResults + b.sameResults) || 0) - (a.sameResults / (a.newResults + a.sameResults) || 0),
+		)
 	const moreThanListed = counts.nodes - allRows.length
 	// Status counts over the listed window (a searchable slice, not the whole
 	// graph) — enough to surface errored/suspended nodes to filter to.
@@ -309,6 +336,29 @@ export function GraphView({
 									<th>kind</th>
 									<th>value</th>
 									<th>last event</th>
+									{metricsOn
+										? METRIC_COLS.map((c) => (
+												<th
+													key={c.key}
+													className={`num${rankBy === c.key ? ' sorted' : ''}`}
+													aria-sort={rankBy === c.key ? 'descending' : undefined}
+													data-tip={c.tip}
+													onClick={() => setRankBy(rankBy === c.key ? undefined : c.key)}
+												>
+													{c.label}
+												</th>
+											))
+										: undefined}
+									<th className="metrics-th">
+										<button
+											className="tbtn"
+											aria-pressed={metricsOn}
+											data-tip="Add metric columns — recomputes, run time, unchanged — over the recorded window. Click a column to rank."
+											onClick={() => setMetricsOn(!metricsOn)}
+										>
+											{metricsOn ? '− metrics' : '+ metrics'}
+										</button>
+									</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -328,12 +378,22 @@ export function GraphView({
 											{n.value}
 										</td>
 										<td className="dimtxt">{n.last ? `${fmtId('event', n.last.id)} ${n.last.kind}` : '—'}</td>
+										{metricsOn ? (
+											<>
+												<td className="num">{n.recomputes}</td>
+												<td className="num">{fmtTook(n.selfUs)}</td>
+												<td className="num">
+													{n.newResults + n.sameResults > 0 ? `${Math.round((n.sameResults / (n.newResults + n.sameResults)) * 100)}%` : ''}
+												</td>
+											</>
+										) : undefined}
+										<td />
 									</tr>
 								))}
 							</tbody>
 							<tfoot>
 								<tr>
-									<td colSpan={4}>
+									<td colSpan={metricsOn ? 8 : 5}>
 										{rows.length} shown
 										{allRows.length > rows.length ? ` · ${allRows.length - rows.length} hidden by kind` : ''}
 										{moreThanListed > 0 ? ` · ${moreThanListed.toLocaleString()} more — search to narrow` : ''}
