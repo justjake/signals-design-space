@@ -77,7 +77,8 @@ export function GraphView({
 	const [depth, setDepth] = useState(2)
 	const [kindOn, setKindOn] = useState<Record<NodeKind, boolean>>({ atom: true, computed: true, watcher: true, effect: true })
 	const [drawerOpen, setDrawerOpen] = useState(true)
-	const [history, setHistory] = useState<number[]>([])
+	// Back/forward navigation over the focused-node trail: `at` is the cursor.
+	const [nav, setNav] = useState<{ trail: number[]; at: number }>({ trail: [], at: -1 })
 	const [copied, setCopied] = useState(false)
 	// Resizable pane sizes (px).
 	const [nodeListH, setNodeListH] = useState(168)
@@ -119,10 +120,38 @@ export function GraphView({
 		setEventSel(null)
 		setPerCol(DEFAULT_PER_COL)
 		setView(null)
-		if (effectiveFocus !== null) {
-			setHistory((h) => (h[h.length - 1] === effectiveFocus ? h : [...h.slice(-6), effectiveFocus]))
-		}
 	}, [effectiveFocus])
+
+	// Back/forward history tracks the inspected node (`selected`) — the thing you
+	// actually navigate. Any selection (a pick, a focus change, a jump) appends
+	// and drops the forward tail; a back/forward move sets `navigating` so its
+	// own selection isn't re-recorded.
+	const navigating = useRef(false)
+	useEffect(() => {
+		if (selected === null) return
+		if (navigating.current) {
+			navigating.current = false
+			return
+		}
+		setNav((n) => {
+			if (n.trail[n.at] === selected) return n
+			const trail = [...n.trail.slice(0, n.at + 1), selected].slice(-20)
+			return { trail, at: trail.length - 1 }
+		})
+	}, [selected])
+
+	const goTo = (at: number) => {
+		navigating.current = true
+		setNav((n) => ({ ...n, at }))
+		setSelected(nav.trail[at])
+		setEventSel(null)
+	}
+	const goBack = () => {
+		if (nav.at > 0) goTo(nav.at - 1)
+	}
+	const goForward = () => {
+		if (nav.at < nav.trail.length - 1) goTo(nav.at + 1)
+	}
 
 	const sel = selected ?? effectiveFocus
 	const model = sel === null ? null : inspectorModel(backend, sel)
@@ -313,6 +342,14 @@ export function GraphView({
 					<div className="canvas-wrap">
 						{layout !== null ? (
 							<div className="canvas-controls">
+								<span role="group" aria-label="Navigate history" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+									<button className="tbtn mode" data-tip="Back to the previous focused node." aria-label="Back" disabled={nav.at <= 0} onClick={goBack}>
+										◀
+									</button>
+									<button className="tbtn mode" data-tip="Forward." aria-label="Forward" disabled={nav.at >= nav.trail.length - 1} onClick={goForward}>
+										▶
+									</button>
+								</span>
 								<button className="tbtn" data-tip="How many levels of dependencies/subscribers to lay out around the focus." onClick={() => setDepth(depth >= 3 ? 1 : depth + 1)}>
 									Depth: {depth}
 								</button>

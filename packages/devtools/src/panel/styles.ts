@@ -72,6 +72,8 @@ export const PANEL_CSS = `
   .kchip.on { color: var(--text); border-color: var(--border-strong); }
   .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; background: var(--surface); }
   .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
+  .tbtn:disabled { opacity: .4; cursor: default; }
+  .tbtn:disabled:hover { color: var(--muted); border-color: var(--border); }
   .tbtn.mode { border-radius: 0; }
   .tbtn.mode[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
   .toolbar .spacer, .controls .spacer { flex: 1; }
