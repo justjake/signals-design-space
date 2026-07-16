@@ -79,6 +79,9 @@ export interface NodeDetails extends GraphNode {
 	subs: number[]
 	/** Error message / awaited-source preview when status !== 'ok'. */
 	pending: string | null
+	/** A deeper, multi-line value preview for the inspector (the list/canvas use
+	 * the short `valuePreview`). Null when the node has no value. */
+	valueFull: string | null
 }
 
 export interface Counts {

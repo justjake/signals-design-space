@@ -30,6 +30,8 @@ export interface NodeProvider {
 	kind(id: number): NodeKind | undefined
 	label(id: number): string | null
 	value(id: number): { preview: string | null; status: NodeStatus; stale: boolean; pending: string | null } | undefined
+	/** A deeper, multi-line value preview for the inspector (on-demand only). */
+	valueFull(id: number): string | null | undefined
 	deps(id: number): number[]
 	subs(id: number): number[]
 }
@@ -248,6 +250,7 @@ export class Collector implements Backend {
 			deps: this.provider.deps(id),
 			subs: this.provider.subs(id),
 			pending: v?.pending ?? null,
+			valueFull: this.provider.valueFull(id) ?? null,
 		}
 	}
 }

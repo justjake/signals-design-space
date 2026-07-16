@@ -477,7 +477,7 @@ export function GraphView({
 
 						<div className="insp-section">
 							<h3>Value</h3>
-							<div className="value-preview">{model.node.valuePreview ?? '—'}</div>
+							<div className="value-preview">{model.node.valueFull ?? model.node.valuePreview ?? '—'}</div>
 							{model.node.pending !== null ? (
 								<div className="sumline" style={{ color: statusVar(model.node.status) }}>
 									{model.node.pending}

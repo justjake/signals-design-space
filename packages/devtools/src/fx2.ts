@@ -59,6 +59,24 @@ function errorPreview(e: unknown): string {
 	return preview(e)
 }
 
+/** A deeper, multi-line preview for the inspector: a couple levels of an
+ * object/array, capped at a few entries per level, indented. Bounded depth and
+ * width keep it cheap and safe on huge or cyclic values; it returns a string
+ * and never retains the value. */
+function deepPreview(v: unknown, depth: number): string {
+	if (depth <= 0 || v === null || typeof v !== 'object') return preview(v)
+	const indent = (s: string) => s.replace(/\n/g, '\n  ')
+	if (Array.isArray(v)) {
+		const rows = v.slice(0, 6).map((x) => `  ${indent(deepPreview(x, depth - 1))},`)
+		if (v.length > 6) rows.push(`  … ${v.length - 6} more`)
+		return `[\n${rows.join('\n')}\n]`
+	}
+	const keys = Object.keys(v as object)
+	const rows = keys.slice(0, 6).map((k) => `  ${k}: ${indent(deepPreview((v as Record<string, unknown>)[k], depth - 1))},`)
+	if (keys.length > 6) rows.push(`  … ${keys.length - 6} more`)
+	return `{\n${rows.join('\n')}\n}`
+}
+
 /** Short label for the DOM event behind an operation: "click button#submit". */
 function describeEvent(ev: Event): string {
 	const t = ev.target
@@ -141,6 +159,19 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 				}
 			}
 			return { preview: null, status: nodeStatus(node) as NodeStatus, stale: false, pending: null }
+		},
+		valueFull(id) {
+			const node = deref(id)
+			if (node === undefined) return undefined
+			const kind = kindOf(node)
+			if (kind !== 'atom' && kind !== 'computed') return null
+			const snap = inspect(node as ProducerNode)
+			if (snap.uninitialized) return 'uninitialized'
+			try {
+				return deepPreview(snap.value, 2)
+			} catch {
+				return preview(snap.value)
+			}
 		},
 		deps(id) {
 			const node = deref(id)
