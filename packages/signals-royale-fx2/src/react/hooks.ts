@@ -263,6 +263,16 @@ export function useValue<T>(x: Signal<T>): T {
 		}
 		stateRef.current = state
 	}
+	// Name the watcher lazily too: a hook that first rendered before the tracer
+	// attached (the panel opened after load) captured no name. Grab it on the
+	// first render once tracing is on, and stamp the already-subscribed watcher
+	// node, so the devtools shows the component instead of "watcher#id".
+	if (emitEvent !== null && state.watcherLabel === undefined) {
+		state.watcherLabel = renderingComponentName()
+	}
+	if (state.watcher !== undefined && state.watcher.label === undefined && state.watcherLabel !== undefined) {
+		state.watcher.label = state.watcherLabel
+	}
 	// Draft ids delivered to this hook's reducer since its last render. A
 	// repeat id adds nothing while the first is still queued: the dispatch
 	// only schedules, and the pass that consumes it resolves the world
