@@ -467,7 +467,7 @@ export function LogView({
 
 				{sel !== null ? <ResizeHandle dir="h" onDelta={(d) => setCzW((w) => clampSize(w - d, 220, 640))} /> : null}
 				{sel !== null ? (
-					<aside className="causality" aria-label="Why this ran" style={{ width: czW }}>
+					<aside className="causality" aria-label="Caused by" style={{ width: czW }}>
 						<div className="cz-head">
 							<div className="cz-kicker">Selected entry</div>
 							<div className="cz-title">
@@ -479,7 +479,7 @@ export function LogView({
 						</div>
 						<div className="cz-section">
 							<h3 data-tip="The chain that led here, in stack-trace order: the selected entry on top, each cause beneath it, the user input at the bottom.">
-								Why this ran
+								Caused by
 							</h3>
 							<CauseSpine
 								chain={spine}

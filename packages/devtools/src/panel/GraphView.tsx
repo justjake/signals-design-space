@@ -263,22 +263,6 @@ export function GraphView({
 				</div>
 			</div>
 
-			<nav className="crumbs" aria-label="Focus history">
-				<span data-tip="The canvas draws only the neighborhood of the focused node. This trail is where you've been.">focus:</span>
-				{history.map((id, i) => {
-					const n = backend.node(id)
-					const name = n === null ? `#${id}` : n.label ?? `${n.kind}#${id}`
-					const here = i === history.length - 1
-					return (
-						<span key={`${id}-${i}`}>
-							{i > 0 ? ' › ' : ' '}
-							{here ? <span className="here">{name}</span> : <button onClick={() => setFocus(id)}>{name}</button>}
-						</span>
-					)
-				})}
-				<span style={{ marginLeft: 'auto' }}>click a node to focus</span>
-			</nav>
-
 			<div className="main">
 				<div className="canvas-col">
 					<section className="nodelist" aria-label="All nodes" style={{ height: nodeListH, maxHeight: nodeListH }}>
@@ -548,7 +532,7 @@ export function GraphView({
 
 						<div className="insp-section">
 							<h3 data-tip="The chain that led to the shown event, in stack-trace order: it on top, each cause beneath, user input at the bottom. Pick an event in the log below to trace it.">
-								Why this ran{eventSel !== null ? ` · #${eventSel}` : ''}
+								Last caused by{eventSel !== null ? ` · #${eventSel}` : ''}
 							</h3>
 							<CauseSpine chain={whyChain} onPick={(e) => e.node !== null && pick(e.node)} />
 						</div>

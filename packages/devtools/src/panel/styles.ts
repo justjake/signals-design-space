@@ -374,6 +374,10 @@ export const PANEL_CSS = `
   .toolbar .spacer, .controls .spacer { flex: 1 1 0; min-width: 0; }
   .crumbs { overflow-x: auto; white-space: nowrap; }
   .crumbs > * { flex: none; }
+  .nodelist th { white-space: nowrap; }
+  .drawer-head { flex-wrap: nowrap; overflow: hidden; }
+  .drawer-head button { flex: none; white-space: nowrap; }
+  .drawer-head .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
