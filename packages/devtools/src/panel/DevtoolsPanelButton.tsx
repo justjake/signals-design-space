@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { Backend } from '../protocol.ts'
 
 /**
@@ -15,6 +15,24 @@ import type { Backend } from '../protocol.ts'
  * the panel's (lazy) stylesheet.
  */
 const Panel = lazy(() => import('./App.tsx').then((m) => ({ default: m.App })))
+
+// Persist the launcher's open/dock/size/position so a full page reload — e.g.
+// a Vite reload after editing a non-component devtools module — reopens the
+// panel where it was instead of dropping back to the closed button.
+const STATE_KEY = 'signals-devtools-launcher'
+interface Persisted {
+	open: boolean
+	dock: 'right' | 'bottom'
+	size: number
+	pos: { x: number; y: number }
+}
+function loadState(): Partial<Persisted> {
+	try {
+		return JSON.parse(localStorage.getItem(STATE_KEY) ?? '{}') as Partial<Persisted>
+	} catch {
+		return {}
+	}
+}
 
 export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
 const BTN_W = 140
@@ -68,11 +86,20 @@ export function DevtoolsPanelButton({
 	defaultOpen?: boolean
 	label?: string
 }) {
-	const [open, setOpen] = useState(defaultOpen)
-	const [dock, setDock] = useState<'right' | 'bottom'>('right')
-	const [size, setSize] = useState(() => Math.round(window.innerWidth * 0.46))
-	const [pos, setPos] = useState(() => cornerPos(defaultCorner))
+	const saved = useRef(loadState()).current
+	const [open, setOpen] = useState(saved.open ?? defaultOpen)
+	const [dock, setDock] = useState<'right' | 'bottom'>(saved.dock ?? 'right')
+	const [size, setSize] = useState(() => saved.size ?? Math.round(window.innerWidth * 0.46))
+	const [pos, setPos] = useState(() => (saved.pos ? snap(saved.pos.x, saved.pos.y) : cornerPos(defaultCorner)))
 	const drag = useRef<{ gx: number; gy: number; moved: boolean } | null>(null)
+
+	useEffect(() => {
+		try {
+			localStorage.setItem(STATE_KEY, JSON.stringify({ open, dock, size, pos }))
+		} catch {
+			/* private mode — the panel just won't survive a reload */
+		}
+	}, [open, dock, size, pos])
 
 	const overlay =
 		dock === 'right'
