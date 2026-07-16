@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Backend } from '../protocol.ts'
+import type { Backend, EventId, NodeId } from '../protocol.ts'
 import { useBackend } from './store.ts'
 import { PANEL_CSS } from './styles.ts'
 import { ThemeDialog } from './ThemeDialog.tsx'
@@ -32,25 +32,25 @@ export function App({
 	// mount, not a frame late.
 	const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null)
 	const [tab, setTab] = useState<'graph' | 'log'>('graph')
-	const [focus, setFocus] = useState<number | null>(null)
+	const [focus, setFocus] = useState<NodeId | null>(null)
 	const [logQuery, setLogQuery] = useState('')
-	const [logSelect, setLogSelect] = useState<number | null>(null)
+	const [logSelect, setLogSelect] = useState<EventId | null>(null)
 	const [themeOpen, setThemeOpen] = useState(false)
 
-	const inspect = (id: number) => {
+	const inspect = (id: NodeId) => {
 		setFocus(id)
 		setTab('graph')
 	}
 	// Open a specific event in the log — the graph's causal chain uses this so a
 	// spine entry links to its log row (not just to the node it's about).
-	const openEventInLog = (eventId: number) => {
+	const openEventInLog = (eventId: EventId) => {
 		setLogSelect(eventId)
 		setTab('log')
 	}
 	// "Open in Log" pre-populates the visible search filter with the node's name
 	// — no hidden per-node state; it's the log, filtered, and you can see and
 	// clear the filter.
-	const openInLog = (id: number) => {
+	const openInLog = (id: NodeId) => {
 		const n = backend.node(id)
 		setLogQuery(`name:${n?.label ?? `${n?.kind ?? 'node'}#${id}`}`)
 		setTab('log')

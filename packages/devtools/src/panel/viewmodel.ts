@@ -9,10 +9,12 @@ import {
 	type Backend,
 	type DevtoolsEvent,
 	type EventFilter,
+	type EventId,
 	type GraphNode,
 	kindClass,
 	type KindClass,
 	type NodeDetails,
+	type NodeId,
 	type NodeKind,
 	type NodeStatus,
 	type StackFrame,
@@ -20,18 +22,18 @@ import {
 
 /** A log-table row: verbatim kind + its color class + the node's display name. */
 export interface LogRow {
-	id: number
+	id: EventId
 	kind: string
 	cls: KindClass
 	/** Node id this entry is about; null for engine entries. */
-	node: number | null
+	node: NodeId | null
 	/** Node label, or `kind#id` when unlabeled, or null for engine entries. */
 	name: string | null
 	/** One-line, plain-words summary of the entry's data. */
 	summary: string
 	/** µs since attach. */
 	t: number
-	cause: number
+	cause: EventId
 	/** Duration in µs, where the entry is a closed span (compute/effect). */
 	took: number | null
 	/** Short real wall-clock timestamp (HH:MM:SS.mmm). */
@@ -42,7 +44,7 @@ export interface LogRow {
 	stack: StackFrame[] | null
 }
 
-function nodeName(backend: Backend, id: number | null): string | null {
+function nodeName(backend: Backend, id: NodeId | null): string | null {
 	if (id === null) return null
 	const n = backend.node(id)
 	if (n === null) return `#${id}`
@@ -91,7 +93,7 @@ export function logRows(backend: Backend, filter: EventFilter, limit: number): L
 }
 
 /** The cause chain leading to `eventId`, resolved to rows, root first. */
-export function causeRows(backend: Backend, eventId: number): LogRow[] {
+export function causeRows(backend: Backend, eventId: EventId): LogRow[] {
 	return backend.causeChain(eventId).map((e) => toRow(backend, e))
 }
 
@@ -145,9 +147,9 @@ export interface TreeRow {
  * depth-first walk emits a stable, readable tree. A row whose id is in
  * `collapsed` is emitted, but its subtree is not.
  */
-export function logTree(rows: LogRow[], collapsed?: ReadonlySet<number>): TreeRow[] {
+export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeRow[] {
 	const present = new Set(rows.map((r) => r.id))
-	const childrenOf = new Map<number, LogRow[]>()
+	const childrenOf = new Map<EventId, LogRow[]>()
 	const roots: LogRow[] = []
 	for (const r of rows) {
 		if (r.cause > 0 && present.has(r.cause)) {
@@ -187,10 +189,10 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<number>): TreeRo
  * depth ≥ 1), bounded for huge fan-outs. Shared by the log's "what this caused"
  * and the graph inspector's last-event view.
  */
-export function causedTree(rows: LogRow[], eventId: number, cap = 200): TreeRow[] {
+export function causedTree(rows: LogRow[], eventId: EventId, cap = 200): TreeRow[] {
 	const self = rows.find((r) => r.id === eventId)
 	if (self === undefined) return []
-	const kids = new Map<number, LogRow[]>()
+	const kids = new Map<EventId, LogRow[]>()
 	for (const r of rows) {
 		if (r.cause > 0) {
 			const l = kids.get(r.cause)
@@ -199,8 +201,8 @@ export function causedTree(rows: LogRow[], eventId: number, cap = 200): TreeRow[
 		}
 	}
 	const sub: LogRow[] = []
-	const seen = new Set<number>()
-	const walk = (id: number): void => {
+	const seen = new Set<EventId>()
+	const walk = (id: EventId): void => {
 		for (const c of kids.get(id) ?? []) {
 			if (sub.length >= cap || seen.has(c.id)) continue
 			seen.add(c.id)
@@ -214,7 +216,7 @@ export function causedTree(rows: LogRow[], eventId: number, cap = 200): TreeRow[
 
 /** A node-list row for the graph view. */
 export interface NodeRow {
-	id: number
+	id: NodeId
 	kind: GraphNode['kind']
 	name: string
 	value: string
@@ -222,7 +224,7 @@ export interface NodeRow {
 	stale: boolean
 	recomputes: number
 	/** The node's most recent entry, for the "last event" column. */
-	last: { id: number; kind: string } | null
+	last: { id: EventId; kind: string } | null
 }
 
 export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[] {
@@ -245,7 +247,7 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
  * colored, clickable lists.
  */
 export interface NeighborRef {
-	id: number
+	id: NodeId
 	name: string
 	kind: NodeKind
 	status: NodeStatus
@@ -257,7 +259,7 @@ export interface NeighborRef {
  */
 const NEIGHBOR_CAP = 40
 
-function neighbors(backend: Backend, ids: number[]): NeighborRef[] {
+function neighbors(backend: Backend, ids: NodeId[]): NeighborRef[] {
 	const out: NeighborRef[] = []
 	for (const id of ids) {
 		if (out.length >= NEIGHBOR_CAP) break
@@ -285,7 +287,7 @@ export interface InspectorModel {
 	last: LogRow | null
 }
 
-export function inspectorModel(backend: Backend, id: number): InspectorModel | null {
+export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | null {
 	const node = backend.node(id)
 	if (node === null) return null
 	// The node's most recent entry anchors the "why" chain.

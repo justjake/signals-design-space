@@ -5,11 +5,11 @@
  * a node (or the visible log) as plain markdown and paste it into any chat.
  * Everything here comes from real recorded data; nothing is fabricated.
  */
-import type { Backend } from '../protocol.ts'
+import type { Backend, NodeId } from '../protocol.ts'
 import { inspectorModel, type LogRow } from './viewmodel.ts'
 
 /** A node's identity, value, edges, and why-it-last-ran chain, as markdown. */
-export function nodeMarkdown(backend: Backend, id: number): string {
+export function nodeMarkdown(backend: Backend, id: NodeId): string {
 	const m = inspectorModel(backend, id)
 	if (m === null) return `(node #${id} is gone)`
 	const n = m.node

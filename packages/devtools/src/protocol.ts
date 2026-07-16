@@ -27,6 +27,14 @@ export type KindClass =
 export type NodeKind = 'atom' | 'computed' | 'watcher' | 'effect'
 export type NodeStatus = 'ok' | 'suspended' | 'error'
 
+// Branded ids so a node id and an event id can't be swapped by mistake. Both
+// are numbers at runtime; the brand is type-level only. Mint at the source (the
+// adapter for a NodeId, the collector for an EventId) with a cast.
+declare const nodeIdBrand: unique symbol
+declare const eventIdBrand: unique symbol
+export type NodeId = number & { readonly [nodeIdBrand]: true }
+export type EventId = number & { readonly [eventIdBrand]: true }
+
 /** One parsed frame of a captured JS stack (app frames only). */
 export interface StackFrame {
 	fn: string
@@ -41,7 +49,7 @@ export interface StackFrame {
  * engine id for global uniqueness.
  */
 export interface GraphNode {
-	id: number
+	id: NodeId
 	kind: NodeKind
 	label: string | null
 	status: NodeStatus
@@ -64,36 +72,36 @@ export interface GraphNode {
 	 * The node's most recent entry — retained, so listing a node never scans
 	 * the ring. 0 / null when the node has no entry in the window.
 	 */
-	lastEventId: number
+	lastEventId: EventId
 	lastKind: string | null
 }
 
 /** A dependency edge: data flows dep → sub. */
 export interface GraphEdge {
-	from: number
-	to: number
+	from: NodeId
+	to: NodeId
 }
 
 /** One normalized trace entry. `kind` is the library's verbatim string. */
 export interface DevtoolsEvent {
-	id: number
+	id: EventId
 	kind: string
 	/** Provoking entry id; 0 = operation root. */
-	cause: number
+	cause: EventId
 	/** µs since the collector attached — monotonic, for durations and deltas. */
 	t: number
 	/** Wall-clock (epoch ms) when recorded, for a real timestamp in the UI. */
 	wall: number
 	/** Node this entry is about; null for engine-level entries. */
-	node: number | null
+	node: NodeId | null
 	/** Kind-specific fields the adapter passed through (phase, error preview…). */
 	data: Record<string, unknown>
 }
 
 /** Full inspector payload for one node (on-demand, inert). */
 export interface NodeDetails extends GraphNode {
-	deps: number[]
-	subs: number[]
+	deps: NodeId[]
+	subs: NodeId[]
 	/** Error message / awaited-source preview when status !== 'ok'. */
 	pending: string | null
 	/** A deeper, multi-line value preview for the inspector (the list/canvas use
@@ -115,7 +123,7 @@ export interface Counts {
 
 export interface EventFilter {
 	/** Restrict to entries about this node id. */
-	node?: number
+	node?: NodeId
 	/** Restrict to these kind classes. */
 	classes?: KindClass[]
 }
@@ -129,11 +137,11 @@ export interface Backend {
 	/** Recent entries, newest last, capped. */
 	events(filter: EventFilter, limit: number): DevtoolsEvent[]
 	/** Ancestor chain from the operation root to `eventId`, root first. */
-	causeChain(eventId: number): DevtoolsEvent[]
+	causeChain(eventId: EventId): DevtoolsEvent[]
 	/** Label/kind substring match, capped. */
 	search(query: string, cap: number): GraphNode[]
 	/** Inspector payload for one node (inert field peek + edge walk). */
-	node(id: number): NodeDetails | null
+	node(id: NodeId): NodeDetails | null
 	/** Subscribe to flushes; returns an unsubscribe. */
 	subscribe(listener: () => void): () => void
 }

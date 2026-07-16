@@ -10,7 +10,7 @@
  * Selection never moves a node — it only restyles it. Moving focus recomputes
  * the whole set. That keeps the picture stable to read.
  */
-import type { Backend, NodeDetails, NodeKind, NodeStatus } from '../protocol.ts'
+import type { Backend, EventId, NodeDetails, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
 
 const COL_GAP = 250
 const NODE_W = 176
@@ -21,7 +21,7 @@ const PAD_Y = 24
 const MAX_PER_COL = 6
 
 export interface PlacedNode {
-	id: number
+	id: NodeId
 	x: number
 	y: number
 	w: number
@@ -33,7 +33,7 @@ export interface PlacedNode {
 	focus: boolean
 	/** Most recent entry id — the flash re-keys on this so a node flashes when
 	 * it updates. */
-	lastEventId: number
+	lastEventId: EventId
 }
 
 export interface PlacedEdge {
@@ -66,9 +66,9 @@ export interface GraphLayout {
 }
 
 /** Nodes touched by the last propagation — drawn "hot" with the causal thread. */
-function hotSet(backend: Backend): Set<number> {
+function hotSet(backend: Backend): Set<NodeId> {
 	const last = backend.events({}, 1)[0]
-	const set = new Set<number>()
+	const set = new Set<NodeId>()
 	if (last === undefined) return set
 	for (const e of backend.causeChain(last.id)) if (e.node !== null) set.add(e.node)
 	return set
@@ -87,18 +87,18 @@ function subLine(n: NodeDetails): string {
  */
 function walk(
 	backend: Backend,
-	focusId: number,
+	focusId: NodeId,
 	dir: 'deps' | 'subs',
 	depth: number,
 	maxPerCol: number,
-	placed: Set<number>,
-): { columns: number[][]; overflow: number[] } {
-	const columns: number[][] = []
+	placed: Set<NodeId>,
+): { columns: NodeId[][]; overflow: number[] } {
+	const columns: NodeId[][] = []
 	const overflow: number[] = []
 	let frontier = [focusId]
 	for (let level = 0; level < depth; level++) {
-		const next: number[] = []
-		const seen = new Set<number>()
+		const next: NodeId[] = []
+		const seen = new Set<NodeId>()
 		for (const id of frontier) {
 			const n = backend.node(id)
 			if (n === null) continue
@@ -121,11 +121,11 @@ function walk(
 
 function place(
 	backend: Backend,
-	ids: number[],
+	ids: NodeId[],
 	x: number,
 	centerY: number,
-	focusId: number,
-	hot: Set<number>,
+	focusId: NodeId,
+	hot: Set<NodeId>,
 	out: PlacedNode[],
 ): void {
 	const total = ids.length * ROW_GAP - (ROW_GAP - NODE_H)
@@ -159,16 +159,16 @@ export function glyphFor(kind: NodeKind): string {
 
 /** Build the layout for the neighborhood of `focusId`. `maxPerCol` caps each
  * column (the rest collapse into a frontier stub); raise it to expand. */
-export function layoutFocus(backend: Backend, focusId: number, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | null {
+export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | null {
 	const focus = backend.node(focusId)
 	if (focus === null) return null
 	const hot = hotSet(backend)
-	const placed = new Set<number>([focusId])
+	const placed = new Set<NodeId>([focusId])
 	const up = walk(backend, focusId, 'deps', depth, maxPerCol, placed)
 	const down = walk(backend, focusId, 'subs', depth, maxPerCol, placed)
 
 	// Columns left→right: farthest upstream level … focus … farthest downstream.
-	const columns: { ids: number[]; overflow: number; dir: 'deps' | 'subs' | 'focus' }[] = []
+	const columns: { ids: NodeId[]; overflow: number; dir: 'deps' | 'subs' | 'focus' }[] = []
 	for (let level = up.columns.length - 1; level >= 0; level--)
 		columns.push({ ids: up.columns[level], overflow: up.overflow[level] ?? 0, dir: 'deps' })
 	columns.push({ ids: [focusId], overflow: 0, dir: 'focus' })

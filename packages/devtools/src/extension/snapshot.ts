@@ -15,9 +15,11 @@ import type {
 	Counts,
 	DevtoolsEvent,
 	EventFilter,
+	EventId,
 	GraphNode,
 	KindClass,
 	NodeDetails,
+	NodeId,
 } from '../protocol.ts'
 import { kindClass } from '../protocol.ts'
 
@@ -45,7 +47,7 @@ export function buildSnapshot(backend: Backend, opts?: { events?: number; nodes?
 /** Panel-side Backend that reads from the latest pushed snapshot. */
 export class SnapshotBackend implements Backend {
 	private snap: Snapshot = EMPTY
-	private readonly byNode = new Map<number, NodeDetails>()
+	private readonly byNode = new Map<NodeId, NodeDetails>()
 	private readonly listeners = new Set<() => void>()
 
 	/** Install a new snapshot and notify subscribers. */
@@ -78,8 +80,8 @@ export class SnapshotBackend implements Backend {
 		return out.reverse()
 	}
 
-	causeChain(eventId: number): DevtoolsEvent[] {
-		const byId = new Map<number, DevtoolsEvent>()
+	causeChain(eventId: EventId): DevtoolsEvent[] {
+		const byId = new Map<EventId, DevtoolsEvent>()
 		for (const e of this.snap.events) byId.set(e.id, e)
 		const chain: DevtoolsEvent[] = []
 		let id = eventId
@@ -104,7 +106,7 @@ export class SnapshotBackend implements Backend {
 		return out
 	}
 
-	node(id: number): NodeDetails | null {
+	node(id: NodeId): NodeDetails | null {
 		return this.byNode.get(id) ?? null
 	}
 }

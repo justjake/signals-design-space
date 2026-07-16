@@ -14,9 +14,11 @@ import type {
 	Counts,
 	DevtoolsEvent,
 	EventFilter,
+	EventId,
 	GraphNode,
 	KindClass,
 	NodeDetails,
+	NodeId,
 	NodeKind,
 	NodeStatus,
 } from './protocol.ts'
@@ -27,17 +29,17 @@ import { kindClass } from './protocol.ts'
  * fx2 adapter). `undefined` from any method means the node is gone.
  */
 export interface NodeProvider {
-	kind(id: number): NodeKind | undefined
-	label(id: number): string | null
-	value(id: number): { preview: string | null; status: NodeStatus; stale: boolean; pending: string | null } | undefined
+	kind(id: NodeId): NodeKind | undefined
+	label(id: NodeId): string | null
+	value(id: NodeId): { preview: string | null; status: NodeStatus; stale: boolean; pending: string | null } | undefined
 	/** A deeper, multi-line value preview for the inspector (on-demand only). */
-	valueFull(id: number): string | null | undefined
+	valueFull(id: NodeId): string | null | undefined
 	/** Name of the node's equality fn, for the inspector; null if none/anonymous. */
-	equals(id: number): string | null
+	equals(id: NodeId): string | null
 	/** A synthesized creation signature (stringified fn), or null. */
-	source(id: number): string | null
-	deps(id: number): number[]
-	subs(id: number): number[]
+	source(id: NodeId): string | null
+	deps(id: NodeId): NodeId[]
+	subs(id: NodeId): NodeId[]
 }
 
 interface DebugState {
@@ -49,7 +51,7 @@ interface DebugState {
 	/** Recompute outcomes: result changed vs. stayed equal. */
 	newResults: number
 	sameResults: number
-	lastEventId: number
+	lastEventId: EventId
 	lastKind: string
 }
 
@@ -66,9 +68,9 @@ export class Collector implements Backend {
 	 * id → event, for O(chain) cause walks without scanning the ring. Bounded
 	 * to `capacity`: an entry is dropped when its event is evicted.
 	 */
-	private readonly byId = new Map<number, DevtoolsEvent>()
+	private readonly byId = new Map<EventId, DevtoolsEvent>()
 	/** Reduced, retained per-node state — survives ring eviction. */
-	private readonly nodes = new Map<number, DebugState>()
+	private readonly nodes = new Map<NodeId, DebugState>()
 	/**
 	 * Live node count per kind, maintained incrementally so `counts()` is O(1)
 	 * rather than O(nodes) — it runs on every panel render.
@@ -95,17 +97,17 @@ export class Collector implements Backend {
 	 */
 	record(
 		kind: string,
-		node: number | null,
-		cause: number,
+		node: NodeId | null,
+		cause: EventId,
 		nodeKind: NodeKind | undefined,
 		data: Record<string, unknown>,
-	): number {
-		const id = this.nextId++
+	): EventId {
+		const id = this.nextId++ as EventId
 		this.totalEvents++
 		const evt: DevtoolsEvent = {
 			id,
 			kind,
-			cause: cause > 0 && cause < id ? cause : 0,
+			cause: cause > 0 && cause < id ? cause : (0 as EventId),
 			t: Math.round(this.now() - this.t0),
 			wall: Date.now(),
 			node,
@@ -143,7 +145,7 @@ export class Collector implements Backend {
 	 * outcome. The engine emits the entry before the work runs and closes it
 	 * after; timing lives here, where the clock is. No-op if evicted.
 	 */
-	endSpan(id: number, changed?: boolean): void {
+	endSpan(id: EventId, changed?: boolean): void {
 		const e = this.byId.get(id)
 		if (e === undefined) return
 		const took = Math.max(0, Math.round(this.now() - this.t0) - e.t)
@@ -173,7 +175,7 @@ export class Collector implements Backend {
 	}
 
 	/** Drop a node's retained state when the adapter observes it was GC'd. */
-	forget(id: number): void {
+	forget(id: NodeId): void {
 		const st = this.nodes.get(id)
 		if (st === undefined) return
 		const c = this.kindCounts[st.kind]
@@ -219,7 +221,7 @@ export class Collector implements Backend {
 		return out.reverse()
 	}
 
-	causeChain(eventId: number): DevtoolsEvent[] {
+	causeChain(eventId: EventId): DevtoolsEvent[] {
 		const chain: DevtoolsEvent[] = []
 		let id = eventId
 		let guard = 0
@@ -232,7 +234,7 @@ export class Collector implements Backend {
 		return chain.reverse()
 	}
 
-	private snapshot(id: number): GraphNode | null {
+	private snapshot(id: NodeId): GraphNode | null {
 		const st = this.nodes.get(id)
 		const kind = st?.kind ?? this.provider.kind(id)
 		if (kind === undefined) return null
@@ -249,7 +251,7 @@ export class Collector implements Backend {
 			selfUs: st?.selfUs ?? 0,
 			newResults: st?.newResults ?? 0,
 			sameResults: st?.sameResults ?? 0,
-			lastEventId: st?.lastEventId ?? 0,
+			lastEventId: st?.lastEventId ?? (0 as EventId),
 			lastKind: st?.lastKind ?? null,
 		}
 	}
@@ -267,7 +269,7 @@ export class Collector implements Backend {
 		return out
 	}
 
-	node(id: number): NodeDetails | null {
+	node(id: NodeId): NodeDetails | null {
 		const snap = this.snapshot(id)
 		if (snap === null) return null
 		const v = this.provider.value(id)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Backend, KindClass } from '../protocol.ts'
+import type { Backend, EventId, KindClass, NodeId } from '../protocol.ts'
 import { causedTree, causeRows, fmtDelta, fmtId, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { copyText, logMarkdown } from './markdown.ts'
@@ -74,7 +74,7 @@ function NameCell({
 }: {
 	row: LogRow
 	onCause: () => void
-	onNode: (id: number) => void
+	onNode: (id: NodeId) => void
 }) {
 	const nodeId = row.node
 	// The whole row selects (the <tr> handles the click); the cause ref is the
@@ -115,16 +115,16 @@ export function LogView({
 	backend: Backend
 	query: string
 	setQuery: (q: string) => void
-	inspect: (id: number) => void
+	inspect: (id: NodeId) => void
 	/** An event to select from outside (e.g. a graph spine link); null = none. */
-	selectEvent?: number | null
+	selectEvent?: EventId | null
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	const [on, setOn] = useState<Record<string, boolean>>({ write: true, compute: true, render: true, effect: true, internals: false })
 	const [paused, setPaused] = useState<LogRow[] | null>(null)
 	const [floor, setFloor] = useState(0)
-	const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
-	const [selected, setSelected] = useState<number | null>(null)
+	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
+	const [selected, setSelected] = useState<EventId | null>(null)
 	const [copied, setCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
 	// Timeline brush: [t0, t1] in µs, or null for the full window.
@@ -171,7 +171,7 @@ export function LogView({
 	let treeInput = rows
 	if (mode === 'tree') {
 		const inWindow = new Set(rows.map((r) => r.id))
-		const extra = new Map<number, LogRow>()
+		const extra = new Map<EventId, LogRow>()
 		for (const r of rows) {
 			if (r.cause > 0 && !inWindow.has(r.cause) && !extra.has(r.cause)) {
 				for (const anc of causeRows(backend, r.cause)) if (!inWindow.has(anc.id)) extra.set(anc.id, anc)
@@ -181,7 +181,7 @@ export function LogView({
 	}
 	const tree = mode === 'tree' ? logTree(treeInput, collapsed) : null
 	const treeRows = tree
-	const toggleCollapsed = (id: number) =>
+	const toggleCollapsed = (id: EventId) =>
 		setCollapsed((prev) => {
 			const next = new Set(prev)
 			if (next.has(id)) next.delete(id)
@@ -193,9 +193,9 @@ export function LogView({
 	// within the shown set. Drives the timeline spans and the op entry count —
 	// without walking a cause chain per row.
 	const byId = new Map(base.map((r) => [r.id, r]))
-	const rootMemo = new Map<number, number>()
-	const rootOf = (id: number): number => {
-		const seen: number[] = []
+	const rootMemo = new Map<EventId, EventId>()
+	const rootOf = (id: EventId): EventId => {
+		const seen: EventId[] = []
 		let cur = id
 		for (;;) {
 			const memo = rootMemo.get(cur)
@@ -208,7 +208,7 @@ export function LogView({
 		for (const s of seen) rootMemo.set(s, cur)
 		return cur
 	}
-	const ops = new Map<number, { minT: number; maxT: number; count: number }>()
+	const ops = new Map<EventId, { minT: number; maxT: number; count: number }>()
 	for (const r of base) {
 		const root = rootOf(r.id)
 		const g = ops.get(root)
@@ -282,7 +282,7 @@ export function LogView({
 						onClick={() =>
 							setCollapsed((prev) => {
 								if (prev.size > 0) return new Set()
-								const next = new Set<number>()
+								const next = new Set<EventId>()
 								for (const t of tree ?? []) if (t.depth === 0 && t.children > 0) next.add(t.row.id)
 								return next
 							})

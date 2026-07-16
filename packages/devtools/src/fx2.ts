@@ -14,7 +14,6 @@ import {
 	nodeId as fx2NodeId,
 	nodeKind as fx2NodeKind,
 	nodeStatus,
-	type NodeId,
 	NO_EVENT,
 	type ReactiveNode,
 	type ProducerNode,
@@ -24,7 +23,7 @@ import {
 	type TraceFields,
 } from 'signals-royale-fx2/debug'
 import { Collector, type NodeProvider } from './collector.ts'
-import type { NodeKind, NodeStatus, StackFrame } from './protocol.ts'
+import type { EventId, NodeId, NodeKind, NodeStatus, StackFrame } from './protocol.ts'
 
 const PREVIEW_MAX = 60
 
@@ -125,25 +124,25 @@ export interface Fx2Devtools {
  */
 export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number }): Fx2Devtools {
 	// id -> live node, WeakRef so a disposed node can be collected.
-	const registry = new Map<number, WeakRef<ReactiveNode>>()
+	const registry = new Map<NodeId, WeakRef<ReactiveNode>>()
 	// Last value preview recorded per node, for the write diff. Only previews
 	// (short strings) are held — never a node or a live value — so this can't
 	// leak the graph. Pruned with the node.
-	const lastValue = new Map<number, string>()
+	const lastValue = new Map<NodeId, string>()
 	// Dedup key + id of the DOM event currently attributed as an operation root.
 	let lastDomKey = ''
-	let lastDomId = 0
+	let lastDomId: EventId = 0 as EventId
 	const finalizer =
 		typeof FinalizationRegistry !== 'undefined'
-			? new FinalizationRegistry<number>((id) => {
+			? new FinalizationRegistry<NodeId>((id) => {
 					registry.delete(id)
 					lastValue.delete(id)
 					collector.forget(id)
 				})
 			: null
 
-	function register(node: ReactiveNode): number {
-		const id = fx2NodeId(node) as unknown as number
+	function register(node: ReactiveNode): NodeId {
+		const id = fx2NodeId(node) as unknown as NodeId
 		if (!registry.has(id)) {
 			registry.set(id, new WeakRef(node))
 			finalizer?.register(node, id)
@@ -151,7 +150,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		return id
 	}
 
-	function deref(id: number): ReactiveNode | undefined {
+	function deref(id: NodeId): ReactiveNode | undefined {
 		return registry.get(id)?.deref()
 	}
 
@@ -248,7 +247,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 		const nodeIdNum = node !== null ? register(node) : null
 		const nodeKind = node !== null ? kindOf(node) : undefined
 		const data = fields !== undefined ? fieldsToData(fields) : {}
-		let parent = cause as unknown as number
+		let parent = cause as unknown as EventId
 		// Value diff on a write: the atom already holds the new value when this
 		// fires, so peek it inertly and diff against the last we recorded. The
 		// engine never sends values — value inspection lives here — so the diff
@@ -265,7 +264,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 			// capture the app stack that led here, and attribute it to the DOM
 			// event being dispatched so the causal chain begins at the user input.
 			// One origin per event, shared by its writes.
-			if (parent === 0) {
+			if (parent === (0 as EventId)) {
 				const stack = captureStack()
 				if (stack.length > 0) data.stack = stack
 				const ev = (globalThis as { event?: Event }).event
@@ -273,7 +272,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 					const key = `${ev.type}@${ev.timeStamp}`
 					if (key !== lastDomKey) {
 						lastDomKey = key
-						lastDomId = collector.record('dom-event', null, 0, undefined, { label: describeEvent(ev) })
+						lastDomId = collector.record('dom-event', null, 0 as EventId, undefined, { label: describeEvent(ev) })
 					}
 					parent = lastDomId
 				}
@@ -284,7 +283,7 @@ export function attachFx2Devtools(opts?: { capacity?: number; now?: () => number
 	setTracer({
 		emitEvent: emit,
 		startSpan: emit,
-		endSpan: (id, attrs) => collector.endSpan(id as unknown as number, attrs?.changed),
+		endSpan: (id, attrs) => collector.endSpan(id as unknown as EventId, attrs?.changed),
 	})
 
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }

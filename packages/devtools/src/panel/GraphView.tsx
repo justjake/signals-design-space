@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Backend, NodeKind, NodeStatus } from '../protocol.ts'
+import type { Backend, EventId, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
 import { causedTree, causeRows, fmtId, fmtTook, inspectorModel, logRows, type NeighborRef, nodeRows } from './viewmodel.ts'
 import { CauseSpine, EventRef } from './CauseSpine.tsx'
 import { glyphFor, layoutFocus } from './graph-layout.ts'
@@ -39,7 +39,7 @@ const KIND_CHIPS: { kind: NodeKind; label: string }[] = [
 	{ kind: 'effect', label: 'effect' },
 ]
 
-function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: number) => void }) {
+function NeighborList({ items, onPick }: { items: NeighborRef[]; onPick: (id: NodeId) => void }) {
 	return (
 		<ul className="linklist">
 			{items.map((n) => (
@@ -68,17 +68,17 @@ export function GraphView({
 	openEventInLog,
 }: {
 	backend: Backend
-	focus: number | null
-	setFocus: (id: number | null) => void
-	openInLog: (id: number) => void
-	openEventInLog: (eventId: number) => void
+	focus: NodeId | null
+	setFocus: (id: NodeId | null) => void
+	openInLog: (id: NodeId) => void
+	openEventInLog: (eventId: EventId) => void
 }) {
 	const [query, setQuery] = useState('')
 	const [depth, setDepth] = useState(2)
 	const [kindOn, setKindOn] = useState<Record<NodeKind, boolean>>({ atom: true, computed: true, watcher: true, effect: true })
 	const [drawerOpen, setDrawerOpen] = useState(true)
 	// Back/forward navigation over the focused-node trail: `at` is the cursor.
-	const [nav, setNav] = useState<{ trail: number[]; at: number }>({ trail: [], at: -1 })
+	const [nav, setNav] = useState<{ trail: NodeId[]; at: number }>({ trail: [], at: -1 })
 	const [copied, setCopied] = useState(false)
 	// Resizable pane sizes (px).
 	const [nodeListH, setNodeListH] = useState(168)
@@ -87,10 +87,10 @@ export function GraphView({
 	// Selection (inspected + highlighted) is separate from focus (what the canvas
 	// lays out around): clicking a node that's already shown just inspects it in
 	// place (no relayout, no shift); clicking one that's off-canvas re-centers.
-	const [selected, setSelected] = useState<number | null>(null)
+	const [selected, setSelected] = useState<NodeId | null>(null)
 	// A specific event picked from the drawer to inspect in the sidebar; null
 	// falls back to the node's most recent event.
-	const [eventSel, setEventSel] = useState<number | null>(null)
+	const [eventSel, setEventSel] = useState<EventId | null>(null)
 	// Optional status filter for the node list (error / suspended).
 	const [statusOnly, setStatusOnly] = useState<NodeStatus | null>(null)
 	// Per-column node cap; a frontier stub raises it to reveal more.
@@ -161,7 +161,7 @@ export function GraphView({
 	// One click behaves the same for a canvas node or a list row: inspect it in
 	// place; only re-center the canvas if it isn't already shown, so inspecting
 	// a visible node never shifts the graph. (No separate "focus" gesture.)
-	const pick = (id: number) => {
+	const pick = (id: NodeId) => {
 		setSelected(id)
 		setEventSel(null)
 		if (layout !== null && !layout.nodes.some((n) => n.id === id)) setFocus(id)
