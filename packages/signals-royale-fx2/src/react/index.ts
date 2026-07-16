@@ -3,9 +3,9 @@
  * premise that React's own update queues are the source of truth for
  * which draft state a render pass may see (see host.ts).
  *
- * Runs on stock React: no patches, no build flags. Transition worlds,
- * rebase, per-root committed views, and suspense behavior all go through
- * public React semantics — state updates, context, and effects.
+ * Runs on stock React: no patches, no build flags. Transitions, updater
+ * rebase, and suspense behavior all go through public React semantics —
+ * state updates, context, and effects.
  */
 export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
 export { SignalsFrameworkProvider, wrapCreateRoot } from './SignalsFrameworkProvider.ts'

@@ -103,9 +103,10 @@ else — not the first run, not disposal, not the change test.
   flushes them.
 - There is a fourth, internal lane: render-subscriber notification. It is
   not selectable. Its watchers hold one pinned dependency, skip
-  validation entirely (their change test is world-aware and value-level,
-  which graph clocks cannot express), drain in-flush after sync effects,
-  and carry the draft-wake channel. Exposing it would let user code run
+  validation entirely (their change test is transition-aware and
+  value-level, which graph clocks cannot express), drain in-flush after
+  sync effects, and carry the draft-wake channel. Exposing it would let
+  user code run
   inside the flush with subscriber semantics, which nothing needs.
 
 The `onObserved` atom lifetime flush keeps its own microtask instead of
@@ -153,7 +154,7 @@ state and runs no wave, so effects cannot observe speculative values; a
 transition reaches every effect exactly once, at retirement, through the
 normal write path with equality applied; a discarded transition is
 invisible. This is what makes the effect side of the engine sound under
-concurrent React without any coupling to render worlds.
+concurrent React without any coupling to what renders see.
 
 ## React hooks
 
@@ -204,17 +205,17 @@ machinery.
   version/rerun bookkeeping, and the scheduled-effect handshake
   (`WatchSchedule`) that asked React to re-render a component purely to
   reach its phase effect.
-- Committed-world effects and committed views (`committed(x, container)`,
-  then `committed(x)` and `useCommitted` entirely, the twin world-source
-  watcher and its certificate-edge refresh). The per-root machinery
-  existed to observe the window where a transition has committed on one
-  React root but not yet on another; on a single root that window is
-  unobservable — the commit marker retires the draft before any
-  descendant layout effect runs, so the committed world is always base
-  state. What remained after that cut was a shell over base reads with no
-  ecosystem precedent (React and Solid keep the committed view implicit),
-  so the query was removed outright. Render soundness across multiple
-  roots is unaffected (per-root render worlds and
+- Committed-view effects and committed views (`committed(x, container)`,
+  then `committed(x)` and `useCommitted` entirely, the twin
+  committed-view watcher and its certificate-edge refresh). The per-root
+  machinery existed to observe the window where a transition has
+  committed on one React root but not yet on another; on a single root
+  that window is unobservable — the commit marker retires the draft
+  before any descendant layout effect runs, so the committed view is
+  always base state. What remained after that cut was a shell over base
+  reads with no ecosystem precedent (React and Solid keep the committed
+  view implicit), so the query was removed outright. Render soundness
+  across multiple roots is unaffected (per-root render snapshots and
   retirement-waits-for-all-roots remain); during multi-root commit skew,
   effects and ambient reads observe values at retirement rather than per
   root.

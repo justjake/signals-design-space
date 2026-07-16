@@ -5,10 +5,10 @@
  * Base state lives in a conventional signal graph (graph.ts: lazy cached
  * computeds, effects, batching). React-transition support is a thin
  * overlay on top (worlds.ts): writes issued inside a transition are
- * recorded into a draft instead of hitting the atom, and readers resolve
- * values in a world — base state plus the drafts a specific render pass
- * is allowed to see. See the worlds.ts header for the full model; this
- * file only decides which path each read and write takes.
+ * recorded into a draft instead of hitting the atom, and each reader
+ * resolves values against base state plus the drafts it is allowed to
+ * see. See the worlds.ts header for the full model; this file only
+ * decides which path each read and write takes.
  */
 
 import {

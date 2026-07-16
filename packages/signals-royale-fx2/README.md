@@ -5,9 +5,9 @@ rendering. It is two layers:
 
 - a conventional signal graph — writable atoms, lazy cached computeds,
   effects, batching — with equality cutoff and batched delivery;
-- a small concurrency overlay — WORLDS — that lets drafted writes (React
-  transitions) stay invisible to committed readers until they land, while
-  every reader still sees an internally consistent snapshot.
+- a small concurrency overlay for React transitions: writes made inside a
+  transition stay invisible to committed readers until the transition
+  lands, while every reader still sees an internally consistent snapshot.
 
 The root entry (`signals-royale-fx2`) is React-free and dependency-free.
 React bindings ship as a subpath — `signals-royale-fx2/react` — with
@@ -82,23 +82,25 @@ stop();
   `flushScheduledEffects()` drains the deferred lanes now (tests,
   headless hosts). See `docs/effects.md` for the full contract.
 
-## Intents, drafts, and worlds
+## Intents, drafts, and transitions
 
 Writes are INTENTS: either a value (`set`) or a function to re-execute
 against whatever the base turns out to be (`update`). Urgent intents apply
 immediately. Intents issued inside a React transition are recorded into a
 DRAFT instead — an ordered log attached to that transition.
 
-A WORLD is "committed state plus a specific set of drafts". Resolving a
-value in a world replays, in original dispatch order, the intents that world
-is allowed to see. That single rule produces React's updater-queue behavior:
+Every reader resolves values against committed state plus the drafts it
+is allowed to see: an urgent render sees none, a transition's own renders
+see that transition's draft. Resolution replays, in original dispatch
+order, exactly the intents the reader may see. That single rule produces
+React's updater-queue behavior:
 
 ```ts
 const n = createAtom(1);
 // transition records: update(x => x + 2)     (draft D)
 // urgent write:       update(x => x * 2)
 n.get()      // 2      — urgent skipped the draft: 1 * 2
-// world with D: (1 + 2) * 2 = 6   — replay in dispatch order, never reorder
+// inside the transition: (1 + 2) * 2 = 6 — replay in dispatch order, never reorder
 ```
 
 When a draft RETIRES (its transition committed everywhere), the full replay
@@ -124,11 +126,12 @@ hidden — so "what is on screen" is what everything that did not opt into
 a draft already sees.
 
 Inside a computed evaluation (or a render pass, through the React bindings)
-`latest` and `get` resolve that context's own world — reading ahead of your
-world would be a tear. In a base-state computed or effect, `latest(x)` is
-also a tracked dependency: when `x` changes, the reader re-runs. What
-distinguishes `latest` from `get` is that it never suspends, not that it
-reads a different world from inside an evaluation.
+`latest` and `get` resolve that context's own snapshot — reading
+transitions your context does not include would be a tear. In a base-state
+computed or effect, `latest(x)` is also a tracked dependency: when `x`
+changes, the reader re-runs. What distinguishes `latest` from `get` is
+that it never suspends, not that it reads a different snapshot from inside
+an evaluation.
 
 ## Async values
 
@@ -168,8 +171,8 @@ userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
 - While the new fetch is pending the computed serves its last value and
   `isPending(user)` is true — exactly as if `id` had changed.
 - It composes with transitions for free: the bump is classified like any
-  other write, so a bump inside a transition refetches in that transition's
-  world — the current screen holds, and the result commits with it.
+  other write, so a bump inside a transition refetches inside that
+  transition — the current screen holds, and the result commits with it.
 - Include the version in the request's cache key (as in `fetchUser` above)
   so each bump creates exactly one new request.
 
@@ -225,7 +228,8 @@ capacity and overflow is counted, never silent.
   unobserved computed chain makes the whole chain collectible.
 - Effects, effect scopes, and subscriptions retain graph edges until their
   returned disposer is called.
-- Draft retirement clears rebase logs and world memos (see above).
+- Draft retirement clears rebase logs and per-transition caches (see
+  above).
 
 Leaks are bugs here, not optimizations.
 
@@ -236,7 +240,7 @@ Developed and tested against the React 19.3 canary
 (`19.3.0-canary-e71a6393-20260702`); any React >= 19 satisfies the peer
 range.
 
-## The design premise: React is the world clock
+## The design premise: React decides what each render sees
 
 Most signal bindings treat React as a display driver: the store changes, the
 binding forces components to re-render. That model collapses under
@@ -296,16 +300,17 @@ retirement, so while a transition one root already committed is still held
 by another, that root's screen momentarily runs ahead of base state.
 
 Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
-current pass's world through a validity-gated note: the note is written by
-the pass that owns it and expires at the end of its synchronous window, so
-a pass that did not refresh it (an urgent pass over an untouched subtree,
-another root's render, an interleaved flush) falls back to BASE rather
-than consuming a stale world or leaking live drafts into an urgent frame.
+current pass's snapshot through a validity-gated note: the note is written
+by the pass that owns it and expires at the end of its synchronous window,
+so a pass that did not refresh it (an urgent pass over an untouched
+subtree, another root's render, an interleaved flush) falls back to BASE
+rather than consuming a stale snapshot or leaking live drafts into an
+urgent frame.
 
 Every provider-dependent hook (`useValue`, `useComputed`, and
 `useIsPending`) requires a `SignalsFrameworkProvider` above it and throws
-without one. The root connection carries transition worlds, so a
-subscriber outside a provider has no channel for them. Create roots with
+without one. The provider is the channel that delivers transitions to its
+subtree, so a subscriber outside one cannot see them. Create roots with
 `wrapCreateRoot(createRoot)` or wrap the tree in
 `<SignalsFrameworkProvider>`. `useSignalEffect` and
 `useSignalLayoutEffect` observe base state, which needs no root channel,
@@ -341,7 +346,7 @@ const root = wrapCreateRoot(createRoot)(container);
 const count = createAtom(0);
 
 function Counter() {
-  const n = useValue(count);            // this render pass's world
+  const n = useValue(count);            // what this render pass sees
   const pending = useIsPending(count);  // newer data behind the screen?
   return <button onClick={() => count.set(n + 1)}>{n}{pending ? '…' : ''}</button>;
 }
@@ -349,7 +354,8 @@ function Counter() {
 startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
 ```
 
-- `useValue(x)` — subscribing read; resolves the pass's world; suspends by
+- `useValue(x)` — subscribing read; resolves what the current render pass
+  sees; suspends by
   handing React the engine's stable pending promise (a transition holds; an
   urgent render with settled history serves stale instead — no fallback
   flash).

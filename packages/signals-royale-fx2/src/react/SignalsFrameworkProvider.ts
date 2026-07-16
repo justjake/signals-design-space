@@ -1,17 +1,17 @@
 /**
- * SignalsFrameworkProvider: the component that carries transition worlds for
- * one root.
+ * SignalsFrameworkProvider: the component that delivers transitions to
+ * one React root.
  *
  * Its reducer state is the set of transition draft ids this root has been
  * told about. Because every draft id is dispatched inside its
  * transition's context, React's own update queues decide which render
- * passes see which ids: urgent passes skip the pending update and see the
- * committed base world, the transition's own passes include it, and a
+ * passes see which ids: urgent passes skip the pending update and see
+ * committed base state, the transition's own passes include it, and a
  * rebased retry recomputes the same queue over new state. That queue
- * behavior is the entire definition of a render pass's world — the
+ * behavior is the entire definition of what a render pass sees — the
  * bindings keep no lane bookkeeping of their own.
  *
- * The connection's render notes the pass's world in the host (for plain
+ * The connection's render notes the pass's snapshot in the host (for plain
  * latest()/isPending() calls in render bodies and for hooks mounting
  * inside the pass). Its first child is a null-rendering commit marker,
  * whose layout effect confirms the drafts before application descendants'
@@ -39,8 +39,8 @@ import {
 } from './host.ts'
 
 /**
- * Reducer state for a connection or hook: the live draft ids delivered to it
- * so far, i.e. the world its render passes carry.
+ * Reducer state for a connection or hook: the live draft ids delivered to
+ * it so far, i.e. which transitions its render passes include.
  */
 export interface WorldState {
 	ids: readonly DraftId[]
@@ -188,8 +188,8 @@ export interface WrappedRoot {
 
 /**
  * A createRoot with the provider pre-installed: every render() is wrapped
- * in this root's SignalsFrameworkProvider, so apps get transition worlds
- * without composing anything.
+ * in this root's SignalsFrameworkProvider, so transitions work without
+ * composing anything.
  */
 export function wrapCreateRoot(
 	createRoot: (
