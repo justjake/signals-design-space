@@ -408,9 +408,13 @@ export function LogView({
 							const x0 = x(g.minT)
 							return <rect key={root} className="tl-span" x={x0} y={6} width={Math.max(3, x(g.maxT) - x0)} height={9} fill="var(--border-strong)" />
 						})}
-					{base.map((r) => (
-						<rect key={r.id} x={x(r.t)} y={44} width={2} height={8} fill={`var(--${classVar(r.cls)})`} />
-					))}
+					{base.map((r) => {
+						// A durationful event (a compute/effect span) draws as a bar whose
+						// width is its time, so a slow one is visibly wide on the strip;
+						// instantaneous events stay a thin tick.
+						const w = r.took !== undefined && r.took > 0 ? Math.max(2, x(r.t + r.took) - x(r.t)) : 2
+						return <rect key={r.id} x={x(r.t)} y={44} width={w} height={8} fill={`var(--${classVar(r.cls)})`} />
+					})}
 					{brush !== undefined ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : undefined}
 					{brush === undefined && sel !== undefined ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : undefined}
 				</svg>
