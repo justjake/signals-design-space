@@ -273,6 +273,9 @@ export const PANEL_CSS = `
   .linklist button { font: 11px var(--mono); color: var(--text); padding: 0; border-bottom: 1px dotted var(--faint); }
   .linklist button:hover { color: var(--computed); border-bottom-color: var(--computed); }
   .linklist .meta { font: 10px var(--mono); color: var(--faint); margin-left: auto; flex: none; }
+  /* recursive "what this caused" tree: indented rows, one EventRef each */
+  .caused-tree { list-style: none; margin: 0; padding: 0; font: 11px var(--mono); }
+  .caused-tree li { padding: 2px 0; white-space: nowrap; }
   .sumline { font: 10.5px var(--mono); color: var(--muted); margin: 6px 0 4px; }
   .sumline b { color: var(--text); font-weight: 500; }
 

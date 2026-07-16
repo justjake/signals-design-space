@@ -231,8 +231,32 @@ export function LogView({
 	// Total wall time the whole operation spanned (root → last consequence) — the
 	// "how big was this tree" number you trace back from a slow update.
 	const opTotalUs = opGroup ? opGroup.maxT - opGroup.minT : 0
-	// Entries this one directly caused (children), from the visible window.
-	const children = sel === null ? [] : base.filter((r) => r.cause === sel.id)
+	// The consequence tree of the selected entry: everything it caused, directly
+	// and transitively, within the window, nested (bounded for huge fan-outs).
+	// logTree roots it at sel and orders siblings newest-first; we show depth ≥ 1.
+	const caused = (() => {
+		if (sel === null) return []
+		const kids = new Map<number, LogRow[]>()
+		for (const r of base) {
+			if (r.cause > 0) {
+				const l = kids.get(r.cause)
+				if (l !== undefined) l.push(r)
+				else kids.set(r.cause, [r])
+			}
+		}
+		const sub: LogRow[] = []
+		const seen = new Set<number>()
+		const walk = (id: number): void => {
+			for (const c of kids.get(id) ?? []) {
+				if (sub.length >= 200 || seen.has(c.id)) continue
+				seen.add(c.id)
+				sub.push(c)
+				walk(c.id)
+			}
+		}
+		walk(sel.id)
+		return logTree([sel, ...sub]).filter((t) => t.depth >= 1)
+	})()
 	// The app stack captured at the operation root (the first chain entry with one).
 	const opStack = spine.find((e) => e.stack !== null)?.stack ?? null
 
@@ -475,13 +499,13 @@ export function LogView({
 							/>
 						</div>
 						{opStack !== null ? <StackTrace frames={opStack} /> : null}
-						{children.length > 0 ? (
+						{caused.length > 0 ? (
 							<div className="cz-section">
-								<h3 data-tip="Entries this one directly caused (its children in the causal tree).">What this caused · {children.length}</h3>
-								<ul className="linklist">
-									{children.map((c) => (
-										<li key={c.id}>
-											<EventRef row={c} onClick={() => setSelected(c.id)} />
+								<h3 data-tip="Everything this entry caused, directly and transitively — its consequence tree.">What this caused · {caused.length}</h3>
+								<ul className="caused-tree">
+									{caused.map((t) => (
+										<li key={t.row.id} style={{ paddingLeft: (t.depth - 1) * 14 }}>
+											<EventRef row={t.row} onClick={() => setSelected(t.row.id)} />
 										</li>
 									))}
 								</ul>
