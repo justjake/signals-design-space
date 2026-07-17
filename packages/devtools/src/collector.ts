@@ -111,7 +111,7 @@ export class Collector implements Backend {
 		// renders (real fiber tree + cascade causality), so drop the engine's own
 		// render events — they carry a node (the watcher); bippy's carry none — to
 		// avoid double-counting. Returning 0 makes the paired endSpan a no-op.
-		if (this.reactRenderOn && kind === 'render' && node !== undefined) return 0 as EventId
+		if (this.reactRenderActive && kind === 'render' && node !== undefined) return 0 as EventId
 		const id = this.nextId++ as EventId
 		this.totalEvents++
 		const evt: DevtoolsEvent = {
@@ -220,26 +220,17 @@ export class Collector implements Backend {
 	}
 
 	// ── React render channel (bippy) ───────────────────────────────────────
-	// Same shape as the hot channel: the panel toggles it, the adapter installs
-	// the engine/React-side observer. When on, fx2's own render events are
-	// dropped in record() and bippy's fiber-accurate ones take their place.
+	// Render causality is a core feature, not a mode: when an adapter installs
+	// the bippy observer (always, in a real attach), it marks the channel active
+	// and fx2's own render events are dropped in record() so bippy's fiber-
+	// accurate ones are the single render source. A bare Collector (unit tests)
+	// leaves it inactive, so those keep whatever renders they record.
 
-	private reactRenderInstall: ((on: boolean) => void) | undefined
-	private reactRenderOn = false
+	private reactRenderActive = false
 
-	/** Adapter API: register the switch that starts/stops the bippy observer. */
-	setReactRenderSource(install: (on: boolean) => void): void {
-		this.reactRenderInstall = install
-	}
-
-	setReactRenderMode(on: boolean): void {
-		if (this.reactRenderOn === on) return
-		this.reactRenderOn = on
-		this.reactRenderInstall?.(on)
-	}
-
-	reactRenderMode(): boolean {
-		return this.reactRenderOn
+	/** Adapter API: mark bippy the render source (fx2 renders drop from here on). */
+	setReactRenderActive(): void {
+		this.reactRenderActive = true
 	}
 
 	/** The most recent state-change event (a write or a notify), so the render

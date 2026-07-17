@@ -90,29 +90,51 @@ test('graph trackpad gestures keep pinch focal point fixed and scroll to pan', a
 	expect(result.afterPan.y).toBeGreaterThan(result.afterPinch.y)
 })
 
-test('react render channel: bippy records the component cascade, no panel feedback loop', async ({ page }) => {
-	// ?react=1 mounts a real React tree (Parent → List → Leaf) and turns the
-	// render channel on, so bippy has app fibers to observe.
+// Render causality is a core, always-on feature: renders come from the real
+// React fiber tree (bippy), not the engine, and chain back through the notify to
+// the state change that triggered the pass. This guards that end to end.
+test('render causality: renders are fiber-sourced and chain to the signal change', async ({ page }) => {
+	// ?react=1 mounts a signal-driven React tree (Reader reads `count`, with Leaf
+	// children); a write wakes it and React re-renders the subtree.
 	await page.goto('/?react=1')
 	const panel = page.getByTestId('panel')
 	await panel.getByRole('button', { name: 'Log', exact: true }).click()
 
-	// A parent state change cascades to the children.
 	await page.getByTestId('react-inc').click()
 	await page.getByTestId('react-inc').click()
 
-	// The channel captured the real component tree with reasons: Parent changed
-	// state, its descendants rendered because the parent did (the cascade).
-	await expect(panel).toContainText('Parent')
-	await expect(panel).toContainText('Leaf')
+	// Renders are attributed to real components, and the no-prop child re-rendered
+	// because its parent did — the cascade, straight from the fiber tree.
+	await expect(panel).toContainText('Reader')
+	await expect(panel).toContainText('Cascaded')
 	await expect(panel).toContainText('parent rendered')
 
+	type DevGlobal = {
+		events(filter: { classes?: string[] }, limit: number): Array<{ id: number; kind: string; node: number | undefined; data: { component?: string } }>
+		causeChain(id: number): Array<{ kind: string }>
+		counts(): { events: number }
+	}
+	// Signal → render causality: a Reader render's cause chain reaches the write.
+	const chainsToWrite = await page.evaluate(() => {
+		const c = (globalThis as unknown as { __SIGNALS_DEVTOOLS__: DevGlobal }).__SIGNALS_DEVTOOLS__
+		const renders = c.events({ classes: ['render'] }, 200).filter((e) => e.data.component === 'Reader')
+		return renders.length > 0 && renders.some((r) => c.causeChain(r.id).some((e) => e.kind === 'set'))
+	})
+	expect(chainsToWrite).toBe(true)
+
+	// The engine's own render events are suppressed — every render carries a
+	// component (bippy), none carries an engine node.
+	const allFiberSourced = await page.evaluate(() =>
+		(globalThis as unknown as { __SIGNALS_DEVTOOLS__: DevGlobal }).__SIGNALS_DEVTOOLS__
+			.events({ classes: ['render'] }, 200)
+			.every((e) => e.node === undefined && typeof e.data.component === 'string'),
+	)
+	expect(allFiberSourced).toBe(true)
+
 	// No feedback loop: the panel re-renders on every flush, but bippy excludes
-	// its own root, so event growth stops once interaction stops. Sample twice
-	// with a settle in between — a loop would keep growing on its own.
-	const count = () => page.evaluate(() => (globalThis as { __SIGNALS_DEVTOOLS__?: { counts(): { events: number } } }).__SIGNALS_DEVTOOLS__!.counts().events)
-	const first = await count()
+	// its own root, so with no interaction the event count is stable.
+	const first = await page.evaluate(() => (globalThis as unknown as { __SIGNALS_DEVTOOLS__: DevGlobal }).__SIGNALS_DEVTOOLS__.counts().events)
 	await page.waitForTimeout(400)
-	const second = await count()
-	expect(second).toBe(first) // stable with no interaction → no self-feeding loop
+	const second = await page.evaluate(() => (globalThis as unknown as { __SIGNALS_DEVTOOLS__: DevGlobal }).__SIGNALS_DEVTOOLS__.counts().events)
+	expect(second).toBe(first)
 })

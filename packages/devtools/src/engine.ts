@@ -397,17 +397,12 @@ export function attachEngineDevtools(
 	)
 
 	// React render channel: reads the fiber tree via bippy — no engine hook — so
-	// it lives entirely in the devtools and never touches the engine. Installed
-	// only while the panel's toggle is on; detach quiets the shared bippy hook.
-	let detachReactRender: (() => void) | undefined
-	collector.setReactRenderSource((on) => {
-		if (on && detachReactRender === undefined) {
-			detachReactRender = attachReactRenderTracer(collector, () => collector.latestSignalCause())
-		} else if (!on && detachReactRender !== undefined) {
-			detachReactRender()
-			detachReactRender = undefined
-		}
-	})
+	// it lives entirely in the devtools and never touches the engine. Render
+	// causality is a core feature, so it's always on: mark the collector so the
+	// engine's own render events drop, and bippy's fiber-accurate ones (child →
+	// parent cascade, rooted at the triggering change) are the render source.
+	collector.setReactRenderActive()
+	const detachReactRender = attachReactRenderTracer(collector, () => collector.latestSignalCause())
 
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
 	g.__SIGNALS_DEVTOOLS__ = collector
@@ -417,8 +412,7 @@ export function attachEngineDevtools(
 		detach() {
 			engine.setTracer(null)
 			engine.setHotTracer(null)
-			detachReactRender?.()
-			detachReactRender = undefined
+			detachReactRender()
 			if (g.__SIGNALS_DEVTOOLS__ === collector) g.__SIGNALS_DEVTOOLS__ = undefined
 		},
 	}

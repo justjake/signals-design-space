@@ -7,7 +7,10 @@
  * fx2. Both engines expose the same public API and the same `/debug`
  * contract, so everything below the engine pick is shared.
  */
+import { createElement as h } from 'react'
+import { createRoot } from 'react-dom/client'
 import * as fx2 from 'signals-royale-fx2'
+import { useValue, wrapCreateRoot } from 'signals-royale-fx2/react'
 import * as dalienEngine from 'signals-royale-fx2-dalien'
 import { attachDalienDevtools } from '../src/dalien.ts'
 import { attachFx2Devtools } from '../src/fx2.ts'
@@ -45,26 +48,30 @@ set(count, 1)
 
 mountDevtools(document.getElementById('panel')!, collector)
 
-// ?react=1: mount a small real React tree and turn on the bippy render channel,
-// so the render observer has app fibers to watch — a parent whose state change
-// cascades to its children (Parent → List → Leaf). The signal program above is
-// vanilla DOM, so this is the only React app under observation besides the panel
-// (which the observer excludes). Drives the render-causality e2e.
-if (new URLSearchParams(location.search).get('react') === '1') {
-	collector.setReactRenderMode(true)
-	const [{ createElement: h, useState }, { createRoot }] = await Promise.all([import('react'), import('react-dom/client')])
-	function Leaf({ n }: { n: number }) {
-		return h('li', { 'data-testid': `leaf-${n}` }, `leaf ${n}`)
+// ?react=1: mount a small SIGNAL-DRIVEN React tree, so the always-on render
+// channel has app fibers to observe and the e2e can verify signal → render
+// causality end to end. A write to `count` wakes the reader, React re-renders
+// Reader (and its Leaf children cascade), and bippy chains those renders back
+// through the notify to the write. The vanilla program above is separate DOM;
+// this is the only observed React app besides the panel (which is excluded).
+// fx2 only — it uses fx2's React binding; the e2e drives the default fx2 page.
+if (new URLSearchParams(location.search).get('react') === '1' && !useDalien) {
+	// A child with no props: when Reader re-renders on a count change, this
+	// re-renders purely because its parent did — a genuine cascade ("parent
+	// rendered"), distinct from a prop change.
+	function Cascaded() {
+		return h('span', { 'data-testid': 'react-cascaded' }, 'child')
 	}
-	function List({ tick }: { tick: number }) {
-		return h('ul', null, [0, 1, 2].map((n) => h(Leaf, { key: n, n: n + tick * 0 })))
+	function Reader() {
+		const v = useValue(count)
+		return h('ul', { 'data-testid': 'react-count' }, [h('li', { key: 'v' }, `v:${v}`), h(Cascaded, { key: 'c' })])
 	}
-	function Parent() {
-		const [tick, setTick] = useState(0)
+	function ReactApp() {
 		return h('div', null, [
-			h('button', { key: 'b', 'data-testid': 'react-inc', onClick: () => setTick((t) => t + 1) }, `react-inc ${tick}`),
-			h(List, { key: 'l', tick }),
+			h('button', { key: 'btn', 'data-testid': 'react-inc', onClick: () => set(count, read(count) + 1) }, 'react-inc'),
+			h(Reader, { key: 'reader' }),
 		])
 	}
-	createRoot(document.getElementById('react-app')!).render(h(Parent))
+	const create = wrapCreateRoot(createRoot)
+	create(document.getElementById('react-app')!).render(h(ReactApp))
 }

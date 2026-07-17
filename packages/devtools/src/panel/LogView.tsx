@@ -22,7 +22,6 @@ const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip
 	{ key: 'effect', label: 'effect', sw: 'var(--effect)', classes: ['effect'], tip: 'Effects — code that runs after changes commit: effect() (library) and useSignalEffect (component).' },
 	{ key: 'internals', label: 'internals', sw: 'var(--system)', classes: ['system'], tip: 'Library bookkeeping with no user intent behind it. Off by default. Batch begins and transitions stay visible — they are structure, not noise.' },
 	{ key: 'hot', label: 'hot', sw: 'var(--hot)', classes: ['hot'], tip: 'The engine\'s internal steps, recorded only while this is on: propagate (a change marks what it reaches stale), check (a read confirms whether inputs really changed), pull (a stale computed re-evaluates). Very high volume; off by default.' },
-	{ key: 'react', label: 'react renders', sw: 'var(--watcher)', classes: [], tip: 'Render events from the real React fiber tree (via bippy) instead of the engine: each component render chains to its parent render (the cascade), rooted at the change that triggered the pass. Replaces the engine\'s own render events while on.' },
 ]
 const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async']
 
@@ -132,7 +131,7 @@ export function LogView({
 }) {
 	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	// Hot mirrors the backend's channel state so a remounted panel shows the truth.
-	const [on, setOn] = useState<Record<string, boolean>>(() => ({ write: true, compute: true, render: true, effect: true, internals: false, hot: backend.hotMode?.() ?? false, react: backend.reactRenderMode?.() ?? false }))
+	const [on, setOn] = useState<Record<string, boolean>>(() => ({ write: true, compute: true, render: true, effect: true, internals: false, hot: backend.hotMode?.() ?? false }))
 	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
@@ -355,9 +354,8 @@ export function LogView({
 							aria-pressed={on[c.key]}
 							onClick={() => {
 								const next = !on[c.key]
-								// The hot and react chips drive engine/React channels, not just the filter.
+								// The hot chip drives the engine channel, not just the filter.
 								if (c.key === 'hot') backend.setHotMode?.(next)
-								if (c.key === 'react') backend.setReactRenderMode?.(next)
 								setOn({ ...on, [c.key]: next })
 							}}
 						>

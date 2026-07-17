@@ -158,14 +158,6 @@ export interface Backend {
 	setHotMode?(on: boolean): void
 	/** Whether the hot algorithm channel is currently recording. */
 	hotMode?(): boolean
-	/**
-	 * Toggle the React render channel: when on, renders come from the real fiber
-	 * tree (bippy) with parent-cascade causality, and the engine's own render
-	 * events are suppressed. Optional, in-realm only (needs the live page's React).
-	 */
-	setReactRenderMode?(on: boolean): void
-	/** Whether the React render channel is currently the render source. */
-	reactRenderMode?(): boolean
 }
 
 /**
