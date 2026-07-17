@@ -58,6 +58,46 @@ export function useSignal<T>(signal: ReadableSignal<T>): T {
 }
 
 /**
+ * A suspending computed: while parked its node carries fx2's AsyncSuspended
+ * flag, which the devtools reports as a "suspended" node. `toggle` parks it on
+ * a fresh pending promise (bumping `epoch` re-runs the body so it re-parks) and,
+ * called again, resolves that promise so the body reruns to 'loaded'.
+ */
+export function createSuspending(): {
+	pending: ReadableSignal<boolean>
+	value: ReadableSignal<string>
+	toggle(): void
+} {
+	const epoch = createRoyaleAtom(0, { label: 'asyncEpoch' })
+	const pending = createRoyaleAtom(false, { label: 'asyncPending' })
+	let deferred: { promise: Promise<void>; resolve: () => void } | undefined
+	const value = createRoyaleComputed<string>(
+		(use) => {
+			epoch.get()
+			if (deferred === undefined) return 'idle'
+			use(deferred.promise)
+			return 'loaded'
+		},
+		{ label: 'asyncData' },
+	)
+	return {
+		pending: new RoyaleAtom(pending),
+		value: new RoyaleComputed(value),
+		toggle(): void {
+			if (pending.get()) {
+				deferred?.resolve()
+				pending.set(false)
+				return
+			}
+			let resolve!: () => void
+			deferred = { promise: new Promise<void>((r) => (resolve = r)), resolve }
+			pending.set(true)
+			epoch.update((e) => e + 1)
+		},
+	}
+}
+
+/**
  * The interface's split (compute, handler, deps) shape desugars to fx2's
  * factory form: one spec object per deps window.
  */

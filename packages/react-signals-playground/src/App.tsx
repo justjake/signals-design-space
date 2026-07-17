@@ -16,6 +16,7 @@ import * as React from 'react'
 import {
 	createAtom,
 	createComputed,
+	createSuspending,
 	implementationHref,
 	implementations,
 	name,
@@ -44,6 +45,12 @@ const errorBoom = createComputed(() => {
 	if (errorArmed.state) throw new Error('deliberate error for devtools testing')
 	return count.state
 }, 'errorBoom')
+
+// A deliberately-suspending computed, toggled from a button, so the devtools'
+// suspended-node UI (and "suspended at") can be exercised. fx2-family only —
+// suspension needs the engine's first-class async primitive, so the fixture is
+// absent (undefined) on pages whose engine can't express it.
+const asyncFixture = createSuspending?.()
 
 // The urgent clock: an interval-driven signal. Its continued ticking while a
 // transition is held open is direct visual proof the committed tree stays
@@ -644,6 +651,47 @@ class BoomBoundary extends React.Component<{ children: React.ReactNode }, { fail
 	}
 }
 
+// Reads the suspending computed; while parked its node throws to the Suspense
+// boundary below, so the suspended node (and "suspended at") shows in devtools.
+function AsyncReader(): React.ReactElement {
+	return <span data-testid="async-value">{useSignal(asyncFixture!.value)}</span>
+}
+function AsyncControls(): React.ReactElement {
+	const pending = useSignal(asyncFixture!.pending)
+	// Mount the reader only once armed: its node is then uninitialized on the
+	// first suspend, so it throws to Suspense (a real "loading…" fallback) rather
+	// than serving a pre-settled value; later re-suspends serve the stale value
+	// (fx2's stale-while-revalidate), while devtools shows the node suspended
+	// throughout.
+	const [active, setActive] = React.useState(false)
+	return (
+		<>
+			<button
+				type="button"
+				data-testid="arm-async"
+				className={pending ? 'on' : undefined}
+				aria-pressed={pending}
+				onClick={() => {
+					setActive(true)
+					asyncFixture!.toggle()
+				}}
+			>
+				{pending ? 'resolve async' : 'suspend async'}
+			</button>
+			<span className="cell">
+				<label>async</label>
+				{active ? (
+					<React.Suspense fallback={<span data-testid="async-fallback">loading…</span>}>
+						<AsyncReader />
+					</React.Suspense>
+				) : (
+					<span data-testid="async-value">idle</span>
+				)}
+			</span>
+		</>
+	)
+}
+
 function Controls(): React.ReactElement {
 	useCommittedRenderTally()
 	const value = useSignal(count)
@@ -694,6 +742,7 @@ function Controls(): React.ReactElement {
 					<BoomReader />
 				</BoomBoundary>
 			</span>
+			{asyncFixture ? <AsyncControls /> : null}
 			<button
 				type="button"
 				data-testid="toggle-evens"

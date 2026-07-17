@@ -116,4 +116,20 @@ export interface ConcurrentSignalsShim {
 
 	/** How to hold a transition open on in-flight async data; see TransitionHoldStyle. */
 	readonly transitionHoldStyle: TransitionHoldStyle
+
+	/**
+	 * fx2-family only: a fixture for exercising a *suspending* computed. The
+	 * returned `value` is a derived signal whose engine node parks on a pending
+	 * promise while suspended, so devtools reports that node "suspended" (with a
+	 * "suspended at" time). Read `value` with useSignal inside a <Suspense>
+	 * boundary; `toggle()` suspends it and, called again, resolves it (value
+	 * becomes 'loaded'); `pending` drives the control's label. Absent on engines
+	 * with no first-class async (`use()`) primitive — such a page is no longer
+	 * implementation-agnostic, matching the note above about async extras.
+	 */
+	createSuspending?(): {
+		readonly pending: ReadableSignal<boolean>
+		readonly value: ReadableSignal<string>
+		toggle(): void
+	}
 }
