@@ -1,64 +1,48 @@
 # cosignals
 
-`cosignals` is a signals library with first-class support for React
-transitions and concurrent rendering. Signals are reactive values that
-live outside the component tree; the components, derived values, and side
-effects that read them update automatically when they change.
+Signals for React with first-class support for transitions and
+concurrent rendering. Signals are reactive values that live outside the
+component tree; the components, derived values, and side effects that
+read them update automatically when they change.
 
-What sets this library apart is how writes interact with React:
+What sets `cosignals` apart is how writes interact with React:
 
 - Transition-aware writes: a write made inside `React.startTransition`
   stays invisible to the current screen until the transition commits,
-  exactly like a `useState` update made in a transition. A typical
-  external store cannot do this: it has one current value per key, so
-  either the write shows up immediately (defeating the transition) or the
-  background render cannot see it.
+  exactly like a `useState` update. A typical external store cannot do
+  this: it has one current value per key, so either the write shows up
+  immediately (defeating the transition) or the background render
+  cannot see it.
 - `useState`-like scheduling: a signal write re-renders its subscribers
-  with the same priority React would give a `setState` call from the same
-  place. Bindings built on `useSyncExternalStore` instead render every
-  store change at synchronous priority, no matter where the write came
-  from.
+  with the same priority React would give a `setState` call from the
+  same place, where `useSyncExternalStore` bindings render every store
+  change at synchronous priority.
 - Async values as state: a computed can read a promise. The first load
   suspends through React Suspense; a refetch keeps showing the previous
   value while `isPending` reports that newer data is loading.
 - Stock React: the bindings use only public React APIs — no patches, no
   build flags.
 
-The root entry is React-free and dependency-free. The package splits into
-entry points so an app only pays for what it imports:
-
-- `cosignals`: create signals, derive values, react to changes, batch
-  writes.
-- `cosignals/react`: hooks and the provider that connect signals to
-  components. Requires `react` and `react-dom` 19 or later as peer
-  dependencies.
-- `cosignals/ssr`: serialize and restore atom state across server and
-  client.
-- `cosignals/testing`: reset engine state between tests.
-- `cosignals/debug` and `cosignals/unstable`: tracing, inspection, and
-  engine integration seams, documented in [INTERNALS.md](./INTERNALS.md).
-
-## Install
-
-```sh
-npm install cosignals
-```
-
-## Quick start
-
 ```tsx
 import { createRoot } from 'react-dom/client'
 import { createAtom, createComputed } from 'cosignals'
-import { useValue, wrapCreateRoot } from 'cosignals/react'
+import { useSignal, useSignalEffect, wrapCreateRoot } from 'cosignals/react'
 
+// Signals live outside the tree; share them across components freely.
 const count = createAtom(0)
 const doubled = createComputed(() => count.get() * 2)
 
 function Counter() {
-  const n = useValue(count)
-  const d = useValue(doubled)
+  const n = useSignal(count)    // read and subscribe: re-renders on change
+  const d = useSignal(doubled)
+  useSignalEffect(() => ({
+    watch: doubled,
+    run: (value) => {
+      document.title = `doubled is ${value}`
+    },
+  }), [])
   return (
-    <button onClick={() => count.set(n + 1)}>
+    <button onClick={() => count.update((c) => c + 1)}>
       {n} doubled is {d}
     </button>
   )
@@ -68,10 +52,37 @@ const root = wrapCreateRoot(createRoot)(document.getElementById('root')!)
 root.render(<Counter />)
 ```
 
-Importing `cosignals/react` registers the React bindings with the engine
-as a side effect — there is no setup call. `wrapCreateRoot` returns a
+Importing `cosignals/react` registers the bindings with the engine as a
+side effect — there is no setup call. `wrapCreateRoot` returns a
 `createRoot` whose `render` wraps the tree in the provider the hooks
-need; [SignalsFrameworkProvider](#setup) is the manual alternative.
+need; [`CosignalsProvider`](#setup) is the manual alternative.
+
+## Usage
+
+Install:
+
+```sh
+pnpm add cosignals
+# or: npm install cosignals · yarn add cosignals · bun add cosignals
+```
+
+`cosignals/react` requires `react` and `react-dom` 19 or later as peer
+dependencies.
+
+Import what you need. The package splits into entry points so an app
+only pays for what it imports:
+
+- `cosignals`: create signals, derive values, react to changes, batch
+  writes — `createAtom`, `createComputed`, `createEffect`, `batch`,
+  `latest`, `isPending`. React-free and dependency-free.
+- `cosignals/react`: hooks and the provider that connect signals to
+  components — `useSignal`, `useComputed`, `useSignalEffect`,
+  `useSignalTransition`, `CosignalsProvider`, `wrapCreateRoot`.
+- `cosignals/ssr`: serialize and restore atom state across server and
+  client.
+- `cosignals/testing`: reset engine state between tests.
+- `cosignals/debug` and `cosignals/unstable`: tracing, inspection, and
+  engine integration seams, documented in [INTERNALS.md](./INTERNALS.md).
 
 ## What are signals?
 
@@ -104,27 +115,10 @@ doubled.get()  // 20 — cached, the function does not run again
 ```
 
 An **effect** runs a side effect when signals change, like `useEffect`.
-It is two functions with different jobs:
-
-```ts
-import { createEffect } from 'cosignals'
-
-const stop = createEffect(
-  () => doubled.get(),    // compute: tracked, its reads become dependencies
-  (value, previous) => {  // handler: the side effect, untracked
-    document.title = `doubled is ${value}`
-  },
-)
-// the handler already ran once, with 20
-count.set(3)  // handler runs with 6
-stop()
-```
-
-The split exists so the engine can re-run the compute to check whether
-anything actually changed without repeating the side effect. A write that
-leaves the computed value equal runs no handler at all. Reads the effect
-should react to belong in the compute; reads inside the handler are not
-tracked.
+Inside a component, use the [`useSignalEffect` and
+`useSignalLayoutEffect` hooks](#hooks); for effects owned outside the
+tree — module scope, stores, non-React code — use
+[`createEffect`](#effects).
 
 ```mermaid
 flowchart LR
@@ -172,7 +166,135 @@ n.get()  // 2 — the screen shows 1 * 2; the draft is hidden
 Keep updater functions pure, for the same reason React updaters must be
 pure: they can replay.
 
-## Atoms
+## React
+
+### Setup
+
+Importing `cosignals/react` registers the bindings with the engine
+automatically. (`registerReactSignals` remains exported for code that
+wants the returned handle, whose `dispose()` removes the registration;
+applications do not need it.)
+
+The subscribing hooks — `useSignal`, `useComputed`, and `useIsPending` —
+require a `CosignalsProvider` above them and throw without one. The
+provider is the channel that delivers transitions to its subtree, so a
+subscriber outside one could never see them. Two ways to set it up:
+
+- `wrapCreateRoot(createRoot)`: a `createRoot` whose `render` wraps the
+  tree in a provider, as in the example up top;
+- `<CosignalsProvider>` mounted directly, once per root. Providers
+  cannot be nested.
+
+`useSignalEffect` and `useSignalLayoutEffect` observe committed state,
+which needs no channel, so they work without a provider — as do the
+plain function reads (`latest`, `isPending`).
+
+Multiple roots are supported: one transition can span them, and each
+root's render passes stay internally consistent.
+
+### Hooks
+
+- `useSignal(x)`: read a signal and subscribe. The component re-renders
+  whenever the value it would show changes. On async values: a first
+  load suspends; a refetch keeps showing the settled value, with
+  `useIsPending` as the loading indicator; a render inside a transition
+  suspends into the transition, so the current screen holds instead of
+  showing a fallback.
+- `useSignalEffect(() => ({ watch, run, equals?, label? }), deps)` and
+  `useSignalLayoutEffect(...)`: a component-owned effect. `watch` is the
+  effect's source — a signal, a tuple or record of signals, or a tracked
+  compute function — and `run` is its handler, called with the new and
+  previous values, optionally returning a cleanup. The factory runs on
+  mount and on every `deps` change, disposing the previous effect first
+  — exactly `useEffect`'s re-create cycle — so captured props and state
+  are always fresh with respect to `deps`.
+- `useComputed(fn, deps)`: a component-owned computed. `fn` gets the
+  same `(use, previous)` arguments as a `createComputed` body, and the
+  computed is recreated when `deps` change. No disposal is needed;
+  dropping it at unmount makes it garbage-collectible.
+- `useAtom(initial, opts?)`: a component-owned atom, created once on
+  mount and garbage-collected after unmount.
+- `useIsPending(x)`: `isPending` as a subscription. The flip is
+  delivered urgently, outside any transition — an indicator must not be
+  held back by the transition it indicates. React's own `useTransition`
+  schedules its `isPending` the same way.
+
+```tsx
+useSignalEffect(() => ({
+  watch: query,                 // or [a, b], { a, b }, () => a.get() + b.get()
+  run: (q) => analytics.search(q),
+}), [])
+```
+
+Because one closure carries every capture, `react-hooks/exhaustive-deps`
+can check the whole spec once the hooks are listed:
+
+```jsonc
+"react-hooks/exhaustive-deps": ["error", {
+  "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
+}]
+```
+
+### Transitions
+
+```tsx
+import { useSignalTransition } from 'cosignals/react'
+
+const filter = createAtom('all')
+
+function FilterTabs() {
+  const [pending, startTransition] = useSignalTransition()
+  const current = useSignal(filter)
+  return (
+    <div style={{ opacity: pending ? 0.6 : 1 }}>
+      {['all', 'open', 'done'].map((f) => (
+        <button key={f} onClick={() => startTransition(() => filter.set(f))}>
+          {f === current ? `[${f}]` : f}
+        </button>
+      ))}
+    </div>
+  )
+}
+```
+
+- `startSignalTransition(fn)`: `React.startTransition` plus one signal
+  batch, for writes started outside a component.
+- `useSignalTransition()`: React's `useTransition` combined with a
+  signal batch; `pending` covers the transition's whole lifetime,
+  including renders held by Suspense.
+- Plain `React.startTransition` also works: the first signal write
+  inside any transition is classified into a draft automatically. The
+  wrappers just add the batch.
+
+While the transition is pending, its writes are visible only to its own
+render passes — `useSignal` in the work-in-progress tree sees them,
+while the committed screen, `get()` outside renders, and effects do not.
+When it commits, the writes land everywhere at once.
+
+### Write timing
+
+Every re-render caused by a signal write gets the scheduling React would
+give a `setState` from the same place:
+
+- a click handler: renders synchronously, before the next paint;
+- a timeout, promise, or network callback: default priority, which can
+  land after a paint — wrap the write in `flushSync` when the DOM must
+  update immediately, exactly as for React state;
+- inside a transition: the transition's own render passes.
+
+A signal write and a `setState` in the same callback commit in one
+render.
+
+Writing to an atom during a render throws. Write in event handlers and
+effects instead.
+
+## The core API
+
+Everything in this section comes from the root entry, `cosignals`. It is
+React-free and dependency-free, and works the same in any JavaScript
+environment — the React hooks above are built on it.
+
+### Atoms
 
 `createAtom(initial, options?)` accepts options:
 
@@ -223,7 +345,7 @@ todos.dispatch({ type: 'add', text: 'write docs' })
 A dispatch inside a transition is recorded and replayed like a
 functional update, so keep the reducer pure.
 
-## Computeds and async values
+### Computeds and async values
 
 `createComputed(fn, options?)` takes the same `equals` and `label`
 options as `createAtom`. Computeds are lazy and cached, and their
@@ -273,7 +395,31 @@ const user = createComputed((use) =>
 userVersion.update((v) => v + 1)  // refetch; user serves stale data while loading
 ```
 
-## Effects
+### Effects
+
+In components, reach for `useSignalEffect` or `useSignalLayoutEffect`
+first; `createEffect` is for effects owned outside the component tree.
+It is two functions with different jobs:
+
+```ts
+import { createEffect } from 'cosignals'
+
+const stop = createEffect(
+  () => doubled.get(),    // compute: tracked, its reads become dependencies
+  (value, previous) => {  // handler: the side effect, untracked
+    document.title = `doubled is ${value}`
+  },
+)
+// the handler already ran once, with the current value
+count.set(3)  // handler runs with 6
+stop()
+```
+
+The split exists so the engine can re-run the compute to check whether
+anything actually changed without repeating the side effect. A write that
+leaves the computed value equal runs no handler at all. Reads the effect
+should react to belong in the compute; reads inside the handler are not
+tracked.
 
 `createEffect(source, handler, options?)` returns a disposer. The source
 declares what the effect reacts to:
@@ -344,7 +490,7 @@ called. Computeds need no disposal — an unwatched computed only holds
 references toward its dependencies, so dropping the last reference to it
 makes the whole chain garbage-collectible.
 
-## Reading values
+### Reading values
 
 Four ways to read a signal, each answering a different question:
 
@@ -382,7 +528,7 @@ isPending(count)  // is newer data loading behind the shown value?
 `isSignal(x)` returns true when `x` is an atom or computed from this
 library, useful for APIs that accept either signals or plain values.
 
-## Batching and untrack
+### Batching and untrack
 
 `batch(fn)` runs `fn` as one unit of change. Writes inside still apply in
 order, but computeds, effects, and subscribers settle only after the
@@ -420,127 +566,6 @@ const results = createComputed(() => {
   return search(q, limit)
 })
 ```
-
-## React
-
-### Setup
-
-Importing `cosignals/react` registers the bindings with the engine
-automatically. (`registerReactSignals` remains exported for code that
-wants the returned handle, whose `dispose()` removes the registration;
-applications do not need it.)
-
-The subscribing hooks — `useValue`, `useComputed`, and `useIsPending` —
-require a `SignalsFrameworkProvider` above them and throw without one.
-The provider is the channel that delivers transitions to its subtree, so
-a subscriber outside one could never see them. Two ways to set it up:
-
-- `wrapCreateRoot(createRoot)`: a `createRoot` whose `render` wraps the
-  tree in a provider, as in the quick start;
-- `<SignalsFrameworkProvider>` mounted directly, once per root.
-  Providers cannot be nested.
-
-`useSignalEffect` and `useSignalLayoutEffect` observe committed state,
-which needs no channel, so they work without a provider — as do the
-plain function reads (`latest`, `isPending`).
-
-Multiple roots are supported: one transition can span them, and each
-root's render passes stay internally consistent.
-
-### Hooks
-
-- `useValue(x)`: read a signal and subscribe. The component re-renders
-  whenever the value it would show changes. On async values: a first
-  load suspends; a refetch keeps showing the settled value, with
-  `useIsPending` as the loading indicator; a render inside a transition
-  suspends into the transition, so the current screen holds instead of
-  showing a fallback.
-- `useComputed(fn, deps)`: a component-owned computed. `fn` gets the
-  same `(use, previous)` arguments as a `createComputed` body, and the
-  computed is recreated when `deps` change. No disposal is needed;
-  dropping it at unmount makes it garbage-collectible.
-- `useAtom(initial, opts?)`: a component-owned atom, created once on
-  mount and garbage-collected after unmount.
-- `useIsPending(x)`: `isPending` as a subscription. The flip is
-  delivered urgently, outside any transition — an indicator must not be
-  held back by the transition it indicates. React's own `useTransition`
-  schedules its `isPending` the same way.
-- `useSignalEffect(() => ({ watch, run, equals?, label? }), deps)` and
-  `useSignalLayoutEffect(...)`: a component-owned effect. `watch` is the
-  effect's source (the same shapes `createEffect` accepts) and `run` is
-  its handler. The factory runs on mount and on every `deps` change,
-  disposing the previous effect first — exactly `useEffect`'s re-create
-  cycle — so captured props and state are always fresh with respect to
-  `deps`.
-
-```tsx
-useSignalEffect(() => ({
-  watch: query,                 // or [a, b], { a, b }, () => a.get() + b.get()
-  run: (q) => analytics.search(q),
-}), [])
-```
-
-Because one closure carries every capture, `react-hooks/exhaustive-deps`
-can check the whole spec once the hooks are listed:
-
-```jsonc
-"react-hooks/exhaustive-deps": ["error", {
-  "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
-}]
-```
-
-### Transitions
-
-```tsx
-import { useSignalTransition } from 'cosignals/react'
-
-const filter = createAtom('all')
-
-function FilterTabs() {
-  const [pending, startTransition] = useSignalTransition()
-  const current = useValue(filter)
-  return (
-    <div style={{ opacity: pending ? 0.6 : 1 }}>
-      {['all', 'open', 'done'].map((f) => (
-        <button key={f} onClick={() => startTransition(() => filter.set(f))}>
-          {f === current ? `[${f}]` : f}
-        </button>
-      ))}
-    </div>
-  )
-}
-```
-
-- `startSignalTransition(fn)`: `React.startTransition` plus one signal
-  batch, for writes started outside a component.
-- `useSignalTransition()`: React's `useTransition` combined with a
-  signal batch; `pending` covers the transition's whole lifetime,
-  including renders held by Suspense.
-- Plain `React.startTransition` also works: the first signal write
-  inside any transition is classified into a draft automatically. The
-  wrappers just add the batch.
-
-While the transition is pending, its writes are visible only to its own
-render passes — `useValue` in the work-in-progress tree sees them, while
-the committed screen, `get()` outside renders, and effects do not. When
-it commits, the writes land everywhere at once.
-
-### Write timing
-
-Every re-render caused by a signal write gets the scheduling React would
-give a `setState` from the same place:
-
-- a click handler: renders synchronously, before the next paint;
-- a timeout, promise, or network callback: default priority, which can
-  land after a paint — wrap the write in `flushSync` when the DOM must
-  update immediately, exactly as for React state;
-- inside a transition: the transition's own render passes.
-
-A signal write and a `setState` in the same callback commit in one
-render.
-
-Writing to an atom during a render throws. Write in event handlers and
-effects instead.
 
 ## Server rendering
 
