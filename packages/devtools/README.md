@@ -1,7 +1,5 @@
 # cosignals-devtools
 
-> Historical naming: `signals-royale-fx2` is now named `cosignals`.
-
 Devtools for cosignals: a dependency-graph explorer and a causal
 event log. One panel, two hosts (inline in-page, or a Chrome DevTools panel).
 
