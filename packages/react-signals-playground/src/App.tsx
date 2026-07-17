@@ -47,7 +47,7 @@ const errorBoom = createComputed(() => {
 }, 'errorBoom')
 
 // A deliberately-suspending computed, toggled from a button, so the devtools'
-// suspended-node UI (and "suspended at") can be exercised. fx2-family only —
+// suspended-node UI (and "suspended at") can be exercised. cosignals-family only —
 // suspension needs the engine's first-class async primitive, so the fixture is
 // absent (undefined) on pages whose engine can't express it.
 const asyncFixture = createSuspending?.()
@@ -660,7 +660,7 @@ function AsyncControls(): React.ReactElement {
 	const pending = useSignal(asyncFixture!.pending)
 	// The reader stays mounted so asyncData settles a value ('idle') up front.
 	// A later suspend then parks a node that already has a value, so devtools
-	// shows that stale value (fx2 stale-while-revalidate) rather than
+	// shows that stale value (cosignals stale-while-revalidate) rather than
 	// "uninitialized". The Suspense boundary only catches a never-yet-resolved
 	// read, which this flow no longer produces.
 	return (

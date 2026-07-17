@@ -1,8 +1,7 @@
 # Full-field CI for the signal-library lab: conformance gate + ratio bench.
 #
-# Named field-bench because bench.yml already exists (the cosignals family-B
-# gate benches); this workflow owns the FIELD-WIDE view instead: every
-# framework registered in harness/adapters/index.ts.
+# This workflow owns the field-wide view: every framework registered in
+# harness/adapters/index.ts.
 #
 # Jobs:
 #   plan        — reads the adapter registry so the matrix can never drift

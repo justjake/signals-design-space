@@ -1,5 +1,7 @@
 # Round <NN>: <slug>
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 ## Before editing
 
 - Base SHA:

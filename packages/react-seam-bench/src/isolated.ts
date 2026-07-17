@@ -1,7 +1,7 @@
 /**
  * Runs the benchmark with each contender in its own node process, so that
  * one contender's JIT warmup, GC pressure, and polymorphic call sites can't
- * affect another contender's numbers — and because cosignals-react's
+ * affect another contender's numbers — and because cosignals'
  * registration is once-per-process and patches Atom's prototype, two
  * contenders sharing a process would be wrong, not merely noisy.
  *

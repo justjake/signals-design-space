@@ -1,5 +1,7 @@
 # react-signals-playground
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`; `signals-royale-fx2-dalien` is now named `cosignals-arena`.
+
 One React app, six concurrent-signals implementations. Every component imports its whole reactive surface — signals, hooks, transitions — from the single specifier `#concurrent-signals-shim`, and the page path decides which implementation that specifier resolves to. The app never names an implementation, so the same tree exercises each engine unchanged.
 
 Every implementation lives at its own named path; the bare `/` only redirects to the default (`/royale-fx2/`) — a 301 from the dev/preview servers, and the root `index.html` stub on static hosts.
@@ -8,7 +10,7 @@ Every implementation lives at its own named path; the bare `/` only redirects to
 | --- | --- |
 | `/royale-fx2/` | `signals-royale-fx2` (the default; `/` redirects here) |
 | `/royale-fx2-dalien/` | `signals-royale-fx2-dalien` (the typed-array arena fork) |
-| `/cosignals/` | `cosignals` + `cosignals-react` |
+| `/cosignals-first-draft/` | `cosignals-first-draft` + `cosignals-react` |
 | `/alt-a/` | `cosignals-alt-a` (`cosignals-alt-a/react` bindings) |
 | `/alt-b/` | `cosignals-alt-b` (`cosignals-alt-b/react` bindings) |
 | `/solid-react/` | `concurrent-solid-react` (Solid 2.0 core hosted in React) |
@@ -18,7 +20,7 @@ Every implementation lives at its own named path; the bare `/` only redirects to
 - `package.json` `"imports"` maps `#concurrent-signals-shim` → `src/shims/index.ts` (Vite and TypeScript both resolve subpath imports natively).
 - `src/shims/implementations.ts` is the one table of implementations: URL segment, tab label, shim name, and a typed loader per row. The selector resolves the page's implementation from it, and the app's tab bar renders one tab per row, so the loader and the navigation can never disagree.
 - `src/shims/index.ts` picks the row matching the first path segment and binds it with a top-level-await dynamic import; every importer of the specifier waits on that await, so app code always sees a fully bound implementation.
-- Each implementation adapts to one common typed surface (`src/shims/interface.ts`: `name`, `register`, `createAtom`, `createComputed`, `useSignal`, `useComputed`, `useSignalEffect`, `startSignalTransition`, `transitionHoldStyle`) in its own file: `src/shims/royale-fx2.ts`, `royale-fx2-dalien.ts`, `cosignals.ts`, `alt-a.ts`, `alt-b.ts`, `solid-react.ts`.
+- Each implementation adapts to one common typed surface (`src/shims/interface.ts`: `name`, `register`, `createAtom`, `createComputed`, `useSignal`, `useComputed`, `useSignalEffect`, `startSignalTransition`, `transitionHoldStyle`) in its own file: `src/shims/royale-fx2.ts`, `royale-fx2-dalien.ts`, `cosignals-first-draft.ts`, `alt-a.ts`, `alt-b.ts`, `solid-react.ts`.
 
 Runtime selection was chosen over per-entry "select the implementation before the shim initializes" side-effect modules for one reason: isolation. These engines are module singletons that claim exclusive React protocol registrations (one batch-id allocator per page), so the non-selected implementations must never initialize. A selector that re-exports synchronously would need static imports of all implementations — initializing every engine on every page — so preserving isolation forces a dynamic import somewhere; doing it in the selector needs no per-entry files and no reliance on import evaluation order. Vite code-splits each implementation into its own chunk, and only the selected chunk ever loads (verify in devtools: one `shims/*` chunk per page). The same isolation is why the implementation tabs are plain `<a href>` full-page navigations: each entry is its own module graph, and a client-side switch cannot swap engines.
 
@@ -37,7 +39,7 @@ A transitions lab shaped like a tiny browser, shared verbatim by every entry. Ev
 
 The preferred holding mechanism is Suspense: the destination throws its resource's promise while pending, which keeps React's transition open exactly the way a data-fetching router would. Each shim declares whether that is safe via `transitionHoldStyle`:
 
-- `cosignals`, `cosignals-alt-a` — `'suspense'`: the transition stays pending, urgent updates keep committing throughout.
+- `cosignals-first-draft`, `cosignals-alt-a` — `'suspense'`: the transition stays pending, urgent updates keep committing throughout.
 - `cosignals-alt-b` — `'suspense'`: the hold works, but a known engine issue is kept visible on purpose: while a transition is held, an urgent write that changes a derived value's output (the table filter, add/remove rows) locks the page in an update loop. Writes whose deriveds come out equal (the counter, the evens toggle) are unaffected.
 - `concurrent-solid-react` — `'defer-write'`: originally a foreign thrown promise froze all commits (urgent ones included) until it resolved, then React recovered with a synchronous root render. The battery's 2026-07-08 retest (`FIND-THENABLE.gate`) shows thrown promises now hold cleanly on current engine sources, but defer-write stays for the navigation flow: this bridge's own Suspense story is its async-memo machinery, and the app-derived pending window behaves identically either way.
 - `concurrent-solid-react` also currently runs with memos degraded to unmemoized tracked reads (see `src/shims/solid-react.ts` for the mechanism and repro): as of the engine sources current on 2026-07-08, one urgent signal write with any memo-subscribed component — outside a live transition — parks the bridge's shared render-probe node in the engine's dirty heap with cleared flags, and the flush loop spins forever. The package's own tests pass; the trigger needs the write to land with no transition open.

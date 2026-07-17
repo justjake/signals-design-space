@@ -6,13 +6,6 @@
 import { expect, test } from '../fixtures'
 import { applyExpectation } from '../expectations'
 import { gotoApp, holdNavigate, releaseAndSettle } from '../helpers'
-import type { EffectLogEntry } from '../../src/testkit'
-
-const LEGACY_SPLIT_EFFECTS = new Set(['cosignals', 'alt-a', 'alt-b'])
-
-function entriesFor(log: readonly EffectLogEntry[], probe: string): EffectLogEntry[] {
-	return log.filter((entry) => entry.probe === probe)
-}
 
 test('RCC-EF1.committed-only: the route effect never observes a pending navigation', async ({
 	page,
@@ -64,9 +57,7 @@ test('RCC-EF1.count-hold: the count effect never observes the held draft', async
 	// invisible to committed effects.
 	expect(countValues, 'the effect saw the pending draft').not.toContain(10)
 	if (expectation.kind === 'variant') {
-		// solid-react holds tracked effects while a transition is live and
-		// flushes at its commit — the urgent flip arrives late, never early.
-		expect(countValues, 'held effects fired mid-transition anyway').not.toContain(1)
+		throw new Error(`unexpected count-hold variant for ${entry.label}`)
 	} else {
 		expect(countValues, 'the committed urgent flip never fired').toContain(1)
 	}
@@ -105,54 +96,4 @@ test('RCC-EF2.coalesce: several writes in one handler produce one effect run at 
 	)
 	const fresh = after.slice(before)
 	expect(fresh, 'member writes did not coalesce to one boundary run').toEqual([3])
-})
-
-test('legacy split-effect composition preserves previous values, cleanup order, and deps', async ({
-	page,
-	entry,
-}) => {
-	test.skip(!LEGACY_SPLIT_EFFECTS.has(entry.label), 'only the three autorun bridge shims share this composition')
-	await gotoApp(page, entry)
-
-	const log = () => page.evaluate(() => window.__store.splitEffectLog)
-	await page.evaluate(() => window.__store.write('splitEffectMounted', true))
-	await expect.poll(log).toEqual([{ event: 'run', dep: 0, value: 0 }])
-
-	await page.evaluate(() => window.__store.write('splitEffectValue', 1))
-	await expect.poll(log).toEqual([
-		{ event: 'run', dep: 0, value: 0 },
-		{ event: 'cleanup', dep: 0, value: 0 },
-		{ event: 'run', dep: 0, value: 1, previous: 0 },
-	])
-
-	await page.evaluate(() => window.__store.write('splitEffectRender', 1))
-	await expect.poll(log).toHaveLength(3)
-
-	await page.evaluate(() => window.__store.write('splitEffectDep', 1))
-	await expect.poll(log).toEqual([
-		{ event: 'run', dep: 0, value: 0 },
-		{ event: 'cleanup', dep: 0, value: 0 },
-		{ event: 'run', dep: 0, value: 1, previous: 0 },
-		{ event: 'cleanup', dep: 0, value: 1 },
-		{ event: 'run', dep: 1, value: 1, previous: 1 },
-	])
-
-	await page.evaluate(() => window.__store.write('splitEffectValue', 2))
-	await expect.poll(log).toEqual([
-		{ event: 'run', dep: 0, value: 0 },
-		{ event: 'cleanup', dep: 0, value: 0 },
-		{ event: 'run', dep: 0, value: 1, previous: 0 },
-		{ event: 'cleanup', dep: 0, value: 1 },
-		{ event: 'run', dep: 1, value: 1, previous: 1 },
-		{ event: 'cleanup', dep: 1, value: 1 },
-		{ event: 'run', dep: 1, value: 2, previous: 1 },
-	])
-
-	await page.evaluate(() => window.__store.write('splitEffectMounted', false))
-	await expect.poll(log).toHaveLength(8)
-	expect((await log()).at(-1)).toEqual({ event: 'cleanup', dep: 1, value: 2 })
-
-	await page.evaluate(() => window.__store.write('splitEffectMounted', true))
-	await expect.poll(log).toHaveLength(9)
-	expect((await log()).at(-1)).toEqual({ event: 'run', dep: 1, value: 2 })
 })

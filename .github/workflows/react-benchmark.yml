@@ -1,26 +1,10 @@
-# Benchmark the signal libraries as consumed BY REACT — the seam the core
-# benchmark (benchmark.yml) cannot see. Two jobs:
-#
-#   perf         packages/react-seam-bench: node + jsdom scenarios (fan-out,
-#                transition-under-load, mount) timed per contender with the
-#                same interleaved-rounds/median/CSV/chart pipeline as the
-#                core benchmark. jsdom numbers are JS-cost numbers
-#                (reconciliation + subscription dispatch); no paint.
-#   correctness  the daishi-concurrent-benchmark fork (tearing/branching
-#                suite): Playwright, with its bundled Chromium, against
-#                built pages, published as a pass/fail matrix. (The fork
-#                also keeps a jest+puppeteer stack for upstream
-#                comparability; CI runs the Playwright port because its
-#                Chromium runs natively on arm64 and Linux.) Failures here
-#                are DATA, not always
-#                errors — useSyncExternalStore updates are synchronous by
-#                design, so the uSES adapter entries are expected to fail
-#                the Level 3 (time slicing / state branching) tests. The
-#                job's verdict step encodes which failures actually gate.
+# Benchmark the signal libraries as consumed by React, which the core
+# benchmark in benchmark.yml cannot measure. packages/react-seam-bench runs
+# node and jsdom scenarios for fan-out, transitions under load, and mounting.
+# The results measure JavaScript work without browser paint.
 #
 # Every contender runs on the same React build: the patched fork in
-# vendor/react (cosignals-react requires it; it behaves as stock React for
-# non-bridge code, and one React version for everyone is the fairness rule).
+# vendor/react. One React version for everyone is the fairness rule.
 # The ~13s fork build is cached keyed on the vendor/react submodule SHA;
 # the fork's own toolchain pins node 20 (vendor/react/.nvmrc), so cache
 # misses build under node 20 and everything else runs under node 24.
@@ -34,9 +18,8 @@ on:
     branches: [main]
     paths:
       - 'packages/cosignals/**'
-      - 'packages/cosignals-react/**'
       - 'packages/react-seam-bench/**'
-      - 'packages/signals-royale-fx2/**'
+      - 'packages/cosignals-arena/**'
       - 'packages/dalien-signals'
       - 'daishi-concurrent-benchmark'
       - '.github/workflows/react-benchmark.yml'
@@ -45,7 +28,7 @@ on:
       contenders:
         description: 'Contender names (quoted, space-separated)'
         required: false
-        default: '"cosignals-react" "fx2-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
+        default: '"cosignals" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
       rounds:
         description: 'Interleaved rounds per contender'
         required: false
@@ -56,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CONTENDERS: ${{ inputs.contenders || '"cosignals-react" "fx2-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
+  CONTENDERS: ${{ inputs.contenders || '"cosignals" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
@@ -111,9 +94,7 @@ jobs:
 
       - run: npm install -g pnpm@10
 
-      # Root install links the workspace packages (react-seam-bench,
-      # cosignals, cosignals-react) and resolves react/react-dom/scheduler
-      # through the pnpm overrides into the fork build restored above — so
+      # Build linked packages before the root install materializes them.
       - name: Build upstream alien-signals (esm/ is a local build artifact)
         working-directory: upstream-alien-signals
         run: |
@@ -135,7 +116,7 @@ jobs:
       - name: Install workspace
         run: pnpm install --no-frozen-lockfile
 
-      # cosignals and cosignals-react export TypeScript source directly; the
+      # cosignals exports TypeScript source directly; the
       # scenario bundler compiles them, so no separate build step.
 
       - name: Build react-seam-bench runner
@@ -194,266 +175,3 @@ jobs:
             react-benchmark.svg
             react-benchmark.png
           if-no-files-found: error
-
-  correctness:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Init submodules
-        run: |
-          git submodule update --init \
-            daishi-concurrent-benchmark \
-            packages/dalien-signals \
-            upstream-alien-signals \
-            vendor/react
-
-      - name: Compute react fork cache key
-        id: fork
-        run: echo "sha=$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore react fork build
-        id: fork-cache
-        uses: actions/cache@v4
-        with:
-          path: vendor/react/build/oss-experimental
-          key: react-fork-${{ runner.os }}-${{ steps.fork.outputs.sha }}
-
-      - name: Set up node for the react fork build
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: vendor/react/.nvmrc
-
-      # The fork's rollup build runs out of vendor/react's own node_modules
-      # (yarn 1, preinstalled on the runner), which build-react.sh assumes
-      # is already populated.
-      - name: Build react fork
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        run: |
-          (cd vendor/react && yarn install --frozen-lockfile)
-          bash fork/build-react.sh
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - run: npm install -g pnpm@10
-
-      - name: Build upstream alien-signals (esm/ is a local build artifact)
-        working-directory: upstream-alien-signals
-        run: |
-          npm install
-          # A fresh install resolves a TS 7 without
-          # getParsedCommandLineOfConfigFile, which the build script needs.
-          npm install --no-save typescript@5.8
-          npm run build
-
-      - name: Build dalien-signals
-        working-directory: packages/dalien-signals
-        run: |
-          pnpm install --ignore-workspace
-          node build.js
-
-      # The benchmark's file: dependencies resolve to sibling checkouts in
-      # this layout (../packages/*, ../upstream-alien-signals, and the fork
-      # build under ../vendor/react), so this install must come after the
-      # fork/dalien/alien builds above. --legacy-peer-deps because the
-      # file:-dep React (the 19.x experimental fork) conflicts with the
-      # stock libraries' react@^18 peer ranges; the fork pins ajv@^8 in its
-      # devDependencies so webpack's schema-utils survives the resulting
-      # hoisting.
-      # The contender pages bundle packages/cosignals-react from raw TS; its
-      # own imports (react, cosignals) resolve through the workspace links
-      # that only exist after a root install.
-      - name: Install workspace
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Install benchmark
-        working-directory: daishi-concurrent-benchmark
-        run: npm install --legacy-peer-deps
-
-      - name: Install Playwright Chromium
-        working-directory: daishi-concurrent-benchmark
-        run: npx playwright install --with-deps chromium
-
-      # Only our three entries plus two stock anchors: react-state (native
-      # useState — passes everything, proves the harness can pass) and
-      # zustand (a stock useSyncExternalStore store — fails Level 3, proves
-      # the harness can detect the de-opt).
-      # NOTE: the "cosignal-react" entry name, build script, and LIBS/lib
-      # keys below are defined inside the daishi-concurrent-benchmark
-      # submodule (a separate repo) and must match it, not this repo's
-      # package name (cosignals-react). Rename them only together with an
-      # update of that submodule.
-      - name: Build contender pages
-        working-directory: daishi-concurrent-benchmark
-        run: |
-          npm run build:cosignal-react
-          npm run build:alien-uses
-          npm run build:dalien-uses
-          npm run build:zustand
-          npm run build:react-state
-
-      # continue-on-error because a nonzero playwright exit is expected: the
-      # uSES entries fail the Level 3 tests by design (useSyncExternalStore
-      # updates are always synchronous, so they cannot time-slice or branch).
-      # The verdict step below decides what actually fails the job.
-      # playwright.config.js supplies headless Chromium, the http-server for
-      # dist/ (webServer block), and the JSON report path.
-      - name: Run tearing/branching suite
-        id: playwright
-        continue-on-error: true
-        working-directory: daishi-concurrent-benchmark
-        env:
-          LIBS: cosignal-react,alien-uses,dalien-uses,zustand,react-state
-        run: npx playwright test
-
-      - name: Publish pass/fail matrix
-        working-directory: daishi-concurrent-benchmark
-        run: |
-          node - <<'EOF'
-          const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync('playwright-results.json', 'utf8'));
-          // Playwright JSON nests suites under each file suite as
-          // lib -> 'With useTransition'|'With useDeferredValue' -> 'Level N',
-          // with the outcome in specs[].tests[].results[].status.
-          const columns = [];
-          const libs = new Map();
-          const visit = (suite, path) => {
-            for (const spec of suite.specs || []) {
-              const [lib, ...rest] = path;
-              const col = [...rest, spec.title].join(' / ');
-              if (!columns.includes(col)) columns.push(col);
-              if (!libs.has(lib)) libs.set(lib, new Map());
-              const result = (spec.tests || []).flatMap((t) => t.results || []).pop();
-              const status = !result ? undefined
-                : result.status === 'passed' ? 'passed'
-                : result.status === 'skipped' ? 'skipped'
-                : 'failed'; // failed | timedOut | interrupted
-              libs.get(lib).set(col, status);
-            }
-            for (const child of suite.suites || []) visit(child, [...path, child.title]);
-          };
-          // The top-level suites are per-file; drop the file name from the path.
-          for (const file of report.suites || []) visit(file, []);
-          const mark = (s) => (s === 'passed' ? 'pass' : s === 'failed' ? '**FAIL**' : (s || '-'));
-          let md = '### Correctness matrix (tearing / branching)\n\n';
-          md += '| # | test |\n| ---: | --- |\n';
-          columns.forEach((c, i) => { md += `| ${i + 1} | ${c} |\n`; });
-          md += '\n| lib | ' + columns.map((_, i) => i + 1).join(' | ') + ' |\n';
-          md += '| --- | ' + columns.map(() => ':---:').join(' | ') + ' |\n';
-          for (const [lib, row] of libs) {
-            md += `| ${lib} | ` + columns.map((c) => mark(row.get(c))).join(' | ') + ' |\n';
-          }
-          md += '\nFAIL is expected for the useSyncExternalStore entries on the';
-          md += ' "Can interrupt render" / "Can branch state" tests: external-store';
-          md += ' updates are always synchronous in React, which is the limitation';
-          md += ' cosignal-react exists to remove.\n';
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n');
-          EOF
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: react-correctness
-          path: daishi-concurrent-benchmark/playwright-results.json
-          if-no-files-found: error
-
-      # Known-answer verdict. Gates:
-      #   1. cosignal-react must pass every test it ran (and must have run).
-      #   2. The two anchors must match their known-good behavior —
-      #      react-state passes everything (native state passes all levels),
-      #      zustand fails exactly the two useTransition Level 3 tests and
-      #      passes the rest. The zustand set is matched by title, not by
-      #      count, so a deviation pinpoints which behavior changed. A
-      #      deviation means the harness or the React fork changed behavior,
-      #      not that the anchors regressed.
-      # alien-uses / dalien-uses are informational: their Level 3 failures
-      # are the documented expected outcome and never fail the job.
-      - name: Verdict
-        working-directory: daishi-concurrent-benchmark
-        run: |
-          node - <<'EOF'
-          const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync('playwright-results.json', 'utf8'));
-          // Flatten the suite tree ([lib, branch, level] path per spec).
-          const rows = [];
-          const visit = (suite, path) => {
-            for (const spec of suite.specs || []) {
-              const [lib, branch, level] = path;
-              const result = (spec.tests || []).flatMap((t) => t.results || []).pop();
-              rows.push({
-                lib,
-                branch,
-                level,
-                title: spec.title,
-                passed: !!result && result.status === 'passed',
-              });
-            }
-            for (const child of suite.suites || []) visit(child, [...path, child.title]);
-          };
-          for (const file of report.suites || []) visit(file, []);
-          const byLib = new Map();
-          for (const row of rows) {
-            if (!byLib.has(row.lib)) byLib.set(row.lib, []);
-            byLib.get(row.lib).push(row);
-          }
-          for (const [lib, libRows] of byLib) {
-            const passed = libRows.filter((row) => row.passed).length;
-            console.log(`${lib}: ${passed}/${libRows.length} passed`);
-          }
-          let failed = false;
-          const err = (msg) => { console.log(`::error::${msg}`); failed = true; };
-          const label = (row) => `"${row.branch} / ${row.level} / ${row.title}"`;
-
-          // cosignal-react's OBSERVED baseline (2026-07-05, first run): it is
-          // the only entry that passes Level 3 "Can interrupt render", and it
-          // has two solid open findings (reproduced under both the jest and
-          // playwright stacks) plus one timing-flaky tearing check. Gate as a
-          // ratchet: expected failures must keep failing (a fix should be
-          // celebrated by consciously updating this list), everything else
-          // must pass, and the flaky check is tolerated either way.
-          const cosignalExpectedFail = [
-            'With useTransition / Level 2 / No tearing temporarily on mount',
-            'With useTransition / Level 3 / Can branch state (wip state)',
-          ];
-          const cosignalTolerated = [
-            'With useDeferredValue / Level 2 / No tearing temporarily on update',
-            'With useDeferredValue / Level 2 / No tearing temporarily on mount',
-          ];
-          const cosignal = byLib.get('cosignal-react') || [];
-          if (cosignal.length === 0) {
-            err('cosignal-react ran no tests');
-          }
-          for (const row of cosignal) {
-            const key = `${row.branch} / ${row.level} / ${row.title}`;
-            if (cosignalTolerated.includes(key)) continue;
-            const expectedFail = cosignalExpectedFail.includes(key);
-            if (expectedFail && row.passed) {
-              err(`cosignal-react known-answer check: expected ${label(row)} to fail but it passed — a finding was fixed; update the baseline list`);
-            }
-            if (!expectedFail && !row.passed) {
-              err(`cosignal-react regression: ${label(row)} failed`);
-            }
-          }
-
-          const reactState = byLib.get('react-state') || [];
-          if (reactState.length === 0) err('react-state known-answer check: ran no tests');
-          for (const row of reactState.filter((r) => !r.passed)) {
-            err(`react-state known-answer check: ${label(row)} failed — the harness (not the library) changed`);
-          }
-
-          const zustand = byLib.get('zustand') || [];
-          if (zustand.length === 0) err('zustand known-answer check: ran no tests');
-          for (const row of zustand) {
-            // A stock useSyncExternalStore store cannot time-slice or branch.
-            const mustFail = row.branch === 'With useTransition' && row.level === 'Level 3';
-            if (mustFail && row.passed) {
-              err(`zustand known-answer check: expected ${label(row)} to fail but it passed — the harness (not the library) changed`);
-            } else if (!mustFail && !row.passed) {
-              err(`zustand known-answer check: expected ${label(row)} to pass but it failed — the harness (not the library) changed`);
-            }
-          }
-          process.exit(failed ? 1 : 0);
-          EOF

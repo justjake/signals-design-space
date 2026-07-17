@@ -1,5 +1,7 @@
 # Battery manifest — browser-real concurrent-signals verification
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 The contract for `battery/`: every scenario this battery owes, where it came
 from, what each implementation is expected to do, and whether it is built yet.
 Scenarios are deduplicated by compliance-contract clause; parameter variants
@@ -25,7 +27,7 @@ exercised. Test titles cite row ids, so a report line reads `RCC-RT3.hold
 
 | project | shim name | holdStyle | RT4 ruling |
 | --- | --- | --- | --- |
-| cosignals | `cosignals` | suspense | **newest** (scenario R15, canonical) |
+| cosignals-first-draft | `cosignals-first-draft` | suspense | **newest** (scenario R15, canonical) |
 | alt-a | `cosignals-alt-a` | suspense | **drafts-hidden** (ambient-W0, SPEC-RESOLUTIONS divergence) |
 | alt-b | `cosignals-alt-b` | suspense | **drafts-hidden** (ambient-W0, pinned in both gate modes) |
 | solid-react | `concurrent-solid-react` | defer-write | **drafts-hidden** (ruled + documented — see below) |
@@ -65,7 +67,7 @@ firing order (EF4).
 - `variant:<x>` — the row asserts implementation-specific ruled behavior `<x>`.
 - `skip:<why>` — mechanism not reachable on that implementation; skipped with
   the reason as the annotation.
-- Column order: cosignals · alt-a · alt-b · solid-react · royale-fx2.
+- Column order: cosignals-first-draft · alt-a · alt-b · solid-react · royale-fx2.
 
 ## Hold mechanisms (row parameter `hold=`)
 

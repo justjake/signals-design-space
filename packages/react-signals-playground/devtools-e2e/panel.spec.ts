@@ -5,8 +5,8 @@ import { expect, test } from '@playwright/test'
 // the panel open (?devtools) on both engine pages.
 
 for (const page_ of [
-	{ path: '/royale-fx2/?devtools', engine: 'fx2' },
-	{ path: '/royale-fx2-dalien/?devtools', engine: 'fx2-dalien' },
+	{ path: '/cosignals/?devtools', engine: 'cosignals' },
+	{ path: '/cosignals-arena/?devtools', engine: 'cosignals-arena' },
 ] as const) {
 	test(`panel shows the live ${page_.engine} graph + log and updates on interaction`, async ({ page }) => {
 		await page.goto(page_.path)
@@ -35,7 +35,7 @@ for (const page_ of [
 }
 
 test('graph trackpad gestures keep the pinch focal point fixed and scroll to pan', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	await expect(page.locator('.signals-devtools-root')).toBeVisible()
 	const svg = page.locator('.canvas-wrap svg')
 	await expect(svg).toBeVisible()
@@ -82,7 +82,7 @@ test('graph trackpad gestures keep the pinch focal point fixed and scroll to pan
 })
 
 test('double-click a collapsible log row toggles collapse', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	const panel = page.locator('.signals-devtools-root')
 	await expect(panel).toBeVisible()
 	await panel.locator('.nodelist tbody tr').first().waitFor()
@@ -90,7 +90,7 @@ test('double-click a collapsible log row toggles collapse', async ({ page }) => 
 	for (let i = 0; i < 5; i++) await page.getByTestId('increment').click()
 	await panel.getByRole('button', { name: 'Log', exact: true }).click()
 
-	// Select a collapsible root first: royale prepends new operations, so rows
+	// Select a collapsible root first: the collector prepends new operations, so rows
 	// reorder under us — .selected then pins that row by identity as it moves.
 	await panel.locator('.log tbody tr.op-head').first().locator('.chip').click()
 	const selected = panel.locator('.log tbody tr.selected')
@@ -108,7 +108,7 @@ test('double-click a collapsible log row toggles collapse', async ({ page }) => 
 })
 
 test('following an in-log cause link scrolls the target into view', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	const panel = page.locator('.signals-devtools-root')
 	await expect(panel).toBeVisible()
 	await panel.locator('.nodelist tbody tr').first().waitFor()

@@ -1,5 +1,5 @@
 /**
- * The battery's view of the five implementations. Segments, labels, and
+ * The battery's view of the two implementations. Segments, labels, and
  * shim names come straight from the app's own implementation table
  * (src/shims/implementations.ts), so a new implementation row automatically
  * becomes a candidate battery project.
@@ -18,7 +18,7 @@ export interface BatteryEntry {
 	readonly label: string
 	/** Shim `name` — the impl-name HUD tile must show exactly this. */
 	readonly name: string
-	/** Page path for this implementation ('/royale-fx2/', '/alt-a/', ...). */
+	/** Page path for this implementation. */
 	readonly path: string
 	/** How this implementation holds a transition open on async data. */
 	readonly holdStyle: HoldStyle
@@ -26,11 +26,7 @@ export interface BatteryEntry {
 
 const HOLD_STYLES: Record<string, HoldStyle> = {
 	cosignals: 'suspense',
-	'alt-a': 'suspense',
-	'alt-b': 'suspense',
-	'solid-react': 'defer-write',
-	'royale-fx2': 'suspense',
-	'royale-fx2-dalien': 'suspense',
+	'cosignals-arena': 'suspense',
 }
 
 export const ENTRIES: readonly BatteryEntry[] = implementations.map((impl) => {

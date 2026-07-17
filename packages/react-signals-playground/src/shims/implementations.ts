@@ -21,25 +21,16 @@ export interface Implementation {
 
 export const implementations: readonly Implementation[] = [
 	{
-		segment: 'royale-fx2',
-		label: 'royale-fx2',
-		name: 'signals-royale-fx2',
-		load: () => import('./royale-fx2'),
+		segment: 'cosignals',
+		label: 'cosignals',
+		name: 'cosignals',
+		load: () => import('./cosignals'),
 	},
 	{
-		segment: 'royale-fx2-dalien',
-		label: 'royale-fx2-dalien',
-		name: 'signals-royale-fx2-dalien',
-		load: () => import('./royale-fx2-dalien'),
-	},
-	{ segment: 'cosignals', label: 'cosignals', name: 'cosignals', load: () => import('./cosignals') },
-	{ segment: 'alt-a', label: 'alt-a', name: 'cosignals-alt-a', load: () => import('./alt-a') },
-	{ segment: 'alt-b', label: 'alt-b', name: 'cosignals-alt-b', load: () => import('./alt-b') },
-	{
-		segment: 'solid-react',
-		label: 'solid-react',
-		name: 'concurrent-solid-react',
-		load: () => import('./solid-react'),
+		segment: 'cosignals-arena',
+		label: 'cosignals-arena',
+		name: 'cosignals-arena',
+		load: () => import('./cosignals-arena'),
 	},
 ]
 

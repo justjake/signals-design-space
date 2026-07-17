@@ -35,7 +35,7 @@ export default {
 		// `vp test` at the repo root runs exactly these suites, each with its
 		// own existing vitest.config.ts (vitest 4 projects). Per-package
 		// `pnpm test` / `pnpm -C harness conformance` are unaffected.
-		projects: ['./harness', './packages/cosignals-alt-a', './packages/cosignals-alt-b'],
+		projects: ['./harness', './packages/cosignals'],
 	},
 	fmt: {
 		// Tabs render at two columns; statements do not end in semicolons.

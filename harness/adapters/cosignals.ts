@@ -1,30 +1,13 @@
 /**
- * Adapter for packages/cosignals (the cosignals v1 DIRECT build: donor arena
- * kernel + policy layer). Routes through the public class API — Atom /
- * Computed `.state` getters and `.set` — so conformance and benches measure
- * the surface applications use, policy wrapper included.
+ * The package's test adapter owns its conformance policy. This file only
+ * changes the name used to join framework results in the root harness.
  */
-import * as lib from 'cosignals'
 import type { FrameworkAdapter } from './types'
+import adapter from '../../packages/cosignals/royale/harness-adapter.ts'
 
-const adapter: FrameworkAdapter = {
+const cosignals = {
+	...adapter,
 	name: 'cosignals',
-	signal(initialValue) {
-		const a = new lib.Atom(initialValue)
-		return {
-			read: () => a.state,
-			write: (v) => a.set(v),
-		}
-	},
-	computed(fn) {
-		const c = new lib.Computed(fn)
-		return { read: () => c.state }
-	},
-	effect: lib.effect,
-	effectScope: lib.effectScope,
-	startBatch: lib.startBatch,
-	endBatch: lib.endBatch,
-	untracked: lib.untracked,
-}
+} satisfies FrameworkAdapter
 
-export default adapter
+export default cosignals

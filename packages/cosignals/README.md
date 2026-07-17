@@ -1,606 +1,390 @@
 # cosignals
 
-**cosignals** is a reactive state ("signals") library for JavaScript and
-TypeScript, designed from the start for React's concurrent rendering. It
-keeps derived values and effects in sync with changing state, stores its
-dependency graph in packed integer arrays for speed, and — its defining
-feature — can maintain **several consistent views of the same state at
-once**, so a UI that renders in interruptible slices never shows a frame
-that mixes old and new values.
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 
-You can use it standalone, with no React anywhere: atoms, computed values,
-effects, and batching work as a plain, fast signals library. The concurrent
-machinery engages only when something concurrent actually happens.
+A reactive state engine with first-class support for React concurrent
+rendering. It is two layers:
 
-Two extra entry points are diagnostics: `cosignals/trace` (a zero-allocation
-event recorder that answers "why did this re-render?") and
-`cosignals/graphviz` (DOT renderers for the dependency graph and for causal
-traces).
+- a conventional signal graph — writable atoms, lazy cached computeds,
+  effects, batching — with equality cutoff and batched delivery;
+- a small concurrency overlay for React transitions: writes made inside a
+  transition stay invisible to committed readers until the transition
+  lands, while every reader still sees an internally consistent snapshot.
 
-## How it works
+The root entry (`cosignals`) is React-free and dependency-free.
+React bindings ship as a subpath — `cosignals/react` — with
+`react`/`react-dom` (>= 19) as peer dependencies; they run on stock React,
+no patches or build flags. The npm package contains ESM JavaScript and
+TypeScript declarations compiled from this repository's TypeScript source.
 
-Three primitives cover most programs:
-
-- An **`Atom`** stores a value. Read `.state`; write with `.set(value)` or
-  `.update(fn)`.
-- A **`Computed`** derives and caches a value from atoms or other computeds.
-- An **`effect`** runs a function now, then again when a value it read
-  changes.
-
-Dependencies are automatic: while a computed or effect runs, the library
-records every atom and computed it reads.
+## Core API
 
 ```ts
-import { Atom, Computed, effect, batch } from 'cosignals';
+import { createAtom, createComputed, effect, batch, untracked } from 'cosignals';
 
-const count = new Atom(1);
-const doubled = new Computed(() => count.state * 2);
-const isEven = new Computed(() => count.state % 2 === 0);
+const count = createAtom(1);
+const double = createComputed(() => count.get() * 2);
+const stop = effect(
+  () => double.get(),              // compute: tracked, pure
+  (value) => console.log(value),   // handler: untracked side effect
+); // the handler runs now, then when the settled value changes
 
-const stop = effect(() => {
-  console.log(doubled.state, isEven.state); // 2 false
-});
-
-count.set(2); // logs: 4 true
-batch(() => {
-  count.set(3);
-  count.set(4); // the effect runs once, when the batch closes
+count.set(2);                 // handler logs 4
+count.update((x) => x + 1);   // functional update
+batch(() => {                 // one flush for the whole callback
+  count.set(10);
+  count.set(3);               // net revert: the handler never runs
 });
 stop();
 ```
 
-```mermaid
-flowchart LR
-    count["Atom: count"] -->|read by| doubled["Computed: doubled"]
-    count -->|read by| even["Computed: isEven"]
-    doubled -->|read by| log["effect: console.log both"]
-    even -->|read by| log
-```
+- **Equality:** writes that compare equal are dropped. Pass
+  `{ equals }` to customize; pass `{ label }` to name an atom in traces.
+- **Lazy initializers:** `createAtom(() => expensive())` runs the function once,
+  untracked, at first use (read, write, or subscription — never at
+  construction). A `set` before the first read still runs it, because the
+  equality contract needs the base value. Initializers must not write.
+- **Computeds** are lazy and cached, track dependencies dynamically (a
+  branch not taken this evaluation is not a dependency), and only recompute
+  when an input's value generation actually advanced.
+- **Effects** are a source and a handler. The source declares what the
+  effect reacts to: a compute function (the same evaluator and semantics
+  as a computed — tracked, cached, cut off by `equals`, async-capable
+  through `use()` — with state living on the effect itself), a signal, a
+  tuple of signals, or a record of signals. The container shorthands read
+  each signal into a same-shaped value and default their cutoff to
+  `shallowEquals` (exported; an explicit `equals` overrides):
 
-Arrows point from a value to the work that depends on it. When `count`
-changes, the effect is reachable through both computeds but runs only once.
+  ```ts
+  effect(query, (q) => syncUrl(q))
+  effect([user, theme], ([u, t]) => paintHeader(u, t))
+  effect({ user, theme }, ({ user, theme }) => paintHeader(user, theme))
+  ```
 
-Recomputing every downstream node on each write would waste work, and
-recomputing dependents immediately could run an effect before all of its
-inputs are current. Updates instead use a push-pull algorithm:
+  The handler runs untracked with the source's settled `(value, previous)`
+  pair when that value changes, and may return a cleanup that runs before
+  the next handler run and at disposal. Reads the effect should react to
+  belong in the source; handler reads are untracked.
 
-1. **Push:** a write marks downstream computeds and effects as possibly
-   stale. Effects are queued; no user callback runs during this walk.
-2. **Pull:** before a computed returns `.state`, it checks its dependencies
-   and recalculates only if one actually changed value. A queued effect
-   re-runs and pulls each computed it reads up to date. If a computed's
-   value did not change, the update stops along that path.
+  A pending compute is silent: settlement fires the handler only when the
+  settled value differs. A compute error rethrows from the drain site without
+  calling the handler. `effectScope(fn)` collects every effect created inside
+  and returns one disposer.
+- **Schedules:** `effect(compute, handler, { schedule })` picks when
+  signal-triggered re-runs drain: `'sync'` (default — inside the flush
+  when the write settles), `'useLayoutEffect'`, or `'useEffect'` — named
+  for the React phases that run them. With a provider mounted, the
+  handler runs in the same commit as the components the write re-rendered
+  (layout or passive phase); headless, a microtask or `setTimeout(0)`
+  approximates. Both are coalesced per window with a net value cutoff,
+  and the first run at creation is always synchronous.
+  `flushScheduledEffects()` drains the deferred lanes now (tests,
+  headless hosts). See `docs/effects.md` for the full contract.
 
-```mermaid
-sequenceDiagram
-    participant S as Atom: count
-    participant D as Computed: doubled
-    participant V as Computed: isEven
-    participant E as effect
+## Intents, drafts, and transitions
 
-    S->>D: push - mark possibly stale
-    D->>E: push - queue effect
-    S->>V: push - mark possibly stale
-    V->>E: push - effect already queued
-    E->>D: pull - effect reads doubled
-    D->>S: pull - read count
-    S-->>D: 2
-    D-->>E: 4
-    E->>V: pull - effect reads isEven
-    V->>S: pull - read count
-    S-->>V: 2
-    V-->>E: true
-    Note over D,V: both values current - effect body runs once
-```
+Writes are INTENTS: either a value (`set`) or a function to re-execute
+against whatever the base turns out to be (`update`). Urgent intents apply
+immediately. Intents issued inside a React transition are recorded into a
+DRAFT instead — an ordered log attached to that transition.
 
-## Concurrent worlds
-
-This is the part other signals libraries do not have.
-
-React's concurrent rendering splits work by urgency. A **transition**
-(`startTransition`) marks an update as non-urgent: React renders it in the
-background, over several interruptible slices, while urgent updates
-(typing, clicks) keep landing and committing in between. That is safe for
-React's own state because React keeps one value per pending update
-internally — but an ordinary external store has just one current value. If
-a paused background render resumes and reads the store again, or an urgent
-render reads state that only a pending transition should see, a single
-rendered frame can mix old and new state. That bug is called **tearing**.
-
-cosignals removes the single-current-value limitation with three ideas:
-
-- **Write log.** Every write that lands while something is pending is
-  recorded — which operation (set / functional update / reducer action),
-  which batch it belongs to, and its position on one global timeline — as
-  one small entry object appended to the written atom's write log. Logs
-  only ever append while pending work lives; removal is always wholesale
-  (an episode closing drops a whole log, the bounding valve drops a whole
-  prefix — both below), so dropped history is reclaimed by the garbage
-  collector in bulk and no per-entry bookkeeping exists anywhere.
-- **Batches.** A batch groups the writes belonging to one UI update — one
-  event handler, one transition, one async action. React schedules each
-  batch at a single priority, and the engine keeps a batch's writes visible
-  together or not at all.
-- **Worlds.** A world is one self-consistent assignment of values to every
-  signal, produced by replaying exactly the log entries that world is
-  allowed to see, in timeline order, over each atom's base value. Three
-  kinds exist: the **newest** world (every write applied — what effects and
-  plain reads see), the **committed** world of a root (exactly what that
-  root's on-screen UI reflects), and a **render** world (what one
-  in-progress render may see: committed state plus its own batches, frozen
-  at the moment the render started, so a paused-and-resumed render never
-  drifts).
-
-Because every world is a pure replay of the same log, a pending update and
-the committed UI can never disagree about history — they only differ in how
-much of it they are allowed to see. Here is an urgent write landing while a
-transition's background render is paused:
-
-```mermaid
-sequenceDiagram
-    participant App as app code
-    participant E as cosignals engine
-    participant R as React
-
-    App->>E: startTransition - write tab = "settings" (batch T)
-    E->>E: append log entry for T
-    R->>E: render begins (world frozen - committed + T)
-    R->>R: renders some components, then yields
-    App->>E: click - write count = 5 (urgent batch U)
-    E->>E: append log entry for U
-    E->>R: notify subscribers of count
-    R->>E: urgent render reads count
-    E-->>R: committed world + U - count 5, tab "home"
-    R->>R: commit urgent update (no settings state anywhere)
-    R->>E: transition render resumes
-    R->>E: resumed components read tab, count
-    E-->>R: the frozen render world - tab "settings", count 4
-    Note over R: every slice of the transition render agrees - no torn frame
-    R->>E: transition commits - batch T retires
-    E->>E: T's writes become permanent history - the episode closes, logs drop
-```
-
-The resumed transition render still sees exactly the state it started from
-— including `count = 4` — so the frame it produces is internally
-consistent. When React then re-renders the transition on top of the
-committed urgent update, the new render starts from a fresh frozen view
-that includes both batches.
-
-When a batch is finished everywhere (committed or abandoned), it
-**retires**: its writes become permanent history visible to every world.
-All of the pending-state bookkeeping lives and dies as one **episode** —
-the span from the first pending durable work (a batch opens, an async
-action parks, a render starts) to full quiescence (every batch retired,
-every render closed). While an episode runs, logs and batch records only
-grow — nothing is edited in place. At the close, every touched atom's base
-value adopts the newest result directly (every world provably folds to the
-same value by then, so nothing is replayed or compared), the logs and
-retired batch records drop wholesale, and the garbage collector reclaims
-the history in bulk. One valve bounds the exception: a parked action can
-hold an episode open indefinitely while writes keep landing, so when a
-log's fully-retired prefix — already below every live render's frozen
-view — grows past a threshold, that prefix folds into the base value and
-drops early, keeping held-open episodes at bounded memory.
-
-When nothing is pending at all, the engine is **quiet**: a write folds
-directly into permanent history — no log entry, no batch, no world is
-created — so an app that never starts a transition pays almost nothing for
-any of this.
-
-### What subscribers may see: at-least-once
-
-Subscribed observers — components subscribed through the React driver and
-`useSignalEffect` graph terminals — follow an
-**at-least-once** contract: an observer re-fires when a durable accepted
-change touched a value it read, and it may re-fire even though the value it
-then reads compares equal to what it last saw. The engine stamps every
-change with a per-root clock and revalidates observers against those
-clocks — a producer whose clock is unmoved is skipped without any work, and
-a producer whose clock moved re-fires the observer without a value
-comparison. SignalEffect dependencies are ordinary graph edges, retracked on
-every actual run; there is no parallel dependency snapshot or global scan.
-A round trip through several boundaries (write A→B, then B→A)
-is two accepted changes, so an observer that saw neither intermediate state
-may still re-fire once at the end. What does NOT change: many writes inside
-one boundary still coalesce into one re-fire, and write acceptance still
-honors custom equality — writing an equal value is not an accepted change
-and moves no clock. Observer callbacks should be idempotent (the same
-discipline React's Strict Mode teaches for effects).
-
-## API
-
-The named exports use one default browser instance. Servers should create an
-instance per request; every graph, cache, lifecycle queue, async request cache,
-world, and reclamation registry then belongs to that request:
+Every reader resolves values against committed state plus the drafts it
+is allowed to see: an urgent render sees none, a transition's own renders
+see that transition's draft. Resolution replays, in original dispatch
+order, exactly the intents the reader may see. That single rule produces
+React's updater-queue behavior:
 
 ```ts
-import { createCosignals } from 'cosignals';
-
-const server = createCosignals();
-const count = new server.Atom(1);
-count.set(7);
-const state = server.serializeAtomState({ count });
-
-const client = createCosignals();
-const clientCount = new client.Atom(0);
-client.initializeAtomState(state, { count: clientCount }); // before hydration
+const n = createAtom(1);
+// transition records: update(x => x + 2)     (draft D)
+// urgent write:       update(x => x * 2)
+n.get()      // 2      — urgent skipped the draft: 1 * 2
+// inside the transition: (1 + 2) * 2 = 6 — replay in dispatch order, never reorder
 ```
 
-Each `createCosignals()` instance starts with a **small** storage arena and
-grows it on demand, so creating one per request (thousands over a process
-lifetime) costs kilobytes each rather than reserving the maximum up front. The
-default browser instance keeps its larger starting reservation. To pre-size an
-instance that will build a large graph, pass `createCosignals({ initialRecords
-})` (units of one node plus two dependency edges).
+When a draft RETIRES (its transition committed everywhere), the full replay
+folds into committed state through the ordinary write path — effects run,
+equality applies — and renders still holding the draft's id resolve the same
+values, so retirement is invisible to them. A discarded draft rolls back:
+draft readers are re-notified and re-resolve without it. When the last
+draft dies, every per-draft structure is dropped; a quiescent engine holds
+nothing extra.
 
-Every handle belongs to the instance that created it. Handles are not
-interchangeable across instances: passing one instance's `Atom`/`Computed` to
-another instance's engine surface (or React binding) throws
-`cosignals: handle belongs to a different engine instance` rather than silently
-reading the wrong graph. `import { isAtom, isComputed } from 'cosignals'`
-recognizes a handle's type across instances.
-
-Serialization keys are supplied by the application; labels and construction
-order are not stable identities. A replacer/reviver may be passed as the
-second/third argument. Unknown serialized keys warn, while missing keys leave
-their constructor defaults unchanged. Serialization and initialization require
-the instance to have no live batch or render, so SSR never captures a
-speculative world.
-
-### `new Atom(initial, options?)`
-
-A writable signal.
-
-- `.state` — read the current value. Inside a computed or effect this
-  registers a dependency; inside a React component (via `cosignals-react`)
-  it reads the world of the render in progress.
-- `.set(value)` — replace the value.
-- `.update(fn)` — apply a pure function to the current value.
-
-Options:
-
-- `isEqual?: (a, b) => boolean` — writes equal to the current value are
-  dropped. Applies unconditionally while the atom has no pending recorded
-  writes; once pending entries exist, equality applies per replay step
-  instead, because different worlds may fold different previous values. The
-  comparator is always called as `isEqual(currentValue, incomingValue)`.
-- `label?: string` — debug name, used by the diagnostics entries.
-- `effect?: (ctx) => void | (() => void)` — the **observed lifecycle**: runs
-  when the atom gains its first subscriber of any kind — a computed chain
-  or `effect()` here, or a React component subscribed through the bindings
-  — and the returned cleanup runs once the last subscriber of every kind is
-  gone. One observation state over that union: an atom watched by several
-  kinds at once observes exactly once, and observe/unobserve flaps within
-  one tick coalesce. `ctx` offers `state`, `set`, and `update`. Use it to
-  wire an atom to an external subscription (a socket, a store) exactly
-  while something is watching.
-
-### `new ReducerAtom(reducer, initial, options?)`
-
-An atom whose writes go through a reducer: `.dispatch(action)`. The reducer
-is fixed at creation and **must be pure**, because the engine replays
-dispatched actions to compute what different worlds should show — an impure
-reducer would replay differently each time. Prefer it over `Atom` when
-updates are a vocabulary of actions rather than raw values.
-
-### `new Computed(fn, options?)`
-
-A derived signal; `.state` evaluates on demand and caches. `fn` receives a
-context object:
-
-- `ctx.previous` — the last cached value, as a hint only: it may be stale
-  or `undefined`, and the function must be correct without it. (Computeds
-  used with the React bindings see the last *committed* value here.)
-- `ctx.use(...)` — read an async value inside a computed, in two forms.
-  Both follow the same contract as React's `use()`: a fulfilled promise
-  returns its value, a rejected one throws its reason, and while a promise
-  is pending, reads of the computed throw a stable `SuspendedRead` carrier
-  (exported; the React bindings translate it into Suspense). Settlement
-  re-evaluates the computed.
-  - `ctx.use(promise)` — for a promise the **caller** caches (in a data
-    layer or component state). The engine stores nothing; passing the same
-    settled promise later reads its value synchronously.
-  - `ctx.use(key, factory)` — the built-in cache: the computed keeps a
-    per-key map of promises for its own lifetime, so the factory runs once
-    per key and the same promise is reused across re-evaluations — even
-    across interrupted and replayed renders. The key must carry every input
-    that varies the request: `ctx.use(['user', userId], () =>
-    fetchUser(userId))` — a different `userId` is a different key (a new
-    fetch); the same `userId` reuses the same promise. Keys are strings,
-    numbers, booleans, `null`, or arrays of those. The cache dies with the
-    computed. (A bare factory with no key is rejected: an unkeyed, uncached
-    promise would refetch on every re-evaluation.)
-
-Options: `isEqual` (an equal result returns the previous reference, so
-downstream consumers see no change — an equality cutoff, compared as
-`isEqual(previous, next)`) and `label`.
-
-Reading a computed while its own evaluation is running throws `CycleError`
-— a computed may not depend on itself — instead of silently serving a stale
-cache.
-
-### `effect(fn)` and `effectScope(fn)`
-
-`effect(fn)` runs `fn` immediately with dependency tracking and re-runs it
-when any tracked signal changes. `fn` may return a cleanup function, run
-before each re-run and at disposal. Returns a disposer. Effects always
-observe the newest world — every write applied — because side effects
-cannot be un-run and must not fire from speculative state. (For effects
-that should track only what the user actually sees, use the React
-bindings' `useSignalEffect`, which observes committed state.)
-
-`effectScope(fn)` returns one disposer for every effect created inside
-`fn`.
-
-### `batch(fn)`, `startBatch()` / `endBatch()`
-
-`batch(fn)` defers effect re-runs until `fn` returns, so a group of writes
-triggers each affected effect once. Nothing else: batching never delays the
-writes themselves, and reads inside a batch see them immediately.
-`startBatch()`/`endBatch()` are the low-level pair for binding authors.
-(This synchronous coalescing is unrelated to the concurrent engine's Batch
-records, which group writes by UI update.)
-
-### `untracked(fn)`
-
-Reads inside `fn` register no dependencies. An untracked read is a
-point-in-time sample: a computed that reads something only untracked is not
-re-evaluated when that value changes.
-
-### `configure(options)`
-
-- `forbidWritesInComputeds?: boolean` — when true, any atom write during a
-  computed evaluation throws. Off by default: writes inside computeds are
-  tolerated as long as they do not re-enter the writing computed.
-- `initialRecords?: number` — a capacity floor for the storage arena (in
-  units of one node plus two dependency edges). Raising it before building
-  a large graph avoids growth pauses; it never shrinks. Also settable via
-  the `COSIGNAL_INITIAL_RECORDS` environment variable before first import.
-
-Two disciplines are enforced at runtime because world replay depends on
-them:
-
-- **Updaters, reducers, and equality comparators must be pure.** They are
-  stored and replayed per world, so reading or writing signals inside them
-  throws. Read what you need first, then dispatch.
-- **Writes during a render or world evaluation throw.** A speculative
-  render must not mutate shared state; write from an event handler or an
-  effect instead.
-
-## Memory and reclamation
-
-Signals are garbage-collected. There is no `dispose()` on atoms or
-computeds and no ownership ceremony: when the last reference to an `Atom`
-or `Computed` is dropped, its storage — the packed record, its dependency
-edges, its cached values, any per-key request cache — is reclaimed
-automatically, whether or not the signal still had subscribers, recorded
-history, or a lifecycle callback. Effects are the exception, because a
-running effect is itself a reason to stay alive: stop them with the
-disposer that `effect()`/`effectScope()` returns.
-
-The mechanism is a `FinalizationRegistry` (part of ES2021): the engine
-notices when a handle has been collected and recovers its record. Records
-that still have live consumers — a subscribed component, a pending
-recorded write, a watched lifecycle — are protected by guards and recovered
-the moment the last guard clears. User-supplied cleanup functions never run
-inside the garbage collector's callback; they are deferred to a normal
-engine boundary, so a throwing cleanup surfaces like any other application
-error and the collector is never blocked on user code.
-
-On runtimes without `FinalizationRegistry`, dropped handles keep a bounded
-retention (their records are recycled through the deterministic paths
-instead).
-
-## Storage
-
-Internally, every atom, computed, effect, and dependency edge is a
-fixed-size record in one shared `Int32Array` — a contiguous arena, like an
-array of structs in C. Reads, writes, and invalidation walks are index
-arithmetic over those records: no per-operation allocation on hot paths,
-nothing for the garbage collector to trace. A record id is the record's
-starting offset in the array; id `0` means "none". Component watchers and
-SignalEffect identities also use records from this allocator. A
-SignalEffect's dependency edges themselves live in its root's committed
-world graph, where writes reach it by the same traversal used for other
-dependents.
-
-```mermaid
-classDiagram
-    direction LR
-    class Node["node record - 8 int32 slots"] {
-        0 FLAGS : kind and update state bits
-        1 DEPS : first input edge
-        2 DEPS_TAIL : last input edge
-        3 SUBS : first dependent edge
-        4 SUBS_TAIL : last dependent edge
-        5 GEN : generation, bumped when the slot is reused
-        6 LIFECYCLE : 1 if the atom carries an observed-lifecycle callback
-        7 NODE_INDEX : dense ordinal for side tables
-    }
-    class Link["link record - 8 int32 slots"] {
-        0 VERSION : latest dependency scan
-        1 DEP : node being read
-        2 SUB : node doing the reading
-        3 PREV_SUB : previous dependent edge
-        4 NEXT_SUB : next dependent edge
-        5 PREV_DEP : previous input edge
-        6 NEXT_DEP : next input edge
-        7 FREE_NEXT : next recycled link
-    }
-    class Watcher["watcher record - 8 int32 slots"] {
-        0 FLAGS : kind and live bits
-        1 FREE_NEXT : free-list thread while recycled
-        2 NODE : the watched node
-        3 NODE_GEN : watched node generation at mount
-        4 DEDUP_BITS : per-batch-slot delivery dedup
-        5 GEN : generation
-        6 NODE_IX : watched node dense ordinal
-        7 NODE_INDEX : dense ordinal for side tables
-    }
-    class SignalEffect["SignalEffect identity record - 8 int32 slots"] {
-        0 FLAGS : kind and live bits
-        1 FREE_NEXT : free-list thread while recycled
-        5 GEN : generation
-        7 NODE_INDEX : dense ordinal for side tables
-    }
-    class SideColumns["side columns - indexed by the same id"] {
-        values : current + pending value or cleanup; a watcher's rendered value
-        fns : computed getters and core effect bodies
-        extras : one object of cold oddments per observer record
-        clocks : float64 stamps - a node's updated-at, an observer's last-validated-at
-    }
-    Node --> Link : DEPS / SUBS
-    Link --> Node : DEP / SUB
-    Watcher --> Node : NODE
-    Node --> SignalEffect : committed-world dependency links
-    Node ..> SideColumns : id >> shift
-```
-
-All four record families share the arena, the 8-slot stride, and the
-allocators (nodes, watchers, and SignalEffects draw from one; links from the
-other). JavaScript values and functions cannot live in an `Int32Array`,
-so they sit in ordinary arrays running parallel to the arena (the side
-columns), indexed by shifting the same record id; clock stamps live in a
-parallel `Float64Array` the same way. Kernel capacity grows by rebuilding
-over doubled buffers at safe operation boundaries; freed records are
-recycled through free lists.
-
-Each open world additionally owns pooled shadow/link storage with its own
-value, clock, and suspended-list columns. Lifetime selects the representation:
-persistent committed-root worlds use packed typed arrays; temporary render
-attempts use compact JS arrays, avoiding the large reservation cost when many
-short-lived renders coexist. Both grow by doubling and are scrubbed before
-pool reuse. Per-root **clocks** live in the committed representation: an observer's re-validation
-compares the watched node's per-root updated-at stamp against the
-observer's last-validated stamp, which is what lets boundary re-checks skip
-untouched dependencies without evaluating anything (the at-least-once
-contract above).
-
-The `FLAGS` slot carries the node's kind and its update state. A computed
-moves through three states:
-
-```mermaid
-stateDiagram-v2
-    Clean --> Pending : something upstream was written
-    Pending --> Dirty : a direct input changed value
-    Pending --> Clean : all input values stayed equal
-    Dirty --> Clean : recalculate and cache
-```
-
-- **Clean:** the cached value is current (neither the `DIRTY` nor the
-  `PENDING` flag bit is set).
-- **Pending:** an input may have changed; the node must check its inputs
-  before deciding whether to recalculate.
-- **Dirty:** a direct input changed, so the node must recalculate before
-  returning its value.
-
-The reactive semantics are compatible with
-[alien-signals](https://github.com/stackblitz/alien-signals) (the same
-push-pull algorithm, re-expressed over arena records), validated against a
-179-case conformance suite. `NodeField` and `LinkField` are exported for
-tools that walk the packed graph.
-
-### Package layout
-
-One module is the engine; everything else orbits it:
-
-- **`CosignalEngine.ts`** — the engine, one module holding the whole
-  machine and the `createCosignals()` instance factory. Reads top to bottom: storage layout (the record families and
-  column-coherence functions above), the kernel algorithm, updated-at
-  clocks, the live operation table and growth, the computed evaluation
-  policy (exceptions and suspense), the observed lifecycle, then the
-  concurrent machinery — its vocabulary and node records, observation
-  liveness, write logs and the episode lifecycle, batches and retirement,
-  worlds, world storage, delivery, settlement, watcher and SignalEffect
-  records, render integration, composition, reclamation, the public policy
-  classes, and SSR helpers. Each factory call closes this state over a fresh
-  instance; the named exports are one default call.
-- **`index.ts`** — the curated package re-export list. It owns no state or
-  behavior.
-- Self-contained companions: `errors.ts` (the error classes), `Tracer.ts`
-  (the `cosignals/trace` recorder), and `graphviz.ts`
-  (`cosignals/graphviz`).
-
-## The React driver
-
-The concurrent engine is always present in each instance, but it only learns about renders,
-batches, and commits from a **driver** — one small adapter record installed
-with `attachDriver(driver)`, at most once per engine instance. The driver answers
-two questions per operation (which batch does this write belong to? which
-world should this read resolve in?) and receives the engine's re-render
-decisions as callbacks it schedules into the host's own lanes.
-
-You will normally never call `attachDriver` yourself: the companion
-package [`cosignals-react`](../cosignals-react/README.md) implements the
-driver for a React build with external-runtime support and layers hooks
-(`useSignal`, `useComputed`, `useSignalEffect`, `startSignalTransition`)
-on top. Any UI library whose renderer groups updates by priority and can
-speculatively render, then commit or discard, could implement the same
-contract; the `engine` export carries the host-agnostic embedding surface
-(batches, renders, commits, retirements, world reads).
-
-## Diagnostics: `cosignals/trace` and `cosignals/graphviz`
-
-`cosignals/trace` answers "why did this re-render / effect run / value
-change?" without perturbing what it measures. Events are fixed-size integer
-records written into preallocated buffers — no allocation per event — in
-two modes: a **ring** (flight recorder: fixed memory, oldest events
-overwritten) and a **session** (lossless capture in sealed chunks, with a
-loud truncation marker if a byte budget is crossed). When no tracer is
-attached, the entire cost is one field check per event site. Every record
-names the event that provoked it, so causality is queryable:
+## The read family
 
 ```ts
-import { engine } from 'cosignals';
-import { attachTracer, formatTrace } from 'cosignals/trace';
-
-const tracer = attachTracer(engine);
-// ... exercise the app ...
-console.log(formatTrace(tracer.events())); // "#id +Δµs kind(subject) …"
-console.log(tracer.whyDelivered('w12'));   // the write → delivery chain
-tracer.stop();
+count.get()        // committed state plus applied urgent writes; drafts hidden
+latest(count)      // newest intent, drafts included; never suspends
+isPending(count)   // true while newer data exists behind the shown value
 ```
 
-`cosignals/graphviz` renders DOT source (pipe it to `dot -Tsvg`):
-`dependencyGraphToDot(engine)` snapshots the live dependency graph;
-`traceToDot(events, filter?)` draws a trace as a causal graph — write →
-delivery → correction chains. Each diagnostics entry loads independently:
-importing the engine pulls in neither.
+There is deliberately no `committed()` query: the committed view is
+implicit, exactly as in React and Solid. Ordinary reads outside a render
+pass are base state — committed writes and retired transitions, drafts
+hidden — so "what is on screen" is what everything that did not opt into
+a draft already sees.
 
-## Constraints
+Inside a computed evaluation (or a render pass, through the React bindings)
+`latest` and `get` resolve that context's own snapshot — reading
+transitions your context does not include would be a tear. In a base-state
+computed or effect, `latest(x)` is also a tracked dependency: when `x`
+changes, the reader re-runs. What distinguishes `latest` from `get` is
+that it never suspends, not that it reads a different snapshot from inside
+an evaluation.
 
-- **Purity where replay demands it.** Updaters, reducers, and equality
-  comparators run under a guard that makes signal reads and writes inside
-  them throw (see the API section). This is what makes worlds replayable.
-- **One driver per engine.** Named exports use the default browser engine;
-  `createCosignals()` creates isolated engines for server requests or other
-  independent ownership domains. Attaching a second driver to the same
-  engine throws.
-- **Writes during renders throw.** Speculative renders must not mutate
-  shared state.
-- **Evergreen runtimes.** The library targets modern JavaScript
-  (`FinalizationRegistry`, ES2021); automatic reclamation degrades to
-  bounded retention where it is missing.
+## Async values
 
-## Testing
+Pending and error are graph STATE, not control flow:
 
-Two independent harnesses back the library's claims:
+```ts
+const user = createComputed((use) => use(fetchUser(id.get())));
+```
 
-- **Conformance.** The core passes a 179-case conformance suite for
-  alien-signals-compatible semantics — dependency tracking, lazy
-  re-evaluation, equality cutoffs, effect scheduling, diamond graphs,
-  conditional dependencies.
-- **Model-based testing.** The concurrent engine is developed against an
-  executable reference model: a deliberately simple, obviously-correct
-  implementation of the same behavioral contract, plus an invariant
-  checker, a seeded random schedule generator, and a shrinker that reduces
-  any failure to a minimal reproduction. The engine replays pinned
-  regression schedules and thousands of randomized interleavings (writes,
-  renders, pauses, commits, abandons, mounts) in lockstep with the model,
-  comparing every observable value and every notification decision after
-  every step. The model ships as its own package, so the same harness can
-  check alternative engine implementations.
+- `use(thenable)` returns the settled value, or parks the evaluation. A
+  parked computed keeps serving its last settled value ("stale") and exposes
+  one stable pending promise per span, so a suspended React render retries
+  exactly once per settlement and never re-issues fetches.
+- Settlement behaves as a write: it invalidates and propagates, and parked
+  computeds re-evaluate eagerly so chained requests progress without a
+  reader.
+- Errors rethrow the same reason object at every read site.
+- Keep thenables stable per input set (derive them from state, as above).
+  A function that creates a brand-new promise on every evaluation would
+  refetch on every settlement — that is a data-layer bug this engine cannot
+  paper over.
 
-## License
+## Refetching
 
-MIT
+To refetch with unchanged inputs, own the trigger: keep a version atom,
+read it inside the computed, and bump it to fetch again. There is no
+dedicated refetch API because a version bump is an ordinary write, and
+ordinary writes already do everything a refetch needs.
+
+```ts
+const userVersion = createAtom(0);
+const user = createComputed((use) => use(fetchUser(id.get(), userVersion.get())));
+
+userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
+```
+
+- While the new fetch is pending the computed serves its last value and
+  `isPending(user)` is true — exactly as if `id` had changed.
+- It composes with transitions for free: the bump is classified like any
+  other write, so a bump inside a transition refetches inside that
+  transition — the current screen holds, and the result commits with it.
+- Include the version in the request's cache key (as in `fetchUser` above)
+  so each bump creates exactly one new request.
+
+## Observed lifecycle
+
+```ts
+const price = createAtom(0, {
+  onObserved: ({ get, set }) => {
+    const socket = subscribePrices(set);
+    return () => socket.close();
+  },
+});
+```
+
+The callback runs when the atom gains its FIRST subscriber of any kind
+(effect, watched computed chain, or React component) and the cleanup runs
+when the LAST subscriber of every kind is gone. Subscribe/unsubscribe flaps
+within a tick coalesce, so a StrictMode double-mount nets one activation.
+
+## Server rendering
+
+```ts
+import { initializeAtomState, installState, serializeAtomState } from 'cosignals/ssr';
+
+serializeAtomState([a, b]);            // or { name: atom } records
+initializeAtomState(json, [a2, b2]);   // fresh client atoms
+installState(atom, value);             // one atom
+```
+
+Installing is not a write: no propagation, no equality check, and lazy
+initializers do not run — the installed value satisfies the first read.
+
+## Causality tracing
+
+```ts
+const t = attachTracer({ capacity: 4096 });
+// ... run your app ...
+t.whyLastDelivery(node); // ["#42 deliver", "#41 write \"count\"", ...]
+t.events();              // ring contents; t.dropped counts evictions
+t.stop();
+```
+
+Every event carries a causal parent: a re-render chains to the write that
+caused it, a fold write chains to the draft retirement, a retirement chains
+to the transition's last write. Unrelated operations never chain. Detached
+cost is one null check per emit site; the ring never grows past its
+capacity and overflow is counted, never silent.
+
+## Ownership and reclamation
+
+- Computeds hold references toward their dependencies only, and join
+  subscriber lists only while observed. Dropping the last reference to an
+  unobserved computed chain makes the whole chain collectible.
+- Effects, effect scopes, and subscriptions retain graph edges until their
+  returned disposer is called.
+- Draft retirement clears rebase logs and per-transition caches (see
+  above).
+
+Leaks are bugs here, not optimizations.
+
+# React bindings: `cosignals/react`
+
+Bindings for stock React — no patches, no build flags, no globals.
+Developed and tested against the React 19.3 canary
+(`19.3.0-canary-e71a6393-20260702`); any React >= 19 satisfies the peer
+range.
+
+## The design premise: React decides what each render sees
+
+Most signal bindings treat React as a display driver: the store changes, the
+binding forces components to re-render. That model collapses under
+concurrent rendering — React may be preparing several futures at once
+(transitions), and a store that changes mid-flight either tears or forces
+everything synchronous (`useSyncExternalStore` renders every store change
+at sync priority, no matter where the write came from).
+
+These bindings invert the relationship. The engine never decides what a
+render pass may see; React does:
+
+- `SignalsFrameworkProvider` connects a React subtree to the signals runtime;
+  the packaged `createRoot` wrapper installs one around the root. Providers
+  cannot be nested. A provider's only state is a list of transition draft ids
+  managed by `useReducer`. Its context value is identity-stable, so publishing
+  the connection never re-renders consumers.
+- A transition write opens an engine draft. The draft id is dispatched from
+  inside `React.startTransition` to each root connection and, for each written
+  atom, to exactly the subscribers of that atom (and of computeds over
+  it), each through its own `useReducer`. The dispatches ride the
+  transition's own lanes, so React's update queues — not this library —
+  decide which render passes include the draft: urgent passes skip it, the
+  transition's passes carry it, interrupted work recomputes it. A
+  transition's render passes therefore re-render only the components its
+  writes actually touch, not every subscriber in the app.
+- Reads resolve against exactly the drafts in the current pass's React
+  state. Urgent writes land immediately and pending drafts REPLAY over
+  them in dispatch order, which is how a counter at 1 with a pending "+2"
+  transition shows 2 after an urgent doubling and settles at 6 — never a
+  reorder, never a torn 3.
+- Base-state changes travel the SAME channel: the engine notifies a
+  subscriber, and the hook dispatches into its own reducer only if
+  re-rendering would actually show the committed tree something different
+  (a per-subscriber compare — equal resolutions, foreign transitions, and
+  already-delivered folds all stay silent). There is no
+  `useSyncExternalStore` underneath and no store snapshot: subscriptions
+  attach in effects, and the gap between rendering and attaching is closed
+  by a commit-time repair.
+
+### Writes re-render with exactly `useState`'s urgency
+
+Because every wake is a reducer dispatch made in the write's own context,
+the re-render gets the lane React would give a `setState` from the same
+place: synchronous before paint from a click handler, default priority from
+a timeout, a promise, or a network callback (it may land after a paint —
+wrap the write in `flushSync` when you need the DOM updated immediately,
+exactly as for React state), and the owning transition's lanes for drafted
+writes. An atom write and a `setState` in the same async callback commit
+in ONE render. This deliberately diverges from `useSyncExternalStore`-based
+stores, which escalate every store change to sync priority.
+
+A draft retires when every root that received it has committed it; the
+engine then folds it into committed state, and passes still holding the id
+resolve identical values. Base state is therefore the committed view —
+drafts hidden, folds included. With multiple roots it converges at
+retirement, so while a transition one root already committed is still held
+by another, that root's screen momentarily runs ahead of base state.
+
+Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
+current pass's snapshot through a validity-gated note: the note is written
+by the pass that owns it and expires at the end of its synchronous window,
+so a pass that did not refresh it (an urgent pass over an untouched
+subtree, another root's render, an interleaved flush) falls back to BASE
+rather than consuming a stale snapshot or leaking live drafts into an
+urgent frame.
+
+Every provider-dependent hook (`useValue`, `useComputed`, and
+`useIsPending`) requires a `SignalsFrameworkProvider` above it and throws
+without one. The provider is the channel that delivers transitions to its
+subtree, so a subscriber outside one cannot see them. Create roots with
+`wrapCreateRoot(createRoot)` or wrap the tree in
+`<SignalsFrameworkProvider>`. `useSignalEffect` and
+`useSignalLayoutEffect` observe base state, which needs no root channel,
+so they work without a provider — as do the plain function reads
+(`latest`, `isPending`).
+
+## Out of scope: DOM-mutation attribution
+
+Bracketing exactly React's own DOM mutation phase per commit (so a
+`MutationObserver` client could blind itself to React's mutations while
+still catching everyone else's) needs cooperation from inside the
+reconciler: stock React exposes no signal at mutation-phase entry or exit,
+and anything observable from userland (snapshot lifecycles, layout effects,
+the observer's own async records) fires either on the wrong fibers or too
+late to disconnect. This package deliberately does not patch React, so it
+does not offer a DOM mutation window.
+
+## React API
+
+```tsx
+import { createRoot } from 'react-dom/client';
+import {
+  registerReactSignals, wrapCreateRoot,
+  useValue, useComputed, useSignalEffect, useSignalLayoutEffect,
+  useIsPending, useAtom,
+  startSignalTransition, useSignalTransition,
+} from 'cosignals/react';
+import { createAtom } from 'cosignals';
+
+registerReactSignals(); // stock React; idempotent
+
+const root = wrapCreateRoot(createRoot)(container);
+const count = createAtom(0);
+
+function Counter() {
+  const n = useValue(count);            // what this render pass sees
+  const pending = useIsPending(count);  // newer data behind the screen?
+  return <button onClick={() => count.set(n + 1)}>{n}{pending ? '…' : ''}</button>;
+}
+
+startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
+```
+
+- `useValue(x)` — subscribing read; resolves what the current render pass
+  sees; suspends by
+  handing React the engine's stable pending promise (a transition holds; an
+  urgent render with settled history serves stale instead — no fallback
+  flash).
+- `useComputed(fn, deps)` — component-owned computed.
+- `useSignalEffect(() => ({ watch, run, equals?, label? }), deps)` /
+  `useSignalLayoutEffect(...)` — the engine effect owned by a component.
+  `watch` is the effect's source (compute, signal, tuple, or record);
+  `run` is its handler. The factory runs in the hook's React phase on
+  mount and on every `deps` change — disposing the previous effect first,
+  exactly `useEffect`'s re-create cycle, so captured props are always
+  deps-fresh. Signal-triggered re-runs drain in the matching phase of the
+  pass the write produced, after its DOM mutations. Because one closure
+  carries every capture, `react-hooks/exhaustive-deps` checks the whole
+  spec once configured:
+
+  ```jsonc
+  "react-hooks/exhaustive-deps": ["error", {
+    "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
+  }]
+  ```
+
+  Cleanup honored; StrictMode nets one; base state only — a transition
+  reaches it once, at retirement.
+- `useIsPending(x)` — the pending probe, delivered urgently (an indicator
+  must not be held hostage by the transition it indicates).
+- `useAtom(initial, opts?)` — component-owned atom, reclaimed after
+  unmount.
+- `startSignalTransition(fn)` / `useSignalTransition()` — transition
+  batches. Plain `React.startTransition` also works: the first engine write
+  inside any transition context is classified into a draft automatically.
+- Writing during render throws.
+- Multiple roots are supported; one transition can span them, and each
+  root's render passes stay internally consistent.

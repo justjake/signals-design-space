@@ -12,7 +12,7 @@
  * stopped happening" or "the kernel deopts under unchanged shapes".
  *
  * Most frameworks get a statically imported adapter bundle (never the
- * registry — see smoke.ts for why). FX2 is emitted by its TypeScript 7
+ * registry — see smoke.ts for why). Cosignals is emitted by its TypeScript 7
  * compiler so its trace has the same source shape as its perf probes.
  *
  * V8-version-sensitive: trace formats and inlining heuristics move
@@ -48,13 +48,12 @@ const FX2_BYTECODE_BUDGETS: Record<string, number> = {
 	writeAtom: 160,
 	runEffectCleanup: 160,
 	scheduleWatcher: 210,
-	// +10 for the endSpan close that brackets the effect run (startSpan on
-	// open, endSpan in finally) so a consumer can time the span; 260 stays far
-	// below the inline limit.
-	runHandler: 260,
+	// The nullable trace interface adds method dispatch for causal storage and
+	// span delivery. This remains well below the inline limit.
+	runHandler: 290,
 	trackRead: 260,
-	propagateWave: 280,
-	flush: 330,
+	propagateWave: 310,
+	flush: 350,
 	chainResolve: 390,
 	ensureFreshAt: 400,
 }
@@ -75,16 +74,16 @@ afterAll(() => {
 })
 
 /**
- * Emit FX2 with the same explicit TypeScript 7 invocation used by its
+ * Emit Cosignals with the same explicit TypeScript 7 invocation used by its
  * performance probes.
  */
-function emitFx2Smoke(dir: string, entry = 'fx2-smoke'): string {
+function emitCosignalsSmoke(dir: string, entry = 'cosignals-smoke'): string {
 	writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}\n')
 	const config = path.join(dir, 'tsconfig.json')
 	writeFileSync(
 		config,
 		JSON.stringify({
-			extends: path.join(repoRoot, 'packages/signals-royale-fx2/tsconfig.perf.json'),
+				extends: path.join(repoRoot, 'packages/cosignals/tsconfig.perf.json'),
 			compilerOptions: {
 				rootDir: repoRoot,
 				outDir: dir,
@@ -111,9 +110,9 @@ function emitFx2Smoke(dir: string, entry = 'fx2-smoke'): string {
 async function probeFramework(framework: string, chainDepth: number): Promise<OptTrace> {
 	const dir = mkdtempSync(path.join(tmpdir(), `inline-probe-${framework}-${chainDepth}-`))
 	cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
-	if (framework === 'fx2') {
+	if (framework === 'cosignals') {
 		return traceOptimization({
-			script: emitFx2Smoke(dir),
+			script: emitCosignalsSmoke(dir),
 			env: { SMOKE_DEPTH: String(chainDepth) },
 		})
 	}
@@ -152,16 +151,16 @@ function bytecodeLength(script: string, name: string): number {
 	return size!
 }
 
-describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Node 24)', () => {
+describe.skipIf(NODE_MAJOR !== 24)('cosignals bytecode budgets (tsc-emitted smoke, Node 24)', () => {
 	let script: string
 	let worldScript: string
 	beforeAll(() => {
-		const dir = mkdtempSync(path.join(tmpdir(), 'fx2-bytecode-'))
+		const dir = mkdtempSync(path.join(tmpdir(), 'cosignals-bytecode-'))
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
-		script = emitFx2Smoke(dir)
-		const worldDir = mkdtempSync(path.join(tmpdir(), 'fx2-world-bytecode-'))
+		script = emitCosignalsSmoke(dir)
+		const worldDir = mkdtempSync(path.join(tmpdir(), 'cosignals-world-bytecode-'))
 		cleanups.push(() => rmSync(worldDir, { recursive: true, force: true }))
-		worldScript = emitFx2Smoke(worldDir, 'fx2-world-smoke')
+		worldScript = emitCosignalsSmoke(worldDir, 'cosignals-world-smoke')
 	}, 180_000)
 
 	for (const [name, budget] of Object.entries(FX2_BYTECODE_BUDGETS)) {
@@ -193,29 +192,31 @@ describe.skipIf(NODE_MAJOR !== 24)('fx2 bytecode budgets (tsc-emitted smoke, Nod
 	// tolerable — but the pin keeps further growth explicit. +31 for the
 	// endSpan close that brackets the compute (startSpan on open, endSpan with
 	// the changed outcome after) so a consumer can time it and show new/same.
-	test('recompute pinned at 640 (over the inline limit)', () => {
+	// Causal state now lives behind the nullable trace interface instead of on
+	// every graph node.
+	test('recompute pinned at 820 (over the inline limit)', () => {
 		const size = bytecodeLength(script, 'recompute')
-		expect(size).toBeLessThanOrEqual(640)
+		expect(size).toBeLessThanOrEqual(820)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 
 	// Draft-world tracing emits compute, suspension, error, and world identity
 	// events here. The untraced branch bypasses that work; this owner was
 	// already deliberately over the inline limit before tracing was added.
-	// +11 for the endSpan close that brackets the draft compute.
-	test('resolveState pinned at 1150 (over the inline limit)', () => {
+	// The nullable trace interface also owns the draft and node cause lookups.
+	test('resolveState pinned at 1220 (over the inline limit)', () => {
 		const size = bytecodeLength(worldScript, 'resolveState')
-		expect(size).toBeLessThanOrEqual(1150)
+		expect(size).toBeLessThanOrEqual(1220)
 		expect(size).toBeGreaterThan(INLINE_LIMIT)
 	})
 })
 
-describe.skipIf(NODE_MAJOR !== 24)('fx2 committed-world inlining (tsc-emitted, Node 24)', () => {
+describe.skipIf(NODE_MAJOR !== 24)('cosignals committed-world inlining (tsc-emitted, Node 24)', () => {
 	let trace: OptTrace
 	beforeAll(() => {
-		const dir = mkdtempSync(path.join(tmpdir(), 'fx2-world-inline-'))
+		const dir = mkdtempSync(path.join(tmpdir(), 'cosignals-world-inline-'))
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
-		trace = traceOptimization({ script: emitFx2Smoke(dir, 'fx2-world-smoke') })
+		trace = traceOptimization({ script: emitCosignalsSmoke(dir, 'cosignals-world-smoke') })
 	}, 180_000)
 
 	test('inlines draft-world read helpers', () => {
@@ -286,7 +287,7 @@ describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () 
 				})
 			}
 
-			if (framework === 'fx2') {
+			if (framework === 'cosignals') {
 				test('deep chain resolver reaches top tier without steady eager deopts', async () => {
 					const deepTrace = await probeFramework(framework, 32)
 					const inlinedCallees = new Set(deepTrace.inlined.map((edge) => edge.callee))

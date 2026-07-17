@@ -10,7 +10,7 @@
 
 /**
  * Coarse bucket for coloring/filtering; the only place the UI reduces the
- * open kind vocabulary. Mirrors signals-royale-fx2/debug's TraceKindClass.
+ * open kind vocabulary. Mirrors cosignals/debug's TraceKindClass.
  */
 export type KindClass =
 	| 'origin'
@@ -162,7 +162,7 @@ export interface Backend {
 
 /**
  * Classify a verbatim kind string. Unknown → 'system'. Kept in sync with
- * signals-royale-fx2/debug's kindClass; the adapter may pass its own instead.
+ * cosignals/debug's kindClass; the adapter may pass its own instead.
  */
 export function kindClass(kind: string): KindClass {
 	switch (kind) {

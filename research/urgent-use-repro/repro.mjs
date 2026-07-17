@@ -2,12 +2,12 @@
 // never gets its retry ping on the vendor React build.
 //
 // Run: node research/urgent-use-repro/repro.mjs
-// Resolves react/react-dom through packages/cosignals-alt-a/node_modules,
+// Resolves react/react-dom through packages/cosignals/node_modules,
 // which pnpm links to vendor/react/build/oss-experimental/*.
 import { createRequire } from 'node:module';
 
-const ALT_A = '/Users/jitl/src/alien-signals-opt/packages/cosignals-alt-a/__resolve__.js';
-const require = createRequire(ALT_A);
+const COSIGNALS = '/Users/jitl/src/alien-signals-opt/packages/cosignals/__resolve__.js';
+const require = createRequire(COSIGNALS);
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development';
 

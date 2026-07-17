@@ -2,10 +2,10 @@
  * Engine adapter — plug any engine exposing the `/debug` contract into a
  * Collector.
  *
- * Both `signals-royale-fx2/debug` and `signals-royale-fx2-dalien/debug`
+ * Both `cosignals/debug` and `cosignals-arena/debug`
  * export the same surface (that contract is the whole point of the debug
  * entry); this module is the one adapter body, parameterized over that
- * surface, and `./fx2` / `./dalien` are thin bindings of it. It installs
+ * surface, and `./cosignals` / `./cosignals-arena` are thin bindings of it. It installs
  * the trace hook (events flow straight through, kind strings verbatim) and
  * implements the NodeProvider with the inert `inspect`/`deps`/`subs` peeks.
  * Node handles are held only via WeakRef and pruned through a
@@ -57,6 +57,10 @@ export interface EngineDebug {
 			emitEvent(kind: string, node: EngineNode | null, parent: number, attrs?: EngineTraceFields): number
 			startSpan(kind: string, node: EngineNode | null, parent: number, attrs?: EngineTraceFields): number
 			endSpan?(id: number, attrs?: { changed?: boolean }): void
+			getCause(owner: object): number
+			setCause(owner: object, cause: number): void
+			getDraftWrite(draft: object): number
+			setDraftWrite(draft: object, cause: number): void
 		} | null,
 	): void
 	setHotTracer(fn: ((node: EngineNode, step: string, cause?: number) => void) | null): void
@@ -155,12 +159,12 @@ function captureStack(): StackFrame[] {
 	}
 	// The top frames are this adapter module (captureStack, emit); drop them by
 	// file, then drop engine/framework/dep frames, leaving the app's own.
-	// (The signals-royale-fx2 pattern also matches the -dalien package path.)
+	// The cosignals pattern also matches the arena package path.
 	const selfFile = parsed[0]?.file
 	const out: StackFrame[] = []
 	for (const f of parsed) {
 		if (f.file === selfFile) continue
-		if (/node_modules|signals-royale-fx2|\/react-dom|\/react\/|\/react-jsx|\breact\.development\b|\/scheduler/.test(f.file)) continue
+		if (/node_modules|cosignals|\/react-dom|\/react\/|\/react-jsx|\breact\.development\b|\/scheduler/.test(f.file)) continue
 		out.push(f)
 		if (out.length >= 12) break
 	}
@@ -195,6 +199,7 @@ export function attachEngineDevtools(
 ): EngineDevtools {
 	// id -> live node, WeakRef so a disposed node can be collected.
 	const registry = new Map<NodeId, WeakRef<EngineNode>>()
+	const componentLabels = new WeakMap<object, string>()
 	// Last value preview recorded per node, for the write diff. Only previews
 	// (short strings) are held — never a node or a live value — so this can't
 	// leak the graph. Pruned with the node.
@@ -242,7 +247,7 @@ export function attachEngineDevtools(
 		},
 		label(id) {
 			const node = deref(id)
-			return node?.label
+			return node === undefined ? undefined : (componentLabels.get(node) ?? node.label)
 		},
 		value(id) {
 			const node = deref(id)
@@ -317,6 +322,8 @@ export function attachEngineDevtools(
 	}
 
 	const collector = new Collector(provider, opts)
+	const causes = new WeakMap<object, number>()
+	const draftWrites = new WeakMap<object, number>()
 
 	// emitEvent (points) and startSpan (compute/effect opens) both record an
 	// entry the same way; endSpan closes a span so the collector can time it.
@@ -384,6 +391,10 @@ export function attachEngineDevtools(
 		emitEvent: emit,
 		startSpan: emit,
 		endSpan: (id, attrs) => collector.endSpan(id as unknown as EventId, attrs?.changed),
+		getCause: (owner) => causes.get(owner) ?? 0,
+		setCause: (owner, cause) => causes.set(owner, cause),
+		getDraftWrite: (draft) => draftWrites.get(draft) ?? 0,
+		setDraftWrite: (draft, cause) => draftWrites.set(draft, cause),
 	})
 
 	// Hot algorithm channel: the engine hook is installed only while hot mode
@@ -403,13 +414,13 @@ export function attachEngineDevtools(
 		),
 	)
 
-	// React render channel: reads the fiber tree via bippy — no engine hook — so
-	// it lives entirely in the devtools and never touches the engine. Render
-	// causality is a core feature, so it's always on: mark the collector so the
-	// engine's own render events drop, and bippy's fiber-accurate ones (child →
-	// parent cascade, rooted at the triggering change) are the render source.
-	collector.setReactRenderActive()
-	const detachReactRender = attachReactRenderTracer(collector, () => collector.latestSignalCause())
+	// React render causality lives entirely in the devtools. The engine emits
+	// notifications; bippy observes the resulting fiber commits.
+	const detachReactRender = attachReactRenderTracer(
+		collector,
+		() => collector.latestSignalCause(),
+		(watcher, component) => componentLabels.set(watcher, component),
+	)
 
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
 	g.__SIGNALS_DEVTOOLS__ = collector

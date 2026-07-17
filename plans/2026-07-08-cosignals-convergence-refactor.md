@@ -1,4 +1,4 @@
-# Cosignals convergence refactor
+# cosignals-first-draft convergence refactor
 
 Status: implemented. The decisions marked **LOCKED** below are the resulting
 contract. Earlier refactor plans are historical evidence, not the target

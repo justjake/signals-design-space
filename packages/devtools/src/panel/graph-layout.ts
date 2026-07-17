@@ -76,7 +76,7 @@ function hotSet(backend: Backend): Set<NodeId> {
 
 function subLine(n: NodeDetails): string {
 	if (n.status === 'error') return n.pending ?? '! error'
-	// A suspended node keeps serving its last settled value (fx2 stale-while-
+	// A suspended node keeps serving its last settled value (cosignals stale-while-
 	// revalidate); show that value with a pending marker, not the Suspension
 	// object. Only a never-yet-resolved node has no value to show.
 	if (n.status === 'suspended') return n.valuePreview !== undefined ? `⧗ ${n.valuePreview}` : '⧗ pending'

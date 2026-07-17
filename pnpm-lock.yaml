@@ -95,7 +95,7 @@ snapshots:
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: false
+  autoInstallPeers: true
   excludeLinksFromLockfile: false
 
 overrides:
@@ -134,15 +134,6 @@ importers:
       cosignals:
         specifier: workspace:*
         version: link:../packages/cosignals
-      cosignals-alt-a:
-        specifier: workspace:*
-        version: link:../packages/cosignals-alt-a
-      cosignals-alt-b:
-        specifier: workspace:*
-        version: link:../packages/cosignals-alt-b
-      signals-royale-fx2:
-        specifier: workspace:*
-        version: link:../packages/signals-royale-fx2
     devDependencies:
       '@types/node':
         specifier: 24.13.2
@@ -161,7 +152,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
+        version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
 
   libs/arena: {}
 
@@ -185,162 +176,67 @@ importers:
 
   libs/sweep: {}
 
-  packages/concurrent-solid-react:
-    dependencies:
-      react-signals-utils:
-        specifier: workspace:*
-        version: link:../react-signals-utils
-    devDependencies:
-      '@types/node':
-        specifier: 24.13.2
-        version: 24.13.2
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.1.0
-        version: 26.1.0
-      react:
-        specifier: link:../../vendor/react/build/oss-experimental/react
-        version: link:../../vendor/react/build/oss-experimental/react
-      react-dom:
-        specifier: link:../../vendor/react/build/oss-experimental/react-dom
-        version: link:../../vendor/react/build/oss-experimental/react-dom
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
   packages/cosignals:
-    devDependencies:
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
-  packages/cosignals-alt-a:
     dependencies:
-      react-signals-utils:
-        specifier: workspace:*
-        version: link:../react-signals-utils
-    devDependencies:
-      '@lab/arena':
-        specifier: workspace:*
-        version: link:../../libs/arena
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.17)
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
-      jsdom:
-        specifier: ^26.1.0
-        version: 26.1.0
       react:
         specifier: link:../../vendor/react/build/oss-experimental/react
         version: link:../../vendor/react/build/oss-experimental/react
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.1.0
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^26.0.0
+        version: 26.1.0
       reactive-framework-test-suite:
         specifier: 0.0.2
         version: 0.0.2
+      scheduler:
+        specifier: link:../../vendor/react/build/oss-experimental/scheduler
+        version: link:../../vendor/react/build/oss-experimental/scheduler
       typescript:
         specifier: 7.0.2
         version: 7.0.2
       vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
 
-  packages/cosignals-alt-b:
+  packages/cosignals-arena:
     dependencies:
-      react-signals-utils:
-        specifier: workspace:*
-        version: link:../react-signals-utils
-    devDependencies:
-      '@types/node':
-        specifier: 24.13.2
-        version: 24.13.2
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.1.0
-        version: 26.1.0
       react:
         specifier: link:../../vendor/react/build/oss-experimental/react
         version: link:../../vendor/react/build/oss-experimental/react
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.1.0
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^26.0.0
+        version: 26.1.0
       reactive-framework-test-suite:
         specifier: 0.0.2
         version: 0.0.2
+      scheduler:
+        specifier: link:../../vendor/react/build/oss-experimental/scheduler
+        version: link:../../vendor/react/build/oss-experimental/scheduler
       typescript:
         specifier: 7.0.2
         version: 7.0.2
       vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
-  packages/cosignals-oracle:
-    devDependencies:
-      '@types/node':
-        specifier: 24.13.2
-        version: 24.13.2
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
-  packages/cosignals-react:
-    dependencies:
-      cosignals:
-        specifier: workspace:*
-        version: link:../cosignals
-      react:
-        specifier: link:../../vendor/react/build/oss-experimental/react
-        version: link:../../vendor/react/build/oss-experimental/react
-      react-dom:
-        specifier: link:../../vendor/react/build/oss-experimental/react-dom
-        version: link:../../vendor/react/build/oss-experimental/react-dom
-      react-signals-utils:
-        specifier: workspace:*
-        version: link:../react-signals-utils
-    devDependencies:
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.1.0
-        version: 26.1.0
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
 
   packages/dalien-signals:
     devDependencies:
@@ -364,7 +260,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: latest
-        version: 4.1.10(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
+        version: 4.1.10(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
 
   packages/devtools:
     dependencies:
@@ -377,12 +273,6 @@ importers:
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
-      signals-royale-fx2:
-        specifier: workspace:*
-        version: link:../signals-royale-fx2
-      signals-royale-fx2-dalien:
-        specifier: workspace:*
-        version: link:../signals-royale-fx2-dalien
     devDependencies:
       '@playwright/test':
         specifier: 1.61.1
@@ -399,6 +289,12 @@ importers:
       '@vitejs/plugin-react':
         specifier: 6.0.2
         version: 6.0.2(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
+      cosignals:
+        specifier: workspace:*
+        version: link:../cosignals
+      cosignals-arena:
+        specifier: workspace:*
+        version: link:../cosignals-arena
       esbuild:
         specifier: ^0.28.0
         version: 0.28.1
@@ -415,40 +311,6 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
 
-  packages/reack-strata:
-    dependencies:
-      react:
-        specifier: link:../../vendor/react/build/oss-experimental/react
-        version: link:../../vendor/react/build/oss-experimental/react
-      react-dom:
-        specifier: link:../../vendor/react/build/oss-experimental/react-dom
-        version: link:../../vendor/react/build/oss-experimental/react-dom
-      scheduler:
-        specifier: link:../../vendor/react/build/oss-experimental/scheduler
-        version: link:../../vendor/react/build/oss-experimental/scheduler
-      strata-signals:
-        specifier: workspace:*
-        version: link:../strata
-    devDependencies:
-      '@types/node':
-        specifier: 24.13.2
-        version: 24.13.2
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.1.0
-        version: 26.1.0
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
   packages/react-seam-bench:
     dependencies:
       alien-signals:
@@ -457,15 +319,6 @@ importers:
       cosignals:
         specifier: workspace:*
         version: link:../cosignals
-      cosignals-alt-a:
-        specifier: workspace:*
-        version: link:../cosignals-alt-a
-      cosignals-alt-b:
-        specifier: workspace:*
-        version: link:../cosignals-alt-b
-      cosignals-react:
-        specifier: workspace:*
-        version: link:../cosignals-react
       dalien-signals:
         specifier: link:../dalien-signals
         version: link:../dalien-signals
@@ -478,9 +331,6 @@ importers:
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
-      signals-royale-fx2:
-        specifier: workspace:*
-        version: link:../signals-royale-fx2
     devDependencies:
       '@types/node':
         specifier: 24.13.2
@@ -500,36 +350,21 @@ importers:
 
   packages/react-signals-playground:
     dependencies:
-      concurrent-solid-react:
-        specifier: workspace:*
-        version: link:../concurrent-solid-react
       cosignals:
         specifier: workspace:*
         version: link:../cosignals
-      cosignals-alt-a:
+      cosignals-arena:
         specifier: workspace:*
-        version: link:../cosignals-alt-a
-      cosignals-alt-b:
+        version: link:../cosignals-arena
+      cosignals-devtools:
         specifier: workspace:*
-        version: link:../cosignals-alt-b
-      cosignals-react:
-        specifier: workspace:*
-        version: link:../cosignals-react
+        version: link:../devtools
       react:
         specifier: link:../../vendor/react/build/oss-experimental/react
         version: link:../../vendor/react/build/oss-experimental/react
       react-dom:
         specifier: link:../../vendor/react/build/oss-experimental/react-dom
         version: link:../../vendor/react/build/oss-experimental/react-dom
-      signals-devtools:
-        specifier: workspace:*
-        version: link:../devtools
-      signals-royale-fx2:
-        specifier: workspace:*
-        version: link:../signals-royale-fx2
-      signals-royale-fx2-dalien:
-        specifier: workspace:*
-        version: link:../signals-royale-fx2-dalien
     devDependencies:
       '@playwright/test':
         specifier: 1.61.1
@@ -552,92 +387,6 @@ importers:
       vite:
         specifier: 8.1.0
         version: 8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0)
-
-  packages/react-signals-utils:
-    devDependencies:
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
-
-  packages/signals-royale-fx2:
-    dependencies:
-      react:
-        specifier: link:../../vendor/react/build/oss-experimental/react
-        version: link:../../vendor/react/build/oss-experimental/react
-      react-dom:
-        specifier: link:../../vendor/react/build/oss-experimental/react-dom
-        version: link:../../vendor/react/build/oss-experimental/react-dom
-    devDependencies:
-      '@types/react':
-        specifier: ^19.1.0
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.0
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.0.0
-        version: 26.1.0
-      reactive-framework-test-suite:
-        specifier: 0.0.2
-        version: 0.0.2
-      scheduler:
-        specifier: link:../../vendor/react/build/oss-experimental/scheduler
-        version: link:../../vendor/react/build/oss-experimental/scheduler
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
-
-  packages/signals-royale-fx2-dalien:
-    dependencies:
-      react:
-        specifier: link:../../vendor/react/build/oss-experimental/react
-        version: link:../../vendor/react/build/oss-experimental/react
-      react-dom:
-        specifier: link:../../vendor/react/build/oss-experimental/react-dom
-        version: link:../../vendor/react/build/oss-experimental/react-dom
-    devDependencies:
-      '@types/react':
-        specifier: ^19.1.0
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.0
-        version: 19.2.3(@types/react@19.2.17)
-      jsdom:
-        specifier: ^26.0.0
-        version: 26.1.0
-      reactive-framework-test-suite:
-        specifier: 0.0.2
-        version: 0.0.2
-      scheduler:
-        specifier: link:../../vendor/react/build/oss-experimental/scheduler
-        version: link:../../vendor/react/build/oss-experimental/scheduler
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
-
-  packages/strata:
-    devDependencies:
-      '@types/node':
-        specifier: 24.13.2
-        version: 24.13.2
-      reactive-framework-test-suite:
-        specifier: 0.0.2
-        version: 0.0.2
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 4.1.6
-        version: 4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0)
 
 packages:
 
@@ -2023,6 +1772,7 @@ packages:
       '@vitest/ui': 4.1.10
       happy-dom: '*'
       jsdom: '*'
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -2063,6 +1813,7 @@ packages:
       '@vitest/ui': 4.1.6
       happy-dom: '*'
       jsdom: '*'
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -3254,7 +3005,7 @@ snapshots:
       - tsx
       - yaml
 
-  vitest@4.1.10(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0):
+  vitest@4.1.10(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0)):
     dependencies:
       '@vitest/expect': 4.1.10
       '@vitest/mocker': 4.1.10(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -3280,20 +3031,9 @@ snapshots:
       '@types/node': 24.13.2
       jsdom: 26.1.0
     transitivePeerDependencies:
-      - '@vitejs/devtools'
-      - esbuild
-      - jiti
-      - less
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
-  vitest@4.1.6(@types/node@24.13.2)(esbuild@0.28.1)(jsdom@26.1.0)(tsx@4.23.0):
+  vitest@4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0)):
     dependencies:
       '@vitest/expect': 4.1.6
       '@vitest/mocker': 4.1.6(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
@@ -3319,18 +3059,7 @@ snapshots:
       '@types/node': 24.13.2
       jsdom: 26.1.0
     transitivePeerDependencies:
-      - '@vitejs/devtools'
-      - esbuild
-      - jiti
-      - less
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
   vscode-uri@3.1.0: {}
 

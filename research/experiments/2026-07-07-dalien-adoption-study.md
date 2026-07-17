@@ -1,13 +1,13 @@
-# dalien-signals → cosignals adoption study — architecture, terms, and shapes
+# dalien-signals → cosignals-first-draft adoption study — architecture, terms, and shapes
 
 Date: 2026-07-07. Read-only study; no code changed. Companion to the
 2026-07-06 optimization port study (`dalien-optimizations-port-study.md`),
-which was perf-focused; several of its rows have since LANDED in cosignals
+which was perf-focused; several of its rows have since LANDED in cosignals-first-draft
 (checkDirty wrapper + chainCheck, the FREE_NEXT freelist fix, bytecode
 budgets) and one was REJECTED BY MEASUREMENT (B3 quiet-epoch). This study
 answers the owner's architecture framing: naming/typing techniques, arena
 de-fragmentation, the side-array strategy vs the `Computed`/`ComputedNode`/
-`Map<Id, Node>` layering, and whether cosignals' kernel should rebase onto
+`Map<Id, Node>` layering, and whether cosignals-first-draft's kernel should rebase onto
 dalien's.
 
 Sources, as on disk:
@@ -18,7 +18,7 @@ Sources, as on disk:
   `allocated` callbacks; src/index.ts = the whole signal library as one
   host, with the side columns, the id tier, and the callable tier). The
   fused single-file engine the 2026-07-06 study read is history.
-- `packages/cosignals` — post-Great-Refactor (S0–S7) + S5R reclamation:
+- `packages/cosignals-first-draft` — post-Great-Refactor (S0–S7) + S5R reclamation:
   graph.ts (kernel), concurrent.ts (engine), index.ts (handles),
   World.ts/WorldArena.ts/Batch.ts/WriteLog.ts/RenderPass.ts/deliver.ts/
   observation.ts/settlement.ts/Subscription.ts/engine.ts (mechanisms).
@@ -32,14 +32,14 @@ Both kernels are children of the same research program (libs/arena → the
 179/179 conformance lineage) and share the load-bearing DNA:
 
 - one interleaved Int32Array arena, stride 8, premultiplied ids, record 0
-  burned (dalien system.ts:114-182; cosignals graph.ts:128-232)
+  burned (dalien system.ts:114-182; cosignals-first-draft graph.ts:128-232)
 - link records with the FREE_NEXT=7 freelist discipline (freed links keep
   real fields intact for mid-walk stale reads) — dalien system.ts:176-181;
-  cosignals graph.ts:151-166; the world arenas carry the same rule with a
+  cosignals-first-draft graph.ts:151-166; the world arenas carry the same rule with a
   different spare field (WorldArena.ts:106-115, FREE_NEXT aliases VERSION)
 - the link/linkInsert split, the checkDirty wrapper + two-level fast path +
-  chainCheck + out-of-line loop (dalien system.ts:1328-1700; cosignals
-  graph.ts:487-853 — cosignals' comment cites the dalien port study row 10)
+  chainCheck + out-of-line loop (dalien system.ts:1328-1700; cosignals-first-draft
+  graph.ts:487-853 — cosignals-first-draft's comment cites the dalien port study row 10)
 - persistent Int32Array walk stacks, deferred record free at operation
   boundaries, GEN tenancy stamps, packed no-hole side columns, same-file
   const-enum discipline, bytecode-budget test suites on both sides
@@ -48,7 +48,7 @@ Both kernels are children of the same research program (libs/arena → the
 
 The divergences are exactly where each package's product lives: dalien's
 kernel is **policy-free with host seams** (its whole library is one host);
-cosignals' kernel is **fused with cold policy sites** (boxes, cycle error,
+cosignals-first-draft's kernel is **fused with cold policy sites** (boxes, cycle error,
 lifecycle refcounts, reclamation guards) and carries the engine keying the
 concurrent-worlds layer stands on. That asymmetry decides most verdicts
 below, including the rebase question.
@@ -79,7 +79,7 @@ extends the idea with a phantom **value type**: `SignalIdOf<T> = SignalId &
 { [ValueOf]?: (value: T) => T }` — `get(id)`/`set(id, v)` are fully typed
 through a bare number, invariant in T (the function-typed phantom).
 
-**What cosignals does today.** Plain aliases, deliberately un-branded:
+**What cosignals-first-draft does today.** Plain aliases, deliberately un-branded:
 graph.ts:85-105 (`NodeId`, `LinkId`, `RecordId`, `NodeFlags`, `Version`,
 `Generation`, `RecordCount`, `ValueIndex` — "zero runtime cost, no
 branding, no casts") and concurrent.ts:192-236 (`NodeId` again, `NodeIndex`,
@@ -91,7 +91,7 @@ heavy brands that force casts; lenient brands satisfy the no-casts
 constraint by construction, so adopting them supersedes rather than
 violates that rule (memory should be updated on the ruling).
 
-**Why it pays here specifically.** cosignals has MORE id spaces than
+**Why it pays here specifically.** cosignals-first-draft has MORE id spaces than
 dalien, and they collide in the same functions:
 
 - kernel `NodeId` (premultiplied) vs engine `NodeIndex` (dense ordinal,
@@ -150,7 +150,7 @@ build-from-fresh speed (create 30.1s → 2.1s, first-eval 7.3s → 285ms);
 the bitmap variant took the sort from 25.7% → 7.5% of the rebuild profile
 (post-teardown setup 471 → 268ms).
 
-**What cosignals does today.** graph.ts:446-451 `sweepPendingFree` is the
+**What cosignals-first-draft does today.** graph.ts:446-451 `sweepPendingFree` is the
 plain loop; both free lists stay LIFO forever. The hazard population is
 real but smaller than dalien's: React unmount storms (effect/scope
 disposal cascades), `useComputed` re-key churn (`disposeComputed`,
@@ -174,7 +174,7 @@ observations sharpen the value assessment:
 **Verdict: ADAPT.** Port mechanism 1+2 into graph.ts's sweep verbatim
 (the trigger arithmetic, the bitmap, the descending push). Skip any
 notion of live-record compaction — neither codebase does it, and
-cosignals' NODE_INDEX inheritance contract (freeNode leaves field 7
+cosignals-first-draft's NODE_INDEX inheritance contract (freeNode leaves field 7
 untouched, graph.ts:433) must survive the sort untouched — sorting reuse
 order changes WHICH slot you get next, never a slot's index.
 
@@ -201,7 +201,7 @@ order changes WHICH slot you get next, never a slot's index.
 
 ## 3. Candidate C — side arrays, node objects, and the layer question  [ADAPT: delete the Map layer, keep object nodes, fix the naming]
 
-The owner's framing: dalien keys everything by id in side arrays; cosignals
+The owner's framing: dalien keys everything by id in side arrays; cosignals-first-draft
 has `Computed` vs `ComputedNode` plus `Map<Id, SomeNodeType>`; is the array
 more efficient; can the layers collapse or at least cohere?
 
@@ -218,7 +218,7 @@ Int32 records — the traversal-heavy state is one cache line per record,
 one bounds-check domain; and (b) each operation touches 1–2 columns, at
 distinct sites (a read touches `currentVals`; a recompute adds `fns`).
 
-### 3.2 What cosignals does today — the full inventory
+### 3.2 What cosignals-first-draft does today — the full inventory
 
 Layers per public atom/computed:
 
@@ -302,7 +302,7 @@ bounds-check domain) is where the wins are. Trust the spike numbers." Same
 conclusion in packed-structs-guide.md:84 (row 5: interleaved AoS beats
 parallel SoA for graph traversal; parallel columns 1.8× worse). dalien's
 side arrays win because the traversal state is in the Int32 arena and each
-op touches 1–2 columns; cosignals' engine-node fields are touched
+op touches 1–2 columns; cosignals-first-draft's engine-node fields are touched
 TOGETHER — `foldAtom` reads `log + base + equals + eqIsDefault` in one
 pass; `writeInner` reads `log`, `eqIsDefault`, `base`, `lastTouchBatch`,
 `id`, `ix` in one write. Exploding AtomNode into 8–10 per-field columns
@@ -380,11 +380,11 @@ Float64Array view (`versions[(id >> 1) + 3]`, system.ts:127-162, 1000);
 Halved stamp traffic vs two int32 stores (~4% on deep chains, per the
 campaign records).
 
-cosignals ported exactly this as B3 (2026-07-06) — completely, with the
+cosignals-first-draft ported exactly this as B3 (2026-07-06) — completely, with the
 subtleties pinned and mutation-tested — and it measured **net-negative on
 every gate shape** (reads +3.1%, isolate +9.2%, write +1.5%,
 deepPropagate +7.9%). Structural cause: a stamp hit requires flags to be
-clean anyway, so over cosignals' one-load flags fast path the stamp is a
+clean anyway, so over cosignals-first-draft's one-load flags fast path the stamp is a
 strictly redundant second certificate; dalien needs it because its read
 ladder is heavier (retired check, getter carry, host-seam crossing). The
 rejection is archived with a ceiling argument at
@@ -396,7 +396,7 @@ both load-bearing; there is no free aligned f64 slot left. **DECLINE.**
 
 ## 5. Candidate E — chainCheck / checkDirty walk shortcuts  [ALREADY ADOPTED]
 
-cosignals graph.ts:644-853 is the full dalien family: entry wrapper with
+cosignals-first-draft graph.ts:644-853 is the full dalien family: entry wrapper with
 shallow + two-level fast paths (:651-727), stackless chainCheck (:750-790),
 out-of-line loop (:794-853), `updateAndShallow` (:733). Byte-budget pinned
 (tests/bytecode.spec.ts, 46 checks re-pinned at S7). One residual worth
@@ -416,31 +416,31 @@ index.ts:87, 597-629), and **deferred, bounded** registry registration
 deferral pins owners across in-burst GCs; bounded went 18.5ms → 7.7ms on
 milomg createSignals).
 
-cosignals: the handle IS the owner (Atom/Computed constructors register
+cosignals-first-draft: the handle IS the owner (Atom/Computed constructors register
 `this` on the allocation op, graph.ts:1127-1133, index.ts:554, 692), and
 S5R's reclamation is a SUPERSET of dalien's orphan flow — an engine guard
 hook (watchers, obs retains, write logs, render arenas, suspended lists),
 per-guard retry tickets, two-phase deferred cleanups, per-epoch registry
-(graph.ts:1458-1855). Critically, cosignals **measured and rejected
+(graph.ts:1458-1855). Critically, cosignals-first-draft **measured and rejected
 dalien's deferral**: graph.ts:1573-1583 records the binding — "Measured
 rejects: per-handle unregister keys (+103ns), WeakRef schemes (+93ns),
 deferred/batched and lazy registration" — and S5R's creation budget was
 accepted as a STOP finding (Atom ≈59ns; FinalizationRegistry.register
 +14.2ns on this V8). The two libraries reached opposite deferral verdicts
 because their creation benchmarks differ (dalien optimizes milomg
-create-burst cells; cosignals priced leak-freedom per-constructor and
-accepted it). No owner-parameter API belongs on cosignals' class surface —
+create-burst cells; cosignals-first-draft priced leak-freedom per-constructor and
+accepted it). No owner-parameter API belongs on cosignals-first-draft's class surface —
 the class instance already plays that role. **DECLINE**; revisit deferral
 only if a create-burst gate ever becomes binding, and then re-measure
-under cosignals' registry (the +37% burst pathology dalien found was
-UNBOUNDED deferral, which cosignals never had).
+under cosignals-first-draft's registry (the +37% burst pathology dalien found was
+UNBOUNDED deferral, which cosignals-first-draft never had).
 
 ## 7. Candidate G — the two-tier function/id API shape  [DECLINE public; already true internally]
 
 dalien's README frames the library as two interoperating tiers over one
 graph: callables (GC-owned, leak-free default) and the id tier
 (`signalId`/`get`/`set`/`dispose` — zero allocation per node, explicit
-lifetime; README.md:77-113). cosignals' public API is the class layer by
+lifetime; README.md:77-113). cosignals-first-draft's public API is the class layer by
 explicit ruling (D7), aimed at React apps — an id tier on the public
 surface would reintroduce the manual-lifetime footguns the reclamation
 campaign just closed, for users who don't need it. Internally the shape
@@ -448,7 +448,7 @@ already exists: the kernel's `Engine` op table IS an id tier
 (graph.ts:305-339), and the engine surface (concurrent.ts:2185) is the
 embedding tier the oracle/bindings drive. The one transferable idea is
 DOCUMENTARY: dalien's README explains tier choice by lifetime discipline
-("choose by lifetime discipline, not by speed") — cosignals' README could
+("choose by lifetime discipline, not by speed") — cosignals-first-draft's README could
 adopt that framing for handle-vs-engine-surface. **DECLINE** as an API
 change; fold the framing sentence into the docs backlog.
 
@@ -460,16 +460,16 @@ kind bits, host-owned.
 
 Divergences worth aligning or flagging:
 
-| concept | dalien | cosignals | recommendation |
+| concept | dalien | cosignals-first-draft | recommendation |
 |---|---|---|---|
-| record field enums | `NodeSlot`/`LinkSlot` | `NodeField`/`LinkField` | keep cosignals' ("field" reads better against "side column slots"); no churn |
-| geometry enum | `Arena` (shifts/offsets) | `RecordGeom` | keep cosignals' — more precise |
+| record field enums | `NodeSlot`/`LinkSlot` | `NodeField`/`LinkField` | keep cosignals-first-draft's ("field" reads better against "side column slots"); no churn |
+| geometry enum | `Arena` (shifts/offsets) | `RecordGeom` | keep cosignals-first-draft's — more precise |
 | write counter | `globalVersion` (+ f64 snapshot) | n/a (B3 declined) | nothing to align |
 | tracking pass | `cycle` | `cycle` | aligned already |
-| "retire(d)" | an arena/engine GENERATION retiring at growth | a BATCH's terminal transition | collision across repos; cosignals never retires engines (rebuild, no forwarding) so no internal conflict — add one disambiguating line to concurrent.ts's vocabulary block |
+| "retire(d)" | an arena/engine GENERATION retiring at growth | a BATCH's terminal transition | collision across repos; cosignals-first-draft never retires engines (rebuild, no forwarding) so no internal conflict — add one disambiguating line to concurrent.ts's vocabulary block |
 | "epoch" | historical name for the write counter | TWO meanings already: `engineEpoch` (test-reset counter, graph.ts:269-278) and `Epoch` (quiescence episode counter, concurrent.ts:215-216) | the internal double-booking predates this study; if any rename is taken, `Epoch` → `EpisodeId` is the honest one (its doc comment already says "episode counter") — propose for ruling, low priority |
 | engine content object | (none — columns) | `AtomNode`/`ComputedNode` | → `AtomContent`/`ComputedContent` per §3.4 |
-| shared record-0 scalars | `SysSlot.EnterDepth` in arena memory | module `let enterDepth` (exported read-only) | keep cosignals' — record-0 slots exist in dalien BECAUSE host and kernel are separate compilation units sharing the arena; cosignals' kernel and its "host" are one module |
+| shared record-0 scalars | `SysSlot.EnterDepth` in arena memory | module `let enterDepth` (exported read-only) | keep cosignals-first-draft's — record-0 slots exist in dalien BECAUSE host and kernel are separate compilation units sharing the arena; cosignals-first-draft's kernel and its "host" are one module |
 
 **Verdict: ADOPT** the two flagged items (retire disambiguation line;
 AtomContent rename per §3.4); decline mechanical renames that only chase
@@ -486,13 +486,13 @@ clone-works smoke (system.ts:538-641); the host tier clones the same way
 (index.ts:156-176). Precondition: the factory is CLOSED (only params +
 globals free) — pinned by codegen tests on both tiers.
 
-cosignals: growth rebuilds `createEngine` at boundaries (graph.ts:1911-
+cosignals-first-draft: growth rebuilds `createEngine` at boundaries (graph.ts:1911-
 1919) — the second instantiation, so the despecialization applies in
 principle. But three things temper it: (a) `createEngine` is NOT closed —
 it captures cross-module imports (`lifecycleWatched`, `storeThrown`,
 `boxedRead`, `POLICY_CTX`, module scalars), so the port is not a
 transliteration; closing it means threading a deps record like dalien's
-`EngineShared`, a real refactor of the kernel's spine; (b) cosignals'
+`EngineShared`, a real refactor of the kernel's spine; (b) cosignals-first-draft's
 handles route through the `E` table per call (no closure-captured M in
 user-facing handles), so there is NO retired-forwarding need and the
 post-growth cost profile differs from dalien's (the prior study row 9
@@ -508,9 +508,9 @@ to prevent casual restructuring.
 
 ## 10. Smaller parity notes (no action or ride-alongs)
 
-- **Bytecode budgets** — both sides have them; cosignals' 46 checks were
+- **Bytecode budgets** — both sides have them; cosignals-first-draft's 46 checks were
   re-pinned at S7 with a scope-merge collision guard. Parity.
-- **Microtask maintenance** (dalien system.ts:769-877): cosignals'
+- **Microtask maintenance** (dalien system.ts:769-877): cosignals-first-draft's
   reclamation already nudges via epoch-guarded microtasks
   (scheduleReclaimNudge, graph.ts:1640-1654) and its nudge runs the full
   `maybeBoundary` (growth + sweep). Residual gap: a plain dispose burst
@@ -518,23 +518,23 @@ to prevent casual restructuring.
   ~10-line ride-along candidate with Candidate B (schedule the nudge from
   `dispose`), not standalone work.
 - **Effect-queue gen stamps** (dalien `queuedGens`, index.ts:101-105):
-  cosignals instead defers ALL frees while the queue is non-empty
+  cosignals-first-draft instead defers ALL frees while the queue is non-empty
   (boundaryWork's `queuedLength === 0` gate, graph.ts:1904-1909). Both
   are sound; dalien's own history moved from scrubbing to gen stamps for
-  JSC-quadratic reasons cosignals' design never triggers. No action.
+  JSC-quadratic reasons cosignals-first-draft's design never triggers. No action.
 - **Column growth micro-deltas** (prior study row 7): still open as a tidy
   ride-along (size columns only in the fresh-record branch); noise-level.
 - **watched/unwatched host state**: dalien keeps it in an id-indexed array
-  (system.ts:1416-1440); cosignals' lifecycle keeps a Map of ACTIVE
+  (system.ts:1416-1440); cosignals-first-draft's lifecycle keeps a Map of ACTIVE
   records only (lifecycle.ts:64) with the dormant callback in the atom's
   own `fns` slot — cold path, sparser population; the Map is the right
   container there. No action.
 
 ---
 
-## 11. THE REBASE QUESTION — could cosignals' kernel become (or vendor) dalien's kernel?
+## 11. THE REBASE QUESTION — could cosignals-first-draft's kernel become (or vendor) dalien's kernel?
 
-### 11.1 What cosignals' kernel carries that dalien's does not
+### 11.1 What cosignals-first-draft's kernel carries that dalien's does not
 
 Enumerated against graph.ts; each is inside the kernel because a cold site
 of a HOT function needs it — the exact placements dalien's seams cannot
@@ -545,12 +545,12 @@ host without new crossings:
   with flag-preservation rules threaded through the eval-start rewrite
   (:982-983) and the boxed read tail (:1292-1296). dalien's `update` seam
   hands the host the whole update (host does everything) — hosting boxes
-  there means cosignals reimplements updateComputed host-side anyway.
+  there means cosignals-first-draft reimplements updateComputed host-side anyway.
 - **CycleError on re-entrant computedRead** (D2, :1249-1251) — one test on
   the already-loaded flags word; upstream/dalien serve the stale cache.
 - **LIFECYCLE per-link refcount** (D1) inside `linkInsert`/`unlink`
   (:538-541, :550-553) with HOST_OWNED exclusion — dalien's
-  watched/unwatched fires on first/last subscriber only; cosignals' union
+  watched/unwatched fires on first/last subscriber only; cosignals-first-draft's union
   refcount counts every non-engine link and excludes engine computeds.
 - **HOST_OWNED flag + markHostOwned retro-release** (:1317-1336) — the
   engine/kernel ownership boundary for the observation index.
@@ -578,19 +578,19 @@ host without new crossings:
 - **Engine-epoch test discipline + watermark/REC_SLACK growth rule**
   (:269-278, 355-362) vs dalien's 3/4 growAt.
 
-### 11.2 What dalien's kernel carries that cosignals' lacks
+### 11.2 What dalien's kernel carries that cosignals-first-draft's lacks
 
 - host seams as a PRODUCT (createReactiveSystem options; the "build your
   own framework" surface, README §Build-your-own + hostPrimitives proof)
 - the f64 version snapshot machinery (declined, B3)
 - codegen-cloned generations + retired-engine forwarding (Candidate I)
 - growCapacity/max-capacity public API, capacity units (records/MB)
-- `reset()` as a public generation lifecycle (cosignals: test-only scrub)
+- `reset()` as a public generation lifecycle (cosignals-first-draft: test-only scrub)
 - mass-teardown free-list ordering (Candidate B — being adopted)
 - deferred bounded owner registration (measured-rejected here, §6)
 - record-0 SysSlot shared scalars (unneeded in a one-module kernel, §8)
 
-### 11.3 The seam evidence — why the split shape would cost cosignals
+### 11.3 The seam evidence — why the split shape would cost cosignals-first-draft
 
 dalien's own upstream-split campaign is the controlled experiment: the SAME
 algorithms, arena, and layout, re-hosted behind seams, ran an unattributed
@@ -602,7 +602,7 @@ factory closure per arena generation — at which point the split engine's
 hot units matched the fused engine because they had effectively re-fused
 (module-scope-vs-factory alone was measured as 26–48% fatter optimized
 code for identical source). The final board reached parity ONLY with that
-re-fusion plus codegen cloning. cosignals' kernel is ALREADY the fused
+re-fusion plus codegen cloning. cosignals-first-draft's kernel is ALREADY the fused
 shape with policy at cold sites; rebasing onto dalien's seam kernel means
 buying back the exact residual dalien spent that campaign extinguishing,
 while ALSO porting every §11.1 item either into the host (rewriting
@@ -615,7 +615,7 @@ dependency, just a rename).
 dalien-signals is the owner's separate, published project with its own CI,
 benchmarks, README claims, and release cadence; packages/dalien-signals is
 a submodule that is already checked out off its recorded pointer in this
-tree. A kernel dependency would couple cosignals' conformance surface
+tree. A kernel dependency would couple cosignals-first-draft's conformance surface
 (179/179 + oracle lockstep + fuzz + divergence checker + 46 bytecode
 budgets) to an external release train, and every §11.1 feature would be a
 patch dalien has no reason to carry (several — boxes, CycleError — are

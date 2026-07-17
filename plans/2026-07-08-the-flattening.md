@@ -15,7 +15,7 @@ Merge the kernel and the concurrent machinery into one engine module with a
 data-oriented layout: long-lived graph state in arenas, short-lived episode
 state in ordinary JS objects that die in bulk, no object layer for node
 data, no manager seams, no kernel/arena walk duplication maintained by
-hand-correspondence. Keep every capability cosignals has today, plus SSR.
+hand-correspondence. Keep every capability cosignals-first-draft has today, plus SSR.
 
 What dies: `AtomInternals`/`ComputedInternals` objects; `Watcher` and
 `Subscription` objects and their managers; the fifteen-module composition
@@ -205,7 +205,7 @@ preserve revisitability) — unless the owner rules to keep both.
 
 ## Gate (all must hold before merge to main)
 
-- cosignals suite (reclaim probes, leak audit, docs-gate, bytecode budgets
+- cosignals-first-draft suite (reclaim probes, leak audit, docs-gate, bytecode budgets
   re-pinned for the new shapes), oracle lockstep with the frozen corpus,
   react 72 against the real fork, conformance ×4, the daishi concurrent
   verifier, fork protocol suites, SSR round-trip tests (new).
@@ -222,7 +222,7 @@ preserve revisitability) — unless the owner rules to keep both.
 One big-bang build on a branch (owner's ruling: no stage-ladder). Builders
 work from this document, alt-b's source for the arena techniques that
 transfer (schema generation, bump/reset discipline, free-list defrag —
-already ported), and cosignals' current tests as the contract. SSR lands
+already ported), and cosignals-first-draft's current tests as the contract. SSR lands
 inside the campaign as its final piece.
 
 ## Review disposition

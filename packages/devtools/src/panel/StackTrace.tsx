@@ -35,7 +35,7 @@ function set(key: string, value: string): void {
 	}
 }
 
-/** The dev server's filesystem root, if the `signals-devtools/vite` plugin
+/** The dev server's filesystem root, if the `cosignals-devtools/vite` plugin
  * published it — used as the default project root so links open real files
  * with no setup. A path typed into the panel is stored separately and wins. */
 function injectedProjectRoot(): string {

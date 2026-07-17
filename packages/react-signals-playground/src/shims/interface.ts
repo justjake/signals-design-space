@@ -97,7 +97,7 @@ export interface ConcurrentSignalsShim {
 	 *
 	 * The split is the shape every implementation can express: autorun-style
 	 * effects compose it by running the handler inside their tracked body,
-	 * while a split-effect implementation (fx2) cannot express the reverse —
+	 * while a split-effect implementation (cosignals) cannot express the reverse —
 	 * a single body that both tracks and writes.
 	 */
 	useSignalEffect<T>(
@@ -118,7 +118,7 @@ export interface ConcurrentSignalsShim {
 	readonly transitionHoldStyle: TransitionHoldStyle
 
 	/**
-	 * fx2-family only: a fixture for exercising a *suspending* computed. The
+	 * cosignals-family only: a fixture for exercising a *suspending* computed. The
 	 * returned `value` is a derived signal whose engine node parks on a pending
 	 * promise while suspended, so devtools reports that node "suspended" (with a
 	 * "suspended at" time). Read `value` with useSignal inside a <Suspense>

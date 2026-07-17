@@ -1,12 +1,12 @@
 /**
  * Wedge-class rows, isolated in the last spec file: some of these
- * deliberately drive a known main-thread wedge (the alt-b filter/rows
- * update loop). Every blocking step runs page-side under a watchdog; on a
+ * deliberately stress main-thread liveness during filter/rows updates.
+ * Every blocking step runs page-side under a watchdog; on a
  * hang the live stack is captured over CDP and attached before the
  * assertion decides what the hang means for this implementation.
  *
- * Manifest rows: FIND-EQUAL-SAFE, FIND-SOLID-HEAP, FIND-THENABLE.nav,
- * FIND-THENABLE.gate, FIND-ALTB-WEDGE.filter, FIND-ALTB-WEDGE.rows.
+ * Manifest rows: FIND-EQUAL-SAFE, FIND-DERIVED-HEAP, FIND-THENABLE.nav,
+ * FIND-THENABLE.gate, FIND-DERIVED-WEDGE.filter, FIND-DERIVED-WEDGE.rows.
  * Ordering within this file is least- to most-destructive.
  */
 import { expect, test } from '../fixtures'
@@ -37,7 +37,7 @@ test('FIND-EQUAL-SAFE: equality-cutoff urgent writes during a held navigation ne
 	await holdNavigate(page, 'table')
 
 	// The wedge's positive boundary: counter and evens toggle are pinned
-	// safe on every implementation, alt-b included.
+	// safe on every implementation.
 	const outcome = await withWatchdog(page, testInfo, 'equal-safe-writes', 5000, () =>
 		page.evaluate(() => {
 			document.querySelector<HTMLButtonElement>('[data-testid="increment"]')?.click()
@@ -50,16 +50,14 @@ test('FIND-EQUAL-SAFE: equality-cutoff urgent writes during a held navigation ne
 	await releaseAndSettle(page, 'table')
 })
 
-test('FIND-SOLID-HEAP: urgent write outside any transition with derived-subscribed components stays live', async ({
+test('FIND-DERIVED-HEAP: urgent write outside any transition with derived-subscribed components stays live', async ({
 	page,
 	entry,
 }, testInfo) => {
-	applyExpectation(test, 'FIND-SOLID-HEAP', entry)
+	applyExpectation(test, 'FIND-DERIVED-HEAP', entry)
 	await gotoApp(page, entry)
 	// Dashboard subscribes doubled/parity/scaled deriveds — the trio that
-	// parked solid-react's render probe in its dirty heap before the shim
-	// degraded memos. This row pins the workaround: signal + derived +
-	// urgent write with no transition open.
+	// This row pins signal + derived + urgent write with no transition open.
 	await expect(page.getByTestId('view-panel')).toHaveAttribute('data-view', 'dashboard')
 
 	const outcome = await withWatchdog(page, testInfo, 'urgent-write-no-transition', 5000, () =>
@@ -104,11 +102,7 @@ test('FIND-THENABLE.gate: a thrown foreign thenable holds the transition open on
 	page,
 	entry,
 }, testInfo) => {
-	// History: solid-react's shim documents a commit freeze for thrown
-	// promises, measured against an earlier engine snapshot. Retested
-	// 2026-07-08: the hold works on the original four; royale-fx2 now passes
-	// too, so this row pins the working
-	// behavior — if the freeze ever comes back, this goes red.
+	// Pin the working behavior so a future freeze goes red.
 	applyExpectation(test, 'FIND-THENABLE.gate', entry)
 	await gotoApp(page, entry)
 	await page.evaluate(() => {
@@ -132,15 +126,11 @@ test('FIND-THENABLE.gate: a thrown foreign thenable holds the transition open on
 	await expect(page.getByTestId('count')).toHaveText('11')
 })
 
-test('FIND-ALTB-WEDGE.filter: value-changing derived write during a held navigation (alt-b wedges)', async ({
+test('FIND-DERIVED-WEDGE.filter: value-changing derived write during a held navigation stays live', async ({
 	page,
 	entry,
-	errors,
 }, testInfo) => {
-	applyExpectation(test, 'FIND-ALTB-WEDGE.filter', entry)
-	if (entry.label === 'alt-b') {
-		errors.allow(/.*/, 'FINDING: the wedge may surface arbitrary late errors while spinning')
-	}
+	applyExpectation(test, 'FIND-DERIVED-WEDGE.filter', entry)
 	await gotoApp(page, entry)
 	await holdNavigate(page, 'table')
 
@@ -155,21 +145,17 @@ test('FIND-ALTB-WEDGE.filter: value-changing derived write during a held navigat
 		`main thread wedged in an update loop: ${outcome.stack?.slice(0, 8).join(' | ')}`,
 	).toBe(false)
 
-	// Still healthy (non-alt-b): the filter committed and the hold survives.
+	// The filter committed and the hold survives.
 	expect(await clockTicks(page)).toBe(true)
 	expect(await testidText(page, 'pending')).toBe('yes')
 	await releaseAndSettle(page, 'table')
 })
 
-test('FIND-ALTB-WEDGE.rows: add-rows during a held navigation (alt-b wedges, same class)', async ({
+test('FIND-DERIVED-WEDGE.rows: add-rows during a held navigation stays live', async ({
 	page,
 	entry,
-	errors,
 }, testInfo) => {
-	applyExpectation(test, 'FIND-ALTB-WEDGE.rows', entry)
-	if (entry.label === 'alt-b') {
-		errors.allow(/.*/, 'FINDING: the wedge may surface arbitrary late errors while spinning')
-	}
+	applyExpectation(test, 'FIND-DERIVED-WEDGE.rows', entry)
 	await gotoApp(page, entry)
 	await holdNavigate(page, 'table')
 

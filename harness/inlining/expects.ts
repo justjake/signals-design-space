@@ -41,17 +41,12 @@ const SHARED_OPTIMIZE = [
 // Node 24) but far above a cold or deopt-looping run (0).
 export const expectations: InliningExpectation[] = [
 	{
-		framework: 'cosignals',
-		minInlinedPairs: 10,
-		mustReachTopTier: [...SHARED_OPTIMIZE, 'computedReadSlow', 'writeAtom'],
-	},
-	{
 		framework: 'dalien',
 		minInlinedPairs: 10,
 		mustReachTopTier: [...SHARED_OPTIMIZE, 'readComputed'],
 	},
 	{
-		framework: 'fx2',
+		framework: 'cosignals',
 		minInlinedPairs: 10,
 		mustInline: ['getComputed', 'readAtom', 'readComputed', 'trackRead', 'writeAtom'],
 		mustReachTopTier: [

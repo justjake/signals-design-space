@@ -1,5 +1,5 @@
 /**
- * Mount-window and lifecycle rows: RCC-RT6.* (mount mid-flight), the alt-b
+ * Mount-window and lifecycle rows: RCC-RT6.* (mount mid-flight), the
  * mount-world agreement shape, RCC-OL2 (unmounted silence), RCC-WP1 (two
  * roots).
  */
@@ -74,16 +74,15 @@ test('RCC-RT6.mount-mid-count-hold: a probe mounted during a held count transiti
 	}
 })
 
-test('RCC-RT5/6.alt-b-mount-world: readers mounted by a value-writing transition agree in their first commit', async ({
+test('RCC-RT5/6.mount-world: readers mounted by a value-writing transition agree in their first commit', async ({
 	page,
 	entry,
 }) => {
-	applyExpectation(test, 'RCC-RT5/6.alt-b-mount-world', entry)
+	applyExpectation(test, 'RCC-RT5/6.mount-world', entry)
 	await gotoApp(page, entry)
 	// One transition both writes the value and mounts 20 readers of it: the
 	// commit that reveals the readers must show them all agreeing. Which
-	// world that joint commit shows (alt-b's suite pins "the pending one")
-	// is per-implementation; the same-commit agreement is what RT5/RT6
+	// world that joint commit shows is per-implementation; the same-commit agreement is what RT5/RT6
 	// demand, and the latch owns that check.
 	await page.evaluate(() => window.__store.transitionWriteMany({ count: 7, latticeMode: 'plain' }))
 	await expect(page.getByTestId('lattice')).toBeVisible({ timeout: 20_000 })

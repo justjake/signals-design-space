@@ -1,8 +1,8 @@
 // Same repro but using React.act like the RTL suites do.
 import { createRequire } from 'node:module';
 
-const ALT_A = '/Users/jitl/src/alien-signals-opt/packages/cosignals-alt-a/__resolve__.js';
-const require = createRequire(ALT_A);
+const COSIGNALS = '/Users/jitl/src/alien-signals-opt/packages/cosignals/__resolve__.js';
+const require = createRequire(COSIGNALS);
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development';
 

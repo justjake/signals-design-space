@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'signals-royale-fx2'
-import { attachFx2Devtools } from '../src/fx2.ts'
+import { createAtom, createComputed, effect, set } from 'cosignals'
+import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { mountDevtools } from '../src/panel/mount.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -15,9 +15,9 @@ function clickButton(root: HTMLElement, label: string) {
 	return act(async () => { btn.click() })
 }
 
-describe('inline host renders and live-updates from fx2', () => {
+describe('inline host renders and live-updates from cosignals', () => {
 	it('mounts the graph, switches to the log, and re-renders on new activity', async () => {
-		const dt = attachFx2Devtools()
+		const dt = attachCosignalsDevtools()
 		const el = document.createElement('div')
 		document.body.appendChild(el)
 		let handle: { unmount(): void } | undefined
@@ -40,7 +40,7 @@ describe('inline host renders and live-updates from fx2', () => {
 			expect(el.innerHTML).toContain('count')
 			expect(el.innerHTML).toContain('doubled')
 
-			// The log shows real entries with fx2's verbatim kind strings.
+			// The log shows real entries with cosignals's verbatim kind strings.
 			await clickButton(el, 'Log')
 			expect(el.innerHTML).toContain('set')
 			expect(el.innerHTML).toContain('compute')
@@ -60,7 +60,7 @@ describe('inline host renders and live-updates from fx2', () => {
 	})
 
 	it('reveals the metric columns only after "+ metrics" is toggled on', async () => {
-		const dt = attachFx2Devtools()
+		const dt = attachCosignalsDevtools()
 		const el = document.createElement('div')
 		document.body.appendChild(el)
 		let handle: { unmount(): void } | undefined

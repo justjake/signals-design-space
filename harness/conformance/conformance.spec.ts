@@ -49,18 +49,18 @@ for (const { section, cases } of testSuite) {
 	describe(`${frameworkName} :: ${section}`, () => {
 		for (const [name, fn] of Object.entries(cases)) {
 			// reactive-framework-test-suite 0.0.2 treats avoiding all work
-			// after a batch net-revert as semantics. FX2 intentionally promises
+			// after a batch net-revert as semantics. Cosignals intentionally promises
 			// only final-value atomicity; its replacement case below checks that
 			// contract without constraining conservative validation/effect work.
 			if (
-				frameworkName === 'fx2' &&
+				frameworkName === 'cosignals' &&
 				(name === "#123 repeated no-op batches don't re-trigger effects" ||
 					name === '#132 batch: computed not recomputed if dep reverts' ||
 					name === '#147 computed not recomputed in batch if dep reverts')
 			) {
 				continue
 			}
-			// FX2's effect is a pure tracked compute plus an untracked handler;
+			// Cosignals's effect is a pure tracked compute plus an untracked handler;
 			// the suite's single-body autorun runs through an adapter shim whose
 			// body is the compute. These five cases pin interleavings of that
 			// single body (body-vs-cleanup order, run counts during validation,
@@ -68,7 +68,7 @@ for (const { section, cases } of testSuite) {
 			// reproduce. The package suite pins the same concerns against the
 			// real two-function contract (tests/conformance.spec.ts).
 			if (
-				frameworkName === 'fx2' &&
+				frameworkName === 'cosignals' &&
 				(name === '#38 effect cleanup fn called before each re-run' ||
 					name === '#89 effect cleanup reset when effect throws' ||
 					name === '#201 computed-triggered disposal: effect skipped and no subscription leak' ||
@@ -91,8 +91,8 @@ for (const { section, cases } of testSuite) {
 	})
 }
 
-if (frameworkName === 'fx2') {
-	describe('fx2 :: batch net-revert semantics', () => {
+if (frameworkName === 'cosignals') {
+	describe('cosignals :: batch net-revert semantics', () => {
 		test('#123/#132/#147 expose only final values', () => {
 			framework.run(() => {
 				const atom = framework.signal(0)

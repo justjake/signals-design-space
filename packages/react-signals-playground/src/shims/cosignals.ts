@@ -1,65 +1,113 @@
-/**
- * `cosignals` (+ `cosignals-react`) behind the common shim interface.
- *
- * The exported useSignal accepts the interface's structural signal types
- * while the bridge's own hook dispatches on the concrete kernel classes.
- * The casts are sound by construction: createAtom/createComputed below are
- * the only producers of the app's signal handles, so every handle really is
- * an Atom/Computed instance.
- */
-import { Atom, Computed } from 'cosignals'
+/** `cosignals` behind the common shim interface. */
+import { useRef } from 'react'
+import { createRoot as createReactRoot } from 'react-dom/client'
 import {
-	registerCosignalReact,
+	createAtom as createCosignalsAtom,
+	createComputed as createCosignalsComputed,
+	type Atom,
+	type Computed,
+} from 'cosignals'
+import {
+	registerReactSignals,
 	startSignalTransition,
-	useComputed as bridgeUseComputed,
-	useSignal as bridgeUseSignal,
-	useSignalEffect as bridgeUseSignalEffect,
-	type SignalSource,
-} from 'cosignals-react'
+	useComputed,
+	useSignalEffect as useCosignalsSignalEffect,
+	useValue,
+	wrapCreateRoot,
+} from 'cosignals/react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
-import { useSplitEffectFromAutorun } from './split-effect'
-
-export { createRoot } from 'react-dom/client'
 
 export const name = 'cosignals'
-
-// Verified in the playground's Playwright suite: a promise thrown from a
-// component inside a transition render keeps the transition pending while
-// urgent updates keep committing, exactly like stock React semantics.
 export const transitionHoldStyle: TransitionHoldStyle = 'suspense'
+export const createRoot = wrapCreateRoot(createReactRoot as never)
 
 export function register(): void {
-	// The handle is intentionally dropped: registration lives for the page,
-	// and dispose() only matters for tests that re-register.
-	registerCosignalReact()
+	registerReactSignals()
+}
+
+class CosignalsAtom<T> implements WritableSignal<T> {
+	constructor(readonly signal: Atom<T>) {}
+	get state(): T {
+		return this.signal.get()
+	}
+	set(next: T): void {
+		this.signal.set(next)
+	}
+	update(fn: (current: T) => T): void {
+		this.signal.update(fn)
+	}
+}
+
+class CosignalsComputed<T> implements ReadableSignal<T> {
+	constructor(readonly signal: Computed<T>) {}
+	get state(): T {
+		return this.signal.get()
+	}
 }
 
 export function createAtom<T>(initial: T, label?: string): WritableSignal<T> {
-	return new Atom(initial, { label })
+	return new CosignalsAtom(createCosignalsAtom(initial, { label }))
 }
 
 export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T> {
-	return new Computed(fn, { label })
+	return new CosignalsComputed(createCosignalsComputed(fn, { label }))
 }
 
 export function useSignal<T>(signal: ReadableSignal<T>): T {
-	return bridgeUseSignal(signal as unknown as SignalSource<T>)
+	return useValue((signal as CosignalsAtom<T> | CosignalsComputed<T>).signal)
 }
 
-export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
-	// This bridge splits the concerns: useComputed memoizes a Computed handle
-	// on deps, and subscription goes through useSignal like any other signal.
-	return bridgeUseSignal(bridgeUseComputed(fn, deps))
+/**
+ * A suspending computed: while parked its node carries cosignals's AsyncSuspended
+ * flag, which the devtools reports as a "suspended" node. `toggle` parks it on
+ * a fresh pending promise (bumping `epoch` re-runs the body so it re-parks) and,
+ * called again, resolves that promise so the body reruns to 'loaded'.
+ */
+export function createSuspending(): {
+	pending: ReadableSignal<boolean>
+	value: ReadableSignal<string>
+	toggle(): void
+} {
+	const epoch = createCosignalsAtom(0, { label: 'asyncEpoch' })
+	const pending = createCosignalsAtom(false, { label: 'asyncPending' })
+	let deferred: { promise: Promise<void>; resolve: () => void } | undefined
+	const value = createCosignalsComputed<string>(
+		(use) => {
+			epoch.get()
+			if (deferred === undefined) return 'idle'
+			use(deferred.promise)
+			return 'loaded'
+		},
+		{ label: 'asyncData' },
+	)
+	return {
+		pending: new CosignalsAtom(pending),
+		value: new CosignalsComputed(value),
+		toggle(): void {
+			if (pending.get()) {
+				deferred?.resolve()
+				pending.set(false)
+				return
+			}
+			let resolve!: () => void
+			deferred = { promise: new Promise<void>((r) => (resolve = r)), resolve }
+			pending.set(true)
+			epoch.update((e) => e + 1)
+		},
+	}
 }
 
+/**
+ * The interface's split (compute, handler, deps) shape desugars to cosignals's
+ * factory form: one spec object per deps window.
+ */
 export function useSignalEffect<T>(
 	compute: () => T,
 	handler: (value: T, previous: T | undefined) => void | (() => void),
 	deps?: readonly unknown[],
 ): void {
-	useSplitEffectFromAutorun(bridgeUseSignalEffect, compute, handler, deps)
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useCosignalsSignalEffect(() => ({ watch: compute, run: handler }), deps ?? [])
 }
 
-// Direct re-export: the bridge's scope type (() => unknown, for async
-// actions) is wider than the interface's () => void, so it conforms as is.
-export { startSignalTransition }
+export { startSignalTransition, useComputed }

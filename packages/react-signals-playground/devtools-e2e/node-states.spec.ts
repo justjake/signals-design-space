@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test'
 // (caught by a boundary so the page survives). Guards the errored-node UI:
 // the node reads as errored and the inspector shows "errored at <time>".
 test('errored node: arm-error surfaces an errored node with an errored-at time', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	const panel = page.locator('.signals-devtools-root')
 	await panel.locator('.nodelist tbody tr').first().waitFor()
 
@@ -29,12 +29,12 @@ test('errored node: arm-error surfaces an errored node with an errored-at time',
 // and the inspector shows "suspended at <time>". The right-docked panel overlays
 // this control at the test viewport width, so trigger it with a DOM-level click.
 test('suspended node: suspend-async surfaces a suspended node with a suspended-at time', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	const panel = page.locator('.signals-devtools-root')
 	await panel.locator('.nodelist tbody tr').first().waitFor()
 
 	await page.getByTestId('arm-async').evaluate((el) => (el as HTMLButtonElement).click())
-	// fx2 keeps serving the last settled value while pending — the stale value
+	// cosignals keeps serving the last settled value while pending — the stale value
 	// stays on screen (no fallback flash), and devtools shows the node suspended.
 	await expect(page.getByTestId('async-value')).toHaveText('idle')
 
@@ -83,7 +83,7 @@ test('suspended node: suspend-async surfaces a suspended node with a suspended-a
 
 // Effects show up as soon as the urgent counter changes (an effect reacts to it).
 test('effect nodes: a +1 urgent produces effect nodes', async ({ page }) => {
-	await page.goto('/royale-fx2/?devtools')
+	await page.goto('/cosignals/?devtools')
 	const panel = page.locator('.signals-devtools-root')
 	await panel.locator('.nodelist tbody tr').first().waitFor()
 	await page.getByTestId('increment').click()

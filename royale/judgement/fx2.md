@@ -1,5 +1,7 @@
 # Judgement scorecard: fx2
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 **Verdict: clean (after fix round; originally issues)** · final fork LOC 11 · final lib LOC 2239 · fork LOC 11 · lib LOC 2194
 
 ## Gates (claimed vs observed)

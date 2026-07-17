@@ -6,4 +6,4 @@
  * module graph. implementations.ts derives its default row from this, so
  * the default still lives in exactly one place.
  */
-export const DEFAULT_SEGMENT = 'royale-fx2'
+export const DEFAULT_SEGMENT = 'cosignals'

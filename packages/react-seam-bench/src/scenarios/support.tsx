@@ -24,7 +24,7 @@ export function sleep(ms: number): Promise<void> {
 
 /**
  * A few macrotask hops so scheduler tasks, passive effects, and
- * microtask-debounced work all run — cosignals-react finalizes watcher
+ * microtask-debounced work all run — cosignals finalizes watcher
  * teardown on a debounced microtask after unmount, so measurement phases
  * must drain between each other or teardown bleeds into the next timing.
  */

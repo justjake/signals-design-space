@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 9.1
 favorite thing: The visibility-predicate world model gets updater replay, per-root views, and quiescent reclamation from one compact per-signal history.
 least favorite thing: The resumed-pass hole for unsubscribed atoms and roughly 2x core cost keep the elegant model from feeling completely closed.

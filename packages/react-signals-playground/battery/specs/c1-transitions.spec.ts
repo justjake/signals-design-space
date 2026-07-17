@@ -71,7 +71,7 @@ test('RCC-UM2.render-write: a render-phase write to shared state is rejected', a
 		() => document.querySelector('[data-testid="render-write-outcome"]')?.textContent ?? '',
 	)
 	// Correct behavior: rejected, and the victim atom never moved.
-	// solid-react FINDING: 'wrote-without-error' and the write landed.
+	// A broken implementation may report 'wrote-without-error' and land the write.
 	expect(outcome, 'render-phase write was accepted').toMatch(/^rejected:/)
 	expect(await page.evaluate(() => window.__store.read('renderWriteVictim'))).toBe(0)
 })

@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 9.3
 favorite thing: The 167-line fact-only seam and per-atom ordered history form the cleanest end-to-end concurrency model in the field.
 least favorite thing: The nearly two-thousand-line library still admits a resumed-pass staleness corner for unsubscribed atoms.

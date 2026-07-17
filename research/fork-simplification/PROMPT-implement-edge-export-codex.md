@@ -201,7 +201,7 @@ export type RegistryListener = {
 	onRenderPassStart?(container: unknown, includedTokens: readonly BatchToken[]): void;
 	onRenderPassYield?(container: unknown): void;
 	onRenderPassResume?(container: unknown): void;
-	onRenderPassEnd?(container: unknown, committed: boolean): void; // disposition is free (commit-driven end vs implicit/discard end); mainline cosignals consumes it, the alts ignore the arg
+	onRenderPassEnd?(container: unknown, committed: boolean): void; // disposition is free (commit-driven end vs implicit/discard end); mainline cosignals-first-draft consumes it, the alts ignore the arg
 	onRootCommitted?(container: unknown, committedTokens: readonly BatchToken[]): void;
 	onBatchRetired?(token: BatchToken, committed: boolean): void;
 	onBeforeMutation?(container: unknown): void;
@@ -235,9 +235,9 @@ not rewritten**: the shipping code is proven by 657 lines of tests and two
 past seam bugs lived exactly in these edges. Size target ~600 lines including
 npm-standalone docs.
 
-## Informative: mainline `cosignals` joins later — do not preclude it
+## Informative: mainline `cosignals-first-draft` joins later — do not preclude it
 
-`packages/cosignals` + `packages/cosignals-react` (the flagship engine, a third
+`packages/cosignals-first-draft` + `packages/cosignals-react` (the flagship engine, a third
 consumer) speak the same protocol v2 today (`cosignals-react/src/shim.ts:245-257`)
 and map onto this design — zero extra fork lines, one package seam kept. Do NOT
 port mainline in this work; just keep these intact:

@@ -38,16 +38,14 @@ test('META-ISOLATION: only the selected implementation chunk is requested (chunk
 
 	// A shim chunk URL: dev serves /src/shims/<id>.ts, the build emits assets/<id>-<hash>.js.
 	const chunkOf = (label: string): RegExp =>
-		new RegExp(
-			`/shims/${label === 'cosignals' ? 'cosignals' : label}\\.ts$|/assets/${label}-[^/]*\\.js$`,
-		)
+		new RegExp(`/shims/${label}\\.ts$|/assets/${label}-[^/]*\\.js$`)
 	expect(
 		requested.some((url) => chunkOf(entry.label).test(url)),
 		`no chunk for ${entry.label} in ${requested.filter((u) => /assets|shims/.test(u)).join(', ')}`,
 	).toBe(true)
 	const others = ENTRIES.map((e) => e.label).filter((label) => label !== entry.label)
 	for (const other of others) {
-		// Labels can prefix one another (royale-fx2 / royale-fx2-dalien), and a
+		// Labels can prefix one another (cosignals / cosignals-arena), and a
 		// built chunk is named label-hash, so a prefix label's matcher also hits
 		// the longer label's chunk: discount whatever is this page's own chunk.
 		const loaded = requested.filter(

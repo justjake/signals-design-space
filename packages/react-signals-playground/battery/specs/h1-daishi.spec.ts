@@ -70,7 +70,7 @@ test('DAISHI-2/DAISHI-4: no tearing (finally + temporarily) on mount with transi
 	expect(new Set(await latticeValues(page))).toEqual(new Set([settled]))
 	// Temporarily: no PAINTED commit during the mount-under-fire tore —
 	// daishi's own passive-effect mechanism (the strict layout latch is the
-	// RCC instrument; solid-react's finding shows up in both).
+	// RCC instrument; findings show up in both).
 	const lattice = await page.evaluate(() => window.__store.lattice)
 	expect(lattice.passiveChecks).toBeGreaterThan(0)
 	expect(lattice.tornPassive).toEqual([])

@@ -8,11 +8,6 @@
 	},
 	"include": [
 		"src",
-		"vite.config.ts",
-		"../cosignals-react/types",
-		// concurrent-solid-react ships TS source whose dev diagnostics sit
-		// behind the __DEV__ compile-time constant; this declares it for tsc
-		// (vite's `define` supplies the runtime value).
-		"../concurrent-solid-react/globals.d.ts"
+		"vite.config.ts"
 	]
 }

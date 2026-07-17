@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 8.5
 favorite thing: Worlds are nothing but visibility predicates (a cutoff seq plus a deferred-batch list) folded over per-signal write histories, so there are no world tables or overlay stores to reclaim.
 least favorite thing: The judge had to catch `latest()` being flatly wrong in two whole contexts (canonical computed evaluations and render bodies) after section 5 had already claimed it done.

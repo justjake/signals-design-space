@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'signals-royale-fx2'
-import { attachFx2Devtools } from '../src/fx2.ts'
+import { createAtom, createComputed, effect, set } from 'cosignals'
+import { attachCosignalsDevtools } from '../src/cosignals.ts'
 
 // Deterministic monotonic clock so event timestamps are stable.
 function fakeClock() {
@@ -8,9 +8,9 @@ function fakeClock() {
 	return () => (t += 1000)
 }
 
-describe('fx2 → collector pipeline', () => {
+describe('cosignals → collector pipeline', () => {
 	it('captures events, builds a graph, and inspects values inertly', () => {
-		const dt = attachFx2Devtools({ now: fakeClock() })
+		const dt = attachCosignalsDevtools({ now: fakeClock() })
 		const { collector } = dt
 		try {
 			const count = createAtom(1, { label: 'count' })
@@ -22,7 +22,7 @@ describe('fx2 → collector pipeline', () => {
 
 			set(count, 5)
 
-			// Events captured with fx2's verbatim kind strings.
+			// Events captured with cosignals's verbatim kind strings.
 			const events = collector.events({}, 200)
 			expect(events.length).toBeGreaterThan(0)
 			const kinds = new Set(events.map((e) => e.kind))
@@ -61,7 +61,7 @@ describe('fx2 → collector pipeline', () => {
 	})
 
 	it('hot mode is off by default and toggling installs/removes the engine hook', () => {
-		const dt = attachFx2Devtools({ now: fakeClock() })
+		const dt = attachCosignalsDevtools({ now: fakeClock() })
 		const { collector } = dt
 		const hotRows = () =>
 			collector.events({}, 500).filter((e) => e.kind === 'propagate' || e.kind === 'check' || e.kind === 'pull')

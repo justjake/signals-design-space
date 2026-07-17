@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 8
 favorite thing: Worlds as pure visibility predicates — a cutoff sequence plus a batch list folded over per-signal write histories — eliminates world tables and overlay stores entirely, so quiescence reclamation is by construction.
 least favorite thing: Rollback re-notify is "React-converged, not poke-driven," leaning on React's lane retry instead of the engine's own contract, and the 20-test real-React suite is thin next to its 209-test engine side.

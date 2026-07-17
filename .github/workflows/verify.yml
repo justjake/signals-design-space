@@ -17,68 +17,6 @@ env:
   CI: 'true'
 
 jobs:
-  unit:
-    name: unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Init source submodules
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install core verification dependencies
-        run: |
-          pnpm install --frozen-lockfile \
-            --filter "cosignals..." \
-            --filter "@lab/cosignals-oracle..." \
-            --filter "strata-signals..."
-
-      - name: Run deterministic unit suites
-        run: |
-          pnpm --dir packages/cosignals exec vitest run --exclude tests/concurrent-fuzz.spec.ts
-          pnpm --dir packages/cosignals-oracle exec vitest run --exclude tests/fuzz.spec.ts
-          pnpm --dir packages/strata test
-
-  fuzz:
-    name: seeded fuzzing
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Init workspace source submodules
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install fuzz dependencies
-        run: |
-          pnpm install --frozen-lockfile \
-            --filter "cosignals..." \
-            --filter "@lab/cosignals-oracle..."
-
-      - name: Run model and engine fuzz corpora
-        run: |
-          pnpm --dir packages/cosignals-oracle exec vitest run tests/fuzz.spec.ts
-          pnpm --dir packages/cosignals exec vitest run tests/concurrent-fuzz.spec.ts
-
   inlining:
     name: inlining verification (Node 24)
     runs-on: ubuntu-latest
@@ -140,7 +78,7 @@ jobs:
           fork/build-react.sh
 
   react-unit:
-    name: React integration unit tests
+    name: concurrent signals unit tests
     needs: react-fork
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -169,21 +107,13 @@ jobs:
       - name: Install React integration dependencies
         run: |
           pnpm install --frozen-lockfile \
-            --filter "cosignals-alt-a..." \
-            --filter "cosignals-alt-b..." \
-            --filter "cosignals-react..." \
-            --filter "concurrent-solid-react..." \
-            --filter "react-signals-utils..." \
-            --filter "signals-royale-fx2..."
+            --filter "cosignals..." \
+            --filter "cosignals-arena..."
 
-      - name: Run React integration suites
+      - name: Run package suites
         run: |
-          pnpm --dir packages/react-signals-utils test
-          pnpm --dir packages/cosignals-alt-a test
-          pnpm --dir packages/cosignals-alt-b test
-          pnpm --dir packages/cosignals-react test
-          pnpm --dir packages/concurrent-solid-react test
-          pnpm --dir packages/signals-royale-fx2 test
+          pnpm --dir packages/cosignals test
+          pnpm --dir packages/cosignals-arena test
 
   browser:
     name: browser battery (Chromium)

@@ -1,5 +1,7 @@
 # Implementer
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 You own discovery and implementation for the next FX2 improvement. The
 controller operates the loop but does not select or pre-approve your candidate.
 

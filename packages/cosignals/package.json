@@ -1,24 +1,36 @@
 {
 	"name": "cosignals",
 	"version": "0.1.0",
+	"description": "Concurrent signals for React",
 	"private": true,
-	"description": "A signals library designed for React concurrent rendering: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics on a packed typed-array kernel. Writes record into batches on one timeline and every render reads its own consistent world view — apps that never start a transition pay almost nothing. Includes a zero-allocation trace recorder (cosignals/trace).",
-	"license": "MIT",
 	"type": "module",
-	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./trace": "./src/Tracer.ts",
-		"./graphviz": "./src/graphviz.ts"
+		"./ssr": "./src/ssr.ts",
+		"./react": "./src/react/index.ts",
+		"./debug": "./src/debug/index.ts"
 	},
 	"scripts": {
-		"check": "tsc --noEmit -p tsconfig.json",
-		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"test": "vitest run"
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"format-doc-comments": "node tools/format-doc-comments.mjs",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"fuzz": "vitest run tests/oracle-fuzz.spec.ts",
+		"bench": "node bench/react-bench.mjs"
 	},
 	"devDependencies": {
-		"esbuild": "0.28.1",
+		"@types/react": "^19.1.0",
+		"@types/react-dom": "^19.1.0",
+		"jsdom": "^26.0.0",
+		"react": "19.3.0-canary-e71a6393-20260702",
+		"react-dom": "19.3.0-canary-e71a6393-20260702",
+		"reactive-framework-test-suite": "0.0.2",
+		"scheduler": "0.28.0-canary-e71a6393-20260702",
 		"typescript": "7.0.2",
-		"vitest": "4.1.6"
+		"vitest": "^3.0.0"
+	},
+	"peerDependencies": {
+		"react": ">=19.0.0",
+		"react-dom": ">=19.0.0"
 	}
 }

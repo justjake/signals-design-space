@@ -15,14 +15,10 @@
 	"dependencies": {
 		"alien-signals": "link:../../upstream-alien-signals",
 		"cosignals": "workspace:*",
-		"cosignals-alt-a": "workspace:*",
-		"cosignals-alt-b": "workspace:*",
-		"cosignals-react": "workspace:*",
 		"dalien-signals": "link:../dalien-signals",
 		"jsdom": "^26.1.0",
 		"react": "*",
-		"react-dom": "*",
-		"signals-royale-fx2": "workspace:*"
+		"react-dom": "*"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",

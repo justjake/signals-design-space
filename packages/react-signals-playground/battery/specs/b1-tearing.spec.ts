@@ -27,15 +27,11 @@ test('RCC-RT1.scope-read: a transition scope reading its own write; ambient read
 	const probe = await page.evaluate(() => window.__store.transitionScopeProbe('storeOnly', 41))
 
 	if (expectation.kind === 'variant') {
-		// royale-fx2 hides drafts from bare reads, including reads in the
+		// cosignals hides drafts from bare reads, including reads in the
 		// transition callback that staged the write.
 		expect(probe).toEqual({ inScope: 0, ambient: 0 })
-	} else if (entry.label === 'cosignals') {
-		// RT4-newest family: ambient pre-commit reads include the staged write.
-		expect(probe).toEqual({ inScope: 41, ambient: 41 })
 	} else {
-		// ambient-W0 family: the scope reads its own draft, ambient does not.
-		expect(probe).toEqual({ inScope: 41, ambient: 0 })
+		throw new Error(`missing scope-read expectation for ${entry.label}`)
 	}
 
 	// Whatever the world rules, the write itself is L1/L2 state: it commits.

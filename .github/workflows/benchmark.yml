@@ -1,13 +1,13 @@
-# Benchmark the signal-library family (cosignals DIRECT, cosignals LOGGED,
-# dalien-signals) against upstream alien-signals whenever the cosignals
-# packages or the dalien-signals submodule pointer change on main. Node and
+# Benchmark cosignals, cosignals-arena, and dalien-signals against upstream
+# alien-signals whenever those packages or the dalien-signals submodule
+# pointer change on main. Node and
 # Bun run as parallel jobs; each uploads a CSV of per-test medians and a
 # rendered PNG chart.
 #
 # This is the family-wide sibling of packages/dalien-signals'
 # .github/workflows/benchmark.yml (which benchmarks dalien against upstream
-# on that repo's own pushes — it cannot measure cosignals because this repo
-# is private). Both use the same harness: the justjake/js-reactivity-
+# on that repo's own pushes and cannot measure this repo's private packages).
+# Both use the same harness: the justjake/js-reactivity-
 # benchmark fork (median-of-N estimator, interleaved isolated runner,
 # family adapters — all committed on the fork, no patch step), which the
 # milomg-reactivity-benchmark submodule pointer pins. See
@@ -22,8 +22,7 @@ on:
     branches: [main]
     paths:
       - 'packages/cosignals/**'
-      - 'packages/cosignals-react/**'
-      - 'packages/cosignals-oracle/**'
+      - 'packages/cosignals-arena/**'
       - 'packages/dalien-signals'
       - 'milomg-reactivity-benchmark'
       - '.github/workflows/benchmark.yml'
@@ -32,7 +31,7 @@ on:
       frameworks:
         description: 'Framework names (quoted, space-separated), or ALL'
         required: false
-        default: '"Dalien Signals" "Alien Signals" "Cosignal"'
+        default: '"Dalien Signals" "Alien Signals" "Cosignals" "Cosignals Arena"'
       rounds:
         description: 'Interleaved rounds per framework'
         required: false
@@ -43,7 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal" "Royale FX2"' }}
+  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignals" "Cosignals Arena"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
@@ -93,7 +92,7 @@ jobs:
           pnpm install --ignore-workspace
           node build.js
 
-      # cosignals's exports point at TypeScript source with no dependencies;
+      # cosignals exports TypeScript source directly;
       # the harness bundler compiles it directly, so no install/build here.
 
       - name: Build benchmark runner

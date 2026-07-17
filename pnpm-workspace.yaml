@@ -2,10 +2,6 @@ packages:
   - libs/*
   - harness
   - packages/*
-  - packages/cosignals
-  - packages/cosignals-oracle
-  - packages/cosignals-react
-  - packages/react-seam-bench
 onlyBuiltDependencies:
   - esbuild
 # pnpm 10 reads overrides here, not from package.json's "pnpm" field (which it

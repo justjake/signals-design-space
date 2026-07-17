@@ -72,7 +72,7 @@ design.
 - Draft revision ownership candidate investigated and restored under inconclusive timing.
 - Internal live-binding candidate investigated and restored under inconclusive timing.
 - Internal `activeConsumer`, `currentWorld`, and `currentPark` consumers now read their canonical ESM live bindings directly; the three zero-policy getter wrappers and ten calls are gone while public `getActiveTracer()` remains a function.
-- The playground's `alt-a`, `alt-b`, and `cosignals` adapters share one three-caller split-effect composer; Solid and Royale retain their distinct lifecycle mechanisms.
+- The playground's `alt-a`, `alt-b`, and `cosignals-first-draft` adapters share one three-caller split-effect composer; Solid and Royale retain their distinct lifecycle mechanisms.
 - Tracer ring `head` plus `size` own occupancy; private slots are non-optional and `events()`/`find()` no longer defend against impossible holes.
 - Root and suspension trace IDs share one two-caller allocation mechanism while retaining two weak owners and separate fixed per-session numbering.
 - Public effect-scope, batch, start/end-batch, and untracked controls are direct graph re-exports; their five local runtime alias bindings are gone.

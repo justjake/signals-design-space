@@ -14,6 +14,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      cosignals:
+        specifier: link:../../../packages/cosignals
+        version: link:../../../packages/cosignals
       jsdom:
         specifier: ^26.1.0
         version: 26.1.0
@@ -26,9 +29,6 @@ importers:
       scheduler:
         specifier: link:../../../vendor/react/build/oss-experimental/scheduler
         version: link:../../../vendor/react/build/oss-experimental/scheduler
-      signals-royale-fx2:
-        specifier: link:../../../packages/signals-royale-fx2
-        version: link:../../../packages/signals-royale-fx2
       typescript:
         specifier: 7.0.2
         version: 7.0.2

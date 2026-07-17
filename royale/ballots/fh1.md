@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh2
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 9
 favorite thing: The worldHooks seam that leaves an alien-v3-shaped canonical graph untouched while the concurrent layer plugs in through three narrow hooks is the cleanest layering in the field, and it bought the best measured geomean (1.28x alien).
 least favorite thing: Fiber-granular subscription (uSES + forcer + committed-view effect per component instance) makes it the largest library of the field at 2733 LOC and taxes every mount 10-25%.

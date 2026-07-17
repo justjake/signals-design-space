@@ -85,7 +85,7 @@ test('RCC-SU3.interleaved-gates: two held transitions never alias; the joint com
 	// Host fact, pinned identically on all five implementations
 	// and in BOTH release orders: two component-level suspended transitions
 	// on one root entangle — releasing one gate commits NOTHING until the
-	// other resolves. (Per-node keyed independence — alt-a#7/alt-b#6 —
+	// other resolves. (Per-node keyed independence
 	// lives at engine resource level; the package suites referee it.)
 	await page.evaluate(() => window.__store.releaseHoldB())
 	await page.waitForTimeout(400)

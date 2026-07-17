@@ -1,6 +1,6 @@
 # The flattening — build state
 
-Campaign: merge packages/cosignals' kernel + concurrent machinery into ONE
+Campaign: merge packages/cosignals-first-draft's kernel + concurrent machinery into ONE
 arena-based engine module per plans/2026-07-08-the-flattening.md (revision 3,
 FINAL — its two mechanism sections are normative: the bump table, the episode
 boundary lists, the repealed equality-count pin). Branch: `flattening`.
@@ -25,7 +25,7 @@ must be able to continue from it alone.
 1. **Cherry-pick 526f8ca** — the V-urgent-committed-branch lockstep pin
    (passes against the current engine; must keep passing through the
    rebuild).
-2. **Schema generator** (`packages/cosignals/tools/schema.ts`): schema
+2. **Schema generator** (`packages/cosignals-first-draft/tools/schema.ts`): schema
    types + validation + the schema instance + generators + CLI in one file
    (run via `pnpm gen` = `node --experimental-strip-types tools/schema.ts`).
    Emits (a) the marked layout region in src/CosignalEngine.ts — const enums
@@ -35,7 +35,7 @@ must be able to continue from it alone.
    src/debug/layout.debug.ts (field tables, flag decoding, hydrators, column
    roster). Regen-diff gate: tests/schema-gen.spec.ts (regenerates in
    memory, string-compares; also pins marker failure modes).
-3. **Engine module skeleton** (`packages/cosignals/src/CosignalEngine.ts`,
+3. **Engine module skeleton** (`packages/cosignals-first-draft/src/CosignalEngine.ts`,
    ~3250 lines, compiling, docs-gate-clean): the whole kernel carried over
    from Kernel.ts (algorithm unchanged), suspense.ts and lifecycle.ts folded
    in as sections, plus the new clocks machinery (below). Old modules
@@ -87,11 +87,11 @@ must be able to continue from it alone.
 
 ## Suites run against the fused engine (post-cutover)
 
-- cosignals: 31 files, 360 passed, 1 skipped — GREEN (includes docs-gate,
+- cosignals-first-draft: 31 files, 360 passed, 1 skipped — GREEN (includes docs-gate,
   leak-audit, reclaim probes, bytecode budgets, concurrent battery with the
   V-urgent-committed-branch pin, fuzz, scars, equality-semantics).
 - cosignals-oracle: 82 passed — GREEN.
-- harness conformance: FRAMEWORK=cosignals 179/179, cosignals-concurrent
+- harness conformance: FRAMEWORK=cosignals-first-draft 179/179, cosignals-concurrent
   179/179 (also alien-v3 baseline 179/179) — GREEN.
 - cosignals-react (react 72 against the real fork): 72/72 — GREEN.
 - NOT run: daishi concurrent verifier (separate playwright/jest harness,
@@ -252,7 +252,7 @@ must be able to continue from it alone.
      clocks yet (readers land with subscriptions, priority 5).
    - Bytecode re-pin: arenaFoldOutcome 340→385 (measured 367; the two
      bump arms), justified in the table. All other budgets unchanged.
-   - Suites after this unit: cosignals 360 green, react 72/72, conformance
+   - Suites after this unit: cosignals-first-draft 360 green, react 72/72, conformance
      179/179 ×2, oracle 82 green.
    - Flake FIXED in the same unit: one bytecode-spec run transiently
      reported every arena fn uncovered — the bare-substring
@@ -304,7 +304,7 @@ must be able to continue from it alone.
      temporary probe ALSO reverted the leg's uncommitted edits to that file
      (the schema-gen regen-diff caught the mismatch immediately). Probes on
      uncommitted work must be reverted by re-editing, never by checkout.
-   - Suites after re-apply: cosignals 360 green (incl. regen-diff), react
+   - Suites after re-apply: cosignals-first-draft 360 green (incl. regen-diff), react
      72/72, conformance 179/179, oracle 82 green.
 
 ## Done (continued 5)
@@ -515,7 +515,7 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     setter (the bindings rename watchers after mount). NOTE for the lead's
     pricing: deliver()'s dedupBits/root reads went from own-field loads to
     E.buffer()/extras reads (the record-storage shape).
-    Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
+    Suites: cosignals-first-draft 362/1skip, oracle 82, react 72/72 — green.
 
 14. **Subscriptions as arena records + SubscriptionManager dies (commit C1
     — storage only, semantics untouched)**: SubscriptionManager.ts DELETED;
@@ -541,7 +541,7 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     ConcurrentEngine re-pointed; trace-off ENGINE_MODULES: the dead
     SubscriptionManager.ts path removed (CosignalEngine.ts entry covers the
     section — documented in the list comment).
-    Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
+    Suites: cosignals-first-draft 362/1skip, oracle 82, react 72/72 — green.
 
 15. **At-least-once observers (commit D — the ruling's semantics; layout
     v4)**. THE CENTRAL DESIGN DISCOVERY (the fuzz corpora convicted the
@@ -623,7 +623,7 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
       re-evaluation (engine leg, evaluation-counted).
     - cosignals-react: useSignalEffect doc teaches the at-least-once
       contract (idempotent bodies, Strict-Mode analogy).
-    Suites: cosignals 368/1skip (365 + 3 pins), oracle 82, react 72/72,
+    Suites: cosignals-first-draft 368/1skip (365 + 3 pins), oracle 82, react 72/72,
     conformance 179×2, typecheck ×3 (one pre-existing worktree artifact:
     an untracked user-draft src/Allocator.ts fails tsc locally — not mine,
     not committed, left untouched).
@@ -656,7 +656,7 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     ±5%; was +64-93% convicted); wide-mask WT 176.3 vs main 169.5 (+4.0%);
     cold-render WT 394.0 vs main 416.7 (-5.4%, faster); logged watch1
     112-120 vs leg-end's 162-244 (dramatically better, variance
-    collapsed; residual vs main +9%). Full suites re-green (cosignals 368
+    collapsed; residual vs main +9%). Full suites re-green (cosignals-first-draft 368
     + user draft, oracle 82, react 72/72, conformance 179×2).
     RESIDUAL, stated per the verdict's demand: ~+13% on the no-gc write
     loop exists at leg-5 START vs main (151 vs 134 ns) — a pre-leg-5
@@ -733,9 +733,9 @@ seam extraction + object implementation + dual gate.
       overlapping spreads (main's own rounds spanned 166-185) — extended
       to 8 interleaved rounds: main 174.48 vs WT 174.73 (+0.1%, parity).
       Checksums identical both sides on all three shapes. GATE PASSED.
-    - Suites: cosignals 372/1skip (368 + 1 new growth pin + the user
+    - Suites: cosignals-first-draft 372/1skip (368 + 1 new growth pin + the user
       draft's 3), oracle 82/1skip, react 72/72, conformance 179×2,
-      cosignals typecheck clean.
+      cosignals-first-draft typecheck clean.
 
 18. **Render integration folded in (priority 6; leg 6 unit 2)** —
     RenderPass.ts DELETED; its whole body (RenderPassState/RenderPass/
@@ -791,7 +791,7 @@ seam extraction + object implementation + dual gate.
       marker cut of item 8; likely parallel-load compile-timing. Left
       unfixed (not reproducible); if it recurs, the parse-window rule
       (compiled-before-marker = uncovered) is the place to look.
-    - Suites after the fold-in: cosignals 366/1skip (the owner moved their
+    - Suites after the fold-in: cosignals-first-draft 366/1skip (the owner moved their
       draft spec out of tests/ mid-leg, so the untracked +6 disappeared
       from tallies), oracle 82/1skip, react 72/72, conformance 179×2,
       typecheck ×3 clean.
@@ -901,11 +901,11 @@ writing. Full-suite tallies may drift by their test count while untracked.
   priority-7 verification): commits bd656e0 (cherry-pick, owner ruling 3),
   3d83cc3 (growth restoration, layout v5, gate passed), 1cf8a12 (render
   integration — RenderPass.ts dies into the engine), plus the priority-7
-  cleanup/inventory commit (see items 17-19). Suites at run end: cosignals
+  cleanup/inventory commit (see items 17-19). Suites at run end: cosignals-first-draft
   31 files / 366 passed / 1 skipped, oracle 82/1skip, cosignals-react
-  72/72 (real fork), conformance FRAMEWORK=cosignals 179/179 +
+  72/72 (real fork), conformance FRAMEWORK=cosignals-first-draft 179/179 +
   cosignals-concurrent 179/179 (this worktree's harness), typecheck clean
-  ×3 (cosignals, cosignals-react, cosignals-oracle). Growth gate:
+  ×3 (cosignals-first-draft, cosignals-react, cosignals-oracle). Growth gate:
   cold-render -5.5% (WT faster) / wide-mask +0.1% over 8 interleaved
   rounds / storm +1.0%; checksums identical. NOT run: daishi verifier
   (final-gate material), perf benches beyond the sanctioned growth gate
@@ -916,7 +916,7 @@ writing. Full-suite tallies may drift by their test count while untracked.
 - Run 1 (first builder): commits 526f8ca (cherry-pick), b144141 (schema +
   skeleton + clocks), 0e97bee (kernel cutover), 0e741c3 (world-arena move).
   Tree at run end: flattening @ 0e741c3, only pnpm-lock.yaml uncommitted,
-  cosignals 360 green / react 72 / conformance 179×2 / oracle 82.
+  cosignals-first-draft 360 green / react 72 / conformance 179×2 / oracle 82.
   Next action: priority 3 step 1 in "In progress / exact next actions".
 - Run 5 (third builder, leg 5 — priority 5 observers + owner rulings 1+2
   landed mid-leg): commits b22b174 (schema v3: extras column + observer
@@ -925,20 +925,20 @@ writing. Full-suite tallies may drift by their test count while untracked.
   deleted), ebd5244 (at-least-once observers: consult-driven clocks +
   cutoffVals layout v4 + model co-evolution + 3 new battery pins), plus
   cherry-picks bfdc85c/b28602c (the two owner plan amendments). Suites at
-  run end: cosignals 368 passed / 1 skipped (365 + the 3 at-least-once
+  run end: cosignals-first-draft 368 passed / 1 skipped (365 + the 3 at-least-once
   pins; excludes the user's untracked draft spec), oracle 82, cosignals-
-  react 72/72 (real fork), conformance FRAMEWORK=cosignals 179/179 +
+  react 72/72 (real fork), conformance FRAMEWORK=cosignals-first-draft 179/179 +
   cosignals-concurrent 179/179 (this worktree's harness), typecheck clean
-  for cosignals + cosignals-react + cosignals-oracle. NOT run: daishi
+  for cosignals-first-draft + cosignals-react + cosignals-oracle. NOT run: daishi
   verifier, perf benches (lead owns; the growth unit carries its own
   sanctioned gate). Next action: growth restoration (above).
 - Run 4 (second builder, priority 4 — episodes): one commit (episodes; see
-  Done continued 5). Suites at run end: cosignals 31 files / 362 passed /
+  Done continued 5). Suites at run end: cosignals-first-draft 31 files / 362 passed /
   1 skipped (the 2 new equality pins joined), oracle 82 passed,
-  cosignals-react 72/72, conformance FRAMEWORK=cosignals 179/179 +
+  cosignals-react 72/72, conformance FRAMEWORK=cosignals-first-draft 179/179 +
   cosignals-concurrent 179/179 (run from THIS worktree's harness — its
-  node_modules/cosignals symlinks this worktree's package), typecheck clean
-  for cosignals + cosignals-react + cosignals-oracle. WORKTREE-ONLY
+  node_modules/cosignals-first-draft symlinks this worktree's package), typecheck clean
+  for cosignals-first-draft + cosignals-react + cosignals-oracle. WORKTREE-ONLY
   environment artifact (not flattening-caused, main-repo harness
   typechecks clean): `pnpm -C harness typecheck` fails on bench/child.ts
   TS7006 because the untracked milomg-reactivity-benchmark dir does not

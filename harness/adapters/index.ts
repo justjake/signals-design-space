@@ -20,11 +20,6 @@ export const adapterNames = [
 	'arena-spkq',
 	'dalien',
 	'cosignals',
-	'cosignals-concurrent',
-	'cosignals-alt-a',
-	'cosignals-alt-b',
-	'strata',
-	'fx2',
 ] as const
 
 export type AdapterName = (typeof adapterNames)[number]
@@ -43,11 +38,6 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	'arena-spkq': () => import('./arena-spkq'),
 	dalien: () => import('./dalien'),
 	cosignals: () => import('./cosignals'),
-	'cosignals-concurrent': () => import('./cosignals-concurrent'),
-	'cosignals-alt-a': () => import('./cosignals-alt-a'),
-	'cosignals-alt-b': () => import('./cosignals-alt-b'),
-	strata: () => import('./strata'),
-	fx2: () => import('./fx2'),
 }
 
 export function isAdapterName(name: string): name is AdapterName {

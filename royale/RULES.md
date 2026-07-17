@@ -276,7 +276,7 @@ your two package dirs (plus the vendor/react gitlink if git insists).
   your clone, including the orchestrator repo at
   `/Users/jitl/src/alien-signals-opt`).
 - **Forbidden reading** (design-independence — the whole point is a fresh design):
-  `packages/cosignals*/src/**`, `packages/concurrent-solid-react/src/**`, `spec/`,
+  `packages/cosignals-first-draft*/src/**`, `packages/concurrent-solid-react/src/**`, `spec/`,
   `design-loop/`, `monitor-design/`, `research/`, `reviews/`, `plans/`,
   `react-concurrent-signals-arena*.md`, and the incumbents' SPEC-RESOLUTIONS.md.
 - **Allowed reading**: this file; every `tests/` / `test/` dir (tests define

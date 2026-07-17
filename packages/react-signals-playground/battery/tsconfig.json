@@ -10,8 +10,6 @@
 	"include": [
 		".",
 		// Type-only imports from the app (TestStore, implementations table).
-		"../src",
-		"../../cosignals-react/types",
-		"../../concurrent-solid-react/globals.d.ts"
+		"../src"
 	]
 }

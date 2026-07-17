@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 9.1
 favorite thing: Predicate worlds over version-stamped histories express render and committed views without overlay stores while keeping the fork to 167 lines.
 least favorite thing: The resumed-pass unsubscribed-atom caveat and roughly 1.95x core slowdown show that the elegant model still has a consistency edge and a material steady-state cost.

@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 8.7
 favorite thing: The visibility-predicate model gets robust replay, root views, and quiescent cleanup without allocating whole world tables.
 least favorite thing: Correctness of resumed passes still leans on subscriber pokes, leaving the admitted unsubscribed-atom staleness risk.

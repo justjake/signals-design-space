@@ -15,7 +15,7 @@ both the implementations and the record of what failed.
 
 | Path | What it explores |
 | --- | --- |
-| [`packages/cosignals`](packages/cosignals/) + [`packages/cosignals-react`](packages/cosignals-react/) | The most complete in-tree design: a packed push-pull graph, operation journals, per-render and per-root views, async resources, tracing, reclamation, and bindings to the React fork. |
+| [`packages/cosignals-first-draft`](packages/cosignals-first-draft/) + [`packages/cosignals-react`](packages/cosignals-react/) | The most complete in-tree design: a packed push-pull graph, operation journals, per-render and per-root views, async resources, tracing, reclamation, and bindings to the React fork. |
 | [`packages/strata`](packages/strata/) + [`packages/reack-strata`](packages/reack-strata/) | A smaller branch/journal formulation. The graph stores committed state; React renders fold the operations belonging to their lanes over that base. |
 | [`packages/concurrent-solid-react`](packages/concurrent-solid-react/) | A minimum-evolution experiment based on Solid 2.0's double-buffered values, transitions, async graph state, and scheduler. It asks how much of an existing concurrent signals engine can be hosted by React. |
 | [`packages/cosignals-alt-a`](packages/cosignals-alt-a/) and [`packages/cosignals-alt-b`](packages/cosignals-alt-b/) | Independent implementations of the two arena specifications. They are valuable counterexamples for write-gate activation, overlays, per-world state, and fork size. |
@@ -54,7 +54,7 @@ README claims.
 | [`packages/cosignals-oracle`](packages/cosignals-oracle/) | A deliberately slow, obvious reference model, invariant checker, seeded schedule generator, shrinker, and lockstep engine referee. |
 | [`royale`](royale/) | The independent-rewrite tournament: a shared 25-case real-React battery, fork/library line counts, leak gates, fuzz requirements, and comparable benchmark adapters. |
 | [`daishi-concurrent-benchmark`](daishi-concurrent-benchmark/) | An independent suite of externally observable concurrent-store failure schedules. |
-| [`spec`](spec/) | The mechanism-free [`React Compliance Contract`](spec/react-compliance-contract.md), the cosignals spec, and the branching-store model. |
+| [`spec`](spec/) | The mechanism-free [`React Compliance Contract`](spec/react-compliance-contract.md), the cosignals-first-draft spec, and the branching-store model. |
 | [`research`](research/), [`plans`](plans/), [`reviews`](reviews/), [`design-loop`](design-loop/) | Source studies, measured results, implementation plans, adversarial reviews, and the multi-round design record. These explain why apparently simpler mechanisms were rejected. |
 
 Useful commands from the repository root:
@@ -62,9 +62,9 @@ Useful commands from the repository root:
 ```sh
 pnpm fork:build                                  # build the patched React
 pnpm fork:test                                   # run its batch-registry gate
-FRAMEWORK=cosignals pnpm -C harness conformance  # 179-case core contract
-pnpm -C harness bench --frameworks cosignals,alien-v3
-pnpm -C harness memory --frameworks cosignals,alien-v3
+FRAMEWORK=cosignals-first-draft pnpm -C harness conformance  # 179-case core contract
+pnpm -C harness bench --frameworks cosignals-first-draft,alien-v3
+pnpm -C harness memory --frameworks cosignals-first-draft,alien-v3
 pnpm -C harness typecheck
 pnpm play                                        # open the shared browser lab
 ```
@@ -78,7 +78,7 @@ cached function of signals. An **effect** is work that re-runs when the values i
 read may have changed.
 
 ```ts
-import { Atom, Computed, batch, effect } from 'cosignals';
+import { Atom, Computed, batch, effect } from 'cosignals-first-draft';
 
 const count = new Atom(1);
 const doubled = new Computed(() => count.state * 2);

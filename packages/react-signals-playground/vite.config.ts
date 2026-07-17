@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
-import { signalsDevtools } from 'signals-devtools/vite'
+import { signalsDevtools } from 'cosignals-devtools/vite'
 import { defineConfig, type Connect, type Plugin } from 'vite'
 import { DEFAULT_SEGMENT } from './src/shims/default-segment'
 
@@ -51,13 +51,13 @@ function redirectDirEntries(dirs: readonly string[]): Plugin {
 	}
 }
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
 	plugins: [
 		react(),
-		// Publishes the dev server's filesystem root so the fx2 devtools'
+		// Publishes the dev server's filesystem root so the cosignals devtools'
 		// stack-trace links open real files without anyone typing a project path.
 		signalsDevtools(),
-		redirectDirEntries(['/cosignals', '/alt-a', '/alt-b', '/solid-react', '/royale-fx2', '/royale-fx2-dalien', '/control']),
+		redirectDirEntries(['/cosignals', '/cosignals-arena', '/control']),
 	],
 	// MPA: every implementation is its own html entry under a named path;
 	// the root entry is only the redirect stub. Disabling the SPA fallback
@@ -66,12 +66,6 @@ export default defineConfig(({ mode }) => ({
 	server: { headers: COI_HEADERS },
 	preview: { headers: COI_HEADERS },
 	appType: 'mpa',
-	// concurrent-solid-react's vendored Solid core guards its dev-mode
-	// diagnostics behind the __DEV__ compile-time constant (see that
-	// package's globals.d.ts): diagnostics on for dev serve, off for builds.
-	define: {
-		__DEV__: JSON.stringify(mode !== 'production'),
-	},
 	optimizeDeps: {
 		// react/react-dom/scheduler resolve to the workspace's patched React
 		// build (pnpm override → link:vendor/react/build/oss-experimental).
@@ -92,14 +86,10 @@ export default defineConfig(({ mode }) => ({
 				// The bare-root redirect stub (static hosts; dev/preview 301 first).
 				root: entry('index.html'),
 				cosignals: entry('cosignals/index.html'),
-				'alt-a': entry('alt-a/index.html'),
-				'alt-b': entry('alt-b/index.html'),
-				'solid-react': entry('solid-react/index.html'),
-				'royale-fx2': entry('royale-fx2/index.html'),
-				'royale-fx2-dalien': entry('royale-fx2-dalien/index.html'),
+				'cosignals-arena': entry('cosignals-arena/index.html'),
 				// The vanilla-React control page (the battery's host-baseline group).
 				control: entry('control/index.html'),
 			},
 		},
 	},
-}))
+})

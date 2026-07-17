@@ -16,12 +16,12 @@ if (container === null) {
 	throw new Error('react-signals-playground: missing #root container')
 }
 
-// fx2 devtools, on the royale-fx2 page only. Renders the devtools launch
+// Signals devtools, on the cosignals pages only. Renders the devtools launch
 // button (a React component the devtools package ships); it lazy-loads the
 // panel on first open. Dynamically imported so default loads — and the
 // battery — never fetch the devtools. ?devtools=1 opens it on load.
-if (location.pathname.includes('royale-fx2')) {
-	const engine = location.pathname.includes('royale-fx2-dalien') ? 'dalien' : 'fx2'
+if (location.pathname.includes('cosignals')) {
+	const engine = location.pathname.includes('cosignals-arena') ? 'cosignals-arena' : 'cosignals'
 	const open = new URLSearchParams(location.search).has('devtools')
 	if (open) {
 		// ?devtools: attach the collector before the first render (top-level await),

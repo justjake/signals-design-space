@@ -26,7 +26,7 @@ import { kindClass } from './protocol.ts'
 
 /**
  * The adapter's view of a live node, by id. All reads are inert (see the
- * fx2 adapter). `undefined` from any method means the node is gone.
+ * cosignals adapter). `undefined` from any method means the node is gone.
  */
 export interface NodeProvider {
 	kind(id: NodeId): NodeKind | undefined
@@ -107,11 +107,6 @@ export class Collector implements Backend {
 		nodeKind: NodeKind | undefined,
 		data: Record<string, unknown>,
 	): EventId {
-		// With the React render channel on, bippy is the source of truth for
-		// renders (real fiber tree + cascade causality), so drop the engine's own
-		// render events — they carry a node (the watcher); bippy's carry none — to
-		// avoid double-counting. Returning 0 makes the paired endSpan a no-op.
-		if (this.reactRenderActive && kind === 'render' && node !== undefined) return 0 as EventId
 		const id = this.nextId++ as EventId
 		this.totalEvents++
 		const evt: DevtoolsEvent = {
@@ -219,22 +214,10 @@ export class Collector implements Backend {
 		return this.hotOn
 	}
 
-	// ── React render channel (bippy) ───────────────────────────────────────
-	// Render causality is a core feature, not a mode: when an adapter installs
-	// the bippy observer (always, in a real attach), it marks the channel active
-	// and fx2's own render events are dropped in record() so bippy's fiber-
-	// accurate ones are the single render source. A bare Collector (unit tests)
-	// leaves it inactive, so those keep whatever renders they record.
-
-	private reactRenderActive = false
-
-	/** Adapter API: mark bippy the render source (fx2 renders drop from here on). */
-	setReactRenderActive(): void {
-		this.reactRenderActive = true
-	}
-
-	/** The most recent state-change event (a write or a notify), so the render
-	 * observer can root a cascade at what triggered the pass. */
+	/**
+	 * The most recent state-change event (a write or a notify), so the render
+	 * observer can root a cascade at what triggered the pass.
+	 */
 	latestSignalCause(): EventId {
 		return this.events({ classes: ['write', 'notify'] }, 1)[0]?.id ?? (0 as EventId)
 	}

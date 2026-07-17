@@ -6,7 +6,7 @@
  * that structurally — diff each committed fiber against its previous version;
  * a component with no changed props/state/hooks/context re-rendered only because
  * an ancestor did (the cascade). bippy reads React's fiber tree through the
- * DevTools global hook, so this observes React directly and never touches fx2.
+ * DevTools global hook, so this observes React directly and never touches cosignals.
  *
  * On each commit we walk the fibers that rendered, top-down, and record one
  * `render` event per component with real causality: a child chains to its
@@ -15,9 +15,10 @@
  * of "App re-rendered its children" reads as one tree rooted at the click,
  * never a dozen uncaused renders.
  *
- * This is a second, independent channel; it does not use fx2 node identity —
- * render events carry the component name + fiber id in `data` and relate purely
- * through cause pointers.
+ * This is a second, independent channel. Render events carry the component
+ * name and fiber id in `data` and relate through cause pointers. The adapter
+ * may also use committed hook refs to label its watcher nodes; Bippy still
+ * does not inspect or mutate the signal graph.
  */
 import {
 	getDisplayName,
@@ -37,8 +38,10 @@ import {
 import type { Collector } from './collector.ts'
 import type { EventId } from './protocol.ts'
 
-/** Why a fiber rendered, in the order React resolves it: its own change wins,
- * else it's a parent-driven cascade. Mirrors React DevTools' getChangeDescription. */
+/**
+ * Why a fiber rendered, in the order React resolves it: its own change wins,
+ * otherwise it is a parent-driven cascade.
+ */
 function renderReason(fiber: Fiber, phase: RenderPhase, parentRendered: boolean): string {
 	// A first render (mount phase, or no previous fiber to diff against) is a mount.
 	if (phase === 'mount' || fiber.alternate === null) return 'mounted'
@@ -68,7 +71,11 @@ function renderReason(fiber: Fiber, phase: RenderPhase, parentRendered: boolean)
  * the shared DevTools hook once, so detach flips a local flag rather than
  * un-patching.
  */
-export function attachReactRenderTracer(collector: Collector, latestSignalCause: () => EventId): () => void {
+export function attachReactRenderTracer(
+	collector: Collector,
+	latestSignalCause: () => EventId,
+	labelWatcher: (watcher: object, component: string) => void,
+): () => void {
 	let active = true
 	instrument(
 		secure({
@@ -93,6 +100,21 @@ export function attachReactRenderTracer(collector: Collector, latestSignalCause:
 				const rendered = new Map<number, EventId>()
 				traverseRenderedFibers(root, (fiber: Fiber, phase: RenderPhase) => {
 					if (phase === 'unmount' || !isCompositeFiber(fiber)) return
+					const component = getDisplayName(fiber) ?? 'Anonymous'
+					// useValue keeps its subscription state in a ref. Layout effects
+					// install the watcher before React reports this commit, so the
+					// committed hook list provides the component-to-watcher relation
+					// without owner-stack capture in the signal bindings.
+					traverseState(fiber, (state) => {
+						const ref = state?.memoizedState
+						if (ref === null || typeof ref !== 'object' || !('current' in ref)) return
+						const current = ref.current
+						if (current === null || typeof current !== 'object' || !('watcher' in current)) return
+						const watcher = current.watcher
+						if (watcher !== null && typeof watcher === 'object') {
+							labelWatcher(watcher, component)
+						}
+					})
 					// Nearest ancestor that also rendered this commit → the cascade parent.
 					let cause: EventId = 0 as EventId
 					for (let p = fiber.return; p !== null && p !== undefined; p = p.return) {
@@ -108,7 +130,7 @@ export function attachReactRenderTracer(collector: Collector, latestSignalCause:
 					if (!parentRendered) cause = latestSignalCause()
 					const timings = getTimings(fiber)
 					const id = collector.record('render', undefined, cause, undefined, {
-						component: getDisplayName(fiber) ?? 'Anonymous',
+						component,
 						fiberId: getFiberId(fiber),
 						reason: renderReason(fiber, phase, parentRendered),
 						took: Math.round((timings.selfTime ?? 0) * 1000),

@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 8.8
 favorite thing: The 167-line raw-facts seam and predicate-based histories keep React policy-free while preserving updater-order replay.
 least favorite thing: A yielded pass can still commit a pre-urgent value when it first discovers an otherwise unsubscribed atom, so restart correctness depends on prior subscription coverage.

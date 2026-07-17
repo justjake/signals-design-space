@@ -1,9 +1,6 @@
 /**
  * RCC-RT4 in BOTH variants. Each implementation runs exactly the variant it
- * is ruled (or discovered) to follow and skips the other with the ruling as
- * the annotation — see the manifest's implementation table for provenance:
- * cosignals → newest (scenario R15); alt-a/alt-b → drafts-hidden
- * (ambient-W0); solid-react and royale-fx2 → drafts-hidden.
+ * is ruled to follow and skips the other with the ruling as the annotation.
  */
 import { expect, test } from '../fixtures'
 import { applyExpectation } from '../expectations'

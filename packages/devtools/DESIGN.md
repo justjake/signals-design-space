@@ -1,6 +1,8 @@
 # Signals Devtools — design
 
-Devtools for the signals libraries in this repo (cosignals, signals-royale-fx2 /
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
+Devtools for the signals libraries in this repo (cosignals-first-draft, signals-royale-fx2 /
 fx2-dalien, strata, concurrent-solid-react). Two hosts, one React UI:
 
 - **Chrome extension** — a devtools panel next to Elements/Console.
@@ -29,12 +31,12 @@ All tracers in this repo converge on the same causal shape:
 - **Event** — `{ id, kind, cause, node, data }` where `cause` is the id of
   the provoking event (`0`/undefined = operation root). `causeChain(id)` walks
   to the root. Sources:
-  - cosignals `Tracer` (packed Int32Array ring/session, 31 kinds, µs deltas)
+  - cosignals-first-draft `Tracer` (packed Int32Array ring/session, 31 kinds, µs deltas)
   - fx2 / fx2-dalien `tracer.ts` (object ring, `{id, kind, cause, label, data}`)
   - strata `CausalityLog` (object ring, resolved target names)
   - cosignals-oracle `ModelEvent` (the canonical field-complete schema)
 - **Graph** — enumerable nodes with kinds and labels, plus dep→sub edges:
-  - cosignals: `engine.idToInternals` / `dependencyEdges()` / `watchers` /
+  - cosignals-first-draft: `engine.idToInternals` / `dependencyEdges()` / `watchers` /
     `idToSignalEffect`; kinds atom / computed / watcher / signal-effect;
     `graphviz.ts` already serializes this to DOT.
   - fx2: `Flag` bits encode node kind; `Link` lists give edges; `label` field.
@@ -98,7 +100,7 @@ a BFS over the live graph is cheap in-page; shipping 100k nodes is not.
   *visible node set only* (`node-touched`, `edges-changed`, `node-removed`);
   the adapter filters at the source.
 - **Events**: batched and flushed on microtask/frame — never one postMessage
-  per trace record. Packed tracers (cosignals) can ship sealed Int32Array
+  per trace record. Packed tracers (cosignals-first-draft) can ship sealed Int32Array
   chunks + label table and be decoded frontend-side, which keeps the
   extension path cheap under load. Node-scoped subscriptions (for the
   inspector's event drawer) push the node-id filter down to the adapter.
@@ -138,7 +140,7 @@ Naming: user-facing UI says **name** (the node's label); the protocol field is
 Decision: event `kind` is **passed through per-library**, not mapped onto a
 lowest-common-denominator enum. A small `kindClass(kind): 'origin' | 'write' |
 'eval' | 'notify' | 'effect' | 'batch' | 'render' | 'system'` function in the
-protocol gives the UI enough to color/filter without flattening cosignals'
+protocol gives the UI enough to color/filter without flattening cosignals-first-draft's
 31-kind vocabulary into mush.
 
 ### Origins: DOM events and stacks
@@ -321,7 +323,7 @@ subscription covers only visible nodes, so this costs nothing at 100k.
 
 Effects and watchers are usually owned by a component (`useSignalEffect`
 inside `<TodoFooter>`). Adapters populate `GraphNode.owner` where they can:
-cosignals watchers already carry root + name; React-side hooks capture the
+cosignals-first-draft watchers already carry root + name; React-side hooks capture the
 owning component name at creation (from the fiber, the way React DevTools
 resolves display names — `vendor/react/packages/react-devtools-shared` is the
 reference). The UI renders owned nodes as `document.title · <TodoFooter>`,
@@ -643,7 +645,7 @@ started it. No connection, no download beyond the clipboard.
 - **Operation profile**: flame view of one operation (evals nested by cause,
   sized by µs) — the trace already contains the whole flame.
 - **Time scrubbing**: pick an event, reconstruct node values as-of that point
-  (cosignals' LOGGED overlay retains history; others show last-known).
+  (cosignals-first-draft's LOGGED overlay retains history; others show last-known).
 - **World / draft lanes**: timeline lanes for forked worlds and drafts
   (`draft-open`→commit/discard, render passes pinned to worlds).
 - **Trace export/import**: save session chunks + label table to a file; open
@@ -677,7 +679,7 @@ trace it's observing), and **ship a Chrome DevTools panel**.
 - **`protocol/`** — pure data, no DOM, no signals: `GraphNode` / `GraphEdge` /
   `DevtoolsEvent`, `kindClass()`, the `Backend` interface, wire messages. This
   is the firewall: it's modeled on the *causal shape* (entry `{id, kind, cause,
-  node, data, t}`), not on fx2's ~5 kinds nor cosignals' ~31. Unknown kinds
+  node, data, t}`), not on fx2's ~5 kinds nor cosignals-first-draft's ~31. Unknown kinds
   pass through to a default class; the panel renders what's present and
   degrades for what isn't.
 - **`collector/` (in-page, plain JS, zero signals)** — owns the ring buffer of
@@ -688,7 +690,7 @@ trace it's observing), and **ship a Chrome DevTools panel**.
   inspects the same engine.
 - **adapters** — one thin module per library plugging its seam into the
   collector: kind mapping + synthesis rules, `Flag`→kind, label reader, value
-  peek, dep/sub walkers. fx2's adapter is richest; a second (cosignals)
+  peek, dep/sub walkers. fx2's adapter is richest; a second (cosignals-first-draft)
   lands early to keep the protocol honest.
 - **`panel/` (React, plain-React state)** — the mockups become components;
   state via `useReducer`/`useSyncExternalStore` over the collector store.
@@ -817,7 +819,7 @@ MV3, patterned on `vendor/react`'s `react-devtools-extensions` /
 `panel/` app; an injected page hook runs the collector; a content script
 bridges page ↔ panel (`window.postMessage` ↔ `chrome.runtime` port). Entries
 batch per frame across the boundary; values cross as structured-clone-safe
-previews (cosignals' packed ring can ship raw and decode panel-side later).
+previews (cosignals-first-draft's packed ring can ship raw and decode panel-side later).
 The panel is transport-agnostic — the inline host wires the same components to
 an in-realm `Backend`.
 
@@ -831,5 +833,5 @@ an in-realm `Backend`.
 2. **`panel/` + inline host** — mockups → components on the live collector.
    The demoable milestone.
 3. **Chrome extension shell** — page hook + content-script bridge.
-4. **Second adapter (cosignals) + copy-as-markdown serializer** — proves the
+4. **Second adapter (cosignals-first-draft) + copy-as-markdown serializer** — proves the
    protocol isn't fx2-shaped and lands the AI handoff.

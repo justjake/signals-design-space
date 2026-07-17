@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 8.5
 favorite thing: Worlds as pure visibility predicates (cutoff seq + deferred-batch list) folded over per-signal write histories is the cleanest zero-table formulation of the concurrent model in the field, and it made per-root committed views nearly free.
 least favorite thing: The latest() context rule shipped broken in two contexts (canonical computed evaluations went permanently stale, render bodies tore) and was only caught by the judge, after the report had claimed it done.

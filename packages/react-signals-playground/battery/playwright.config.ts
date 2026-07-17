@@ -2,7 +2,7 @@
  * The verification battery's Playwright config. One project per
  * implementation entry, all running the same specs against a fresh
  * production build served by vite preview — so a report line reads
- * `RCC-RT5 [alt-b]` and CI never depends on a checked-in dist/.
+ * `RCC-RT5 [cosignals-arena]` and CI never depends on a checked-in dist/.
  *
  * Determinism decisions:
  * - Bundled Chromium only (no channel: 'chrome'): the browser version is
@@ -59,7 +59,7 @@ export default defineConfig<{ entry: BatteryEntry }>({
 		// Fresh build every run: the battery verifies source, never a stale dist.
 		command: `pnpm build && pnpm preview --port ${PREVIEW_PORT} --strictPort`,
 		// The bare root 301s to the default implementation; poll a real page.
-		url: `http://localhost:${PREVIEW_PORT}/royale-fx2/`,
+		url: `http://localhost:${PREVIEW_PORT}/cosignals/`,
 		cwd: packageDir,
 		reuseExistingServer: !process.env.CI,
 		timeout: 180_000,

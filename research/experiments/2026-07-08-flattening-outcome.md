@@ -74,9 +74,9 @@ revalidation cost.
 
 ## Gates at completion
 
-cosignals 362 passed | 1 skipped across 30 files (bytecode 46 with the
+cosignals-first-draft 362 passed | 1 skipped across 30 files (bytecode 46 with the
 final re-pinned table; docs-gate 6; leak-audit; reclaim probes; the frozen
 fuzz corpora lockstep-green; the battery including the owner's
 urgent-write-to-abandoned-branch pin), cosignals-react 72 against the real
-fork, conformance 179 ×2 (cosignals, cosignals-concurrent), oracle 82 | 1
+fork, conformance 179 ×2 (cosignals-first-draft, cosignals-concurrent), oracle 82 | 1
 untouched, typecheck ×3 clean.

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'signals-royale-fx2'
-import { attachFx2Devtools } from '../src/fx2.ts'
+import { createAtom, createComputed, effect, set } from 'cosignals'
+import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { buildSnapshot, SnapshotBackend } from '../src/extension/snapshot.ts'
 import { logRows, nodeRows, inspectorModel } from '../src/panel/viewmodel.ts'
 
 describe('extension bridge: snapshot round-trip', () => {
 	it('serializes a live Backend and serves identical queries panel-side', () => {
-		const dt = attachFx2Devtools()
+		const dt = attachCosignalsDevtools()
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })

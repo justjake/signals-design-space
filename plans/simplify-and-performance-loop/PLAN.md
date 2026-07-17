@@ -1,5 +1,7 @@
 # FX2 simplify-and-performance loop
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 Give this file to Codex Ultra as the controller for a `/goal` or `/loop`. Ultra
 keeps the loop moving; it does not choose the changes.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'signals-royale-fx2'
-import { attachFx2Devtools } from '../src/fx2.ts'
+import { createAtom, createComputed, effect, set } from 'cosignals'
+import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { inspectorModel, logRows, nodeRows } from '../src/panel/viewmodel.ts'
 
 function clock() {
@@ -10,7 +10,7 @@ function clock() {
 
 describe('panel view-model', () => {
 	it('derives log rows, node rows, and an inspector model from live data', () => {
-		const dt = attachFx2Devtools({ now: clock() })
+		const dt = attachCosignalsDevtools({ now: clock() })
 		const { collector } = dt
 		try {
 			const count = createAtom(1, { label: 'count' })

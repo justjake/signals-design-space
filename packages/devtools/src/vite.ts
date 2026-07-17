@@ -10,13 +10,13 @@ import type { Plugin } from 'vite'
  * Serve-only: a production build has no local filesystem to open.
  *
  *   // vite.config.ts
- *   import { signalsDevtools } from 'signals-devtools/vite'
+ *   import { signalsDevtools } from 'cosignals-devtools/vite'
  *   export default { plugins: [signalsDevtools()] }
  */
 export function signalsDevtools(): Plugin {
 	let root = ''
 	return {
-		name: 'signals-devtools',
+		name: 'cosignals-devtools',
 		apply: 'serve',
 		configResolved(config) {
 			root = config.root

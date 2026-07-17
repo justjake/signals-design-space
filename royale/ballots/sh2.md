@@ -1,4 +1,6 @@
 ## judge packages/signals-royale-fh1
+
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
 score out of 10: 9.1
 favorite thing: Worlds as visibility predicates over one versioned write history make the 167-line seam remarkably clean.
 least favorite thing: The roughly 1.95x Alien geomean and resumed-pass staleness caveat keep the elegant model from feeling completely closed.

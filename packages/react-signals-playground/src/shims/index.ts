@@ -44,7 +44,7 @@ export const useComputed = impl.useComputed
 export const useSignalEffect = impl.useSignalEffect
 export const startSignalTransition = impl.startSignalTransition
 export const transitionHoldStyle = impl.transitionHoldStyle
-// fx2-family only; undefined on engines without a first-class async primitive.
+// cosignals-family only; undefined on engines without a first-class async primitive.
 export const createSuspending = impl.createSuspending
 
 // The implementation table rides along for the app's tab bar: exporting it

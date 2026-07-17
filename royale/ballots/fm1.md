@@ -1,5 +1,7 @@
 # Peer ballot — filed by fm1
 
+> Historical naming: `signals-royale-fx2` is now named `cosignals`.
+
 ## judge packages/signals-royale-fh1
 score out of 10: 9
 favorite thing: Worlds as pure visibility predicates (cutoff seq + deferred-batch list) folded over per-signal write histories is the cleanest formulation of the same rebase-log idea I built, with genuinely zero world tables.
