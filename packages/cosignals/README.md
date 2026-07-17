@@ -32,7 +32,8 @@ const doubled = createComputed(() => count.get() * 2)
 
 function Counter() {
   const n = useSignal(count) // read and subscribe: re-renders on change
-  const d = useSignal(doubled)
+  // The effect subscribes to doubled by itself: it reacts to a signal
+  // this component never renders.
   useSignalEffect(
     () => ({
       watch: doubled,
@@ -42,11 +43,7 @@ function Counter() {
     }),
     [],
   )
-  return (
-    <button onClick={() => count.update((c) => c + 1)}>
-      {n} doubled is {d}
-    </button>
-  )
+  return <button onClick={() => count.update((c) => c + 1)}>{n}</button>
 }
 
 const root = wrapCreateRoot(createRoot)(document.getElementById("root")!)
@@ -261,6 +258,12 @@ A component-owned effect. The factory you pass works like a `useEffect`
 body: it runs on mount and again whenever `deps` change (disposing the
 effect it previously built, so captured props and state stay fresh) and
 returns the spec: `{ watch, run, equals?, label? }`.
+
+The effect subscribes to its watched signals directly, so a component
+can react to signals it never renders. Reaching the same signal through
+`useEffect` would mean reading it with `useSignal` and listing the
+value in deps — subscribing the whole component and re-rendering it
+just to feed the effect.
 
 `watch` takes three shapes. Watch one signal — `run` receives its
 value:
