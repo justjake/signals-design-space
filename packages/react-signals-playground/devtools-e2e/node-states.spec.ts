@@ -50,6 +50,32 @@ test('suspended node: suspend-async surfaces a suspended node with a suspended-a
 	await panel.locator('.nodelist tbody tr').filter({ hasText: 'asyncData' }).first().click()
 	await expect(panel.locator('.inspector')).toContainText('suspended at')
 
+	// Selection must not recolor a status node's border to its kind color: a
+	// selected suspended computed stays suspension-blue, with the kind color
+	// (teal) moved to the halo. Guards a regression that recurred across the
+	// focus and selection styling. Colors are probed live so it's theme-robust.
+	const border = await panel.locator('g.node', { hasText: 'asyncData' }).first().evaluate((el) => {
+		const root = el.closest('.signals-devtools-root') as HTMLElement
+		const probe = (v: string) => {
+			const d = document.createElement('div')
+			d.style.color = `var(${v})`
+			root.appendChild(d)
+			const c = getComputedStyle(d).color
+			d.remove()
+			return c
+		}
+		const rect = el.querySelector('rect:not(.ring)') as SVGRectElement
+		return {
+			selected: el.classList.contains('selected'),
+			stroke: getComputedStyle(rect).stroke,
+			suspended: probe('--suspended'),
+			computed: probe('--computed'),
+		}
+	})
+	expect(border.selected).toBe(true)
+	expect(border.stroke).toBe(border.suspended)
+	expect(border.stroke).not.toBe(border.computed)
+
 	// Resolving clears it: the value renders 'loaded'.
 	await page.getByTestId('arm-async').evaluate((el) => (el as HTMLButtonElement).click())
 	await expect(page.getByTestId('async-value')).toHaveText('loaded')

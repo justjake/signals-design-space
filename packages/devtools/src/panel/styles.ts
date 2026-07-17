@@ -257,6 +257,14 @@ export const PANEL_CSS = `
   .node.selected.computed rect { stroke: var(--computed); }
   .node.selected.watcher rect { stroke: var(--watcher); }
   .node.selected.effect rect { stroke: var(--effect); }
+  /* A selected node that's errored or suspended keeps its STATUS color on the
+     border — a selected suspended computed stays suspension-blue, not teal — and
+     moves the halo to the node's own kind color (a computed's teal), so selection
+     reads as "this one" without masking the state. After the per-kind selected
+     rules so it wins at equal specificity. */
+  .node.selected.suspended rect { stroke: var(--suspended); stroke-width: 2; }
+  .node.selected.error rect { stroke: var(--danger); stroke-width: 2; }
+  .node.selected.suspended rect, .node.selected.error rect { filter: drop-shadow(0 0 6px var(--nc)); }
   /* A mouse click focuses the node but doesn't match :focus-visible, so the
      browser's default 5px outline (a blue box that covered the kind border)
      showed. Suppress it on pointer focus — selection already indicates the node
