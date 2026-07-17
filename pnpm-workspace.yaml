@@ -4,10 +4,3 @@ packages:
   - packages/*
 onlyBuiltDependencies:
   - esbuild
-# pnpm 10 reads overrides here, not from package.json's "pnpm" field (which it
-# now ignores). Pin React and friends to the from-source build the whole
-# workspace links against.
-overrides:
-  react: link:vendor/react/build/oss-experimental/react
-  react-dom: link:vendor/react/build/oss-experimental/react-dom
-  scheduler: link:vendor/react/build/oss-experimental/scheduler

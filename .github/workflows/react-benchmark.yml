@@ -3,11 +3,9 @@
 # node and jsdom scenarios for fan-out, transitions under load, and mounting.
 # The results measure JavaScript work without browser paint.
 #
-# Every contender runs on the same React build: the patched fork in
-# vendor/react. One React version for everyone is the fairness rule.
-# The ~13s fork build is cached keyed on the vendor/react submodule SHA;
-# the fork's own toolchain pins node 20 (vendor/react/.nvmrc), so cache
-# misses build under node 20 and everything else runs under node 24.
+# Every contender runs on the same React build: the workspace's pinned
+# stable react/react-dom/scheduler from the registry. One React version
+# for everyone is the fairness rule.
 #
 # Design and rationale: research/react-seam-benchmark-proposal.md.
 
@@ -55,38 +53,7 @@ jobs:
         run: |
           git submodule update --init \
             packages/dalien-signals \
-            upstream-alien-signals \
-            vendor/react
-
-      - name: Compute react fork cache key
-        id: fork
-        run: echo "sha=$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      # fork/build-react.sh leaves the built packages (plus the node_modules
-      # symlinks react-dom needs for resolution) under build/oss-experimental,
-      # which is exactly what the root package.json link: overrides consume —
-      # so that directory is the whole cache.
-      - name: Restore react fork build
-        id: fork-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/react/build/oss-experimental
-          key: react-fork-${{ runner.os }}-${{ steps.fork.outputs.sha }}
-
-      - name: Set up node for the react fork build
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: vendor/react/.nvmrc
-
-      # The fork's rollup build runs out of vendor/react's own node_modules
-      # (yarn 1, preinstalled on the runner), which build-react.sh assumes
-      # is already populated.
-      - name: Build react fork
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        run: |
-          (cd vendor/react && yarn install --frozen-lockfile)
-          bash fork/build-react.sh
+            upstream-alien-signals
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -110,8 +77,7 @@ jobs:
           pnpm install --ignore-workspace
           node build.js
 
-      # After the react fork cache step and the linked packages' builds:
-      # pnpm resolves the react overrides and materializes link: deps at
+      # After the linked packages' builds: pnpm materializes link: deps at
       # install time, so their build outputs must exist first.
       - name: Install workspace
         run: pnpm install --no-frozen-lockfile

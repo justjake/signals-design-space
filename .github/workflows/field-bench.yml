@@ -16,8 +16,8 @@
 #                 gates on absolute thresholds. Raw JSON/CSV go to artifacts;
 #                 the ratio table goes to the job summary.
 #   react-seam  — optional (workflow_dispatch input): the react-seam-bench
-#                 field against the vendored React fork. Needs the fork build,
-#                 so it inits vendor/react and runs fork/build-react.sh first.
+#                 field against the workspace's pinned stable React from the
+#                 registry.
 #
 # Submodules: checkout uses submodules: false, then a targeted
 # `git submodule update --init` for exactly what each job needs —
@@ -33,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       react_seam:
-        description: 'Also run react-seam-bench (builds the vendored React fork)'
+        description: 'Also run react-seam-bench'
         type: boolean
         required: false
         default: false
@@ -117,8 +117,6 @@ jobs:
           pnpm run build
 
       # Filtered install from the root: the harness dependency closure only.
-      # A full unfiltered install would materialize the react link: overrides
-      # that point into the (absent) vendor/react fork build.
       - name: Install (root, filtered to the harness closure)
         run: pnpm install --frozen-lockfile --filter "@lab/harness..."
 
@@ -217,8 +215,8 @@ jobs:
             shapes.log
           if-no-files-found: error
 
-  # Optional: the React-seam field. Heavy (yarn install + React fork build),
-  # so it only runs when explicitly requested via the dispatch input.
+  # Optional: the React-seam field. Only runs when explicitly requested via
+  # the dispatch input.
   react-seam:
     needs: conformance
     if: github.event_name == 'workflow_dispatch' && inputs.react_seam
@@ -229,10 +227,10 @@ jobs:
         with:
           submodules: false
 
-      - name: Init submodules (harness set + vendor/react for the fork build)
+      - name: Init submodules (harness set)
         run: |
           # shellcheck disable=SC2086  # HARNESS_SUBMODULES is a deliberate space-separated list
-          git submodule update --init $HARNESS_SUBMODULES vendor/react
+          git submodule update --init $HARNESS_SUBMODULES
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -248,17 +246,7 @@ jobs:
           pnpm install --ignore-workspace --frozen-lockfile
           pnpm run build
 
-      # The React fork build (fork/build-react.sh) runs the fork's own rollup
-      # pipeline; it needs vendor/react's yarn dependency tree.
-      - name: Install vendor/react deps (yarn)
-        working-directory: vendor/react
-        run: yarn install --frozen-lockfile
-
-      - name: Build the React fork (vendor/react -> build/oss-experimental)
-        run: fork/build-react.sh
-
-      # Full root install: with the fork build present, the react link:
-      # overrides resolve. Fall back to non-frozen in case a contender-only
+      # Full root install. Fall back to non-frozen in case a contender-only
       # manifest change landed ahead of its lockfile update.
       - name: Install (root, full)
         run: |

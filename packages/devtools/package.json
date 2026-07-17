@@ -33,6 +33,8 @@
 		"cosignals-arena": "workspace:*",
 		"esbuild": "^0.28.0",
 		"jsdom": "^26.0.0",
+		"react": "19.2.7",
+		"react-dom": "19.2.7",
 		"typescript": "7.0.2",
 		"vite": "8.1.0",
 		"vitest": "^3.0.0"

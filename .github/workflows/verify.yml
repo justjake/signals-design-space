@@ -42,44 +42,8 @@ jobs:
       - name: Trace top-tier compilation, inlining, and steady deopts
         run: pnpm inlining
 
-  react-fork:
-    name: prepare React fork
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      cache-key: ${{ steps.fork.outputs.key }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Init React submodule
-        run: git submodule update --init vendor/react
-
-      - name: Compute React build cache key
-        id: fork
-        run: echo "key=react-fork-${RUNNER_OS}-$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore React fork build
-        id: fork-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/react/build/oss-experimental
-          key: ${{ steps.fork.outputs.key }}
-
-      - name: Set up React build Node
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: vendor/react/.nvmrc
-
-      - name: Build React fork
-        if: steps.fork-cache.outputs.cache-hit != 'true'
-        run: |
-          yarn --cwd vendor/react install --frozen-lockfile
-          fork/build-react.sh
-
   react-unit:
     name: concurrent signals unit tests
-    needs: react-fork
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -87,13 +51,6 @@ jobs:
 
       - name: Init workspace source submodules
         run: git submodule update --init packages/dalien-signals upstream-alien-signals
-
-      - name: Restore React fork build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/react/build/oss-experimental
-          key: ${{ needs.react-fork.outputs.cache-key }}
-          fail-on-cache-miss: true
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -115,9 +72,61 @@ jobs:
           pnpm --dir packages/cosignals test
           pnpm --dir packages/cosignals-arena test
 
+  react-matrix:
+    name: cosignals unit tests (React ${{ matrix.react }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each entry pairs a react/react-dom release line with the scheduler
+        # version that react-dom line depends on (npm view react-dom@X
+        # dependencies). Keep the pairs in sync when bumping lines.
+        include:
+          - react: 19.0.7
+            scheduler: 0.25.0
+          - react: 19.1.8
+            scheduler: 0.26.0
+          - react: 19.2.7
+            scheduler: 0.27.0
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Init workspace source submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install cosignals dependencies
+        run: pnpm install --frozen-lockfile --filter "cosignals..."
+
+      # Swap in the matrix React after the frozen-lockfile install; this
+      # rewrites packages/cosignals/package.json and the lockfile in the
+      # runner's checkout only, so no per-version lockfiles are committed.
+      - name: Install React ${{ matrix.react }}
+        run: |
+          pnpm --filter cosignals add -D \
+            react@${{ matrix.react }} \
+            react-dom@${{ matrix.react }} \
+            scheduler@${{ matrix.scheduler }}
+
+      - name: Report installed React versions
+        working-directory: packages/cosignals
+        run: |
+          node -p "['react', 'react-dom', 'scheduler'].map((m) => m + ' ' + require(m + '/package.json').version).join('\n')"
+
+      - name: Run cosignals suite on React ${{ matrix.react }}
+        run: pnpm --dir packages/cosignals test
+
   browser:
     name: browser battery (Chromium)
-    needs: react-fork
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -125,13 +134,6 @@ jobs:
 
       - name: Init workspace source submodules
         run: git submodule update --init packages/dalien-signals upstream-alien-signals
-
-      - name: Restore React fork build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/react/build/oss-experimental
-          key: ${{ needs.react-fork.outputs.cache-key }}
-          fail-on-cache-miss: true
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:

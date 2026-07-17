@@ -17,8 +17,8 @@
 		"cosignals": "workspace:*",
 		"dalien-signals": "link:../dalien-signals",
 		"jsdom": "^26.1.0",
-		"react": "*",
-		"react-dom": "*"
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",

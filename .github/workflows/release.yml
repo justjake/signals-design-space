@@ -47,32 +47,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Initialize the React source used by development tests
-        run: git submodule update --init vendor/react
-
-      - name: Compute React build cache key
-        id: react
-        run: echo "key=react-fork-${RUNNER_OS}-$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore React build
-        id: react-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/react/build/oss-experimental
-          key: ${{ steps.react.outputs.key }}
-
-      - name: Set up React build Node
-        if: steps.react-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: vendor/react/.nvmrc
-
-      - name: Build React
-        if: steps.react-cache.outputs.cache-hit != 'true'
-        run: |
-          yarn --cwd vendor/react install --frozen-lockfile
-          fork/build-react.sh
-
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 10.33.0
