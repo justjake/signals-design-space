@@ -230,7 +230,18 @@ export const PANEL_CSS = `
   .node.computed .glyph { fill: var(--computed); }
   .node.watcher .glyph { fill: var(--watcher); }
   .node.effect .glyph { fill: var(--effect); }
-  .node.selected rect { stroke: var(--computed); stroke-width: 1.5; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--computed) 45%, transparent)); }
+  /* Selection keeps the node's kind color — brighter (full saturation vs the
+     muted 55% default) and bolder, with a neutral halo — so a selected watcher
+     still reads purple, not blue. Recoloring the stroke to --computed made every
+     selected node look like a computed. */
+  .node.selected rect { stroke-width: 2; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--base05) 30%, transparent)); }
+  .node.selected.atom rect { stroke: var(--atom); }
+  .node.selected.computed rect { stroke: var(--computed); }
+  .node.selected.watcher rect { stroke: var(--watcher); }
+  .node.selected.effect rect { stroke: var(--effect); }
+  /* Focus ring sits clearly outside the node (offset), so it never covers the
+     kind-colored border the way a 1px-offset ring did. */
+  .node:focus-visible { outline-offset: 4px; border-radius: 6px; }
   .node.suspended rect { stroke: var(--suspended); stroke-dasharray: 5 3; }
   .node.suspended .glyph, .node.suspended .sub, .node.suspended .status { fill: var(--suspended); }
   .node.error rect { stroke: var(--danger); stroke-width: 1.5; }
