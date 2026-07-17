@@ -20,10 +20,11 @@ const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip
 	{ key: 'compute', label: 'recompute', sw: 'var(--computed)', classes: ['compute'], tip: 'Recompute: a computed re-ran its function.' },
 	{ key: 'render', label: 'render', sw: 'var(--watcher)', classes: ['notify', 'render'], tip: 'Rendering: notify (a watcher was told its inputs changed) and render (a render pass, start to commit).' },
 	{ key: 'effect', label: 'effect', sw: 'var(--effect)', classes: ['effect'], tip: 'Effects — code that runs after changes commit: effect() (library) and useSignalEffect (component).' },
-	{ key: 'internals', label: 'internals', sw: 'var(--system)', classes: ['system'], tip: 'Library bookkeeping with no user intent behind it. Off by default. Batch begins and transitions stay visible — they are structure, not noise.' },
-	{ key: 'hot', label: 'hot', sw: 'var(--hot)', classes: ['hot'], tip: 'The engine\'s internal steps, recorded only while this is on: propagate (a change marks what it reaches stale), check (a read confirms whether inputs really changed), pull (a stale computed re-evaluates). Very high volume; off by default.' },
+	{ key: 'hot', label: 'internals', sw: 'var(--hot)', classes: ['hot'], tip: 'The engine\'s low-level algorithm steps, recorded only while this is on (zero cost otherwise): propagate (a change marks what it reaches stale) and check (a read confirms whether inputs really changed). These are a deeper view of the same work the events above already summarize — very high volume, for debugging the engine itself.' },
 ]
-const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async']
+// Structural kinds (origin/error/batch/async) and any unclassified kind
+// (system) are always shown — they are never noise and have no toggle.
+const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async', 'system']
 
 /** Per-kind tooltip text for the row chips. Unknown kinds fall back to a
  * generic error/verbatim hint so a future kind still explains itself. */

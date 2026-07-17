@@ -390,9 +390,16 @@ export function attachEngineDevtools(
 	// is on (collector.setHotMode), so the disabled cost stays the engine's own
 	// per-site null check. Each hot event carries the node's registered id and
 	// the step string — the ring never holds a node, same as every other event.
+	// A `check` fires during a read, which often has no signal operation in scope
+	// (currentCause is 0), so fall its cause back to the latest state change — the
+	// write whose downstream re-render triggered the read — so hot steps group
+	// under the operation instead of piling up as uncaused roots.
 	collector.setHotSource((on) =>
 		engine.setHotTracer(
-			on ? (node, step, cause) => void collector.record(step, register(node), (cause ?? 0) as EventId, kindOf(node), {}) : null,
+			on
+				? (node, step, cause) =>
+						void collector.record(step, register(node), ((cause || collector.latestSignalCause()) ?? 0) as EventId, kindOf(node), {})
+				: null,
 		),
 	)
 
