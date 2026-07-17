@@ -394,7 +394,7 @@ export function GraphView({
 										</td>
 										<td>{n.kind}</td>
 										<td className="dimtxt" style={n.status === 'error' ? { color: 'var(--danger)' } : n.status === 'suspended' ? { color: 'var(--suspended)' } : undefined}>
-											{n.status !== 'ok' && n.pending !== undefined ? `${n.status === 'error' ? '! ' : '⧗ '}${n.pending}` : n.value}
+											{n.status === 'error' && n.pending !== undefined ? `! ${n.pending}` : n.status === 'suspended' ? `⧗ ${n.value}` : n.value}
 										</td>
 										<td className="dimtxt">{n.last ? `${fmtId('event', n.last.id)} ${n.last.kind}` : '—'}</td>
 										{metricsOn ? (
@@ -506,12 +506,20 @@ export function GraphView({
 												</text>
 											</g>
 										) : undefined}
-										<text x={8} y={16}>
-											<tspan className="glyph">{glyphFor(n.kind)}</tspan> {n.label}
-										</text>
-										<text className="sub status" x={8} y={30}>
-											{n.sub}
-										</text>
+										{/* Clip label + value to the box: an errored node's message can run
+										    far past the right edge, and SVG text doesn't wrap. The badge
+										    sits outside the clip so the status glyph is never cut. */}
+										<clipPath id={`signals-devtools-nodeclip-${n.id}`}>
+											<rect width={n.status !== 'ok' ? n.w - 20 : n.w - 8} height={NODE_H} rx={5} />
+										</clipPath>
+										<g clipPath={`url(#signals-devtools-nodeclip-${n.id})`}>
+											<text x={8} y={16}>
+												<tspan className="glyph">{glyphFor(n.kind)}</tspan> {n.label}
+											</text>
+											<text className="sub status" x={8} y={30}>
+												{n.sub}
+											</text>
+										</g>
 									</g>
 								))}
 								{layout.stubs.map((s, i) => (

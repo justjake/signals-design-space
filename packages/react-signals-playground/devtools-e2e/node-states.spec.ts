@@ -34,7 +34,9 @@ test('suspended node: suspend-async surfaces a suspended node with a suspended-a
 	await panel.locator('.nodelist tbody tr').first().waitFor()
 
 	await page.getByTestId('arm-async').evaluate((el) => (el as HTMLButtonElement).click())
-	await expect(page.getByTestId('async-fallback')).toBeVisible() // reader threw to Suspense
+	// fx2 keeps serving the last settled value while pending — the stale value
+	// stays on screen (no fallback flash), and devtools shows the node suspended.
+	await expect(page.getByTestId('async-value')).toHaveText('idle')
 
 	// The engine node is suspended, and the inspector reports when.
 	await expect.poll(async () =>

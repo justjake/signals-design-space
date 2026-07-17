@@ -658,12 +658,11 @@ function AsyncReader(): React.ReactElement {
 }
 function AsyncControls(): React.ReactElement {
 	const pending = useSignal(asyncFixture!.pending)
-	// Mount the reader only once armed: its node is then uninitialized on the
-	// first suspend, so it throws to Suspense (a real "loading…" fallback) rather
-	// than serving a pre-settled value; later re-suspends serve the stale value
-	// (fx2's stale-while-revalidate), while devtools shows the node suspended
-	// throughout.
-	const [active, setActive] = React.useState(false)
+	// The reader stays mounted so asyncData settles a value ('idle') up front.
+	// A later suspend then parks a node that already has a value, so devtools
+	// shows that stale value (fx2 stale-while-revalidate) rather than
+	// "uninitialized". The Suspense boundary only catches a never-yet-resolved
+	// read, which this flow no longer produces.
 	return (
 		<>
 			<button
@@ -671,22 +670,15 @@ function AsyncControls(): React.ReactElement {
 				data-testid="arm-async"
 				className={pending ? 'on' : undefined}
 				aria-pressed={pending}
-				onClick={() => {
-					setActive(true)
-					asyncFixture!.toggle()
-				}}
+				onClick={() => asyncFixture!.toggle()}
 			>
 				{pending ? 'resolve async' : 'suspend async'}
 			</button>
 			<span className="cell">
 				<label>async</label>
-				{active ? (
-					<React.Suspense fallback={<span data-testid="async-fallback">loading…</span>}>
-						<AsyncReader />
-					</React.Suspense>
-				) : (
-					<span data-testid="async-value">idle</span>
-				)}
+				<React.Suspense fallback={<span data-testid="async-fallback">loading…</span>}>
+					<AsyncReader />
+				</React.Suspense>
 			</span>
 		</>
 	)

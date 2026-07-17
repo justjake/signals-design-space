@@ -243,6 +243,11 @@ export const PANEL_CSS = `
   .node.computed .glyph { fill: var(--computed); }
   .node.watcher .glyph { fill: var(--watcher); }
   .node.effect .glyph { fill: var(--effect); }
+  /* --nc = the node's own kind color, so status focus rings below can glow in it. */
+  .node.atom { --nc: var(--atom); }
+  .node.computed { --nc: var(--computed); }
+  .node.watcher { --nc: var(--watcher); }
+  .node.effect { --nc: var(--effect); }
   /* Selection keeps the node's kind color — brighter (full saturation vs the
      muted 55% default) and bolder, with a neutral halo — so a selected watcher
      still reads purple, not blue. Recoloring the stroke to --computed made every
@@ -259,6 +264,11 @@ export const PANEL_CSS = `
      (:focus-visible must follow :focus to win at equal specificity.) */
   .node:focus { outline: none; }
   .node:focus-visible { outline: 2px solid var(--thread); outline-offset: 4px; border-radius: 6px; }
+  /* On a status node the focus ring takes the status color (red / suspended-blue)
+     and glows in the node's own kind color, so focus reinforces both the problem
+     and what kind of node hit it. */
+  .node.error:focus-visible { outline-color: var(--danger); filter: drop-shadow(0 0 5px var(--nc)); }
+  .node.suspended:focus-visible { outline-color: var(--suspended); filter: drop-shadow(0 0 5px var(--nc)); }
   .node.suspended rect { stroke: var(--suspended); stroke-dasharray: 5 3; }
   .node.suspended .glyph, .node.suspended .sub, .node.suspended .status { fill: var(--suspended); }
   .node.error rect { stroke: var(--danger); stroke-width: 1.5; }
