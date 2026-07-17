@@ -24,9 +24,9 @@ What sets `cosignals` apart is how writes interact with React:
 ```tsx
 import { createRoot } from "react-dom/client"
 import { createAtom, createComputed } from "cosignals"
-import { useSignal, useSignalEffect, wrapCreateRoot } from "cosignals/react"
+import { CosignalsProvider, useSignal, useSignalEffect } from "cosignals/react"
 
-// Signals live outside the tree; share them across components freely.
+// Signals may live outside the tree; share them across components freely or via context.
 const count = createAtom(0)
 const doubled = createComputed(() => count.get() * 2)
 
@@ -50,12 +50,12 @@ function App() {
   return <Counter />
 }
 
-const root = wrapCreateRoot(createRoot)(document.getElementById("root")!)
-root.render(<App />)
+createRoot(document.getElementById("root")!).render(
+  <CosignalsProvider>
+    <App />
+  </CosignalsProvider>,
+)
 ```
-
-`wrapCreateRoot` returns a `createRoot` whose `render` wraps the tree in
-the provider the subscribing hooks need — [Usage](#usage) covers setup.
 
 ## Usage
 
@@ -77,22 +77,18 @@ only pays for what it imports:
   `latest`, `isPending`. React-free and dependency-free.
 - `cosignals/react`: hooks and the provider that connect signals to
   components — `useSignal`, `useComputed`, `useSignalEffect`,
-  `useSignalTransition`, `CosignalsProvider`, `wrapCreateRoot`.
+  `useSignalTransition`, `CosignalsProvider`.
 - `cosignals/ssr`: serialize and restore atom state across server and
   client.
 - `cosignals/testing`: reset engine state between tests.
 - `cosignals/debug` and `cosignals/unstable`: tracing, inspection, and
   engine integration seams, documented in [INTERNALS.md](./INTERNALS.md).
 
-Set up the provider once per root. The subscribing hooks — `useSignal`,
-`useComputed`, and `useIsPending` — require a `CosignalsProvider` above
-them and throw without one; it is the channel that delivers transitions
-to its subtree. Two ways to mount it:
-
-- `wrapCreateRoot(createRoot)`: a `createRoot` whose `render` wraps the
-  tree in a provider, as in the example up top;
-- `<CosignalsProvider>` rendered directly, once per root. Providers
-  cannot be nested.
+Render `<CosignalsProvider>` at the top of each root, as in the example
+up top. The subscribing hooks — `useSignal`, `useComputed`, and
+`useIsPending` — require a provider above them and throw without one; it
+is the channel that delivers transitions to its subtree. Providers
+cannot be nested.
 
 `useSignalEffect`, `useSignalLayoutEffect`, and the plain function
 reads (`latest`, `isPending`) observe committed state, so they work

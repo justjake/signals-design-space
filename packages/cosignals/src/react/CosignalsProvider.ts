@@ -148,8 +148,8 @@ export function CosignalsProvider(props: CosignalsProviderProps): React.ReactEle
   if (React.useContext(ReactRootConnectionContext) !== null) {
     const error = new Error(
       "CosignalsProvider cannot be nested inside another " +
-        "CosignalsProvider. Mount it outside the other provider, " +
-        "or use wrapCreateRoot(createRoot).",
+        "CosignalsProvider. Mount one provider per root, at the top " +
+        "of the tree.",
     )
     trace?.emitEvent("policy-error", null, NO_EVENT, {
       error,
@@ -174,37 +174,4 @@ export function CosignalsProvider(props: CosignalsProviderProps): React.ReactEle
     props.children,
     React.createElement(DeferredEffectHost, null),
   )
-}
-
-/**
- * A React root whose render() wraps the tree in a
- * CosignalsProvider.
- */
-export interface WrappedRoot {
-  render(node: React.ReactNode): void
-  unmount(): void
-}
-
-/**
- * A createRoot with the provider pre-installed: every render() is wrapped
- * in this root's CosignalsProvider, so transitions work without
- * composing anything.
- */
-export function wrapCreateRoot(
-  createRoot: (
-    el: Element,
-    opts?: unknown,
-  ) => { render(node: React.ReactNode): void; unmount(): void },
-): (el: Element, opts?: unknown) => WrappedRoot {
-  return (el, opts) => {
-    const root = createRoot(el, opts)
-    return {
-      render(node: React.ReactNode) {
-        root.render(React.createElement(CosignalsProvider, null, node))
-      },
-      unmount() {
-        root.unmount()
-      },
-    }
-  }
 }

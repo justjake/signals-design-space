@@ -14,7 +14,7 @@ Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, co
 const React = (await import("react")).default ?? (await import("react"))
 const { createRoot } = await import("react-dom/client")
 const { createAtom } = await import("cosignals")
-const { registerReactSignals, useSignal, wrapCreateRoot, startSignalTransition } =
+const { CosignalsProvider, registerReactSignals, useSignal, startSignalTransition } =
   await import("../src/react/index.ts")
 
 registerReactSignals()
@@ -48,7 +48,11 @@ async function run(label, makeCase) {
   advisories.length = 0
   const el = document.createElement("div")
   document.body.appendChild(el)
-  const root = wrapCreateRoot(createRoot)(el)
+  const reactRoot = createRoot(el)
+  const root = {
+    render: (node) => reactRoot.render(React.createElement(CosignalsProvider, null, node)),
+    unmount: () => reactRoot.unmount(),
+  }
   const { node, write, done } = makeCase()
   root.render(node)
   await settle(() => el.textContent.length > 0)

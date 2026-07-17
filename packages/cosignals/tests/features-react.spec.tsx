@@ -594,7 +594,7 @@ describe("hooks demand a CosignalsProvider", () => {
     }
   }
 
-  test("[falsify-first] provider-dependent hooks throw without a provider and name the fixes", async () => {
+  test("[falsify-first] provider-dependent hooks throw without a provider and name the fix", async () => {
     const { createRoot } = await import("react-dom/client")
     const tracer = attachTracer()
     const a = createAtom(1)
@@ -619,8 +619,7 @@ describe("hooks demand a CosignalsProvider", () => {
       })
       expect(text(div), name).toContain("caught:")
       expect(text(div), name).toContain(`caught:${name}wasrendered`)
-      expect(text(div), name).toContain("CosignalsProvider")
-      expect(text(div), name).toContain("wrapCreateRoot")
+      expect(text(div), name).toContain("Wrapthetreein<CosignalsProvider>")
       await act(() => root.unmount())
       div.remove()
     }
@@ -657,7 +656,7 @@ describe("hooks demand a CosignalsProvider", () => {
       expect(text(div)).toContain(
         "caught:CosignalsProvidercannotbenestedinsideanotherCosignalsProvider.",
       )
-      expect(text(div)).toContain("wrapCreateRoot(createRoot)")
+      expect(text(div)).toContain("Mountoneproviderperroot")
       expect(text(div)).not.toContain("nestedchild")
       const errors = []
       for (const event of tracer.events()) {

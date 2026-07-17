@@ -94,7 +94,13 @@ if (contender === "cosignals") {
   const engine = await import("cosignals")
   const bindings = await import("../src/react/index.ts")
   bindings.registerReactSignals()
-  const wrappedCreateRoot = bindings.wrapCreateRoot(ReactDOMClient.createRoot)
+  const wrappedCreateRoot = (el) => {
+    const root = ReactDOMClient.createRoot(el)
+    return {
+      render: (node) => root.render(React.createElement(bindings.CosignalsProvider, null, node)),
+      unmount: () => root.unmount(),
+    }
+  }
   impl = {
     createCells(n) {
       const cells = []

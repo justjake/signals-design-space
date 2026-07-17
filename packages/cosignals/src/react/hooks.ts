@@ -106,14 +106,14 @@ const NO_IDS: readonly DraftId[] = []
 /**
  * These hooks cannot work without a CosignalsProvider. The root
  * connection carries transition worlds, and a subscriber without one has
- * no channel for them. Fail at the hook and name both supported fixes.
+ * no channel for them. Fail at the hook and name the fix.
  */
 function requireRootConnection(hook: string): ReactRootConnection {
   const connection = useContext(ReactRootConnectionContext)
   if (connection === null) {
     const error = new Error(
       `${hook} was rendered without a CosignalsProvider above it. ` +
-        "Create roots with wrapCreateRoot(createRoot), or wrap the tree in <CosignalsProvider>.",
+        "Wrap the tree in <CosignalsProvider>, once per root.",
     )
     trace?.emitEvent("policy-error", null, NO_EVENT, {
       error,

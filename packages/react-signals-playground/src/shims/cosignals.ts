@@ -1,5 +1,5 @@
 /** `cosignals` behind the common shim interface. */
-import { useRef } from "react"
+import { createElement, useRef, type ReactNode } from "react"
 import { createRoot as createReactRoot } from "react-dom/client"
 import {
   createAtom as createCosignalsAtom,
@@ -8,18 +8,32 @@ import {
   type Computed,
 } from "cosignals"
 import {
+  CosignalsProvider,
   registerReactSignals,
   startSignalTransition,
   useComputed,
   useSignalEffect as useCosignalsSignalEffect,
   useSignal as useCosignalsSignal,
-  wrapCreateRoot,
 } from "cosignals/react"
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from "./interface"
 
 export const name = "cosignals"
 export const transitionHoldStyle: TransitionHoldStyle = "suspense"
-export const createRoot = wrapCreateRoot(createReactRoot as never)
+
+export function createRoot(container: Element): {
+  render(node: ReactNode): void
+  unmount(): void
+} {
+  const root = createReactRoot(container)
+  return {
+    render(node: ReactNode) {
+      root.render(createElement(CosignalsProvider, null, node))
+    },
+    unmount() {
+      root.unmount()
+    },
+  }
+}
 
 export function register(): void {
   registerReactSignals()
