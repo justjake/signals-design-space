@@ -222,11 +222,6 @@ function Total({ taxRate }: { taxRate: number }) {
 }
 ```
 
-Computeds are cleaned up by garbage collection alone, in components or
-out: an unwatched computed only holds references toward its
-dependencies, so dropping the last reference to it frees the whole
-chain.
-
 ### Effects
 
 An **effect** runs a side effect when signals change, like `useEffect`.
@@ -618,8 +613,9 @@ const results = createComputed(() => {
 });
 ```
 
-`x.peek()` is the single-signal version: the same value `get()` would
-return, read as if inside `untrack`.
+`x.peek()` reads the signal's value without it becoming a dependency,
+like `untrack(() => x.get())`. This is usually a bad idea: the reader
+keeps working from the peeked value after it goes stale.
 
 ### isSignal
 
