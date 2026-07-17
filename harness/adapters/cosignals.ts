@@ -3,7 +3,7 @@
  * changes the name used to join framework results in the root harness.
  */
 import type { FrameworkAdapter } from './types'
-import adapter from '../../packages/cosignals/royale/harness-adapter.ts'
+import adapter from '../../packages/cosignals/tests/harness-adapter.ts'
 
 const cosignals = {
 	...adapter,

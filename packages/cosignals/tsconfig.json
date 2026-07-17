@@ -6,5 +6,5 @@
 		"types": ["react", "react-dom"],
 		"allowImportingTsExtensions": true
 	},
-	"include": ["src", "tests", "royale"]
+	"include": ["src", "tests"]
 }

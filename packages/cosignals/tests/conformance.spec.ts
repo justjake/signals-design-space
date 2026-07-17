@@ -9,7 +9,7 @@ import {
 	setExpect,
 	type ReactiveFramework,
 } from 'reactive-framework-test-suite'
-import adapter from '../royale/harness-adapter.ts'
+import adapter from './harness-adapter.ts'
 import { createAtom, createComputed, effect, nodeOf } from '../src/index.ts'
 
 const framework = {
