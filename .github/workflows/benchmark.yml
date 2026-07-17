@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Only the three submodules the benchmark needs — a full recursive
       # init would pull the react fork and every vendor library. The milomg
@@ -68,11 +68,11 @@ jobs:
             milomg-reactivity-benchmark \
             upstream-alien-signals
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: matrix.runtime == 'bun'
 
       - run: npm install -g pnpm@10
@@ -152,7 +152,7 @@ jobs:
               "results-${{ matrix.runtime }}.csv" | sort -t'|' -k3 -n
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-${{ matrix.runtime }}
           path: |

@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Only the submodules this job needs — a full recursive init would
       # pull every vendor library.
@@ -68,14 +68,14 @@ jobs:
       # so that directory is the whole cache.
       - name: Restore react fork build
         id: fork-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor/react/build/oss-experimental
           key: react-fork-${{ runner.os }}-${{ steps.fork.outputs.sha }}
 
       - name: Set up node for the react fork build
         if: steps.fork-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: vendor/react/.nvmrc
 
@@ -88,7 +88,7 @@ jobs:
           (cd vendor/react && yarn install --frozen-lockfile)
           bash fork/build-react.sh
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -167,7 +167,7 @@ jobs:
               react-results.csv | sort -t'|' -k3 -n
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: react-benchmark
           path: |
