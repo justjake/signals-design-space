@@ -93,35 +93,18 @@ to its subtree. Two ways to mount it:
 - `<CosignalsProvider>` rendered directly, once per root. Providers
   cannot be nested.
 
-`useSignalEffect` and `useSignalLayoutEffect` observe committed state,
-which needs no channel, so they work without a provider — as do the
-plain function reads (`latest`, `isPending`). Multiple roots are
+`useSignalEffect`, `useSignalLayoutEffect`, and the plain function
+reads (`latest`, `isPending`) observe committed state, so they work
+with or without a provider. Multiple roots are
 supported: one transition can span them, and each root's render passes
 stay internally consistent.
 
 ## What are signals?
 
-Signals come in two kinds. An **atom** holds a value you change over
-time; a **computed** derives a value from other signals and caches it.
-**Effects** are the exit from the graph: they run your code — DOM
-updates, network calls, logging — when the signals they watch change.
-Each has a plain-function form from `cosignals` and a hook form from
-`cosignals/react`.
-
-```mermaid
-flowchart LR
-    count["atom: count"] -->|read by| doubled["computed: doubled"]
-    doubled -->|read by| title["effect: document.title"]
-```
-
-Arrows point from a value to the work that depends on it. A write marks
-downstream work as possibly stale and schedules effects, but nothing
-recomputes until it is read. A computed that recomputes to an equal
-value stops the update along that path, so its consumers never re-run.
-
 ### Atoms
 
-An atom is like `useState`, but it lives outside any component:
+An **atom** stores a value you can change over time. It is like
+`useState`, but it lives outside any component:
 
 ```ts
 import { createAtom } from "cosignals";
@@ -158,8 +141,7 @@ function SearchBox() {
   lifetime (below).
 
 Passing a function creates a lazy atom. The initializer runs once,
-untracked, at the first read, write, or subscription — never at
-construction:
+untracked, at the first read, write, or subscription:
 
 ```ts
 const config = createAtom(() => loadConfig());
@@ -202,8 +184,8 @@ functional update, so keep the reducer pure.
 
 ### Computeds
 
-A computed derives a cached value from other signals, like `useMemo` or
-a Redux selector. The signals its function reads become its
+A **computed** derives a cached value from other signals, like `useMemo`
+or a Redux selector. The signals its function reads become its
 dependencies automatically, and it recomputes only when read after a
 dependency changed:
 
@@ -240,14 +222,29 @@ function Total({ taxRate }: { taxRate: number }) {
 }
 ```
 
-Computeds need no disposal, in components or out: an unwatched computed
-only holds references toward its dependencies, so dropping the last
-reference to it makes the whole chain garbage-collectible.
+Computeds are cleaned up by garbage collection alone, in components or
+out: an unwatched computed only holds references toward its
+dependencies, so dropping the last reference to it frees the whole
+chain.
 
 ### Effects
 
-An effect runs a side effect when signals change, like `useEffect`.
-Every effect here is two parts with different jobs:
+An **effect** runs a side effect when signals change, like `useEffect`.
+Atoms, computeds, and effects form a graph:
+
+```mermaid
+flowchart LR
+    count["atom: count"] -->|read by| doubled["computed: doubled"]
+    doubled -->|read by| title["effect: document.title"]
+```
+
+Arrows point from a value to the work that depends on it. A write marks
+downstream work as possibly stale and schedules effects; each value
+recomputes at its next read. A computed that recomputes to an equal
+value stops the update along that path, so its consumers keep their
+cached results.
+
+Every effect is two parts with different jobs:
 
 - watch: what the effect reacts to. It is tracked: the signals it reads
   become the effect's dependencies.
@@ -255,15 +252,13 @@ Every effect here is two parts with different jobs:
   the previous value it handled, and may return a cleanup that runs
   before the next `run` and at disposal.
 
-The split exists so the engine can re-run the watch to check whether
-anything actually changed without repeating the side effect. A write
-that leaves the watched value equal runs no handler at all. Reads the
-effect should react to belong in the watch; reads inside `run` are not
-tracked.
+The split lets the engine re-run the watch to check whether anything
+actually changed before touching the side effect: the handler runs only
+when the watched value did change. Put reads the effect should react to
+in the watch.
 
-Effects observe committed state only. They never see a transition's
-pending writes; a transition reaches every effect exactly once, when it
-commits, and a discarded transition never reaches them.
+Effects observe committed state: a transition reaches every effect
+exactly once, when it commits — and only if it commits.
 
 #### useSignalEffect
 
@@ -365,8 +360,8 @@ stop(); // dispose: run the last cleanup, drop the graph edges
 
 The tuple and record shorthands rebuild their container on every run,
 so they default their cutoff to `shallowEquals` (exported for reuse);
-an explicit `equals` option overrides. If the watch throws, the handler
-is not called and the error surfaces where the effect runs.
+an explicit `equals` option overrides. If the watch throws, the error
+surfaces where the effect runs.
 
 The first run happens synchronously, at creation. Async sources relax
 that:
@@ -426,8 +421,8 @@ This works for `useState` because React keeps pending updates in
 per-hook queues, and each render pass chooses which updates to apply.
 `cosignals` gives atoms the same machinery:
 
-- a write made inside a transition does not touch the atom; it is
-  recorded in a draft attached to that transition;
+- a write made inside a transition is recorded in a draft attached to
+  that transition, leaving the atom itself as it was;
 - the committed screen, ordinary reads, and effects keep seeing the
   value without the draft;
 - the transition's own render passes see the value with the draft
@@ -483,8 +478,9 @@ function FilterTabs() {
 
 While the transition is pending, its writes are visible only to its own
 render passes — `useSignal` in the work-in-progress tree sees them,
-while the committed screen, `get()` outside renders, and effects do
-not. When it commits, the writes land everywhere at once.
+while the committed screen, `get()` outside renders, and effects keep
+seeing the old value. When it commits, the writes land everywhere at
+once.
 
 ### Async computeds
 
@@ -539,10 +535,11 @@ userVersion.update((v) => v + 1); // refetch; user serves stale data while loadi
 
 `isPending(x)` is true while newer data exists behind what is shown — a
 pending transition has written `x`, or an async computed is loading
-again behind its settled value. It is passive: it never evaluates,
-refetches, or suspends. A first load is not pending, because there is
-no stale data to indicate over; suspending on first load is Suspense's
-job.
+again behind its settled value. It only reports: reading it leaves the
+computed exactly as it was, where a `get()` might evaluate, refetch, or
+suspend. A first load reads false — pending means newer data behind
+data already shown, and a first load has nothing shown yet; that case
+belongs to Suspense.
 
 `useIsPending(x)` is the same read as a subscription. The flip is
 delivered urgently, outside any transition — an indicator must not be
@@ -552,9 +549,9 @@ schedules its `isPending` the same way.
 ### latest
 
 `latest(x)` reads the newest view — committed state plus every pending
-transition's writes. It never suspends: an async computed that has
-never settled reads as `undefined` (a failed one still rethrows its
-error).
+transition's writes. Where a plain read would suspend (an async
+computed that has never settled), `latest` returns `undefined` instead;
+a failed computed still rethrows its error.
 
 Inside a computed evaluation or a render, `latest` resolves the
 caller's own snapshot instead of reading ahead, because mixing
@@ -622,8 +619,7 @@ const results = createComputed(() => {
 ```
 
 `x.peek()` is the single-signal version: the same value `get()` would
-return, without registering the dependency, so the reader never re-runs
-because of this signal.
+return, read as if inside `untrack`.
 
 ### isSignal
 
@@ -651,9 +647,9 @@ initializeAtomState(json, { count, query });
 installState(count, 42);
 ```
 
-Installing is not a write: no propagation, no equality check, no
-effects, and lazy initializers do not run — the installed value
-satisfies the first read.
+Installing bypasses the write path: the value lands directly and
+satisfies the first read, skipping propagation, equality checks,
+effects, and lazy initializers.
 
 ## Testing
 
@@ -669,8 +665,7 @@ beforeEach(() => {
 });
 ```
 
-Existing atoms stay valid across a reset. Application code should never
-import this entry.
+Existing atoms stay valid across a reset.
 
 ## Going deeper
 
