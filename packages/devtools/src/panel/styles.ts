@@ -129,11 +129,12 @@ export const PANEL_CSS = `
   .log { flex: 1; overflow-y: auto; font: 11.5px var(--mono); }
   .log table { border-collapse: collapse; width: 100%; }
   .log th { position: sticky; top: 0; background: var(--surface); z-index: 1; font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-  .log td { padding: 4px 10px; border-bottom: 1px solid var(--row-line); vertical-align: baseline; white-space: nowrap; }
+  .log td { padding: 2px 10px; border-bottom: 1px solid var(--row-line); vertical-align: middle; white-space: nowrap; height: 24px; }
   .log tr:hover td { background: var(--surface); }
   .log .id { color: var(--faint); width: 48px; }
-  .log .t { color: var(--muted); width: 92px; }
-  .log .t .tdelta { display: block; color: var(--faint); font-size: 9.5px; }
+  .log .t { color: var(--muted); width: 128px; }
+  /* Delta rides inline after the timestamp so a row stays one line. */
+  .log .t .tdelta { color: var(--faint); font-size: 10px; margin-left: 5px; }
   .log .name .lname { color: var(--text); }
   .log .name .nid { color: var(--faint); font-size: 10px; margin-left: 6px; }
   button.nid { padding: 0; border: none; border-bottom: 1px dotted transparent; cursor: pointer; }
@@ -145,10 +146,18 @@ export const PANEL_CSS = `
   .causeref { color: var(--faint); font-size: 10px; margin-left: 8px; padding: 0; }
   .kcell { display: flex; align-items: center; }
   .kcell .ntext { margin-left: 3px; }
-  .g { width: 14px; align-self: stretch; position: relative; flex: none; }
-  .g.vert::before, .g.tee::before { content: ""; position: absolute; left: 6px; top: -6px; bottom: -6px; width: 1px; background: var(--border-strong); }
-  .g.elbow::before { content: ""; position: absolute; left: 6px; top: -6px; height: calc(50% + 6px); width: 1px; background: var(--border-strong); }
-  .g.tee::after, .g.elbow::after { content: ""; position: absolute; left: 7px; top: calc(50% - 1px); width: 7px; height: 1px; background: var(--border-strong); }
+  /* Tree connector lines, one guide cell per ancestor level. Each spans the
+     full row height (align-self: stretch), so with no per-row border in tree
+     mode (below) consecutive cells' lines join seamlessly — a real vertical
+     rule, not a per-row segment. vert/tee run top→bottom; elbow (last child)
+     runs top→middle then turns right; tee/elbow draw the horizontal connector. */
+  .g { width: 18px; align-self: stretch; position: relative; flex: none; }
+  .g.vert::before, .g.tee::before { content: ""; position: absolute; left: 9px; top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
+  .g.elbow::before { content: ""; position: absolute; left: 9px; top: 0; height: 50%; width: 1px; background: var(--border-strong); }
+  .g.tee::after, .g.elbow::after { content: ""; position: absolute; left: 9px; top: 50%; width: 9px; height: 1px; background: var(--border-strong); }
+  /* No per-row rule in tree mode: it would slice the connector lines. Grouping
+     comes from the operation zebra + op-head borders instead. */
+  .log.tree td { border-bottom: none; padding-top: 0; padding-bottom: 0; }
   tr.op-head td { background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding-top: 5px; padding-bottom: 5px; }
   tr.op-head:hover td { background: var(--surface-2); }
   tr.op-head .data { overflow: visible; max-width: none; width: auto; white-space: nowrap; }
@@ -161,17 +170,17 @@ export const PANEL_CSS = `
   .log.tree tbody tr.op-alt { background: color-mix(in srgb, var(--base05) 5%, transparent); }
   .op-title { font-weight: 500; }
   .op-title .tw { color: var(--faint); font-weight: 400; }
-  .caret { color: var(--muted); width: 16px; font-size: 13px; line-height: 1; display: inline-block; text-align: center; padding: 0; cursor: pointer; }
-  .caret:hover { color: var(--text); }
+  .caret { color: var(--muted); width: 22px; height: 22px; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; border-radius: 4px; flex: none; }
+  .caret:hover { color: var(--text); background: var(--elevated); }
   /* tree mode: the causal tree lives in the leading id column — a gutter of
      connector lines (one per ancestor level), then the caret and the L{id}.
      Nesting reads from the left edge; the id column grows with depth while the
      when/kind/name/took columns stay aligned so their values still scan. */
-  .log.tree .id { width: auto; white-space: nowrap; vertical-align: stretch; }
-  .treecell { display: flex; align-items: stretch; min-height: 18px; }
-  .treecell .caret, .treecell .caret-spacer { flex: none; align-self: center; }
-  .caret-spacer { display: inline-block; width: 16px; }
-  .treecell .lid { align-self: center; margin-left: 1px; }
+  .log.tree .id { width: auto; white-space: nowrap; }
+  .treecell { display: flex; align-items: center; height: 24px; }
+  .treecell .caret, .treecell .caret-spacer { flex: none; }
+  .caret-spacer { display: inline-block; width: 22px; }
+  .treecell .lid { margin-left: 2px; }
   tr.selected td { background: color-mix(in srgb, var(--thread) 8%, var(--bg)) !important; }
   tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
   tr.endrow td { color: var(--faint); }
