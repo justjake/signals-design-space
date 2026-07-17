@@ -14,6 +14,7 @@ import {
 	kindClass,
 	type KindClass,
 	type NodeDetails,
+	nodeDisplayName,
 	type NodeId,
 	type NodeKind,
 	type NodeStatus,
@@ -48,7 +49,7 @@ function nodeName(backend: Backend, id: NodeId | undefined): string | undefined 
 	if (id === undefined) return undefined
 	const n = backend.node(id)
 	if (n === undefined) return `#${id}`
-	return n.label ?? `${n.kind}#${id}`
+	return nodeDisplayName(n)
 }
 
 function summarize(e: DevtoolsEvent): string {
@@ -171,7 +172,7 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeR
 		}
 	}
 	// Roots (whole operations) read newest-first — the latest thing you did is on
-	// top. But WITHIN an operation, children read oldest-first, so a cause chain
+	// top. But within an operation, children read oldest-first, so a cause chain
 	// flows top-down in the order it happened (write → notify → render → …). A
 	// cause always has a lower id than its effects, so neither sort puts a parent
 	// after a child.
@@ -181,7 +182,7 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeR
 	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean, op: number) => {
 		if (depth > 40) return // guard against a pathological chain
 		// `trail[k] = !isLast(ancestor at depth k)`. A passing vertical at column i
-		// reflects whether the ancestor ONE level deeper (at depth i+1, the next
+		// reflects whether the ancestor one level deeper (at depth i+1, the next
 		// node on the path to this row) has a younger sibling — so it reads
 		// trail[i+1], not trail[i]. (trail[0], the root's own last-ness, is never a
 		// column: roots have no parent line.) The last column is this row's own
@@ -232,6 +233,62 @@ export function causedTree(rows: LogRow[], eventId: EventId, cap = 200): TreeRow
 	return logTree([self, ...sub]).filter((t) => t.depth >= 1)
 }
 
+/**
+ * Rollup stats for one operation (an entry tree under one root): its time
+ * span, entry count, render count, and total recorded span time. Drives the
+ * log's timeline spans and the "whole operation" summary.
+ */
+export interface OpGroup {
+	minT: number
+	maxT: number
+	count: number
+	renders: number
+	us: number
+}
+
+/**
+ * Group entries by their operation root in one pass, following cause pointers
+ * within the given rows. Returns the per-root rollups and each row's resolved
+ * root id (a row whose cause is 0 or outside `rows` is its own root).
+ */
+export function opGroups(rows: LogRow[]): { groups: Map<EventId, OpGroup>; rootById: Map<EventId, EventId> } {
+	const byId = new Map(rows.map((r) => [r.id, r]))
+	const rootById = new Map<EventId, EventId>()
+	const rootOf = (id: EventId): EventId => {
+		const seen: EventId[] = []
+		let cur = id
+		for (;;) {
+			const memo = rootById.get(cur)
+			if (memo !== undefined) {
+				cur = memo
+				break
+			}
+			const r = byId.get(cur)
+			if (r === undefined || r.cause === 0 || !byId.has(r.cause)) break
+			seen.push(cur)
+			cur = r.cause
+		}
+		for (const s of seen) rootById.set(s, cur)
+		return cur
+	}
+	const groups = new Map<EventId, OpGroup>()
+	for (const r of rows) {
+		const root = rootOf(r.id)
+		rootById.set(r.id, root)
+		const took = r.took ?? 0
+		const isRender = r.kind === 'render'
+		const g = groups.get(root)
+		if (g === undefined) groups.set(root, { minT: r.t, maxT: r.t, count: 1, renders: isRender ? 1 : 0, us: took })
+		else {
+			g.maxT = r.t
+			g.count++
+			if (isRender) g.renders++
+			g.us += took
+		}
+	}
+	return { groups, rootById }
+}
+
 /** A node-list row for the graph view. */
 export interface NodeRow {
 	id: NodeId
@@ -279,7 +336,7 @@ export function nodeRows(backend: Backend, query: string, cap: number): NodeRow[
 	return backend.search(query, cap).map((n) => ({
 		id: n.id,
 		kind: n.kind,
-		name: n.label ?? `${n.kind}#${n.id}`,
+		name: nodeDisplayName(n),
 		value: n.valuePreview ?? '—',
 		pending: n.pending,
 		status: n.status,
@@ -315,7 +372,7 @@ function neighbors(backend: Backend, ids: NodeId[]): NeighborRef[] {
 		if (out.length >= NEIGHBOR_CAP) break
 		const n = backend.node(id)
 		if (n === undefined) continue
-		out.push({ id, name: n.label ?? `${n.kind}#${id}`, kind: n.kind, status: n.status })
+		out.push({ id, name: nodeDisplayName(n), kind: n.kind, status: n.status })
 	}
 	return out
 }
@@ -379,7 +436,7 @@ export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | u
 	}
 	return {
 		node,
-		name: node.label ?? `${node.kind}#${node.id}`,
+		name: nodeDisplayName(node),
 		deps: neighbors(backend, node.deps),
 		subs: neighbors(backend, node.subs),
 		depsTotal: node.deps.length,

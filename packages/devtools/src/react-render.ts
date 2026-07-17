@@ -85,14 +85,18 @@ export function attachReactRenderTracer(
 				// collector flush, which would feed back into itself (a write →
 				// record → flush → panel render → record → … runaway). Identify it by
 				// the markers the panel and its launch button always render, so every
-				// mount path is covered (inline mountDevtools AND the DevtoolsPanelButton
+				// mount path is covered (inline mountDevtools and the DevtoolsPanelButton
 				// the playground uses), not just those that tag their container.
-				const container = root.containerInfo as Element | null
+				// createRoot accepts an Element, a Document, or a DocumentFragment.
+				// Only an Element can sit inside the devtools DOM (closest); all three
+				// container types can contain it (querySelector).
+				const container: unknown = root.containerInfo
+				if (container instanceof Element && container.closest('.signals-devtools-root, .signals-devtools-launch') !== null) {
+					return
+				}
 				if (
-					container !== null &&
-					typeof container.querySelector === 'function' &&
-					(container.closest?.('.signals-devtools-root, .signals-devtools-launch') !== null ||
-						container.querySelector('.signals-devtools-root, .signals-devtools-launch') !== null)
+					(container instanceof Element || container instanceof Document || container instanceof DocumentFragment) &&
+					container.querySelector('.signals-devtools-root, .signals-devtools-launch') !== null
 				) {
 					return
 				}

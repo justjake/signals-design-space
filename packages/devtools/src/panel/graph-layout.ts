@@ -11,14 +11,17 @@
  * the whole set. That keeps the picture stable to read.
  */
 import type { Backend, EventId, NodeDetails, NodeId, NodeKind, NodeStatus } from '../protocol.ts'
+import { nodeDisplayName } from '../protocol.ts'
 
 const COL_GAP = 250
 const NODE_W = 176
 const FOCUS_W = 200
-const NODE_H = 40
+/** Node box height, shared with the canvas renderer for hit areas and culling. */
+export const NODE_H = 40
 const ROW_GAP = 54
 const PAD_Y = 24
-const MAX_PER_COL = 6
+/** Per-column node cap before the rest collapse into a frontier stub. */
+export const DEFAULT_PER_COL = 6
 
 export interface PlacedNode {
 	id: NodeId
@@ -142,7 +145,7 @@ function place(
 				y,
 				w: id === focusId ? FOCUS_W : NODE_W,
 				kind: n.kind,
-				label: n.label ?? `${n.kind}#${id}`,
+				label: nodeDisplayName(n),
 				sub: subLine(n),
 				status: n.status,
 				hot: hot.has(id),
@@ -162,7 +165,7 @@ export function glyphFor(kind: NodeKind): string {
 
 /** Build the layout for the neighborhood of `focusId`. `maxPerCol` caps each
  * column (the rest collapse into a frontier stub); raise it to expand. */
-export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, maxPerCol = MAX_PER_COL): GraphLayout | undefined {
+export function layoutFocus(backend: Backend, focusId: NodeId, depth: number, maxPerCol = DEFAULT_PER_COL): GraphLayout | undefined {
 	const focus = backend.node(focusId)
 	if (focus === undefined) return undefined
 	const hot = hotSet(backend)

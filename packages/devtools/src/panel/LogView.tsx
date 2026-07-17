@@ -1,10 +1,19 @@
+/**
+ * The log tab, as a coordinator: it owns the pause/clear/filter/brush state,
+ * resolves the view-model rows the child components render, and wires their
+ * selections back into App's navigation. The pieces live in their own files —
+ * LogTimeline (the brushable strip), LogTable (flat/tree rows), LogDetail
+ * (the selected entry's causality pane).
+ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Backend, EventId, KindClass, NodeId } from '../protocol.ts'
-import { causedTree, causeRows, fmtDelta, fmtId, fmtTook, type Guide, type LogRow, logRows, logTree } from './viewmodel.ts'
-import { CauseSpine, EventRef } from './CauseSpine.tsx'
-import { causalityMarkdown, copyText, logMarkdown } from './markdown.ts'
+import { causedTree, causeRows, fmtTook, type LogRow, logRows, logTree, opGroups } from './viewmodel.ts'
+import { LogDetail } from './LogDetail.tsx'
+import { LogTable } from './LogTable.tsx'
+import { LogTimeline } from './LogTimeline.tsx'
+import { copyText, logMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
-import { StackTrace } from './StackTrace.tsx'
+import { useBackend } from './store.ts'
 
 const LIMIT = 1000
 
@@ -26,32 +35,6 @@ const CHIPS: { key: string; label: string; sw: string; classes: KindClass[]; tip
 // (system) are always shown — they are never noise and have no toggle.
 const ALWAYS_ON: KindClass[] = ['origin', 'error', 'batch', 'async', 'system']
 
-/** Per-kind tooltip text for the row chips. Unknown kinds fall back to a
- * generic error/verbatim hint so a future kind still explains itself. */
-const KIND_TIPS: Record<string, string> = {
-	'dom-event': 'The DOM event that started this operation.',
-	set: 'atom.set(value): the atom was assigned a new value.',
-	update: 'atom.update(fn): the atom was computed from its previous value.',
-	compute: 'A computed ran its function for the first time (came into existence).',
-	recompute: 'A computed re-ran its function because an input changed.',
-	effect: 'An effect ran after changes committed.',
-	notify: 'A watcher was told its inputs changed (re-render scheduled).',
-	render: 'A component rendered a committed value.',
-	settle: 'An awaited async value resolved.',
-	retry: 'A suspended computation retried after its await resolved.',
-	'compute-suspend': 'A recompute paused awaiting a Promise.',
-	'transition-open': 'A transition began; its updates render in the background.',
-	'transition-commit': 'A transition committed to the UI.',
-	'transition-retire': 'A committed transition folded into base state.',
-	'transition-discard': 'A transition was abandoned.',
-	propagate: 'Hot step: a change pushed "possibly stale" marks down to its subscribers.',
-	check: 'Hot step: a read walked dependencies to confirm whether anything really changed.',
-	pull: 'Hot step: a stale computed or effect computation re-evaluated.',
-}
-function kindTip(kind: string): string {
-	return KIND_TIPS[kind] ?? (kind.endsWith('-error') ? 'This step threw an error.' : kind)
-}
-
 function matchesSearch(r: LogRow, query: string): boolean {
 	if (query === '') return true
 	const name = (r.name ?? '').toLowerCase()
@@ -62,55 +45,6 @@ function matchesSearch(r: LogRow, query: string): boolean {
 		else ok &&= r.kind.toLowerCase().includes(tok) || name.includes(tok)
 	}
 	return ok
-}
-
-function Guides({ guides }: { guides: Guide[] }) {
-	return (
-		<>
-			{guides.map((g, i) => (
-				// eslint-disable-next-line react/no-array-index-key -- fixed-length per row
-				<span key={i} className={`g ${g === 'none' ? '' : g}`} />
-			))}
-		</>
-	)
-}
-
-function NameCell({
-	row,
-	onCause,
-	onNode,
-}: {
-	row: LogRow
-	onCause: () => void
-	onNode: (id: NodeId) => void
-}) {
-	const nodeId = row.node
-	// The whole row selects (the <tr> handles the click); the cause ref is the
-	// one secondary action, so it stops propagation and jumps instead.
-	const cause = row.cause > 0 ? (
-		<button className="causeref" onClick={(e) => { e.stopPropagation(); onCause() }}>
-			⤷{fmtId('event', row.cause)}
-		</button>
-	) : undefined
-	const name =
-		row.name === undefined ? (
-			<span style={{ color: 'var(--faint)' }}>—</span>
-		) : (
-			<>
-				<span className="lname">{row.name}</span>
-				{nodeId !== undefined ? (
-					<button className="nid" onClick={(e) => { e.stopPropagation(); onNode(nodeId) }}>
-						{fmtId('node', nodeId)}
-					</button>
-				) : undefined}
-			</>
-		)
-	return (
-		<td className="name">
-			{name}
-			{cause}
-		</td>
-	)
 }
 
 export function LogView({
@@ -135,42 +69,19 @@ export function LogView({
 	mode: 'flat' | 'tree'
 	setMode: (m: 'flat' | 'tree') => void
 }) {
+	// Flush counter: bumps when the collector records new entries. The memos
+	// below key their backend reads on it, so a re-render caused by local state
+	// (a selection, a brush drag) never re-reads and re-nests the whole window.
+	const flush = useBackend(backend)
 	// Hot mirrors the backend's channel state so a remounted panel shows the truth.
 	const [on, setOn] = useState<Record<string, boolean>>(() => ({ write: true, compute: true, render: true, effect: true, internals: false, hot: backend.hotMode?.() ?? false }))
 	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
 	const [floor, setFloor] = useState(0)
 	const [collapsed, setCollapsed] = useState<ReadonlySet<EventId>>(() => new Set())
 	const [copied, setCopied] = useState(false)
-	const [czCopied, setCzCopied] = useState(false)
 	const [czW, setCzW] = useState(320)
 	// Timeline brush: [t0, t1] in µs, or undefined for the full window.
 	const [brush, setBrush] = useState<[number, number] | undefined>(undefined)
-	const tlRef = useRef<SVGSVGElement | null>(null)
-	const brushing = useRef<number | undefined>(undefined)
-	const selRowRef = useRef<HTMLTableRowElement | null>(null)
-
-	// Scroll the selected entry into view after following a link or jump-to-cause,
-	// but NOT when the user directly clicked a row here — a click's selection is
-	// already where they're looking, and scrolling it mid-gesture would swallow
-	// the double-click-to-collapse. clickSelectRef distinguishes the two sources.
-	// In a rAF because when a link switches to the log this component just mounted
-	// and the rows aren't laid out yet when the effect first fires.
-	const clickSelectRef = useRef(false)
-	// Native onDoubleClick is unreliable here: the first click changes `selected`,
-	// which re-renders the table before the second click, so the browser never
-	// resolves the pair into a dblclick. Detect it ourselves from the onClick that
-	// always fires — two clicks on the same collapsible row within the OS-typical
-	// 500ms double-click window toggle it.
-	const lastClickRef = useRef<{ id: EventId; t: number } | undefined>(undefined)
-	useEffect(() => {
-		if (selected === undefined) return
-		if (clickSelectRef.current) {
-			clickSelectRef.current = false
-			return
-		}
-		const raf = requestAnimationFrame(() => selRowRef.current?.scrollIntoView({ block: 'nearest' }))
-		return () => cancelAnimationFrame(raf)
-	}, [selected])
 
 	// Esc clears the timeline window (a click on the strip clears it too).
 	useEffect(() => {
@@ -188,10 +99,11 @@ export function LogView({
 		return [...set]
 	}, [on])
 
-	const live = logRows(backend, { classes }, LIMIT)
-	const base = (paused ?? live).filter((r) => r.id > floor)
-	const rows = base.filter(
-		(r) => matchesSearch(r, query) && (brush === undefined || (r.t >= brush[0] && r.t <= brush[1])),
+	const live = useMemo(() => logRows(backend, { classes }, LIMIT), [backend, flush, classes])
+	const base = useMemo(() => (paused ?? live).filter((r) => r.id > floor), [paused, live, floor])
+	const rows = useMemo(
+		() => base.filter((r) => matchesSearch(r, query) && (brush === undefined || (r.t >= brush[0] && r.t <= brush[1]))),
+		[base, query, brush],
 	)
 
 	// Flash a row only when its event genuinely arrives — never on a view or
@@ -221,8 +133,9 @@ export function LogView({
 	// Tree mode: resolve any cause referenced but outside the visible window
 	// (still in the ring) and prepend its ancestry, so rows nest under the real
 	// event instead of orphaning. Then nest, honoring the collapsed set.
-	let treeInput = rows
-	if (mode === 'tree') {
+	const tree = useMemo(() => {
+		if (mode !== 'tree') return undefined
+		let treeInput = rows
 		const inWindow = new Set(rows.map((r) => r.id))
 		const extra = new Map<EventId, LogRow>()
 		for (const r of rows) {
@@ -231,9 +144,8 @@ export function LogView({
 			}
 		}
 		if (extra.size > 0) treeInput = [...extra.values(), ...rows]
-	}
-	const tree = mode === 'tree' ? logTree(treeInput, collapsed) : undefined
-	const treeRows = tree
+		return logTree(treeInput, collapsed)
+	}, [mode, rows, collapsed, backend, flush])
 	const toggleCollapsed = (id: EventId) =>
 		setCollapsed((prev) => {
 			const next = new Set(prev)
@@ -242,39 +154,9 @@ export function LogView({
 			return next
 		})
 
-	// Group entries by operation root in one pass, following cause pointers
-	// within the shown set. Drives the timeline spans and the op entry count —
-	// without walking a cause chain per row.
-	const byId = new Map(base.map((r) => [r.id, r]))
-	const rootMemo = new Map<EventId, EventId>()
-	const rootOf = (id: EventId): EventId => {
-		const seen: EventId[] = []
-		let cur = id
-		for (;;) {
-			const memo = rootMemo.get(cur)
-			if (memo !== undefined) { cur = memo; break }
-			const r = byId.get(cur)
-			if (r === undefined || r.cause === 0 || !byId.has(r.cause)) break
-			seen.push(cur)
-			cur = r.cause
-		}
-		for (const s of seen) rootMemo.set(s, cur)
-		return cur
-	}
-	const ops = new Map<EventId, { minT: number; maxT: number; count: number; renders: number; us: number }>()
-	for (const r of base) {
-		const root = rootOf(r.id)
-		const took = r.took ?? 0
-		const isRender = r.kind === 'render'
-		const g = ops.get(root)
-		if (g === undefined) ops.set(root, { minT: r.t, maxT: r.t, count: 1, renders: isRender ? 1 : 0, us: took })
-		else {
-			g.maxT = r.t
-			g.count++
-			if (isRender) g.renders++
-			g.us += took
-		}
-	}
+	// Group entries by operation root — drives the timeline spans and the op
+	// entry count without walking a cause chain per row.
+	const { groups: ops, rootById } = useMemo(() => opGroups(base), [base])
 	// One-line rollup for an operation-root row: the "how big was this tree"
 	// glance the log tree exists to give. Undefined for non-root rows.
 	const opRollup = (id: EventId): string | undefined => {
@@ -286,25 +168,13 @@ export function LogView({
 		return parts.join(' · ')
 	}
 
-	const minT = base.length ? base[0].t : 0
-	const span = Math.max(1, (base.length ? base[base.length - 1].t : 1) - minT)
-	const x = (t: number) => 40 + ((t - minT) / span) * 1120
-	// Inverse of x: a client x-coordinate on the timeline → a time (µs), clamped.
-	const tAt = (clientX: number): number => {
-		const el = tlRef.current
-		if (el === null) return minT
-		const r = el.getBoundingClientRect()
-		const sx = ((clientX - r.left) / r.width) * 1200
-		return Math.max(minT, Math.min(minT + span, minT + ((sx - 40) / 1120) * span))
-	}
-
 	// The cause chain resolves from the backend, so a selected entry outside the
 	// visible window (e.g. jumped-to via ⤷) still shows — its own entry is the
 	// chain's last element.
-	const spine = selected === undefined ? [] : causeRows(backend, selected)
+	const spine = useMemo(() => (selected === undefined ? [] : causeRows(backend, selected)), [backend, flush, selected])
 	const sel = selected === undefined ? undefined : (rows.find((r) => r.id === selected) ?? spine[spine.length - 1] ?? undefined)
 	const opRoot = spine[0] ?? sel
-	const opGroup = sel === undefined ? undefined : ops.get(rootOf(sel.id))
+	const opGroup = sel === undefined ? undefined : ops.get(rootById.get(sel.id) ?? sel.id)
 	const opEntries = opGroup?.count ?? (sel === undefined ? 0 : 1)
 	// Total wall time the whole operation spanned (root → last consequence) — the
 	// "how big was this tree" number you trace back from a slow update.
@@ -312,7 +182,7 @@ export function LogView({
 	// The consequence tree of the selected entry: everything it caused, directly
 	// and transitively, within the window, nested (bounded for huge fan-outs).
 	// logTree roots it at sel and orders siblings newest-first; we show depth ≥ 1.
-	const caused = sel === undefined ? [] : causedTree(base, sel.id)
+	const caused = useMemo(() => (sel === undefined ? [] : causedTree(base, sel.id)), [base, sel])
 	// The app stack captured at the operation root (the first chain entry with one).
 	const opStack = spine.find((e) => e.stack !== undefined)?.stack ?? undefined
 
@@ -398,248 +268,39 @@ export function LogView({
 				</button>
 			</div>
 
-			<div className="timeline">
-				<svg
-					ref={tlRef}
-					viewBox="0 0 1200 56"
-					preserveAspectRatio="none"
-					aria-label="Timeline — drag to select a time window, click to clear"
-					style={{ cursor: 'crosshair', touchAction: 'none' }}
-					onPointerDown={(e) => {
-						const t = tAt(e.clientX)
-						brushing.current = t
-						setBrush([t, t])
-						e.currentTarget.setPointerCapture(e.pointerId)
-					}}
-					onPointerMove={(e) => {
-						const start = brushing.current
-						if (start === undefined) return
-						const t = tAt(e.clientX)
-						setBrush([Math.min(start, t), Math.max(start, t)])
-					}}
-					onPointerUp={(e) => {
-						const start = brushing.current
-						brushing.current = undefined
-						e.currentTarget.releasePointerCapture(e.pointerId)
-						// A click (negligible drag) clears the window.
-						if (start !== undefined && Math.abs(tAt(e.clientX) - start) < span * 0.01) setBrush(undefined)
-					}}
-				>
-					{[...ops.entries()]
-						.filter(([, g]) => g.count > 1)
-						.map(([root, g]) => {
-							const x0 = x(g.minT)
-							return <rect key={root} className="tl-span" x={x0} y={6} width={Math.max(3, x(g.maxT) - x0)} height={9} fill="var(--border-strong)" />
-						})}
-					{base.map((r) => {
-						// A durationful event (a compute/effect span) draws as a bar whose
-						// width is its time, so a slow one is visibly wide on the strip;
-						// instantaneous events stay a thin tick.
-						const w = r.took !== undefined && r.took > 0 ? Math.max(2, x(r.t + r.took) - x(r.t)) : 2
-						return <rect key={r.id} x={x(r.t)} y={44} width={w} height={8} fill={`var(--${classVar(r.cls)})`} />
-					})}
-					{brush !== undefined ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : undefined}
-					{sel !== undefined ? <rect className="tl-cursor" x={x(sel.t) - 1} y={2} width={2} height={52} /> : undefined}
-				</svg>
-			</div>
+			<LogTimeline rows={base} ops={ops} brush={brush} setBrush={setBrush} selT={sel?.t} />
 
 			<div className="main">
-				<div className={`log ${mode}`} role="region" aria-label="Log">
-					<table>
-						<thead>
-							<tr>
-								<th>#</th>
-								<th data-tip="When this happened — time since recording started.">when</th>
-								<th data-tip="What happened. Chips are colored by category.">kind</th>
-								<th data-tip="The node this event is about.">name</th>
-								<th data-tip="What came of it, in plain words.">outcome</th>
-								<th style={{ textAlign: 'right' }}>took</th>
-							</tr>
-						</thead>
-						<tbody>
-							{mode === 'flat'
-								? [...rows].reverse().map((r) => (
-										<tr
-											key={r.id}
-											ref={r.id === selected ? selRowRef : undefined}
-											className={`${r.id === selected ? 'selected' : ''}${flashing.has(r.id) ? ' flash' : ''}`.trim() || undefined}
-											aria-selected={r.id === selected}
-											onClick={() => {
-												clickSelectRef.current = true
-												onSelect(r.id)
-											}}
-										>
-											<td className="id">{fmtId('event', r.id)}</td>
-											<td className="t">
-												{r.time}
-												{r.delta !== undefined ? <span className="tdelta"> {fmtDelta(r.delta)}</span> : undefined}
-											</td>
-											<td>
-												<span className={`chip ${r.cls}`} data-tip={kindTip(r.kind)}>{r.kind}</span>
-											</td>
-											<NameCell row={r} onCause={() => onSelect(r.cause)} onNode={inspect} />
-											<td className="data">{r.summary}</td>
-											<td className="took">{fmtTook(r.took)}</td>
-										</tr>
-									))
-								: treeRows!.map((t) => (
-										<tr
-											key={t.row.id}
-											ref={t.row.id === selected ? selRowRef : undefined}
-											className={`${t.op % 2 === 1 ? 'op-alt ' : ''}${t.depth === 0 && t.children > 0 ? 'op-head ' : ''}${t.row.id === selected ? 'selected ' : ''}${flashing.has(t.row.id) ? 'flash' : ''}`.trim() || undefined}
-											aria-selected={t.row.id === selected}
-											onClick={() => {
-												const now = Date.now()
-												const prev = lastClickRef.current
-												if (t.children > 0 && prev && prev.id === t.row.id && now - prev.t < 500) {
-													toggleCollapsed(t.row.id)
-													lastClickRef.current = undefined
-													return
-												}
-												lastClickRef.current = { id: t.row.id, t: now }
-												clickSelectRef.current = true
-												onSelect(t.row.id)
-											}}
-										>
-											<td className="id">
-												<span className="treecell">
-													<Guides guides={t.guides} />
-													{t.children > 0 ? (
-														<button
-															className="caret"
-															aria-label={collapsed.has(t.row.id) ? 'Expand' : 'Collapse'}
-															onClick={(e) => {
-																e.stopPropagation()
-																toggleCollapsed(t.row.id)
-															}}
-														>
-															{collapsed.has(t.row.id) ? '▸' : '▾'}
-														</button>
-													) : (
-														<span className="caret-spacer" />
-													)}
-													<span className="lid">{fmtId('event', t.row.id)}</span>
-												</span>
-											</td>
-											<td className="t">
-												{t.row.time}
-												{t.row.delta !== undefined ? <span className="tdelta"> {fmtDelta(t.row.delta)}</span> : undefined}
-											</td>
-											<td>
-												<span className={`chip ${t.row.cls}`} data-tip={kindTip(t.row.kind)}>{t.row.kind}</span>
-											</td>
-											<NameCell row={t.row} onCause={() => onSelect(t.row.cause)} onNode={inspect} />
-											<td className="data">
-												{t.depth === 0 && t.children > 0 ? (
-													<span className="op-rollup">{opRollup(t.row.id) ?? t.row.summary}</span>
-												) : (
-													t.row.summary
-												)}
-											</td>
-											<td className="took">{fmtTook(t.row.took)}</td>
-										</tr>
-									))}
-							{rows.length === 0 ? (
-								<tr>
-									<td className="data" colSpan={6} style={{ color: 'var(--faint)', fontStyle: 'italic' }}>
-										no entries {query || brush ? 'match the filter' : 'yet'}
-									</td>
-								</tr>
-							) : undefined}
-						</tbody>
-					</table>
-				</div>
+				<LogTable
+					mode={mode}
+					rows={rows}
+					treeRows={tree}
+					selected={selected}
+					onSelect={onSelect}
+					collapsed={collapsed}
+					toggleCollapsed={toggleCollapsed}
+					flashing={flashing}
+					opRollup={opRollup}
+					inspect={inspect}
+					emptyHint={`no entries ${query || brush ? 'match the filter' : 'yet'}`}
+				/>
 
 				{sel !== undefined ? <ResizeHandle dir="h" onDelta={(d) => setCzW((w) => clampSize(w - d, 220, 640))} /> : undefined}
 				{sel !== undefined ? (
-					<aside className="causality" aria-label="Caused by" style={{ width: czW }}>
-						<div className="cz-head">
-							<div className="cz-kicker">
-								Selected entry
-								<button
-									className="srclink2"
-									style={{ float: 'right' }}
-									data-tip="Copy this event's cause chain and consequences as markdown — paste into a chat to explain why it happened."
-									onClick={() => {
-										void copyText(causalityMarkdown(spine, caused)).then((ok) => {
-											setCzCopied(ok)
-											if (ok) setTimeout(() => setCzCopied(false), 1200)
-										})
-									}}
-								>
-									⧉ {czCopied ? 'copied' : 'copy'}
-								</button>
-							</div>
-							<div className="cz-title">
-								<EventRef row={sel} />
-							</div>
-							<div className="cz-sub">
-								+{((sel.t - (opRoot?.t ?? sel.t)) / 1000).toFixed(3)}ms into the operation
-							</div>
-							<div className="insp-desc">{kindTip(sel.kind)}</div>
-						</div>
-						<div className="cz-section">
-							<h3 data-tip="The chain that led here, in stack-trace order: the selected entry on top, each cause beneath it, the user input at the bottom.">
-								Caused by
-							</h3>
-							<CauseSpine
-								chain={spine}
-								onPick={(e) => onSelect(e.id)}
-								renderExtra={(t) => (
-									<div className="impact-card">
-										whole operation: <b>{opEntries} entries</b>
-										{opTotalUs > 0 ? <> · <b>{fmtTook(opTotalUs)}</b></> : undefined}
-										<br />
-										{t.node !== undefined ? (
-											<button className="srclink" onClick={() => inspect(t.node!)}>
-												view {t.name} in graph →
-											</button>
-										) : undefined}
-									</div>
-								)}
-							/>
-						</div>
-						{opStack !== undefined ? <StackTrace frames={opStack} /> : undefined}
-						{caused.length > 0 ? (
-							<div className="cz-section">
-								<h3 data-tip="Everything this entry caused, directly and transitively — its consequence tree.">What this caused · {caused.length}</h3>
-								<ul className="caused-tree">
-									{caused.map((t) => (
-										<li key={t.row.id} style={{ paddingLeft: (t.depth - 1) * 14 }}>
-											<EventRef row={t.row} onClick={() => onSelect(t.row.id)} />
-										</li>
-									))}
-								</ul>
-							</div>
-						) : undefined}
-					</aside>
+					<LogDetail
+						sel={sel}
+						spine={spine}
+						caused={caused}
+						opRoot={opRoot}
+						opEntries={opEntries}
+						opTotalUs={opTotalUs}
+						opStack={opStack}
+						width={czW}
+						onSelect={onSelect}
+						inspect={inspect}
+					/>
 				) : undefined}
 			</div>
 		</>
 	)
-}
-
-/** KindClass → the base color var used for timeline ticks. */
-function classVar(cls: KindClass): string {
-	switch (cls) {
-		case 'write':
-			return 'atom'
-		case 'compute':
-			return 'computed'
-		case 'notify':
-		case 'render':
-			return 'watcher'
-		case 'effect':
-			return 'effect'
-		case 'error':
-			return 'danger'
-		case 'async':
-			return 'suspended'
-		case 'origin':
-			return 'thread'
-		case 'hot':
-			return 'hot'
-		default:
-			return 'system'
-	}
 }

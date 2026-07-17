@@ -17,11 +17,10 @@ import type {
 	EventFilter,
 	EventId,
 	GraphNode,
-	KindClass,
 	NodeDetails,
 	NodeId,
 } from '../protocol.ts'
-import { kindClass } from '../protocol.ts'
+import { causeChainFrom, eventFilterPredicate, nodeMatchesQuery } from '../protocol.ts'
 
 /** A structured-clone-safe view of the engine, posted page → panel on flush. */
 export interface Snapshot {
@@ -68,14 +67,12 @@ export class SnapshotBackend implements Backend {
 	}
 
 	events(filter: EventFilter, limit: number): DevtoolsEvent[] {
-		const classes = filter.classes ? new Set<KindClass>(filter.classes) : null
+		const matches = eventFilterPredicate(filter)
 		const out: DevtoolsEvent[] = []
 		const all = this.snap.events
 		for (let i = all.length - 1; i >= 0 && out.length < limit; i--) {
 			const e = all[i]
-			if (filter.node !== undefined && e.node !== filter.node) continue
-			if (classes !== null && !classes.has(kindClass(e.kind))) continue
-			out.push(e)
+			if (matches(e)) out.push(e)
 		}
 		return out.reverse()
 	}
@@ -83,16 +80,7 @@ export class SnapshotBackend implements Backend {
 	causeChain(eventId: EventId): DevtoolsEvent[] {
 		const byId = new Map<EventId, DevtoolsEvent>()
 		for (const e of this.snap.events) byId.set(e.id, e)
-		const chain: DevtoolsEvent[] = []
-		let id = eventId
-		let guard = 0
-		while (id > 0 && guard++ < 10000) {
-			const e = byId.get(id)
-			if (e === undefined) break
-			chain.push(e)
-			id = e.cause
-		}
-		return chain.reverse()
+		return causeChainFrom((id) => byId.get(id), eventId)
 	}
 
 	search(query: string, cap: number): GraphNode[] {
@@ -100,8 +88,7 @@ export class SnapshotBackend implements Backend {
 		const out: GraphNode[] = []
 		for (const n of this.snap.nodes) {
 			if (out.length >= cap) break
-			const hay = `${n.label ?? ''} ${n.kind}`.toLowerCase()
-			if (q === '' || hay.includes(q)) out.push(n)
+			if (nodeMatchesQuery(n, q)) out.push(n)
 		}
 		return out
 	}

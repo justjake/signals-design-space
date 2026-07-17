@@ -2,7 +2,7 @@
  * Devtools protocol — the normalized, library-agnostic wire types.
  *
  * Modeled on the causal shape every tracer in this repo shares (an entry with
- * a `cause` parent id), NOT on any one library's kind vocabulary. Kind strings
+ * a `cause` parent id), not on any one library's kind vocabulary. Kind strings
  * pass through verbatim from the adapter; the panel colors/filters via
  * `kindClass`, and unknown kinds fall through to 'system' so a future kind
  * still renders. No DOM, no signals — this module is pure data.
@@ -10,7 +10,7 @@
 
 /**
  * Coarse bucket for coloring/filtering; the only place the UI reduces the
- * open kind vocabulary. Mirrors cosignals/debug's TraceKindClass.
+ * open kind vocabulary.
  */
 export type KindClass =
 	| 'origin'
@@ -90,6 +90,20 @@ export interface GraphEdge {
 	to: NodeId
 }
 
+/** A node's display name: its label, or `kind#id` when it has none. */
+export function nodeDisplayName(n: Pick<GraphNode, 'id' | 'kind' | 'label'>): string {
+	return n.label ?? `${n.kind}#${n.id}`
+}
+
+/**
+ * The label/kind substring match behind Backend.search. `lowerQuery` must
+ * already be lowercased; '' matches everything. Shared by every Backend
+ * implementation so search semantics can't drift between realms.
+ */
+export function nodeMatchesQuery(n: Pick<GraphNode, 'kind' | 'label'>, lowerQuery: string): boolean {
+	return lowerQuery === '' || `${n.label ?? ''} ${n.kind}`.toLowerCase().includes(lowerQuery)
+}
+
 /** One normalized trace entry. `kind` is the library's verbatim string. */
 export interface DevtoolsEvent {
 	id: EventId
@@ -161,8 +175,38 @@ export interface Backend {
 }
 
 /**
- * Classify a verbatim kind string. Unknown → 'system'. Kept in sync with
- * cosignals/debug's kindClass; the adapter may pass its own instead.
+ * Build the row predicate for an EventFilter. Every Backend implementation
+ * (the in-realm collector, the extension's snapshot backend) filters through
+ * this one function, so filter semantics can't drift between realms.
+ */
+export function eventFilterPredicate(filter: EventFilter): (e: DevtoolsEvent) => boolean {
+	const classes = filter.classes ? new Set<KindClass>(filter.classes) : null
+	return (e) =>
+		(filter.node === undefined || e.node === filter.node) &&
+		(classes === null || classes.has(kindClass(e.kind)))
+}
+
+/**
+ * Walk cause pointers from `eventId` up to its operation root, resolving each
+ * id through `get` (undefined = evicted/unknown, ends the walk). Returns the
+ * chain root first. The step guard bounds a corrupted cause cycle.
+ */
+export function causeChainFrom(get: (id: EventId) => DevtoolsEvent | undefined, eventId: EventId): DevtoolsEvent[] {
+	const chain: DevtoolsEvent[] = []
+	let id = eventId
+	let guard = 0
+	while (id > 0 && guard++ < 10000) {
+		const e = get(id)
+		if (e === undefined) break
+		chain.push(e)
+		id = e.cause
+	}
+	return chain.reverse()
+}
+
+/**
+ * Classify a verbatim kind string into its display bucket. Unknown kinds fall
+ * through to 'system' so a future kind still renders.
  */
 export function kindClass(kind: string): KindClass {
 	switch (kind) {

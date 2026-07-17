@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { Backend, EventId, NodeId } from '../protocol.ts'
+import { nodeDisplayName } from '../protocol.ts'
 import { useBackend } from './store.ts'
 import { PANEL_CSS } from './styles.ts'
 import { ThemeDialog } from './ThemeDialog.tsx'
@@ -64,20 +65,42 @@ export function App({
 		if (loc.tab === 'graph') setGraphSel(loc.node)
 		else setLogSel(loc.event)
 	}
+	// The location the views were last pointed at. navigate() applies directly
+	// (its target is its argument, so there is nothing stale to read); go() only
+	// moves nav.at, and the effect below applies the location that move landed
+	// on. Tracking the applied location here keeps the effect from re-applying
+	// what navigate() already did.
+	const appliedRef = useRef<NavLoc | undefined>(undefined)
 	const navigate = (loc: NavLoc) => {
 		setNav((n) => {
 			if (sameLoc(n.trail[n.at], loc)) return n
 			const trail = [...n.trail.slice(0, n.at + 1), loc].slice(-30)
 			return { trail, at: trail.length - 1 }
 		})
+		appliedRef.current = loc
 		apply(loc)
 	}
+	// go() computes the new index inside the updater, so two clicks batched
+	// into one frame each advance from the other's result instead of both
+	// reading the same render-scope nav and moving one step total.
 	const go = (delta: number) => {
-		const at = nav.at + delta
-		if (at < 0 || at >= nav.trail.length) return
-		setNav((n) => ({ ...n, at }))
-		apply(nav.trail[at])
+		setNav((n) => {
+			const at = n.at + delta
+			return at < 0 || at >= n.trail.length ? n : { ...n, at }
+		})
 	}
+	// Apply the location a go() move landed on. Applying is a side effect
+	// (it sets other state), so it can't run inside the setNav updater; this
+	// effect sees the settled nav after all batched moves. A layout effect, so
+	// the view switches before the browser paints the moved history state.
+	// Trail entries keep their identity, so a location navigate() just applied
+	// is skipped by reference.
+	useLayoutEffect(() => {
+		const loc = nav.trail[nav.at]
+		if (loc === undefined || loc === appliedRef.current) return
+		appliedRef.current = loc
+		apply(loc)
+	}, [nav])
 
 	// Open a node in the graph / an event in the log. Used by both the views'
 	// own selections and the cross-view links (a log row's "view in graph", a
@@ -88,7 +111,7 @@ export function App({
 	// — a filter action, not a single-target jump, so it doesn't join the history.
 	const openInLog = (id: NodeId) => {
 		const n = backend.node(id)
-		setLogQuery(`name:${n?.label ?? `${n?.kind ?? 'node'}#${id}`}`)
+		setLogQuery(`name:${n === undefined ? `node#${id}` : nodeDisplayName(n)}`)
 		setTab('log')
 	}
 

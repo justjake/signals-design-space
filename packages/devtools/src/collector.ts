@@ -2,7 +2,7 @@
  * Collector — the in-page, library-agnostic heart of the devtools.
  *
  * Plain JS: a ring of normalized events, a reduced per-node DebugState, and
- * the Backend query surface. It holds ONLY numbers and strings — never a
+ * the Backend query surface. It holds only numbers and strings — never a
  * reactive node object — so it can't leak the graph it observes and can't feed
  * back into it. Node metadata (kind, value, edges) is fetched through a
  * NodeProvider the library adapter implements; the collector never sees a
@@ -16,13 +16,12 @@ import type {
 	EventFilter,
 	EventId,
 	GraphNode,
-	KindClass,
 	NodeDetails,
 	NodeId,
 	NodeKind,
 	NodeStatus,
 } from './protocol.ts'
-import { kindClass } from './protocol.ts'
+import { causeChainFrom, eventFilterPredicate, kindClass, nodeMatchesQuery } from './protocol.ts'
 
 /**
  * The adapter's view of a live node, by id. All reads are inert (see the
@@ -243,7 +242,7 @@ export class Collector implements Backend {
 	}
 
 	events(filter: EventFilter, limit: number): DevtoolsEvent[] {
-		const classes = filter.classes ? new Set<KindClass>(filter.classes) : null
+		const matches = eventFilterPredicate(filter)
 		const out: DevtoolsEvent[] = []
 		const n = this.ring.length
 		if (n === 0) return out
@@ -253,24 +252,13 @@ export class Collector implements Backend {
 		for (let scanned = 0; scanned < n && out.length < limit; scanned++) {
 			const e = this.ring[idx]
 			idx = full ? (idx - 1 + this.capacity) % this.capacity : idx - 1
-			if (filter.node !== undefined && e.node !== filter.node) continue
-			if (classes !== null && !classes.has(kindClass(e.kind))) continue
-			out.push(e)
+			if (matches(e)) out.push(e)
 		}
 		return out.reverse()
 	}
 
 	causeChain(eventId: EventId): DevtoolsEvent[] {
-		const chain: DevtoolsEvent[] = []
-		let id = eventId
-		let guard = 0
-		while (id > 0 && guard++ < 10000) {
-			const e = this.byId.get(id)
-			if (e === undefined) break
-			chain.push(e)
-			id = e.cause
-		}
-		return chain.reverse()
+		return causeChainFrom((id) => this.byId.get(id), eventId)
 	}
 
 	private snapshot(id: NodeId): GraphNode | undefined {
@@ -305,8 +293,7 @@ export class Collector implements Backend {
 			if (out.length >= cap) break
 			const snap = this.snapshot(id)
 			if (snap === undefined) continue
-			const hay = `${snap.label ?? ''} ${snap.kind}`.toLowerCase()
-			if (q === '' || hay.includes(q)) out.push(snap)
+			if (nodeMatchesQuery(snap, q)) out.push(snap)
 		}
 		return out
 	}
