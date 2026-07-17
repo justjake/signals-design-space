@@ -149,9 +149,27 @@ export function LogView({
 	const brushing = useRef<number | undefined>(undefined)
 	const selRowRef = useRef<HTMLTableRowElement | null>(null)
 
-	// Scroll the selected entry into view (e.g. after a jump-to-cause).
+	// Scroll the selected entry into view after following a link or jump-to-cause,
+	// but NOT when the user directly clicked a row here — a click's selection is
+	// already where they're looking, and scrolling it mid-gesture would swallow
+	// the double-click-to-collapse. clickSelectRef distinguishes the two sources.
+	// In a rAF because when a link switches to the log this component just mounted
+	// and the rows aren't laid out yet when the effect first fires.
+	const clickSelectRef = useRef(false)
+	// Native onDoubleClick is unreliable here: the first click changes `selected`,
+	// which re-renders the table before the second click, so the browser never
+	// resolves the pair into a dblclick. Detect it ourselves from the onClick that
+	// always fires — two clicks on the same collapsible row within the OS-typical
+	// 500ms double-click window toggle it.
+	const lastClickRef = useRef<{ id: EventId; t: number } | undefined>(undefined)
 	useEffect(() => {
-		selRowRef.current?.scrollIntoView({ block: 'nearest' })
+		if (selected === undefined) return
+		if (clickSelectRef.current) {
+			clickSelectRef.current = false
+			return
+		}
+		const raf = requestAnimationFrame(() => selRowRef.current?.scrollIntoView({ block: 'nearest' }))
+		return () => cancelAnimationFrame(raf)
 	}, [selected])
 
 	// Esc clears the timeline window (a click on the strip clears it too).
@@ -446,7 +464,10 @@ export function LogView({
 											ref={r.id === selected ? selRowRef : undefined}
 											className={`${r.id === selected ? 'selected' : ''}${flashing.has(r.id) ? ' flash' : ''}`.trim() || undefined}
 											aria-selected={r.id === selected}
-											onClick={() => onSelect(r.id)}
+											onClick={() => {
+												clickSelectRef.current = true
+												onSelect(r.id)
+											}}
 										>
 											<td className="id">{fmtId('event', r.id)}</td>
 											<td className="t">
@@ -467,7 +488,18 @@ export function LogView({
 											ref={t.row.id === selected ? selRowRef : undefined}
 											className={`${t.op % 2 === 1 ? 'op-alt ' : ''}${t.depth === 0 && t.children > 0 ? 'op-head ' : ''}${t.row.id === selected ? 'selected ' : ''}${flashing.has(t.row.id) ? 'flash' : ''}`.trim() || undefined}
 											aria-selected={t.row.id === selected}
-											onClick={() => onSelect(t.row.id)}
+											onClick={() => {
+												const now = Date.now()
+												const prev = lastClickRef.current
+												if (t.children > 0 && prev && prev.id === t.row.id && now - prev.t < 500) {
+													toggleCollapsed(t.row.id)
+													lastClickRef.current = undefined
+													return
+												}
+												lastClickRef.current = { id: t.row.id, t: now }
+												clickSelectRef.current = true
+												onSelect(t.row.id)
+											}}
 										>
 											<td className="id">
 												<span className="treecell">

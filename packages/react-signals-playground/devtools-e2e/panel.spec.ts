@@ -80,3 +80,58 @@ test('graph trackpad gestures keep the pinch focal point fixed and scroll to pan
 	expect(result.afterPan.x).toBeGreaterThan(result.afterPinch.x) // scrolled to pan
 	expect(result.afterPan.y).toBeGreaterThan(result.afterPinch.y)
 })
+
+test('double-click a collapsible log row toggles collapse', async ({ page }) => {
+	await page.goto('/royale-fx2/?devtools')
+	const panel = page.locator('.signals-devtools-root')
+	await expect(panel).toBeVisible()
+	await panel.locator('.nodelist tbody tr').first().waitFor()
+	// A few writes give the tree collapsible root operations (depth-0 with children).
+	for (let i = 0; i < 5; i++) await page.getByTestId('increment').click()
+	await panel.getByRole('button', { name: 'Log', exact: true }).click()
+
+	// Select a collapsible root first: royale prepends new operations, so rows
+	// reorder under us — .selected then pins that row by identity as it moves.
+	await panel.locator('.log tbody tr.op-head').first().locator('.chip').click()
+	const selected = panel.locator('.log tbody tr.selected')
+	await expect(selected.locator('.caret')).toHaveText('▾') // expanded by default
+	await page.waitForTimeout(600) // let the double-click window lapse so the next pair is clean
+
+	// Two clicks within the window collapse it; another pair expands it again.
+	await selected.locator('.chip').click()
+	await selected.locator('.chip').click()
+	await expect(selected.locator('.caret')).toHaveText('▸')
+	await page.waitForTimeout(600)
+	await selected.locator('.chip').click()
+	await selected.locator('.chip').click()
+	await expect(selected.locator('.caret')).toHaveText('▾')
+})
+
+test('following an in-log cause link scrolls the target into view', async ({ page }) => {
+	await page.goto('/royale-fx2/?devtools')
+	const panel = page.locator('.signals-devtools-root')
+	await expect(panel).toBeVisible()
+	await panel.locator('.nodelist tbody tr').first().waitFor()
+	for (let i = 0; i < 6; i++) await page.getByTestId('increment').click()
+	await panel.getByRole('button', { name: 'Log', exact: true }).click()
+	await expect(panel.locator('.log tbody button.causeref').first()).toBeVisible()
+
+	// Scroll the log fully down so an earlier cause target is off-screen, then
+	// follow the bottom-most cause link — its target must land inside the viewport.
+	await panel.locator('.log').evaluate((el) => {
+		let p = el as HTMLElement | null
+		while (p && p.scrollHeight <= p.clientHeight) p = p.parentElement
+		if (p) p.scrollTop = p.scrollHeight
+	})
+	await panel.locator('.log tbody button.causeref').last().click()
+	const selected = panel.locator('.log tbody tr.selected')
+	await expect(selected).toHaveCount(1)
+	await expect(async () => {
+		const inView = await selected.first().evaluate((el) => {
+			const cr = el.getBoundingClientRect()
+			const sc = (el as HTMLElement).closest('.signals-devtools-root')!.getBoundingClientRect()
+			return cr.top >= sc.top - 1 && cr.bottom <= sc.bottom + 1
+		})
+		expect(inView).toBe(true)
+	}).toPass()
+})
