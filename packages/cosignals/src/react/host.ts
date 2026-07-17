@@ -43,7 +43,7 @@ import {
 	setAmbientClassifier,
 	worldOf,
 } from '../worlds.ts'
-import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts'
+import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../signals.ts'
 
 /**
  * One registered connection per SignalsFrameworkProvider. The record is

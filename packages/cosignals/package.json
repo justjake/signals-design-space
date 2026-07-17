@@ -8,8 +8,13 @@
 		".": "./src/index.ts",
 		"./ssr": "./src/ssr.ts",
 		"./react": "./src/react/index.ts",
-		"./debug": "./src/debug/index.ts"
+		"./debug": "./src/debug/index.ts",
+		"./unstable": "./src/unstable.ts",
+		"./testing": "./src/testing.ts"
 	},
+	"sideEffects": [
+		"./src/react/index.ts"
+	],
 	"scripts": {
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"format-doc-comments": "node tools/format-doc-comments.mjs",

@@ -272,7 +272,7 @@ export let activeConsumer: EvaluatedNode<unknown> | null = null
 export let currentWorld: World | null = null
 /**
  * The computed body executing right now, tracked separately from
- * activeConsumer: untracked() clears activeConsumer but must not disable
+ * activeConsumer: untrack() clears activeConsumer but must not disable
  * per-computed policies (like the no-writes-inside-computeds rule).
  */
 export let activeEvaluation: EvaluatedNode<unknown> | null = null
@@ -738,7 +738,7 @@ export function flushLifetimeTransitions(): void {
 			atom.lifetimeCleanup = undefined
 			if (cleanup !== undefined) {
 				try {
-					untracked(cleanup)
+					untrack(cleanup)
 				} catch (error) {
 					if (trace !== null) {
 						trace.emitEvent('cleanup-error', atom, trace.getCause(atom), {
@@ -1604,7 +1604,7 @@ export const PARKED = Symbol('parked')
  * is activeConsumer, so the function can find its owner. (Draft
  * evaluations pass their own use function instead; see worlds.ts.) A
  * use() that escapes its evaluation — captured and called later, or called
- * inside untracked() — finds no evaluating computed and throws rather than
+ * inside untrack() — finds no evaluating computed and throws rather than
  * park the wrong node.
  */
 const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
@@ -1859,7 +1859,7 @@ export function readComputed<T>(node: ComputedNode<T>): T {
 }
 
 /** Run `fn` without adding its signal reads to the active dependency list. */
-export function untracked<T>(fn: () => T): T {
+export function untrack<T>(fn: () => T): T {
 	const prev = activeConsumer
 	activeConsumer = null
 	try {
@@ -1954,7 +1954,7 @@ function runEffectCleanup(w: EffectNode): void {
 		const c = w.cleanup
 		w.cleanup = undefined
 		try {
-			untracked(c)
+			untrack(c)
 		} catch (e) {
 			if (trace !== null) {
 				trace.emitEvent('cleanup-error', w, trace.getCause(w), { error: e })
@@ -2026,7 +2026,7 @@ function disposeEffect(w: EffectNode): void {
 			const c = w.cleanup
 			w.cleanup = undefined
 			try {
-				untracked(c)
+				untrack(c)
 			} catch (error) {
 				if (trace !== null) {
 					trace.emitEvent('cleanup-error', w, trace.getCause(w), { error })

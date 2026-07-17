@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'cosignals'
+import { createAtom, createComputed, createEffect } from 'cosignals'
 import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { inspectorModel, logRows, nodeRows } from '../src/panel/viewmodel.ts'
 
@@ -17,15 +17,15 @@ describe('panel view-model', () => {
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
 			// parity recomputes to the same value on 1 → 5, feeding sameResults.
 			const parity = createComputed(() => count.get() % 2, { label: 'parity' })
-			effect(
+			createEffect(
 				() => doubled.get(),
 				() => {},
 			)
-			effect(
+			createEffect(
 				() => parity.get(),
 				() => {},
 			)
-			set(count, 5)
+			count.set(5)
 
 			// Log rows carry the verbatim kind, a color class, and the node name.
 			const rows = logRows(collector, {}, 50)
@@ -70,7 +70,7 @@ describe('panel view-model', () => {
 
 			// A second write shows a real prev → next value diff: the adapter peeks
 			// the atom's value inertly and diffs against the last it recorded.
-			set(count, 9)
+			count.set(9)
 			const after = logRows(collector, {}, 50)
 			const lastWrite = [...after].reverse().find((r) => r.kind === 'set' && r.name === 'count')!
 			expect(lastWrite.summary).toBe('5 → 9')

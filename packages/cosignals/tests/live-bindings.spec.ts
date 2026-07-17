@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 import * as graph from '../src/graph.ts'
 import * as publicApi from '../src/index.ts'
+import * as unstableApi from '../src/unstable.ts'
 import * as worlds from '../src/worlds.ts'
 
 test('internal live bindings do not widen the public entry point', () => {
@@ -10,7 +11,11 @@ test('internal live bindings do not widen the public entry point', () => {
 	expect('serializeAtomState' in publicApi).toBe(false)
 	expect('initializeAtomState' in publicApi).toBe(false)
 	expect('installState' in publicApi).toBe(false)
-	expect(publicApi.getActiveTracer).toBeTypeOf('function')
+	// Engine seams live behind the unstable entry, not the root.
+	expect('nodeOf' in publicApi).toBe(false)
+	expect('setRenderWriteGuard' in publicApi).toBe(false)
+	expect('resetEngineForTest' in publicApi).toBe(false)
+	expect(publicApi.createAtom).toBeTypeOf('function')
 })
 
 test('[falsify-first] canonical ambient owners expose live internal bindings', () => {
@@ -33,7 +38,7 @@ test('[falsify-first] canonical ambient owners expose live internal bindings', (
 		return source.get()
 	})
 	expect(computed.get()).toBe(1)
-	expect(seenConsumer).toBe(publicApi.nodeOf(computed))
+	expect(seenConsumer).toBe(unstableApi.nodeOf(computed))
 	expect(graphState.activeConsumer).toBeNull()
 
 	graph.withWorld(worlds.BASE_WORLD, () => {
@@ -56,7 +61,7 @@ test('[falsify-first] canonical ambient owners expose live internal bindings', (
 			seenPark = worldState.currentPark
 			return source.get()
 		})
-		expect(worlds.resolveState(publicApi.nodeOf(worldComputed), world)).toEqual({
+		expect(worlds.resolveState(unstableApi.nodeOf(worldComputed), world)).toEqual({
 			flags: 0,
 			value: 2,
 		})

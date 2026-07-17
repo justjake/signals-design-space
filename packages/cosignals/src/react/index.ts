@@ -6,7 +6,16 @@
  * Runs on stock React: no patches, no build flags. Transitions, updater
  * rebase, and suspense behavior all go through public React semantics —
  * state updates, context, and effects.
+ *
+ * Importing this entry registers the bindings with the engine (write
+ * classification, the write-during-render guard, the render-world
+ * provider). No setup call is needed; registerReactSignals stays
+ * exported for code that wants the disposer handle.
  */
+import { registerReactSignals } from './host.ts'
+
+registerReactSignals()
+
 export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
 export { SignalsFrameworkProvider, wrapCreateRoot } from './SignalsFrameworkProvider.ts'
 export {

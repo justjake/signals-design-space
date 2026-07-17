@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'cosignals'
+import { createAtom, createComputed, createEffect } from 'cosignals'
 import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { buildSnapshot, SnapshotBackend } from '../src/extension/snapshot.ts'
 import { logRows, nodeRows, inspectorModel } from '../src/panel/viewmodel.ts'
@@ -10,11 +10,11 @@ describe('extension bridge: snapshot round-trip', () => {
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
-			effect(
+			createEffect(
 				() => doubled.get(),
 				() => {},
 			)
-			set(count, 5)
+			count.set(5)
 
 			// Page side: build a snapshot and prove it survives structured clone.
 			const snap = buildSnapshot(dt.collector)

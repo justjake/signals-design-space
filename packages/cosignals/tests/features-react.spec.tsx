@@ -15,17 +15,15 @@ import {
 	type Harness,
 } from './helpers.tsx'
 import {
-	attachTracer,
 	createComputed,
-	effect,
+	createEffect,
 	endBatch,
-	nodeOf,
-	read,
 	createAtom,
 	startBatch,
-	update,
 	type Atom,
 } from 'cosignals'
+import { attachTracer } from 'cosignals/debug'
+import { nodeOf } from 'cosignals/unstable'
 import { initializeAtomState, serializeAtomState } from 'cosignals/ssr'
 import {
 	SignalsFrameworkProvider,
@@ -112,7 +110,7 @@ describe('scenario 11 — suspense family', () => {
 		expect(text(container)).toBe('d:one') // transition holds on the fetch
 		await r.settle('1', 'TWO')
 		expect(text(container)).toBe('d:TWO') // lands with the transition
-		expect(read(r.data)).toBe('TWO')
+		expect(r.data.get()).toBe('TWO')
 	})
 })
 
@@ -245,12 +243,12 @@ describe('scenario 15 — causality traces', () => {
 		)
 		await act(() => {
 			startSignalTransition(() => {
-				update(a, (x) => x + 1)
+				a.update((x) => x + 1)
 				hold.set(true)
 			})
 		})
 		await act(() => {
-			update(a, (x) => x * 2)
+			a.update((x) => x * 2)
 		})
 		expect(text(container)).toBe('v:2')
 		const urgentChain = t.whyLastDelivery(nodeOf(a))
@@ -496,7 +494,7 @@ describe('scenario 15 — causality traces', () => {
 		// The handler's run is the operation in flight when the transition
 		// opens — the same seam a devtools adapter uses to attribute a DOM
 		// event — so the transition's subtree roots under the triggering write.
-		const dispose = effect(trigger, (v) => {
+		const dispose = createEffect(trigger, (v) => {
 			if (v === 1) {
 				startSignalTransition(() => key.set(1))
 			}
@@ -720,13 +718,13 @@ describe('cosignals extras', () => {
 			})
 		})
 		expect(text(container)).toBe('v:0;') // invisible, held, no fallback
-		expect(read(a)).toBe(0)
+		expect(a.get()).toBe(0)
 		await act(async () => {
 			gate.resolve()
 			await gate.promise
 		})
 		expect(text(container)).toBe('v:1;')
-		expect(read(a)).toBe(1)
+		expect(a.get()).toBe(1)
 	})
 
 	test('useSignalTransition: isPending spans the batch lifetime', async () => {

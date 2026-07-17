@@ -3,11 +3,11 @@ import { SkipTest } from 'reactive-framework-test-suite'
 import {
 	createAtom,
 	createComputed,
-	effect,
+	createEffect,
 	effectScope,
 	endBatch,
 	startBatch,
-	untracked,
+	untrack,
 } from '../src/index.ts'
 import { SignalWriteForbidden } from '../src/graph.ts'
 import { installState } from '../src/ssr.ts'
@@ -46,12 +46,12 @@ const adapter = {
 	// a body that writes signals throws the computed write-policy error,
 	// which signal.write above converts to SkipTest.
 	effect(fn: () => void | (() => void)): () => void {
-		return effect(() => fn(), (cleanup) => cleanup, { equals: () => false })
+		return createEffect(() => fn(), (cleanup) => cleanup, { equals: () => false })
 	},
 	effectScope,
 	startBatch,
 	endBatch,
-	untracked,
+	untracked: untrack,
 }
 
 export default adapter

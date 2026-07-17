@@ -1,21 +1,18 @@
 /** Engine-level world semantics: drafts, replay order, fold, views. */
 import { describe, expect, test } from 'vitest'
 import {
-	Flag,
-	attachTracer,
 	createComputed,
-	effect,
+	createEffect,
 	isPending,
 	latest,
-	nodeOf,
-	read,
-	reducerAtom,
-	setRenderWorldProvider,
+	createReducerAtom,
 	createAtom,
 	type Computed,
 	type Signal,
 	type UseFn,
 } from '../src/index.ts'
+import { Flag, nodeOf, setRenderWorldProvider } from '../src/unstable.ts'
+import { attachTracer } from '../src/debug/index.ts'
 import {
 	BASE_WORLD,
 	discardDraft,
@@ -143,7 +140,7 @@ describe('draft visibility', () => {
 		const boom = new Error('updater boom')
 		const atom = createAtom(0)
 		const computed = createComputed(() => atom.get())
-		const stop = effect(
+		const stop = createEffect(
 			() => computed.get(),
 			() => {},
 		)
@@ -180,11 +177,11 @@ describe('draft visibility', () => {
 	test('draft writes are invisible to base-state readers until retirement', () => {
 		const a = createAtom(0)
 		const id = inDraft(() => a.set(1))
-		expect(read(a)).toBe(0)
+		expect(a.get()).toBe(0)
 		expect(latest(a)).toBe(1)
 		expect(stateIn(a, [id])).toEqual(valueState(1))
 		retireDraft(id)
-		expect(read(a)).toBe(1)
+		expect(a.get()).toBe(1)
 		expect(latest(a)).toBe(1)
 	})
 
@@ -196,7 +193,7 @@ describe('draft visibility', () => {
 		runWithDraftWrites(draft, () => atom.set(1))
 		expect(latest(peeked)).toBe(1)
 		runWithDraftWrites(draft, () => atom.set(2))
-		// The world memo also treats peek as untracked: a later write into the
+		// The world memo also treats peek as untrack: a later write into the
 		// same draft does not invalidate the computed's cached resolution.
 		expect(latest(peeked)).toBe(1)
 		discardDraft(draft.id)
@@ -211,7 +208,7 @@ describe('draft visibility', () => {
 		const b = createAtom(0)
 		let runs = 0
 		// Fresh tuples never compare equal, so every delivered pull counts.
-		effect(
+		createEffect(
 			() => [a.get(), b.get()],
 			() => {
 				runs++
@@ -232,7 +229,7 @@ describe('draft visibility', () => {
 		expect(latest(a)).toBe(15)
 		discardDraft(id)
 		expect(latest(a)).toBe(5)
-		expect(read(a)).toBe(5)
+		expect(a.get()).toBe(5)
 	})
 
 	test('fold loudness is per subscriber: rendered-world resolutions decide who re-renders', () => {
@@ -249,7 +246,7 @@ describe('draft visibility', () => {
 		expect(resolveState(nodeOf(a), worldOf([id])).value).toBe(9)
 		expect(resolveState(nodeOf(a), worldOf([])).value).toBe(1)
 		retireDraft(id)
-		expect(read(a)).toBe(9) // the fold landed in base state
+		expect(a.get()).toBe(9) // the fold landed in base state
 		// Carrier's world still resolves 9 — equal to what it rendered: silent.
 		expect(resolveState(nodeOf(a), worldOf([id])).value).toBe(9)
 		// The base world resolves 9 ≠ the 1 an unaware subscriber rendered:
@@ -295,7 +292,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 	})
 
 	test('ReducerAtom dispatches replay in intent order', () => {
-		const count = reducerAtom((state: number, action: number) => state + action, 1)
+		const count = createReducerAtom((state: number, action: number) => state + action, 1)
 		const id = inDraft(() => count.dispatch(2))
 		count.dispatch(10)
 		expect(count.get()).toBe(11)
@@ -308,20 +305,20 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 		const a = createAtom(1)
 		const id = inDraft(() => a.update((x) => x + 1))
 		a.update((x) => x * 2)
-		expect(read(a)).toBe(2) // urgent skipped the draft, applied *2 to base 1
+		expect(a.get()).toBe(2) // urgent skipped the draft, applied *2 to base 1
 		expect(stateIn(a, [id])).toEqual(valueState(4)) // (1+1)*2
 		retireDraft(id)
-		expect(read(a)).toBe(4)
+		expect(a.get()).toBe(4)
 	})
 
 	test('transition +2 then urgent *2: urgent shows 2, lands at 6 — replay, not reorder', () => {
 		const a = createAtom(1)
 		const id = inDraft(() => a.update((x) => x + 2))
 		a.update((x) => x * 2)
-		expect(read(a)).toBe(2)
+		expect(a.get()).toBe(2)
 		expect(stateIn(a, [id])).toEqual(valueState(6)) // (1+2)*2
 		retireDraft(id)
-		expect(read(a)).toBe(6)
+		expect(a.get()).toBe(6)
 	})
 
 	test('[falsify-first, oracle catch seed 5] an urgent equality-cutoff write on a drafted atom re-wakes the draft audience', () => {
@@ -345,7 +342,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 		expect(stateIn(a, [d.id])).toEqual(valueState(5)) // ...but the replay rebased
 		expect(wakes).toEqual([d.id, d.id]) // and the audience heard about it
 		retireDraft(d.id)
-		expect(read(a)).toBe(5)
+		expect(a.get()).toBe(5)
 		unsub()
 	})
 
@@ -380,17 +377,17 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 		const d1 = inDraft(() => a.update((x) => x + 1)) // seq1
 		a.update((x) => x * 10) // seq2 urgent
 		const d2 = inDraft(() => a.update((x) => x + 3)) // seq3
-		expect(read(a)).toBe(10)
+		expect(a.get()).toBe(10)
 		expect(stateIn(a, [d1])).toEqual(valueState(20)) // (1+1)*10
 		expect(stateIn(a, [d2])).toEqual(valueState(13)) // 1*10+3
 		expect(stateIn(a, [d1, d2])).toEqual(valueState(23)) // (1+1)*10+3
 		retireDraft(d1)
-		expect(read(a)).toBe(20)
+		expect(a.get()).toBe(20)
 		// d2's world resolves the same values before and after d1's fold.
 		expect(stateIn(a, [d1, d2])).toEqual(valueState(23))
 		expect(stateIn(a, [d2])).toEqual(valueState(23))
 		retireDraft(d2)
-		expect(read(a)).toBe(23)
+		expect(a.get()).toBe(23)
 	})
 })
 
@@ -507,12 +504,12 @@ describe('computeds across worlds', () => {
 		const left = createAtom('L')
 		const right = createAtom('R')
 		const pick = createComputed(() => (flag.get() ? right.get() : left.get()))
-		expect(read(pick)).toBe('L')
+		expect(pick.get()).toBe('L')
 		const id = inDraft(() => flag.set(true))
-		expect(read(pick)).toBe('L') // base-state branch untouched
+		expect(pick.get()).toBe('L') // base-state branch untouched
 		expect(stateIn(pick, [id])).toEqual(valueState('R'))
 		retireDraft(id)
-		expect(read(pick)).toBe('R')
+		expect(pick.get()).toBe('R')
 	})
 
 	test('world memos keep identity while inputs are stable', () => {
@@ -744,7 +741,7 @@ describe('computeds across worlds', () => {
 	test('isPending flips for drafted atoms and computeds over them', () => {
 		const a = createAtom(1)
 		const c = createComputed(() => a.get() * 2)
-		expect(read(c)).toBe(2) // establish base-state deps
+		expect(c.get()).toBe(2) // establish base-state deps
 		expect(isPending(a)).toBe(false)
 		expect(isPending(c)).toBe(false)
 		const id = inDraft(() => a.set(9))
@@ -753,7 +750,7 @@ describe('computeds across worlds', () => {
 		retireDraft(id)
 		expect(isPending(a)).toBe(false)
 		expect(isPending(c)).toBe(false)
-		expect(read(c)).toBe(18)
+		expect(c.get()).toBe(18)
 	})
 
 	test('isPending is transitive through computeds', () => {
@@ -763,7 +760,7 @@ describe('computeds across worlds', () => {
 		const a = createAtom(1)
 		const c1 = createComputed(() => a.get() * 10)
 		const c2 = createComputed(() => c1.get() + 1)
-		expect(read(c2)).toBe(11) // establish base-state deps a → c1 → c2
+		expect(c2.get()).toBe(11) // establish base-state deps a → c1 → c2
 		expect(isPending(c2)).toBe(false)
 		const id = inDraft(() => a.set(2))
 		expect(isPending(c1)).toBe(true) // direct input
@@ -779,12 +776,12 @@ describe('computeds across worlds', () => {
 		const selected = createComputed(() => (chooseLeft.get() ? left.get() : right.get()))
 		const flips: boolean[] = []
 		const unsub = observeNode(nodeOf(selected), () => flips.push(isPending(selected)))
-		expect(read(selected)).toBe(0)
+		expect(selected.get()).toBe(0)
 
 		const leftDraft = inDraft(() => left.set(1))
 		expect(isPending(selected)).toBe(true)
 		chooseLeft.set(false)
-		expect(read(selected)).toBe(0)
+		expect(selected.get()).toBe(0)
 		expect(isPending(selected)).toBe(false)
 
 		const firstRightDraft = inDraft(() => right.set(1))
@@ -812,7 +809,7 @@ describe('computeds across worlds', () => {
 		const left = createComputed(() => a.get() + b.get())
 		const right = createComputed(() => b.get() - a.get())
 		const root = createComputed(() => left.get() * right.get())
-		expect(read(root)).toBe(3)
+		expect(root.get()).toBe(3)
 		const first = inDraft(() => a.set(4))
 		const ignored = inDraft(() => unrelated.set(5))
 		const second = inDraft(() => b.set(6))
@@ -834,12 +831,12 @@ describe('computeds across worlds', () => {
 		const c = createComputed(() => a.get() * 2)
 		const flips: boolean[] = []
 		const unsub = observeNode(nodeOf(c), () => flips.push(isPending(c)))
-		expect(read(c)).toBe(2) // establish the watched a -> c edge
+		expect(c.get()).toBe(2) // establish the watched a -> c edge
 		const id = inDraft(() => a.set(9))
 		expect(flips).toContain(true) // the append reached the probe
 		retireDraft(id)
 		expect(flips[flips.length - 1]).toBe(false) // and so did the fold
-		expect(read(c)).toBe(18)
+		expect(c.get()).toBe(18)
 		unsub()
 	})
 })
@@ -848,10 +845,10 @@ describe('the committed view is base state', () => {
 	test('ambient reads hide drafts and converge at retirement', () => {
 		const a = createAtom(0)
 		const id = inDraft(() => a.set(1))
-		expect(read(a)).toBe(0) // the draft is invisible
+		expect(a.get()).toBe(0) // the draft is invisible
 		expect(latest(a)).toBe(1)
 		retireDraft(id)
-		expect(read(a)).toBe(1) // the fold landed in base state
+		expect(a.get()).toBe(1) // the fold landed in base state
 	})
 })
 
@@ -864,25 +861,25 @@ describe('latest() context resolution', () => {
 		const a = createAtom(1)
 		const c = createComputed(() => latest(a) * 10)
 		const id = inDraft(() => a.set(2))
-		expect(read(c)).toBe(10) // base-state evaluation must not read ahead
+		expect(c.get()).toBe(10) // base-state evaluation must not read ahead
 		expect(stateIn(c, [id])).toEqual(valueState(20)) // its own world
 		expect(latest(c)).toBe(20) // ambient: newest intent
 		retireDraft(id)
-		expect(read(c)).toBe(20)
+		expect(c.get()).toBe(20)
 	})
 
 	test('latest() inside a computed is a tracked dependency — no permanent staleness', () => {
 		const a = createAtom(1)
 		const c = createComputed(() => latest(a) + 1)
-		expect(read(c)).toBe(2)
+		expect(c.get()).toBe(2)
 		a.set(5)
-		expect(read(c)).toBe(6)
+		expect(c.get()).toBe(6)
 	})
 
 	test('latest() inside an effect tracks base state: re-runs on folds, never on draft writes', () => {
 		const a = createAtom(0)
 		const seen: number[] = []
-		effect(
+		createEffect(
 			() => latest(a),
 			(v) => {
 				seen.push(v)

@@ -1,4 +1,4 @@
-import type { Atom } from './index.ts'
+import type { Atom } from './signals.ts'
 import { type AtomNode, assertSignalWriteAllowed, peekAtom } from './graph.ts'
 
 /** Atoms under app-supplied keys: positional (array) or named (record). */

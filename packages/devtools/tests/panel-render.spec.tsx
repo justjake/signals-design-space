@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'cosignals'
+import { createAtom, createComputed, createEffect } from 'cosignals'
 import { attachCosignalsDevtools } from '../src/cosignals.ts'
 import { mountDevtools } from '../src/panel/mount.tsx'
 
@@ -24,11 +24,11 @@ describe('inline host renders and live-updates from cosignals', () => {
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
-			effect(
+			createEffect(
 				() => doubled.get(),
 				() => {},
 			)
-			set(count, 5)
+			count.set(5)
 
 			await act(async () => {
 				handle = mountDevtools(el, dt.collector)
@@ -49,7 +49,7 @@ describe('inline host renders and live-updates from cosignals', () => {
 			const before = (el.textContent ?? '').match(/#\d+/g)?.length ?? 0
 
 			// New engine activity → collector flush → panel re-renders live.
-			set(count, 9)
+			count.set(9)
 			await tick()
 			const after = (el.textContent ?? '').match(/#\d+/g)?.length ?? 0
 			expect(after).toBeGreaterThan(before)
@@ -67,11 +67,11 @@ describe('inline host renders and live-updates from cosignals', () => {
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
-			effect(
+			createEffect(
 				() => doubled.get(),
 				() => {},
 			)
-			set(count, 5)
+			count.set(5)
 
 			await act(async () => {
 				handle = mountDevtools(el, dt.collector)

@@ -16,14 +16,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
-import {
-	attachTracer,
-	createAtom,
-	createComputed,
-	latest,
-	read,
-	type TraceEvent,
-} from 'cosignals'
+import { createAtom, createComputed, latest } from 'cosignals'
+import { attachTracer, type TraceEvent } from 'cosignals/debug'
 import { startSignalTransition, useValue } from 'cosignals/react'
 import { openDraft, runWithDraftWrites, type Draft } from '../src/worlds.ts'
 import { broadcastDraft } from '../src/react/host.ts'
@@ -90,7 +84,7 @@ describe('tear: the render-world note is validity-gated', () => {
 		// bails out, so nothing refreshed the note for this pass.
 		await act(() => bump())
 		expect(text(container)).toContain('p:1;')
-		expect(read(a)).toBe(1)
+		expect(a.get()).toBe(1)
 		expect(probed).toEqual([1]) // base state, never the held draft
 		await release()
 		expect(text(container)).toBe('h:2;p:1;')

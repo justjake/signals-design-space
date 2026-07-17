@@ -43,7 +43,7 @@ import {
 import {
 	createAtom,
 	createComputed,
-	effect,
+	createEffect,
 	isPendingPassive,
 	isUninitialized,
 	nodeOf,
@@ -53,7 +53,7 @@ import {
 	type Signal,
 	type SignalValues,
 	type UseFn,
-} from '../index.ts'
+} from '../signals.ts'
 import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
 import {
 	trace,
@@ -303,11 +303,16 @@ export function useValue<T>(x: Signal<T>): T {
 }
 
 /**
- * A component-owned computed. No explicit disposal: an unwatched
- * computed only holds references toward its dependencies, so dropping it
- * at unmount makes it garbage-collectible.
+ * A component-owned computed. `fn` gets the same arguments as a
+ * createComputed body — `use` to unwrap promises (suspending this
+ * component on a first load) and the previous settled value. No explicit
+ * disposal: an unwatched computed only holds references toward its
+ * dependencies, so dropping it at unmount makes it garbage-collectible.
  */
-export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
+export function useComputed<T>(
+	fn: (use: UseFn, previous: T | undefined) => T,
+	deps: React.DependencyList,
+): T {
 	requireRootConnection('useComputed') // fail with this hook's name, not useValue's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	const c = useMemo(() => createComputed(fn), deps)
@@ -317,7 +322,7 @@ export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
 /**
  * Everything a spec's `watch` can be: a compute function, a signal, a
  * tuple of signals, or a record of signals — the same shapes
- * {@link effect} accepts as its first argument.
+ * {@link createEffect} accepts as its first argument.
  */
 export type WatchSource =
 	| ((use: UseFn, previous: any) => unknown)
@@ -347,7 +352,7 @@ export interface SignalEffectSpec<S extends WatchSource> {
 	 * - a signal: shorthand for a compute that reads it;
 	 * - a tuple or record of signals: shorthand for a compute that reads
 	 *   each one into a same-shaped tuple or record of values.
-	 * These are the same shapes {@link effect} accepts as its first
+	 * These are the same shapes {@link createEffect} accepts as its first
 	 * argument.
 	 */
 	watch: S
@@ -385,7 +390,7 @@ function useSignalPhaseEffect(
 ): void {
 	usePhaseEffect(() => {
 		const spec = create()
-		return effect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
+		return createEffect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, deps)
 }

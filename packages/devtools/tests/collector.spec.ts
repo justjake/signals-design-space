@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, effect, set } from 'cosignals'
+import { createAtom, createComputed, createEffect } from 'cosignals'
 import { attachCosignalsDevtools } from '../src/cosignals.ts'
 
 // Deterministic monotonic clock so event timestamps are stable.
@@ -15,12 +15,12 @@ describe('cosignals → collector pipeline', () => {
 		try {
 			const count = createAtom(1, { label: 'count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
-			effect(
+			createEffect(
 				() => doubled.get(),
 				() => {},
 			)
 
-			set(count, 5)
+			count.set(5)
 
 			// Events captured with cosignals's verbatim kind strings.
 			const events = collector.events({}, 200)
@@ -68,21 +68,21 @@ describe('cosignals → collector pipeline', () => {
 		try {
 			const count = createAtom(1, { label: 'hot-count' })
 			const doubled = createComputed(() => count.get() * 2, { label: 'hot-doubled' })
-			const dispose = effect(
+			const dispose = createEffect(
 				() => doubled.get(),
 				() => {},
 			)
 
 			// Off by default: exercising the graph records no hot rows.
 			expect(collector.hotMode()).toBe(false)
-			set(count, 2)
+			count.set(2)
 			expect(hotRows()).toHaveLength(0)
 
 			// Enabled: the same write now records propagate/check/pull rows,
 			// carrying node ids only (numbers), never a node object.
 			collector.setHotMode(true)
 			expect(collector.hotMode()).toBe(true)
-			set(count, 3)
+			count.set(3)
 			const hot = hotRows()
 			const kinds = new Set(hot.map((e) => e.kind))
 			expect(kinds.has('propagate')).toBe(true)
@@ -96,7 +96,7 @@ describe('cosignals → collector pipeline', () => {
 			collector.setHotMode(false)
 			expect(collector.hotMode()).toBe(false)
 			const recorded = hotRows().length
-			set(count, 4)
+			count.set(4)
 			expect(hotRows()).toHaveLength(recorded)
 			dispose()
 		} finally {
