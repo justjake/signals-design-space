@@ -1,5 +1,6 @@
 ## Doc comments, public documentation
 
+- Format multiline doc comments with `/**` and `*/` on their own lines. Keep a doc comment on one line only when the entire comment fits as `/** single line */`.
 - audience: intermediate engineer with no signals familiarity, some beginner react knowledge
 - files should make sense reading from top to bottom; re-order as necessary
 - Plain statements over compressed cleverness. If a sentence needs to be read twice, it's wrong even if it's short.
