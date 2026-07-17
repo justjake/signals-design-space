@@ -239,9 +239,13 @@ export const PANEL_CSS = `
   .node.selected.computed rect { stroke: var(--computed); }
   .node.selected.watcher rect { stroke: var(--watcher); }
   .node.selected.effect rect { stroke: var(--effect); }
-  /* Focus ring sits clearly outside the node (offset), so it never covers the
-     kind-colored border the way a 1px-offset ring did. */
-  .node:focus-visible { outline-offset: 4px; border-radius: 6px; }
+  /* A mouse click focuses the node but doesn't match :focus-visible, so the
+     browser's default 5px outline (a blue box that covered the kind border)
+     showed. Suppress it on pointer focus — selection already indicates the node
+     — and give keyboard focus a real ring, offset well outside the border.
+     (:focus-visible must follow :focus to win at equal specificity.) */
+  .node:focus { outline: none; }
+  .node:focus-visible { outline: 2px solid var(--thread); outline-offset: 4px; border-radius: 6px; }
   .node.suspended rect { stroke: var(--suspended); stroke-dasharray: 5 3; }
   .node.suspended .glyph, .node.suspended .sub, .node.suspended .status { fill: var(--suspended); }
   .node.error rect { stroke: var(--danger); stroke-width: 1.5; }
