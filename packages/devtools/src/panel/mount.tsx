@@ -13,9 +13,6 @@ export interface DevtoolsHandle {
 
 /** Render the devtools panel into `el`, reading from `backend`. */
 export function mountDevtools(el: HTMLElement, backend: Backend): DevtoolsHandle {
-	// Mark the container so the React render observer (bippy) skips the panel's
-	// own commits — it re-renders on every collector flush, which would loop.
-	el.setAttribute('data-signals-devtools-panel', '')
 	const root = createRoot(el)
 	root.render(<App backend={backend} />)
 	return {

@@ -74,14 +74,18 @@ export function attachReactRenderTracer(collector: Collector, latestSignalCause:
 		secure({
 			onCommitFiberRoot(_rendererID: number, root: FiberRoot) {
 				if (!active) return
-				// Never observe the devtools panel's own React root — it re-renders on
-				// every collector flush, which would feed back into itself. The panel
-				// tags its mount container; skip any commit into it.
-				const container: unknown = root.containerInfo
+				// Never observe the devtools' own React root — it re-renders on every
+				// collector flush, which would feed back into itself (a write →
+				// record → flush → panel render → record → … runaway). Identify it by
+				// the markers the panel and its launch button always render, so every
+				// mount path is covered (inline mountDevtools AND the DevtoolsPanelButton
+				// the playground uses), not just those that tag their container.
+				const container = root.containerInfo as Element | null
 				if (
 					container !== null &&
-					typeof (container as Element).closest === 'function' &&
-					(container as Element).closest('[data-signals-devtools-panel]') !== null
+					typeof container.querySelector === 'function' &&
+					(container.closest?.('.signals-devtools-root, .signals-devtools-launch') !== null ||
+						container.querySelector('.signals-devtools-root, .signals-devtools-launch') !== null)
 				) {
 					return
 				}

@@ -16,8 +16,6 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"e2e": "playwright test -c e2e",
-		"dev": "vite",
 		"build:extension": "node scripts/build-extension.mjs"
 	},
 	"dependencies": {
