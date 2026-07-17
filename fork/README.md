@@ -1,9 +1,14 @@
 # The cosignal React fork (S1 bring-up record)
 
-The fork lives at **`github.com/justjake/react`, branch `cosignal-fork`**,
-vendored into this repo as the submodule **`vendor/react`** (see
-`.gitmodules`; the submodule tracks that branch). Spec: `spec/cosignal-v1.md`
-§4 (fork protocol). Plan: `fork/PLAN.md`.
+> **Retired.** The workspace now runs registry React (stable 19.2.x); the
+> pnpm overrides, `fork/build-react.sh`, and the `fork:build`/`fork:test`
+> scripts are gone, and the `vendor/react` submodule points at upstream
+> `facebook/react` at a stable release tag for source reference. The fork
+> branch itself still exists at `github.com/justjake/react`, branch
+> `cosignal-fork`. Everything below is the historical bring-up record.
+
+The fork lives at **`github.com/justjake/react`, branch `cosignal-fork`**.
+Spec: `spec/cosignal-v1.md` §4 (fork protocol). Plan: `fork/PLAN.md`.
 
 ## Pinned base
 

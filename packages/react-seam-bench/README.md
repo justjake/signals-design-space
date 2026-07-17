@@ -68,11 +68,9 @@ p95 asymmetry between these groups is the point of the scenario, not noise.
 
 ## Running
 
-Once per checkout (from the repo root — the React fork must be built and
-linked):
+Once per checkout, from the repo root:
 
 ```sh
-pnpm fork:build   # if vendor/react/build is not already populated
 pnpm install
 ```
 

@@ -557,9 +557,10 @@ describe('scenario 17 — lazy initializers under React', () => {
 })
 
 describe('scenario 18 — SSR', () => {
-	// The fork build script emits client bundles only (no react-dom/server),
-	// so the server half is exercised at the engine level: commit values on
-	// the "server" engine, serialize under app keys, install client-side.
+	// The server half is exercised at the engine level: commit values on the
+	// "server" engine, serialize under app keys, install client-side. What
+	// react-dom/server renders from those values is React's business, not
+	// something these assertions add coverage for.
 	test('serialize -> install on fresh atoms -> exact first client render', async () => {
 		const s1 = createAtom(1)
 		const s2 = createAtom('x')

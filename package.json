@@ -8,8 +8,6 @@
 		"bench": "pnpm -C harness bench",
 		"memory": "pnpm -C harness memory",
 		"typecheck": "pnpm -C harness typecheck",
-		"fork:build": "fork/build-react.sh",
-		"fork:test": "cd vendor/react && yarn test --no-watchman ReactFiberBatchRegistry",
 		"play": "pnpm --filter react-signals-playground dev --open",
 		"release:plan:test": "node --test scripts/release-plan.test.mjs",
 		"release:pack": "node scripts/pack-release.mjs"

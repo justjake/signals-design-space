@@ -37,8 +37,7 @@
 	url = https://github.com/justjake/dalien-signals.git
 [submodule "vendor/react"]
 	path = vendor/react
-	url = https://github.com/justjake/react.git
-	branch = cosignal-fork
+	url = https://github.com/facebook/react.git
 [submodule "daishi-concurrent-benchmark"]
 	path = daishi-concurrent-benchmark
 	url = https://github.com/justjake/will-this-react-global-state-work-in-concurrent-rendering

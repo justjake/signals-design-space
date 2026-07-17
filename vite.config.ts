@@ -17,7 +17,6 @@ const vendored = [
 	'milomg-reactivity-benchmark/**',
 	'daishi-concurrent-benchmark/**',
 	'packages/dalien-signals/**',
-	'fork/**',
 	'design-loop/**',
 	'monitor-design/**',
 	'plans/**',

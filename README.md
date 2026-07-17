@@ -22,7 +22,7 @@ both the implementations and the record of what failed.
 | [`packages/dalien-signals`](packages/dalien-signals/) | A data-oriented fork of alien-signals. Nodes and links live in an `Int32Array` arena; this is the main packed-layout baseline without the full React world model. |
 | [`libs`](libs/) | Focused kernels and A/B probes: the alien control, graph-free `sweep`, array-edge `arrayd`, the arena port, links-only and host-boundary variants, and read/hook tax probes. |
 | [`upstream-alien-signals`](upstream-alien-signals/) | The upstream semantic and performance baseline. Its compact linked push-pull core is difficult to beat across every graph shape. |
-| [`vendor/react`](vendor/react/) + [`fork`](fork/) | The patched React host and its build/test tooling. The fork reports write batches, render attempts, root commits, retirement, and the DOM mutation window, and can schedule a correction back into its causal batch. |
+| [`vendor/react`](vendor/react/) + [`fork`](fork/) | Upstream React sources (stable release tag) kept for reference, plus the retired fork experiment's records. The fork reported write batches, render attempts, root commits, retirement, and the DOM mutation window; the workspace now runs registry React. |
 
 ### Libraries surveyed
 
@@ -60,8 +60,6 @@ README claims.
 Useful commands from the repository root:
 
 ```sh
-pnpm fork:build                                  # build the patched React
-pnpm fork:test                                   # run its batch-registry gate
 FRAMEWORK=cosignals-first-draft pnpm -C harness conformance  # 179-case core contract
 pnpm -C harness bench --frameworks cosignals-first-draft,alien-v3
 pnpm -C harness memory --frameworks cosignals-first-draft,alien-v3

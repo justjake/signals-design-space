@@ -66,20 +66,6 @@ export default defineConfig({
 	server: { headers: COI_HEADERS },
 	preview: { headers: COI_HEADERS },
 	appType: 'mpa',
-	optimizeDeps: {
-		// react/react-dom/scheduler resolve to the workspace's patched React
-		// build (pnpm override → link:vendor/react/build/oss-experimental).
-		// Vite skips prebundling linked packages by default, but these are
-		// CJS and must go through the optimizer to be served as ESM in dev.
-		include: [
-			'react',
-			'react/jsx-runtime',
-			'react/jsx-dev-runtime',
-			'react-dom',
-			'react-dom/client',
-			'scheduler',
-		],
-	},
 	build: {
 		rollupOptions: {
 			input: {

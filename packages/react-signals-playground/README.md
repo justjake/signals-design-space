@@ -56,7 +56,6 @@ The preferred holding mechanism is Suspense: the destination throws its resource
 
 ## Notes
 
-- `react`/`react-dom` are declared `*` like every package in this workspace: the root `pnpm.overrides` pins them to `link:vendor/react/build/oss-experimental/*`, the patched build whose external-runtime protocol all four bridges require (`register()` throws on stock React). A registry version pin would never be consulted.
-- The patched build is CJS behind a `link:` dependency, which Vite would serve as-is in dev; `optimizeDeps.include` forces it through the prebundler (see `vite.config.ts`).
+- `react`/`react-dom` resolve to the stable registry versions pinned in this package's `dependencies`; the implementations here run on stock React.
 - `concurrent-solid-react` ships TypeScript source that reads the `__DEV__` compile-time constant; `vite.config.ts` defines it (dev diagnostics on for `pnpm dev`, off for builds) and the playground `tsconfig.json` includes that package's `globals.d.ts` so `tsc` sees the declaration.
 - `pnpm dev` / `pnpm build` / `pnpm preview` / `pnpm check` from this directory.

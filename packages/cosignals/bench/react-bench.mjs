@@ -1,7 +1,7 @@
 /**
  * React seam benchmark: what a React app pays between an external write and
- * the committed DOM. Real createRoot from this package's fork build, jsdom,
- * real timers, no act. One scenario per child process; stdout is pure CSV
+ * the committed DOM. Real createRoot, jsdom, real timers, no act. One
+ * scenario per child process; stdout is pure CSV
  * `scenario,contender,stat,ms`.
  *
  * Scenarios:
