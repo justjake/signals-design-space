@@ -250,7 +250,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 	const engRead = (ref: Ref): number =>
 		'atom' in ref ? engAtoms[ref.atom].get() : engComputeds[ref.computed].get()
 
-	// Scoped subscribers mirror the useValue hook shape, with both of its
+	// Scoped subscribers mirror the useSignal hook shape, with both of its
 	// channels: the render-notify channel (predicate compare, re-read on
 	// change) and the draft-wake channel (wakes deliver draft ids into a
 	// per-subscriber world, exactly like the per-hook reducer; attach-time

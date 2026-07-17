@@ -9,7 +9,7 @@ import { batch, createComputed, isPending as enginePending, latest, createAtom }
 import {
 	startSignalTransition,
 	useIsPending,
-	useValue,
+	useSignal,
 } from 'cosignals/react'
 
 let h: Harness
@@ -23,7 +23,7 @@ afterEach(async () => {
 function Reader({ id, atom }: { id: string; atom: ReturnType<typeof createAtom<number>> }) {
 	return (
 		<span>
-			{id}:{useValue(atom)};
+			{id}:{useSignal(atom)};
 		</span>
 	)
 }
@@ -37,7 +37,7 @@ describe('scenario 1 — urgent writes commit once', () => {
 			renders++
 			return (
 				<span>
-					{useValue(a)},{useValue(b)}
+					{useSignal(a)},{useSignal(b)}
 				</span>
 			)
 		}
@@ -66,8 +66,8 @@ describe('scenario 2 — transition invisibility + isPending', () => {
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
-			const held = useValue(hold)
+			const v = useSignal(a)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -110,8 +110,8 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function App() {
-			const v = useValue(a)
-			const held = useValue(hold)
+			const v = useSignal(a)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -147,14 +147,14 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 		const gate = deferred<void>()
 		const seen: number[] = []
 		function Value() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			React.useLayoutEffect(() => {
 				seen.push(v)
 			})
 			return <span>v:{v};</span>
 		}
 		function Holder() {
-			const held = useValue(hold)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -211,16 +211,16 @@ describe('the latest() context rule', () => {
 		const samples: Array<{ v: number; l: number }> = []
 
 		function UrgentProbe() {
-			const n = useValue(b)
-			const v = useValue(a)
+			const n = useSignal(b)
+			const v = useSignal(a)
 			if (held) {
 				samples.push({ v, l: latest(a) })
 			}
 			return <b>u:{n};</b>
 		}
 		function TransitionReader() {
-			const v = useValue(a)
-			const holding = useValue(hold)
+			const v = useSignal(a)
+			const holding = useSignal(hold)
 			if (holding && !gate.settled) {
 				throw gate.promise
 			}
@@ -275,8 +275,8 @@ describe('scenario 4 — sibling consistency', () => {
 		const a = createAtom(0)
 		const pairs: Array<[number, number]> = []
 		function Pair() {
-			const v1 = useValue(a)
-			const v2 = useValue(a)
+			const v1 = useSignal(a)
+			const v2 = useSignal(a)
 			pairs.push([v1, v2])
 			return (
 				<span>
@@ -307,7 +307,7 @@ describe('scenario 5 — mount mid-transition', () => {
 		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			if (v > 0 && !gate.settled) {
 				throw gate.promise
 			}
@@ -348,7 +348,7 @@ describe('scenario 6 — flushSync excludes deferred work', () => {
 		const b = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			if (v > 0 && !gate.settled) {
 				throw gate.promise
 			}
@@ -383,7 +383,7 @@ describe('scenario 7 — one transition across two roots', () => {
 		const a = createAtom(0)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			if (v > 0 && !gate.settled) {
 				throw gate.promise
 			}
@@ -422,7 +422,7 @@ describe('silent folds must repair subscribers the render-pass worlds never reac
 		const a = createAtom(1)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			if (v === 2 && !gate.settled) {
 				throw gate.promise
 			}
@@ -463,7 +463,7 @@ describe('scenario 8 — StrictMode nets one subscription and one observation', 
 		function App() {
 			return (
 				<span>
-					{useValue(a)}:{useValue(observed)}
+					{useSignal(a)}:{useSignal(observed)}
 				</span>
 			)
 		}
@@ -498,7 +498,7 @@ describe('scenario 9 — unmount: silence and baseline', () => {
 		let renders = 0
 		function View() {
 			renders++
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		const { root } = await h.mount(<View />)
 		await act(async () => {})
@@ -548,7 +548,7 @@ describe('scenario 10 — write-during-render fails loudly', () => {
 		const a = createAtom(0)
 		let thrown: unknown
 		function Bad() {
-			const v = useValue(a)
+			const v = useSignal(a)
 			if (v === 0) {
 				try {
 					a.set(1)
@@ -579,7 +579,7 @@ describe('scenario 12 — time slicing stays real', () => {
 			return <i>{k},</i>
 		}
 		function List() {
-			const n = useValue(items)
+			const n = useSignal(items)
 			const kids = []
 			for (let k = 0; k < n; k++) {
 				kids.push(<SlowItem key={k} k={k} />)
@@ -591,7 +591,7 @@ describe('scenario 12 — time slicing stays real', () => {
 			)
 		}
 		function Input() {
-			return <b>u:{useValue(urgent)};</b>
+			return <b>u:{useSignal(urgent)};</b>
 		}
 		const { container } = await h.mount(
 			<>

@@ -76,7 +76,7 @@ else — not the first run, not disposal, not the change test.
   then useLayoutEffect, then useEffect.
 - The engine core is dependency-free: its built-in pumps are
   `queueMicrotask` (useLayoutEffect) and `setTimeout(0)` (useEffect).
-- With React mounted, each `SignalsFrameworkProvider` hosts the drains
+- With React mounted, each `CosignalsProvider` hosts the drains
   instead: a lane request re-renders a null last-child sentinel by reducer
   dispatch, at the same ambient priority as the subscriber wakes from the
   same write, so React batches both into one render pass. The sentinel's

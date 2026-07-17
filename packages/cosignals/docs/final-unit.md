@@ -144,7 +144,7 @@ narrower question (the single-draft write cutoff).
 
 ## SSR note
 
-Server rendering works (`SignalsFrameworkProvider` is a `useReducer`
+Server rendering works (`CosignalsProvider` is a `useReducer`
 component; its layout effect is client-only). Hydration consistency is the
 standard signals-SSR seeding concern — give the client engine the values
 the server rendered — and the post-hydration gap is case 2 above.

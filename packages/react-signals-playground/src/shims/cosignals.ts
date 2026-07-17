@@ -12,7 +12,7 @@ import {
 	startSignalTransition,
 	useComputed,
 	useSignalEffect as useCosignalsSignalEffect,
-	useValue,
+	useSignal as useCosignalsSignal,
 	wrapCreateRoot,
 } from 'cosignals/react'
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface'
@@ -54,7 +54,7 @@ export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T
 }
 
 export function useSignal<T>(signal: ReadableSignal<T>): T {
-	return useValue((signal as CosignalsAtom<T> | CosignalsComputed<T>).signal)
+	return useCosignalsSignal((signal as CosignalsAtom<T> | CosignalsComputed<T>).signal)
 }
 
 /**

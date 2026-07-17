@@ -26,14 +26,14 @@ import { attachTracer } from 'cosignals/debug'
 import { nodeOf } from 'cosignals/unstable'
 import { initializeAtomState, serializeAtomState } from 'cosignals/ssr'
 import {
-	SignalsFrameworkProvider,
+	CosignalsProvider,
 	startSignalTransition,
 	useAtom,
 	useComputed,
 	useIsPending,
 	useSignalEffect,
 	useSignalTransition,
-	useValue,
+	useSignal,
 } from 'cosignals/react'
 
 let h: Harness
@@ -76,7 +76,7 @@ describe('scenario 11 — suspense family', () => {
 	}
 
 	function DataView({ data }: { data: unknown }) {
-		return <span>d:{useValue(data as never)}</span>
+		return <span>d:{useSignal(data as never)}</span>
 	}
 
 	test('first load: fallback then converge; one fetch across retries', async () => {
@@ -127,7 +127,7 @@ describe('scenario 14 — lifetime effects across subscriber kinds', () => {
 		function Sub({ id }: { id: string }) {
 			return (
 				<span>
-					{id}:{useValue(a)};
+					{id}:{useSignal(a)};
 				</span>
 			)
 		}
@@ -164,7 +164,7 @@ describe('scenario 15 — causality traces', () => {
 			label: 'data',
 		})
 		function App() {
-			return <span>{useValue(data)}</span>
+			return <span>{useSignal(data)}</span>
 		}
 		const { container } = await h.mount(
 			<React.Suspense fallback={<i>loading</i>}>
@@ -229,8 +229,8 @@ describe('scenario 15 — causality traces', () => {
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function App() {
-			const v = useValue(a)
-			const held = useValue(hold)
+			const v = useSignal(a)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -275,7 +275,7 @@ describe('scenario 15 — causality traces', () => {
 		const first = createComputed((use) => use(firstGate.promise), { label: 'first' })
 		const second = createComputed((use) => use(secondGate.promise), { label: 'second' })
 		function Value({ signal }: { signal: typeof first }) {
-			return <span>{useValue(signal)}</span>
+			return <span>{useSignal(signal)}</span>
 		}
 		const tracer = attachTracer()
 		const { container } = await h.mount(
@@ -339,7 +339,7 @@ describe('scenario 15 — causality traces', () => {
 		const gate = deferred<string>()
 		const shared = createComputed((use) => use(gate.promise), { label: 'shared' })
 		function App() {
-			return <span>{useValue(shared)}</span>
+			return <span>{useSignal(shared)}</span>
 		}
 		const tracer = attachTracer()
 		const first = await h.mount(
@@ -385,7 +385,7 @@ describe('scenario 15 — causality traces', () => {
 		const gate = deferred<string>()
 		const data = createComputed((use) => use(gate.promise), { label: 'pending-replacement' })
 		function App() {
-			return <span>{useValue(data)}</span>
+			return <span>{useSignal(data)}</span>
 		}
 		const first = attachTracer()
 		const mounted = await h.mount(
@@ -417,7 +417,7 @@ describe('scenario 15 — causality traces', () => {
 	test('replacing a tracer between a write and its delivery sanitizes the stale cause', async () => {
 		const value = createAtom(1, { label: 'commit-replacement' })
 		function App() {
-			return <span>{useValue(value)}</span>
+			return <span>{useSignal(value)}</span>
 		}
 		const mounted = await h.mount(<App />)
 		const first = attachTracer()
@@ -446,7 +446,7 @@ describe('scenario 15 — causality traces', () => {
 	test('a base write causes the watcher notification; React owns render tracing', async () => {
 		const a = createAtom(1, { label: 'count' })
 		function App() {
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		const { container } = await h.mount(<App />)
 		const tracer = attachTracer()
@@ -474,7 +474,7 @@ describe('scenario 15 — causality traces', () => {
 		const tracer = attachTracer()
 		const a = createAtom(5, { label: 'mounted' })
 		function App() {
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		const { container } = await h.mount(<App />)
 		expect(text(container)).toBe('5')
@@ -488,7 +488,7 @@ describe('scenario 15 — causality traces', () => {
 		const trigger = createAtom(0, { label: 'trigger' })
 		const key = createAtom(0, { label: 'key' })
 		function App() {
-			return <span>k:{useValue(key)}</span>
+			return <span>k:{useSignal(key)}</span>
 		}
 		const { container } = await h.mount(<App />)
 		// The handler's run is the operation in flight when the transition
@@ -542,7 +542,7 @@ describe('scenario 17 — lazy initializers under React', () => {
 			return 7
 		})
 		function App() {
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		expect(runs).toBe(0)
 		const { container } = await h.mount(<App />)
@@ -580,7 +580,7 @@ describe('scenario 18 — SSR', () => {
 			renders++
 			return (
 				<span>
-					{useValue(c1)}:{useValue(c2)}
+					{useSignal(c1)}:{useSignal(c2)}
 				</span>
 			)
 		}
@@ -591,7 +591,7 @@ describe('scenario 18 — SSR', () => {
 	})
 })
 
-describe('hooks demand a SignalsFrameworkProvider', () => {
+describe('hooks demand a CosignalsProvider', () => {
 	// Hooks have no provider-free mode. The root connection carries
 	// transition worlds, so a subscriber without one has no channel for
 	// them. Rendering a provider-dependent hook without a provider throws
@@ -618,14 +618,14 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 		// they observe base state, which needs no root channel, so they work
 		// without a provider.
 		const cases: Array<[string, () => React.ReactNode]> = [
-			['useValue', () => <span>{useValue(a)}</span>],
+			['useSignal', () => <span>{useSignal(a)}</span>],
 			['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
 			['useIsPending', () => <span>{String(useIsPending(a))}</span>],
 		]
 		for (const [name, render] of cases) {
 			const Hooked = () => <>{render()}</>
 			const div = document.body.appendChild(document.createElement('div'))
-			const root = createRoot(div) // deliberately no SignalsFrameworkProvider
+			const root = createRoot(div) // deliberately no CosignalsProvider
 			await act(() => {
 				root.render(
 					<Boundary>
@@ -635,7 +635,7 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 			})
 			expect(text(div), name).toContain('caught:')
 			expect(text(div), name).toContain(`caught:${name}wasrendered`)
-			expect(text(div), name).toContain('SignalsFrameworkProvider')
+			expect(text(div), name).toContain('CosignalsProvider')
 			expect(text(div), name).toContain('wrapCreateRoot')
 			await act(() => root.unmount())
 			div.remove()
@@ -661,17 +661,17 @@ describe('hooks demand a SignalsFrameworkProvider', () => {
 		try {
 			await act(() => {
 				root.render(
-					<SignalsFrameworkProvider>
+					<CosignalsProvider>
 						<Boundary>
-							<SignalsFrameworkProvider>
+							<CosignalsProvider>
 								<span>nested child</span>
-							</SignalsFrameworkProvider>
+							</CosignalsProvider>
 						</Boundary>
-					</SignalsFrameworkProvider>,
+					</CosignalsProvider>,
 				)
 			})
 			expect(text(div)).toContain(
-				'caught:SignalsFrameworkProvidercannotbenestedinsideanotherSignalsFrameworkProvider.',
+				'caught:CosignalsProvidercannotbenestedinsideanotherCosignalsProvider.',
 			)
 			expect(text(div)).toContain('wrapCreateRoot(createRoot)')
 			expect(text(div)).not.toContain('nestedchild')
@@ -700,8 +700,8 @@ describe('cosignals extras', () => {
 		const hold = createAtom(false)
 		const gate = deferred<void>()
 		function Suspender() {
-			const v = useValue(a)
-			const held = useValue(hold)
+			const v = useSignal(a)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -741,8 +741,8 @@ describe('cosignals extras', () => {
 			return <i>{isPending ? 'P' : 'i'};</i>
 		}
 		function Suspender() {
-			const v = useValue(a)
-			const held = useValue(hold)
+			const v = useSignal(a)
+			const held = useSignal(hold)
 			if (held && !gate.settled) {
 				throw gate.promise
 			}
@@ -781,7 +781,7 @@ describe('cosignals extras', () => {
 			return <i>p:{useIsPending(hold) ? 1 : 0};</i>
 		}
 		function Suspender() {
-			if (useValue(hold) && !gate.settled) {
+			if (useSignal(hold) && !gate.settled) {
 				throw gate.promise
 			}
 			return null
@@ -828,7 +828,7 @@ describe('cosignals extras', () => {
 			)
 			return (
 				<span>
-					s:{sum};o:{useValue(own)};
+					s:{sum};o:{useSignal(own)};
 				</span>
 			)
 		}

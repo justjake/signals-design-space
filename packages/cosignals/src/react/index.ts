@@ -17,9 +17,9 @@ import { registerReactSignals } from './host.ts'
 registerReactSignals()
 
 export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
-export { SignalsFrameworkProvider, wrapCreateRoot } from './SignalsFrameworkProvider.ts'
+export { CosignalsProvider, wrapCreateRoot } from './CosignalsProvider.ts'
 export {
-	useValue,
+	useSignal,
 	useComputed,
 	useSignalEffect,
 	useSignalLayoutEffect,

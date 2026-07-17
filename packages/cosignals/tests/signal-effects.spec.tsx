@@ -4,11 +4,11 @@ import { createRoot } from 'react-dom/client'
 import { createAtom, createComputed, latest } from 'cosignals'
 import { nodeOf } from 'cosignals/unstable'
 import {
-	SignalsFrameworkProvider,
+	CosignalsProvider,
 	startSignalTransition,
 	useSignalEffect,
 	useSignalLayoutEffect,
-	useValue,
+	useSignal,
 } from 'cosignals/react'
 import { act, deferred, flushEffects, makeHarness, React, type Harness } from './helpers.tsx'
 
@@ -310,7 +310,7 @@ describe('scheduled React signal effects', () => {
 			return null
 		}
 		function Suspender() {
-			if (useValue(hold) && !gate.settled) {
+			if (useSignal(hold) && !gate.settled) {
 				throw gate.promise
 			}
 			return null
@@ -360,7 +360,7 @@ describe('scheduled React signal effects', () => {
 			return null
 		}
 		function Suspender() {
-			if (useValue(hold) && !gate.settled) {
+			if (useSignal(hold) && !gate.settled) {
 				throw gate.promise
 			}
 			return null
@@ -416,7 +416,7 @@ describe('scheduled React signal effects', () => {
 			return null
 		}
 		function Suspender() {
-			if (useValue(hold) && !gate.settled) {
+			if (useSignal(hold) && !gate.settled) {
 				throw gate.promise
 			}
 			return null
@@ -428,17 +428,17 @@ describe('scheduled React signal effects', () => {
 		try {
 			await act(() => {
 				firstRoot.render(
-					<SignalsFrameworkProvider>
+					<CosignalsProvider>
 						<React.Suspense fallback={null}>
 							<Effect seen={firstSeen} />
 							<Suspender />
 						</React.Suspense>
-					</SignalsFrameworkProvider>,
+					</CosignalsProvider>,
 				)
 				secondRoot.render(
-					<SignalsFrameworkProvider>
+					<CosignalsProvider>
 						<Effect seen={secondSeen} />
-					</SignalsFrameworkProvider>,
+					</CosignalsProvider>,
 				)
 			})
 			expect(firstSeen).toEqual([0])
@@ -495,7 +495,7 @@ describe('scheduled React signal effects', () => {
 			return null
 		}
 		function Suspender() {
-			if (useValue(hold) && !gate.settled) {
+			if (useSignal(hold) && !gate.settled) {
 				throw gate.promise
 			}
 			return null

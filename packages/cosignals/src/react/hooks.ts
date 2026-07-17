@@ -81,7 +81,7 @@ import {
 	EMPTY_WORLD,
 	ReactRootConnectionContext,
 	worldsReducer,
-} from './SignalsFrameworkProvider.ts'
+} from './CosignalsProvider.ts'
 
 interface UseValueState {
 	delivered: Set<DraftId>
@@ -108,7 +108,7 @@ const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 const NO_IDS: readonly DraftId[] = []
 
 /**
- * These hooks cannot work without a SignalsFrameworkProvider. The root
+ * These hooks cannot work without a CosignalsProvider. The root
  * connection carries transition worlds, and a subscriber without one has
  * no channel for them. Fail at the hook and name both supported fixes.
  */
@@ -116,8 +116,8 @@ function requireRootConnection(hook: string): ReactRootConnection {
 	const connection = useContext(ReactRootConnectionContext)
 	if (connection === null) {
 		const error = new Error(
-			`${hook} was rendered without a SignalsFrameworkProvider above it. ` +
-				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.',
+			`${hook} was rendered without a CosignalsProvider above it. ` +
+				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <CosignalsProvider>.',
 		)
 		trace?.emitEvent('policy-error', null, NO_EVENT, {
 			error,
@@ -186,9 +186,9 @@ function unwrapState(
  * equal. The gap for subscribers that attached late is closed by
  * correctSubscription at subscribe time.
  */
-export function useValue<T>(x: Signal<T>): T {
+export function useSignal<T>(x: Signal<T>): T {
 	const node = nodeOf(x)
-	const connection = requireRootConnection('useValue')
+	const connection = requireRootConnection('useSignal')
 	const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
 	const baseSnapshot = useCallback((): GraphChangeClock => {
 		resolveState(node, BASE_WORLD)
@@ -313,10 +313,10 @@ export function useComputed<T>(
 	fn: (use: UseFn, previous: T | undefined) => T,
 	deps: React.DependencyList,
 ): T {
-	requireRootConnection('useComputed') // fail with this hook's name, not useValue's
+	requireRootConnection('useComputed') // fail with this hook's name, not useSignal's
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	const c = useMemo(() => createComputed(fn), deps)
-	return useValue(c)
+	return useSignal(c)
 }
 
 /**

@@ -4,7 +4,7 @@
  *
  * The design premise is that React itself decides which render pass sees
  * which drafts. Draft ids are dispatched into ordinary React state (each
- * SignalsFrameworkProvider's reducer, each useValue hook's reducer) from
+ * CosignalsProvider's reducer, each useSignal hook's reducer) from
  * inside the owning transition, so React's own update queues determine
  * visibility: urgent passes skip the pending update, the transition's passes include
  * it. These bindings never guess at lanes or patch React; everything runs
@@ -46,7 +46,7 @@ import {
 import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../signals.ts'
 
 /**
- * One registered connection per SignalsFrameworkProvider. The record is
+ * One registered connection per CosignalsProvider. The record is
  * identity-stable for the root's lifetime. It is the context value, so
  * publishing it does not re-render consumers, and the key used to
  * validate render-world notes.
@@ -150,7 +150,7 @@ function renderWriteGuard(): void {
 
 /**
  * A render pass's own declaration of which world it is executing in:
- * written by the pass's SignalsFrameworkProvider render (whose reducer state
+ * written by the pass's CosignalsProvider render (whose reducer state
  * is the pass's world) and refreshed by every one of our hooks the pass
  * renders. Consumed by plain latest()/isPending() calls in render bodies, and by
  * hooks mounting inside the pass.

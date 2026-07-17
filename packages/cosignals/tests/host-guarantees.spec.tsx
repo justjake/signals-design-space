@@ -20,9 +20,9 @@ import {
 import {
 	registerReactSignals,
 	resetReactSignalsForTest,
-	SignalsFrameworkProvider,
+	CosignalsProvider,
 	startSignalTransition,
-	useValue,
+	useSignal,
 } from 'cosignals/react'
 import {
 	broadcastDraft,
@@ -34,7 +34,7 @@ import {
 	EMPTY_WORLD,
 	ReactRootConnectionContext,
 	worldsReducer,
-} from '../src/react/SignalsFrameworkProvider.ts'
+} from '../src/react/CosignalsProvider.ts'
 import { makeHarness, text, tick } from './helpers.tsx'
 
 function subCount(x: Atom<number>): number {
@@ -173,7 +173,7 @@ describe('registration', () => {
 		const h = makeHarness()
 		const a = createAtom(0)
 		function App() {
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		const { container } = await h.mount(<App />)
 		const seen: Array<[value: number, dom: string]> = []
@@ -261,9 +261,9 @@ describe('registration', () => {
 		try {
 			await act(() => {
 				root.render(
-					<SignalsFrameworkProvider>
+					<CosignalsProvider>
 						<Child />
-					</SignalsFrameworkProvider>,
+					</CosignalsProvider>,
 				)
 			})
 			expect(Object.keys(connection!)).toEqual(['dispatch', 'committing'])
@@ -281,7 +281,7 @@ describe('registration', () => {
 		const root = createRoot(container)
 		const seen: Array<[rendered: number, committed: number, liveDrafts: number]> = []
 		function Child() {
-			const value = useValue(atom)
+			const value = useSignal(atom)
 			React.useLayoutEffect(() => {
 				seen.push([value, atom.get(), liveDraftCount()])
 			})
@@ -290,9 +290,9 @@ describe('registration', () => {
 		try {
 			await act(() => {
 				root.render(
-					<SignalsFrameworkProvider>
+					<CosignalsProvider>
 						<Child />
-					</SignalsFrameworkProvider>,
+					</CosignalsProvider>,
 				)
 			})
 			expect(seen).toEqual([[0, 0, 0]])
@@ -354,7 +354,7 @@ describe('unmount reclamation', () => {
 			return <>{kids}</>
 		}
 		function Item() {
-			return <i>{useValue(a)}</i>
+			return <i>{useSignal(a)}</i>
 		}
 		const { root, container } = await h.mount(<Many />)
 		expect(subCount(a)).toBe(50)
@@ -377,7 +377,7 @@ describe('unmount reclamation', () => {
 		const h = makeHarness()
 		const a = createAtom(0)
 		function App() {
-			return <span>{useValue(a)}</span>
+			return <span>{useSignal(a)}</span>
 		}
 		const m1 = await h.mount(<App />)
 		const m2 = await h.mount(<App />)

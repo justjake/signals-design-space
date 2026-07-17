@@ -7,15 +7,15 @@
  * while urgent updates keep committing — the participation the transition
  * scenario exists to separate.
  *
- * SignalsFrameworkProvider is mandatory, so this contender sets Provider.
+ * CosignalsProvider is mandatory, so this contender sets Provider.
  * registerReactSignals() is idempotent and process-wide.
  */
 import { batch, createAtom, type Atom } from 'cosignals'
 import {
 	registerReactSignals,
-	SignalsFrameworkProvider,
+	CosignalsProvider,
 	startSignalTransition,
-	useValue,
+	useSignal,
 } from 'cosignals/react'
 import type { Contender } from './types.js'
 
@@ -29,7 +29,7 @@ const cosignals: Contender = {
 			cells.push(createAtom(0))
 		}
 		return {
-			useCell: (i) => useValue(cells[i]),
+			useCell: (i) => useSignal(cells[i]),
 			writeCell: (i, v) => cells[i].set(v),
 			writeMany: (updates) => {
 				batch(() => {
@@ -46,7 +46,7 @@ const cosignals: Contender = {
 				})
 			},
 			dispose() {},
-			Provider: SignalsFrameworkProvider,
+			Provider: CosignalsProvider,
 		}
 	},
 }

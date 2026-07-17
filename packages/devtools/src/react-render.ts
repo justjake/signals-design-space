@@ -105,7 +105,7 @@ export function attachReactRenderTracer(
 				traverseRenderedFibers(root, (fiber: Fiber, phase: RenderPhase) => {
 					if (phase === 'unmount' || !isCompositeFiber(fiber)) return
 					const component = getDisplayName(fiber) ?? 'Anonymous'
-					// useValue keeps its subscription state in a ref. Layout effects
+					// useSignal keeps its subscription state in a ref. Layout effects
 					// install the watcher before React reports this commit, so the
 					// committed hook list provides the component-to-watcher relation
 					// without owner-stack capture in the signal bindings.

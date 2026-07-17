@@ -14,7 +14,7 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 const React = (await import('react')).default ?? (await import('react'))
 const { createRoot } = await import('react-dom/client')
 const { createAtom } = await import('cosignals')
-const { registerReactSignals, useValue, wrapCreateRoot, startSignalTransition } =
+const { registerReactSignals, useSignal, wrapCreateRoot, startSignalTransition } =
 	await import('../src/react/index.ts')
 
 registerReactSignals()
@@ -67,7 +67,7 @@ async function run(label, makeCase) {
 // (a) one cell written 100x, 4 subscribers.
 await run('same-cell burst (100 writes, 4 subs)', () => {
 	const cell = createAtom(0)
-	const Sub = () => React.createElement('i', null, String(useValue(cell)), ';')
+	const Sub = () => React.createElement('i', null, String(useSignal(cell)), ';')
 	return {
 		node: React.createElement(
 			React.Fragment,
@@ -87,7 +87,7 @@ await run('same-cell burst (100 writes, 4 subs)', () => {
 // advisory's distinct-fiber threshold).
 await run('same-cell burst (100 writes, 15 subs)', () => {
 	const cell = createAtom(0)
-	const Sub = () => React.createElement('i', null, String(useValue(cell)), ';')
+	const Sub = () => React.createElement('i', null, String(useSignal(cell)), ';')
 	return {
 		node: React.createElement(
 			React.Fragment,
@@ -106,7 +106,7 @@ await run('same-cell burst (100 writes, 15 subs)', () => {
 // (b) 50 distinct cells rewritten once each, one subscriber per cell.
 await run('many-distinct-cells rewrite (50 cells)', () => {
 	const cells = Array.from({ length: 50 }, () => createAtom(0))
-	const Sub = ({ i }) => React.createElement('i', null, String(useValue(cells[i])), ';')
+	const Sub = ({ i }) => React.createElement('i', null, String(useSignal(cells[i])), ';')
 	return {
 		node: React.createElement(
 			React.Fragment,

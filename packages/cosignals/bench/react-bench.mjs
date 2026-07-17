@@ -104,7 +104,7 @@ if (contender === 'cosignals') {
 			return cells
 		},
 		useCell(cell) {
-			return bindings.useValue(cell)
+			return bindings.useSignal(cell)
 		},
 		write(cell, v) {
 			cell.set(v)

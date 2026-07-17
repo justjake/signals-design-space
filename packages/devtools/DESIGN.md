@@ -745,7 +745,7 @@ Current core trace kinds and the proposed rename (done in fx2 source):
 
 What must be **added** to fx2 (the React binding emits **no** trace events
 today — confirmed):
-- In `src/react/` (SignalsFrameworkProvider, host, transitions): emit
+- In `src/react/` (CosignalsProvider, host, transitions): emit
   **`notify`** (a watcher delivery — the `deliver` path), **`render`** (pass
   start), **`commit`**, and tag transition-opened drafts. These concepts exist
   as internal phases; they're just untraced.

@@ -44,7 +44,7 @@ overlay on top. The layers, by module:
   evaluation on a suspension; settlement behaves like a write. Pending
   and error are graph state carried on the node, not control flow.
 - `src/react/` — the React bindings. `host.ts` glues drafts and worlds to
-  a running React tree; the hooks and `SignalsFrameworkProvider` dispatch
+  a running React tree; the hooks and `CosignalsProvider` dispatch
   draft ids into ordinary React state (`useReducer`), so React's own
   update queues decide which render passes see which drafts. The bindings
   never guess at lanes and never patch React.
