@@ -7,7 +7,7 @@ import { glyphFor, layoutFocus } from './graph-layout.ts'
 import { copyText, nodeMarkdown } from './markdown.ts'
 import { clampSize, ResizeHandle } from './ResizeHandle.tsx'
 import { StackTrace } from './StackTrace.tsx'
-import { useFlashOnChange } from './useFlash.ts'
+import { flashClass, useFlashOnChange } from './useFlash.ts'
 
 const NODE_H = 40
 const DEFAULT_PER_COL = 6
@@ -379,7 +379,7 @@ export function GraphView({
 								{rows.map((n) => (
 									<tr
 										key={n.id}
-										className={`${n.id === sel ? 'selected' : ''}${flashRows.has(n.id) ? ' flash' : ''}`.trim() || undefined}
+										className={`${n.id === sel ? 'selected' : ''} ${flashClass(flashRows, n.id)}`.trim() || undefined}
 										aria-selected={n.id === sel}
 										onClick={() => pick(n.id)}
 									>
@@ -488,7 +488,7 @@ export function GraphView({
 								{visNodes.map((n) => (
 									<g
 										key={n.id}
-										className={`node ${n.kind}${n.id === sel ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''}${flashNodes.has(n.id) ? ' flash' : ''}`}
+										className={`node ${n.kind}${n.id === sel ? ' selected' : ''}${n.status === 'suspended' ? ' suspended' : ''}${n.status === 'error' ? ' error' : ''}${n.hot ? ' hot' : ''} ${flashClass(flashNodes, n.id)}`.trimEnd()}
 										transform={`translate(${n.x},${n.y})`}
 										role="button"
 										tabIndex={0}

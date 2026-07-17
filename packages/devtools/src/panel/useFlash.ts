@@ -1,59 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 
 /**
- * Returns the set of ids whose version (e.g. last-event id) increased since the
- * previous commit, held for `durationMs` so a flash animation can play out.
+ * Tracks which ids should be flashing and returns a per-id flash counter that
+ * increments on every genuine version bump (e.g. a node's last-event id
+ * advancing). Callers turn the counter's parity into one of two animation
+ * classes (flash-a / flash-b): a one-shot CSS animation won't replay while its
+ * class stays applied, so alternating the class name is what makes a spammed
+ * update flash on *every* event instead of once. The animation ends transparent,
+ * so a held class reads as un-flashed until the next bump flips it.
  *
  * A node's first appearance never flashes — only a real change does — so
  * revealing a node (relayout, search, expanding the frontier) or selecting one
- * doesn't flash it. Only new activity does.
- *
- * Each flashing id owns its removal timer, kept in a ref. This effect has no
- * dependency array (it diffs against the previous commit's versions), so it
- * re-runs on every commit — a cleanup that cancelled the timer would be run by
- * the very re-render `setFlashing` triggers, and the flash would never clear.
- * Ref-held timers survive those re-runs; re-flashing an id resets its timer.
+ * doesn't flash it.
  */
-export function useFlashOnChange(versions: Array<[number, number]>, durationMs = 800): Set<number> {
+export function useFlashOnChange(versions: Array<[number, number]>): ReadonlyMap<number, number> {
 	const seen = useRef(new Map<number, number>())
-	const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
-	const [flashing, setFlashing] = useState<Set<number>>(() => new Set())
+	const [gen, setGen] = useState<ReadonlyMap<number, number>>(() => new Map())
+	// Runs after every commit; compares versions against the last committed ones.
 	useEffect(() => {
-		const newly: number[] = []
+		const bumped: number[] = []
 		for (const [id, v] of versions) {
 			const prev = seen.current.get(id)
-			if (prev !== undefined && v > prev) newly.push(id)
+			if (prev !== undefined && v > prev) bumped.push(id)
 			seen.current.set(id, v)
 		}
-		if (newly.length === 0) return
-		setFlashing((f) => {
-			const n = new Set(f)
-			for (const id of newly) n.add(id)
-			return n
+		if (bumped.length === 0) return
+		setGen((g) => {
+			const next = new Map(g)
+			for (const id of bumped) next.set(id, (next.get(id) ?? 0) + 1)
+			return next
 		})
-		for (const id of newly) {
-			const prev = timers.current.get(id)
-			if (prev !== undefined) clearTimeout(prev)
-			timers.current.set(
-				id,
-				setTimeout(() => {
-					timers.current.delete(id)
-					setFlashing((f) => {
-						const n = new Set(f)
-						n.delete(id)
-						return n
-					})
-				}, durationMs),
-			)
-		}
 	})
-	// Cancel pending timers on unmount so they don't set state on a gone component.
-	useEffect(() => {
-		const pending = timers.current
-		return () => {
-			for (const t of pending.values()) clearTimeout(t)
-			pending.clear()
-		}
-	}, [])
-	return flashing
+	return gen
+}
+
+/** The flash class for an id given its counter (from useFlashOnChange): two
+ * alternating names so the animation restarts each bump; empty when never bumped. */
+export function flashClass(gen: ReadonlyMap<number, number>, id: number): string {
+	const c = gen.get(id)
+	return c === undefined ? '' : c % 2 === 1 ? 'flash-a' : 'flash-b'
 }

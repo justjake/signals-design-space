@@ -18,7 +18,12 @@ export const PANEL_CSS = `
 @keyframes signals-devtools-travel { to { stroke-dashoffset: -140; } }
 @keyframes signals-devtools-nodepulse { 0%, 60% { opacity: 0; } 70% { opacity: .8; } 100% { opacity: 0; } }
 @keyframes signals-devtools-flash { from { background-color: color-mix(in srgb, var(--thread) 34%, transparent); } to { background-color: transparent; } }
+/* Identical to -flash / -flash-svg. Two names so alternating the class restarts
+   the one-shot animation on a persistent element (a spammed node), which the
+   same class name would not. */
+@keyframes signals-devtools-flash-b { from { background-color: color-mix(in srgb, var(--thread) 34%, transparent); } to { background-color: transparent; } }
 @keyframes signals-devtools-flash-svg { from { fill: color-mix(in srgb, var(--thread) 50%, var(--surface)); } to { fill: var(--surface); } }
+@keyframes signals-devtools-flash-svg-b { from { fill: color-mix(in srgb, var(--thread) 50%, var(--surface)); } to { fill: var(--surface); } }
 @scope (.signals-devtools-root) {
   :scope {
     --base00: #191919; --base01: #202020; --base02: #383836; --base03: #7d7a75;
@@ -418,10 +423,15 @@ export const PANEL_CSS = `
      when a row/node's own activity advances (a new log event arrives, a graph
      node's last event changes). Class-gated, not remount-keyed, so switching
      views or filters never replays it. */
+  /* Log rows flash once on arrival (each is a unique, freshly-mounted element),
+     so a single class is enough. Node-list rows and canvas nodes persist across
+     events, so they alternate flash-a / flash-b to replay on every bump. */
   .log tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
   .nodelist tbody tr { cursor: pointer; }
-  .nodelist tbody tr.flash { animation: signals-devtools-flash .8s ease-out; }
-  .node.flash rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
+  .nodelist tbody tr.flash-a { animation: signals-devtools-flash .8s ease-out; }
+  .nodelist tbody tr.flash-b { animation: signals-devtools-flash-b .8s ease-out; }
+  .node.flash-a rect:not(.ring) { animation: signals-devtools-flash-svg .8s ease-out; }
+  .node.flash-b rect:not(.ring) { animation: signals-devtools-flash-svg-b .8s ease-out; }
 
   /* Narrow-safe chrome + toolbars: at any width the header and control rows
      stay a single row of fixed-size items and the row scrolls, rather than
@@ -446,7 +456,7 @@ export const PANEL_CSS = `
 
   @media (prefers-reduced-motion: reduce) {
     .thread-anim, .rec .pulse, .node.hot .ring,
-    .log tbody tr.flash, .nodelist tbody tr.flash, .node.flash rect:not(.ring) { animation: none; }
+    .log tbody tr.flash, .nodelist tbody tr.flash-a, .nodelist tbody tr.flash-b, .node.flash-a rect:not(.ring), .node.flash-b rect:not(.ring) { animation: none; }
     .thread-anim { opacity: 0; }
   }
 }
