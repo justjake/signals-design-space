@@ -15,6 +15,7 @@
 
 import { Collector, type NodeProvider } from './collector.ts'
 import type { EventId, NodeId, NodeKind, NodeStatus, StackFrame } from './protocol.ts'
+import { attachReactRenderTracer } from './react-render.ts'
 
 /**
  * The structural slice of an engine node the adapter reads directly;
@@ -395,6 +396,19 @@ export function attachEngineDevtools(
 		),
 	)
 
+	// React render channel: reads the fiber tree via bippy — no engine hook — so
+	// it lives entirely in the devtools and never touches the engine. Installed
+	// only while the panel's toggle is on; detach quiets the shared bippy hook.
+	let detachReactRender: (() => void) | undefined
+	collector.setReactRenderSource((on) => {
+		if (on && detachReactRender === undefined) {
+			detachReactRender = attachReactRenderTracer(collector, () => collector.latestSignalCause())
+		} else if (!on && detachReactRender !== undefined) {
+			detachReactRender()
+			detachReactRender = undefined
+		}
+	})
+
 	const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
 	g.__SIGNALS_DEVTOOLS__ = collector
 
@@ -403,6 +417,8 @@ export function attachEngineDevtools(
 		detach() {
 			engine.setTracer(null)
 			engine.setHotTracer(null)
+			detachReactRender?.()
+			detachReactRender = undefined
 			if (g.__SIGNALS_DEVTOOLS__ === collector) g.__SIGNALS_DEVTOOLS__ = undefined
 		},
 	}

@@ -89,3 +89,30 @@ test('graph trackpad gestures keep pinch focal point fixed and scroll to pan', a
 	expect(result.afterPan.x).toBeGreaterThan(result.afterPinch.x)
 	expect(result.afterPan.y).toBeGreaterThan(result.afterPinch.y)
 })
+
+test('react render channel: bippy records the component cascade, no panel feedback loop', async ({ page }) => {
+	// ?react=1 mounts a real React tree (Parent → List → Leaf) and turns the
+	// render channel on, so bippy has app fibers to observe.
+	await page.goto('/?react=1')
+	const panel = page.getByTestId('panel')
+	await panel.getByRole('button', { name: 'Log', exact: true }).click()
+
+	// A parent state change cascades to the children.
+	await page.getByTestId('react-inc').click()
+	await page.getByTestId('react-inc').click()
+
+	// The channel captured the real component tree with reasons: Parent changed
+	// state, its descendants rendered because the parent did (the cascade).
+	await expect(panel).toContainText('Parent')
+	await expect(panel).toContainText('Leaf')
+	await expect(panel).toContainText('parent rendered')
+
+	// No feedback loop: the panel re-renders on every flush, but bippy excludes
+	// its own root, so event growth stops once interaction stops. Sample twice
+	// with a settle in between — a loop would keep growing on its own.
+	const count = () => page.evaluate(() => (globalThis as { __SIGNALS_DEVTOOLS__?: { counts(): { events: number } } }).__SIGNALS_DEVTOOLS__!.counts().events)
+	const first = await count()
+	await page.waitForTimeout(400)
+	const second = await count()
+	expect(second).toBe(first) // stable with no interaction → no self-feeding loop
+})

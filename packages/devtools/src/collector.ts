@@ -107,6 +107,11 @@ export class Collector implements Backend {
 		nodeKind: NodeKind | undefined,
 		data: Record<string, unknown>,
 	): EventId {
+		// With the React render channel on, bippy is the source of truth for
+		// renders (real fiber tree + cascade causality), so drop the engine's own
+		// render events — they carry a node (the watcher); bippy's carry none — to
+		// avoid double-counting. Returning 0 makes the paired endSpan a no-op.
+		if (this.reactRenderOn && kind === 'render' && node !== undefined) return 0 as EventId
 		const id = this.nextId++ as EventId
 		this.totalEvents++
 		const evt: DevtoolsEvent = {
@@ -212,6 +217,35 @@ export class Collector implements Backend {
 
 	hotMode(): boolean {
 		return this.hotOn
+	}
+
+	// ── React render channel (bippy) ───────────────────────────────────────
+	// Same shape as the hot channel: the panel toggles it, the adapter installs
+	// the engine/React-side observer. When on, fx2's own render events are
+	// dropped in record() and bippy's fiber-accurate ones take their place.
+
+	private reactRenderInstall: ((on: boolean) => void) | undefined
+	private reactRenderOn = false
+
+	/** Adapter API: register the switch that starts/stops the bippy observer. */
+	setReactRenderSource(install: (on: boolean) => void): void {
+		this.reactRenderInstall = install
+	}
+
+	setReactRenderMode(on: boolean): void {
+		if (this.reactRenderOn === on) return
+		this.reactRenderOn = on
+		this.reactRenderInstall?.(on)
+	}
+
+	reactRenderMode(): boolean {
+		return this.reactRenderOn
+	}
+
+	/** The most recent state-change event (a write or a notify), so the render
+	 * observer can root a cascade at what triggered the pass. */
+	latestSignalCause(): EventId {
+		return this.events({ classes: ['write', 'notify'] }, 1)[0]?.id ?? (0 as EventId)
 	}
 
 	private scheduleFlush(): void {

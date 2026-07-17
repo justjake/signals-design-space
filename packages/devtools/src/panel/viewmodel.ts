@@ -65,6 +65,8 @@ function summarize(e: DevtoolsEvent): string {
 	if (typeof d.phase === 'string') parts.push(d.phase)
 	if (typeof d.status === 'string') parts.push(d.status)
 	if (d.draftId !== undefined) parts.push(`draft ${String(d.draftId)}`)
+	// A React render (from bippy) explains why it rendered.
+	if (typeof d.reason === 'string') parts.push(d.reason)
 	return parts.join(' · ')
 }
 
@@ -74,8 +76,11 @@ function toRow(backend: Backend, e: DevtoolsEvent): LogRow {
 		kind: e.kind,
 		cls: kindClass(e.kind),
 		node: e.node,
-		// Engine-level entries have no node; a captured DOM origin labels itself.
-		name: nodeName(backend, e.node) ?? (typeof e.data.label === 'string' ? e.data.label : undefined),
+		// Engine-level entries have no node; a captured DOM origin labels itself,
+		// and a React render (from bippy) names its component.
+		name:
+			nodeName(backend, e.node) ??
+			(typeof e.data.label === 'string' ? e.data.label : typeof e.data.component === 'string' ? e.data.component : undefined),
 		summary: summarize(e),
 		t: e.t,
 		cause: e.cause,

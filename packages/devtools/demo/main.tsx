@@ -44,3 +44,27 @@ document.getElementById('inc')!.addEventListener('click', () => {
 set(count, 1)
 
 mountDevtools(document.getElementById('panel')!, collector)
+
+// ?react=1: mount a small real React tree and turn on the bippy render channel,
+// so the render observer has app fibers to watch — a parent whose state change
+// cascades to its children (Parent → List → Leaf). The signal program above is
+// vanilla DOM, so this is the only React app under observation besides the panel
+// (which the observer excludes). Drives the render-causality e2e.
+if (new URLSearchParams(location.search).get('react') === '1') {
+	collector.setReactRenderMode(true)
+	const [{ createElement: h, useState }, { createRoot }] = await Promise.all([import('react'), import('react-dom/client')])
+	function Leaf({ n }: { n: number }) {
+		return h('li', { 'data-testid': `leaf-${n}` }, `leaf ${n}`)
+	}
+	function List({ tick }: { tick: number }) {
+		return h('ul', null, [0, 1, 2].map((n) => h(Leaf, { key: n, n: n + tick * 0 })))
+	}
+	function Parent() {
+		const [tick, setTick] = useState(0)
+		return h('div', null, [
+			h('button', { key: 'b', 'data-testid': 'react-inc', onClick: () => setTick((t) => t + 1) }, `react-inc ${tick}`),
+			h(List, { key: 'l', tick }),
+		])
+	}
+	createRoot(document.getElementById('react-app')!).render(h(Parent))
+}

@@ -36,6 +36,9 @@
 			<p>
 				doubled = <b data-testid="out" id="out">0</b>
 			</p>
+			<!-- A real React sub-app (?react=1), so the bippy render channel has a
+			     fiber tree to observe — a parent whose state change cascades to children. -->
+			<div id="react-app"></div>
 		</div>
 		<div id="panel" data-testid="panel"></div>
 		<script type="module" src="./main.tsx"></script>

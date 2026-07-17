@@ -74,6 +74,17 @@ export function attachReactRenderTracer(collector: Collector, latestSignalCause:
 		secure({
 			onCommitFiberRoot(_rendererID: number, root: FiberRoot) {
 				if (!active) return
+				// Never observe the devtools panel's own React root — it re-renders on
+				// every collector flush, which would feed back into itself. The panel
+				// tags its mount container; skip any commit into it.
+				const container: unknown = root.containerInfo
+				if (
+					container !== null &&
+					typeof (container as Element).closest === 'function' &&
+					(container as Element).closest('[data-signals-devtools-panel]') !== null
+				) {
+					return
+				}
 				// fiber id → its render event this commit, so a child finds its parent.
 				const rendered = new Map<number, EventId>()
 				traverseRenderedFibers(root, (fiber: Fiber, phase: RenderPhase) => {
