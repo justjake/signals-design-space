@@ -1,0 +1,266 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/cosignals/**'
+      - 'packages/cosignals-arena/**'
+      - 'packages/devtools/**'
+      - 'packages/react-signals-playground/**'
+      - 'scripts/pack-release.mjs'
+      - 'scripts/release-plan.mjs'
+      - 'scripts/release-plan.test.mjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/release.yml'
+  pull_request:
+    paths:
+      - 'packages/cosignals/**'
+      - 'packages/cosignals-arena/**'
+      - 'packages/devtools/**'
+      - 'packages/react-signals-playground/**'
+      - 'scripts/pack-release.mjs'
+      - 'scripts/release-plan.mjs'
+      - 'scripts/release-plan.test.mjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+
+jobs:
+  verify-and-pack:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'justjake')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize the React source used by development tests
+        run: git submodule update --init vendor/react
+
+      - name: Compute React build cache key
+        id: react
+        run: echo "key=react-fork-${RUNNER_OS}-$(git -C vendor/react rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore React build
+        id: react-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/react/build/oss-experimental
+          key: ${{ steps.react.outputs.key }}
+
+      - name: Set up React build Node
+        if: steps.react-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: vendor/react/.nvmrc
+
+      - name: Build React
+        if: steps.react-cache.outputs.cache-hit != 'true'
+        run: |
+          yarn --cwd vendor/react install --frozen-lockfile
+          fork/build-react.sh
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install package and playground dependencies
+        run: pnpm install --frozen-lockfile --filter "react-signals-playground..."
+
+      - name: Install Chromium
+        working-directory: packages/react-signals-playground
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Test release policy
+        run: pnpm release:plan:test
+
+      - name: Typecheck and run unit tests
+        run: |
+          pnpm --dir packages/cosignals typecheck
+          pnpm --dir packages/cosignals test
+          pnpm --dir packages/cosignals-arena typecheck
+          pnpm --dir packages/cosignals-arena test
+          pnpm --dir packages/devtools typecheck
+          pnpm --dir packages/devtools test
+
+      - name: Run development-server browser tests
+        working-directory: packages/react-signals-playground
+        run: pnpm devtools-e2e
+
+      - name: Select npm versions and tags
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/release-plan.mjs release-plan.json
+
+      - name: Build publishable JavaScript and declarations
+        run: |
+          pnpm --dir packages/cosignals build
+          pnpm --dir packages/cosignals-arena build
+          pnpm --dir packages/devtools build
+
+      - name: Package npm tarballs
+        run: pnpm release:pack release-plan.json release-artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs-${{ github.event.pull_request.head.sha || github.sha }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-artifacts:
+    needs: verify-and-pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs-${{ github.event.pull_request.head.sha || github.sha }}
+          path: release-artifacts
+
+      - name: Create an isolated tarball consumer
+        env:
+          RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
+        run: |
+          mkdir -p "$RELEASE_BROWSER_DIR"
+          cp -R packages/react-signals-playground/. "$RELEASE_BROWSER_DIR"
+          cp tsconfig.base.json "${{ runner.temp }}/release-consumer/tsconfig.base.json"
+          node --input-type=module - release-artifacts/release-plan.json "$RELEASE_BROWSER_DIR/package.json" "$GITHUB_WORKSPACE/release-artifacts" <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises'
+          import { resolve } from 'node:path'
+
+          const plan = JSON.parse(await readFile(process.argv[2], 'utf8'))
+          const manifestPath = process.argv[3]
+          const artifactsDirectory = process.argv[4]
+          const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+          for (const release of plan) {
+            manifest.dependencies[release.name] = `file:${resolve(artifactsDirectory, release.tarball)}`
+          }
+          await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+          NODE
+
+      - name: Install only the packed artifacts and registry dependencies
+        env:
+          RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
+        run: |
+          cd "$RELEASE_BROWSER_DIR"
+          pnpm install --ignore-workspace --no-frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Typecheck the artifact consumer
+        env:
+          RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
+        run: |
+          cd "$RELEASE_BROWSER_DIR"
+          pnpm check
+
+      - name: Run production-build browser battery on tarballs
+        env:
+          RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
+        run: |
+          cd "$RELEASE_BROWSER_DIR"
+          pnpm battery
+
+      - name: Run production-build devtools tests on tarballs
+        env:
+          DEVTOOLS_E2E_PRODUCTION: '1'
+          RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
+        run: |
+          cd "$RELEASE_BROWSER_DIR"
+          pnpm devtools-e2e
+
+      - name: Upload browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-browser-diagnostics-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/release-consumer/packages/react-signals-playground/playwright-report/
+            ${{ runner.temp }}/release-consumer/packages/react-signals-playground/battery/test-results/
+            ${{ runner.temp }}/release-consumer/packages/react-signals-playground/devtools-e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    needs: verify-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install an OIDC-capable npm CLI
+        working-directory: ${{ runner.temp }}
+        run: npm install --global npm@^11.5.1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs-${{ github.event.pull_request.head.sha || github.sha }}
+          path: release-artifacts
+
+      - name: Publish the tested tarballs
+        working-directory: ${{ runner.temp }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          node --input-type=module - "$GITHUB_WORKSPACE/release-artifacts" <<'NODE'
+          import { execFileSync } from 'node:child_process'
+          import { readFile } from 'node:fs/promises'
+          import { join } from 'node:path'
+
+          const artifactsDirectory = process.argv[2]
+          const plan = JSON.parse(await readFile(join(artifactsDirectory, 'release-plan.json'), 'utf8'))
+          for (const release of plan) {
+            const response = await fetch(
+              `https://registry.npmjs.org/${encodeURIComponent(release.name)}/${encodeURIComponent(release.version)}`,
+            )
+            if (response.ok) {
+              console.log(`${release.name}@${release.version} already exists; skipping immutable version`)
+              continue
+            }
+            if (response.status !== 404) {
+              throw new Error(`npm registry returned ${response.status} for ${release.name}@${release.version}`)
+            }
+            execFileSync(
+              'npm',
+              ['publish', join(artifactsDirectory, release.tarball), '--tag', release.tag, '--access', 'public'],
+              { stdio: 'inherit' },
+            )
+          }
+          NODE
