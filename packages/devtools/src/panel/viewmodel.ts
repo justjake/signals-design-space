@@ -339,6 +339,10 @@ export interface InspectorModel {
 	why: LogRow[]
 	/** The node's most recent entry, or undefined if it has none in the window. */
 	last: LogRow | undefined
+	/** For a non-ok node, the wall-clock time it entered that state — the
+	 * timestamp of its latest error / suspend event. Undefined when ok or the
+	 * event has aged out of the window. */
+	statusSince: string | undefined
 }
 
 /**
@@ -366,6 +370,13 @@ export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | u
 	// The node's most recent entry anchors the "why" chain.
 	const lastEvent = backend.events({ node: id }, 1)[0]
 	const why = lastEvent ? backend.causeChain(lastEvent.id).map((e) => toRow(backend, e)) : []
+	// When did this node enter its current non-ok state? The latest error/async
+	// event about it — a compute-error or a compute-suspend.
+	let statusSince: string | undefined
+	if (node.status !== 'ok') {
+		const ev = backend.events({ node: id, classes: node.status === 'error' ? ['error'] : ['async'] }, 1)[0]
+		if (ev !== undefined) statusSince = formatClock(ev.wall)
+	}
 	return {
 		node,
 		name: node.label ?? `${node.kind}#${node.id}`,
@@ -377,5 +388,6 @@ export function inspectorModel(backend: Backend, id: NodeId): InspectorModel | u
 		subsTransitive: transitiveCount(backend, node.subs, 'subs'),
 		why,
 		last: lastEvent ? toRow(backend, lastEvent) : undefined,
+		statusSince,
 	}
 }

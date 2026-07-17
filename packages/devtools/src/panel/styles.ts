@@ -301,7 +301,7 @@ export const PANEL_CSS = `
   .insp-kind { font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--computed); display: flex; align-items: center; gap: 6px; }
   .insp-kind .sw { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
   .insp-name { font: 600 15px var(--mono); margin-top: 4px; }
-  .insp-id { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
+  .insp-name .insp-id { font: 400 11px var(--mono); color: var(--faint); margin-left: 4px; }
   /* plain-language kind description under the header (same text as the tooltip) */
   .insp-desc { font: 10.5px/1.5 var(--mono); color: var(--faint); margin-top: 6px; }
   /* copy-as-markdown floated to the right of the kind label */

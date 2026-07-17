@@ -596,9 +596,8 @@ export function GraphView({
 									⧉ {copied ? 'copied' : 'copy as markdown'}
 								</button>
 							</div>
-							<div className="insp-name">{model.name}</div>
-							<div className="insp-id">
-								{model.node.kind} · {fmtId('node', model.node.id)} · engine fx2
+							<div className="insp-name">
+								{model.name} <span className="insp-id">{fmtId('node', model.node.id)}</span>
 							</div>
 							<div className="insp-desc">{KIND_TIP[model.node.kind].replace(/^[^:]+:\s*/, '')}</div>
 						</div>
@@ -607,9 +606,11 @@ export function GraphView({
 							<div className="value-preview">
 								<Code>{model.node.valueFull ?? model.node.valuePreview ?? '—'}</Code>
 							</div>
-							{model.node.pending !== undefined ? (
+							{model.node.status !== 'ok' ? (
 								<div className="sumline" style={{ color: statusVar(model.node.status) }}>
-									{model.node.pending}
+									{model.node.status === 'error' ? 'errored' : 'suspended'}
+									{model.statusSince !== undefined ? ` at ${model.statusSince}` : ''}
+									{model.node.pending !== undefined ? ` — ${model.node.pending}` : ''}
 								</div>
 							) : undefined}
 						</Sec>
@@ -639,7 +640,7 @@ export function GraphView({
 									{model.last ? (
 										<>
 											<EventRef row={model.last} showName={false} />
-											{model.last.took !== undefined ? ` · ${fmtTook(model.last.took)}` : ''}
+											{model.last.took !== undefined ? ` · ${fmtTook(model.last.took)}` : ''} · {model.last.time}
 										</>
 									) : (
 										'—'
