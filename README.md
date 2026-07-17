@@ -52,7 +52,7 @@ README claims.
 | [`packages/react-seam-bench`](packages/react-seam-bench/) | Measures what React pays: write-to-commit fan-out, urgent latency during a large transition, and mount cost. |
 | [`packages/react-signals-playground`](packages/react-signals-playground/) | One browser app running four implementations through the same shim, plus a Playwright battery and a plain-React control page. |
 | [`packages/cosignals-oracle`](packages/cosignals-oracle/) | A deliberately slow, obvious reference model, invariant checker, seeded schedule generator, shrinker, and lockstep engine referee. |
-| [`royale`](royale/) | The independent-rewrite tournament: a shared 25-case real-React battery, fork/library line counts, leak gates, fuzz requirements, and comparable benchmark adapters. |
+| [`royale`](royale/) | Archived results and research notes from the independent-rewrite tournament. |
 | [`daishi-concurrent-benchmark`](daishi-concurrent-benchmark/) | An independent suite of externally observable concurrent-store failure schedules. |
 | [`spec`](spec/) | The mechanism-free [`React Compliance Contract`](spec/react-compliance-contract.md), the cosignals-first-draft spec, and the branching-store model. |
 | [`research`](research/), [`plans`](plans/), [`reviews`](reviews/), [`design-loop`](design-loop/) | Source studies, measured results, implementation plans, adversarial reviews, and the multi-round design record. These explain why apparently simpler mechanisms were rejected. |
