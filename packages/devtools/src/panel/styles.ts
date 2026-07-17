@@ -96,7 +96,10 @@ export const PANEL_CSS = `
   .timeline svg { display: block; width: 100%; height: 56px; }
   .tl-label { font: 9.5px var(--mono); fill: var(--faint); }
   .tl-span { rx: 2; }
+  /* Two distinct markers: the brushed time WINDOW is a translucent dashed band;
+     the SELECTED event is a solid bright hairline cursor. */
   .tl-window { fill: color-mix(in srgb, var(--thread) 8%, transparent); stroke: var(--thread); stroke-width: 1; stroke-dasharray: 3 3; }
+  .tl-cursor { fill: var(--computed); }
 
   /* main split */
   .main { flex: 1; display: flex; min-height: 0; }

@@ -50,6 +50,9 @@ export function App({
 	const [graphSel, setGraphSel] = useState<NodeId | undefined>(undefined)
 	const [logSel, setLogSel] = useState<EventId | undefined>(undefined)
 	const [logQuery, setLogQuery] = useState('')
+	// Log tree/flat mode lives here so it survives switching to the graph and back
+	// (LogView unmounts on tab change). Tree is the default — causality is the point.
+	const [logMode, setLogMode] = useState<'flat' | 'tree'>('tree')
 	const [nav, setNav] = useState<{ trail: NavLoc[]; at: number }>({ trail: [], at: -1 })
 	const [themeOpen, setThemeOpen] = useState(false)
 
@@ -136,7 +139,7 @@ export function App({
 			{tab === 'graph' ? (
 				<GraphView backend={backend} selected={graphSel} onSelect={openNode} openInLog={openInLog} openEventInLog={openEvent} />
 			) : (
-				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={openNode} selected={logSel} onSelect={openEvent} />
+				<LogView backend={backend} query={logQuery} setQuery={setLogQuery} inspect={openNode} selected={logSel} onSelect={openEvent} mode={logMode} setMode={setLogMode} />
 			)}
 
 			<ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} root={rootEl} />

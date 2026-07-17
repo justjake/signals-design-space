@@ -120,6 +120,8 @@ export function LogView({
 	inspect,
 	selected,
 	onSelect,
+	mode,
+	setMode,
 }: {
 	backend: Backend
 	query: string
@@ -129,8 +131,10 @@ export function LogView({
 	selected: EventId | undefined
 	/** Report a user selection so App records it and updates `selected`. */
 	onSelect: (id: EventId) => void
+	/** Tree/flat mode, owned by App so it persists across tab navigation. */
+	mode: 'flat' | 'tree'
+	setMode: (m: 'flat' | 'tree') => void
 }) {
-	const [mode, setMode] = useState<'flat' | 'tree'>('flat')
 	// Hot mirrors the backend's channel state so a remounted panel shows the truth.
 	const [on, setOn] = useState<Record<string, boolean>>(() => ({ write: true, compute: true, render: true, effect: true, internals: false, hot: backend.hotMode?.() ?? false }))
 	const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)
@@ -417,7 +421,7 @@ export function LogView({
 						return <rect key={r.id} x={x(r.t)} y={44} width={w} height={8} fill={`var(--${classVar(r.cls)})`} />
 					})}
 					{brush !== undefined ? <rect className="tl-window" x={x(brush[0])} y={2} width={Math.max(2, x(brush[1]) - x(brush[0]))} height={52} rx={3} /> : undefined}
-					{brush === undefined && sel !== undefined ? <rect className="tl-window" x={x(sel.t) - 3} y={2} width={6} height={52} rx={3} /> : undefined}
+					{sel !== undefined ? <rect className="tl-cursor" x={x(sel.t) - 1} y={2} width={2} height={52} /> : undefined}
 				</svg>
 			</div>
 
