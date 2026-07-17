@@ -32,8 +32,12 @@ const doubled = createComputed(() => count.get() * 2)
 
 function Counter() {
   const n = useSignal(count) // read and subscribe: re-renders on change
-  // The effect subscribes to doubled by itself: it reacts to a signal
-  // this component never renders.
+  return <button onClick={() => count.update((c) => c + 1)}>{n}</button>
+}
+
+function App() {
+  // React to signals without re-rendering: clicks re-render Counter,
+  // never App.
   useSignalEffect(
     () => ({
       watch: doubled,
@@ -43,11 +47,11 @@ function Counter() {
     }),
     [],
   )
-  return <button onClick={() => count.update((c) => c + 1)}>{n}</button>
+  return <Counter />
 }
 
 const root = wrapCreateRoot(createRoot)(document.getElementById("root")!)
-root.render(<Counter />)
+root.render(<App />)
 ```
 
 `wrapCreateRoot` returns a `createRoot` whose `render` wraps the tree in
