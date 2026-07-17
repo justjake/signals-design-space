@@ -79,9 +79,13 @@ export const PANEL_CSS = `
   .search::placeholder { color: var(--faint); }
   .kind-filters { display: flex; gap: 4px; }
   .toolbar .kind-filters { margin-left: 4px; }
-  .kchip { display: inline-flex; align-items: center; gap: 5px; font: 11px var(--mono); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); }
+  /* Off is clearly dim (dropped out, no border/fill); on is filled and bright —
+     a high-contrast toggle, not a subtle color shift. */
+  .kchip { display: inline-flex; align-items: center; gap: 5px; font: 11px var(--mono); padding: 3px 9px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--faint); opacity: .6; }
+  .kchip:hover { opacity: 1; }
   .kchip .sw { width: 8px; height: 8px; border-radius: 2px; }
-  .kchip.on { color: var(--text); border-color: var(--border-strong); }
+  .kchip .kglyph { font: 600 11px var(--mono); line-height: 1; }
+  .kchip.on { color: var(--text); background: var(--elevated); border-color: var(--border-strong); opacity: 1; }
   .tbtn { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; background: var(--surface); }
   .tbtn:hover { color: var(--text); border-color: var(--border-strong); }
   .tbtn:disabled { opacity: .4; cursor: default; }
@@ -101,10 +105,11 @@ export const PANEL_CSS = `
   .timeline svg { display: block; width: 100%; height: 56px; }
   .tl-label { font: 9.5px var(--mono); fill: var(--faint); }
   .tl-span { rx: 2; }
-  /* Two distinct markers: the brushed time WINDOW is a translucent dashed band;
-     the SELECTED event is a solid bright hairline cursor. */
-  .tl-window { fill: color-mix(in srgb, var(--thread) 8%, transparent); stroke: var(--thread); stroke-width: 1; stroke-dasharray: 3 3; }
-  .tl-cursor { fill: var(--computed); }
+  /* Two distinct markers: the brushed time WINDOW is a neutral translucent
+     dashed band (a range); the SELECTED event is a solid yellow hairline cursor
+     (yellow = selection everywhere in the panel). */
+  .tl-window { fill: color-mix(in srgb, var(--base05) 7%, transparent); stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  .tl-cursor { fill: var(--thread); }
 
   /* main split */
   .main { flex: 1; display: flex; min-height: 0; }
@@ -122,8 +127,8 @@ export const PANEL_CSS = `
   .nodelist th.sorted { color: var(--text); }
   .nodelist td { padding: 3px 10px; border-bottom: 1px solid var(--row-line); white-space: nowrap; }
   .nodelist tr:hover td { background: var(--surface); }
-  .nodelist tr.selected td { background: color-mix(in srgb, var(--computed) 9%, var(--bg)); }
-  .nodelist tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--computed); }
+  .nodelist tr.selected td { background: color-mix(in srgb, var(--thread) 12%, var(--bg)); }
+  .nodelist tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
   .nodelist .dot { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 7px; }
   .nodelist .num { text-align: right; color: var(--muted); }
   /* the "+ metrics" toggle cell: tighter padding so the button doesn't grow the header row */

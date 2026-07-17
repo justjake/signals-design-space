@@ -315,7 +315,7 @@ export function GraphView({
 							aria-pressed={kindOn[c.kind]}
 							onClick={() => setKindOn({ ...kindOn, [c.kind]: !kindOn[c.kind] })}
 						>
-							<span className="sw" style={{ background: kindVar(c.kind) }} />
+							<span className="kglyph" style={{ color: kindVar(c.kind) }}>{glyphFor(c.kind)}</span>
 							{c.label} · {counts.byKind[c.kind] ?? 0}
 						</button>
 					))}
@@ -325,7 +325,7 @@ export function GraphView({
 						aria-pressed={statusOnly === 'error'}
 						onClick={() => setStatusOnly(statusOnly === 'error' ? undefined : 'error')}
 					>
-						<span className="sw" style={{ background: 'var(--danger)' }} />
+						<span className="kglyph" style={{ color: 'var(--danger)' }}>!</span>
 						error · {errCount}
 					</button>
 					<button
@@ -334,7 +334,7 @@ export function GraphView({
 						aria-pressed={statusOnly === 'suspended'}
 						onClick={() => setStatusOnly(statusOnly === 'suspended' ? undefined : 'suspended')}
 					>
-						<span className="sw" style={{ background: 'var(--suspended)' }} />
+						<span className="kglyph" style={{ color: 'var(--suspended)' }}>⧗</span>
 						suspended · {suspCount}
 					</button>
 				</div>
