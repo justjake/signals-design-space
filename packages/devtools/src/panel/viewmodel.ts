@@ -180,9 +180,15 @@ export function logTree(rows: LogRow[], collapsed?: ReadonlySet<EventId>): TreeR
 	const out: TreeRow[] = []
 	const walk = (row: LogRow, depth: number, trail: boolean[], isLast: boolean, op: number) => {
 		if (depth > 40) return // guard against a pathological chain
+		// `trail[k] = !isLast(ancestor at depth k)`. A passing vertical at column i
+		// reflects whether the ancestor ONE level deeper (at depth i+1, the next
+		// node on the path to this row) has a younger sibling — so it reads
+		// trail[i+1], not trail[i]. (trail[0], the root's own last-ness, is never a
+		// column: roots have no parent line.) The last column is this row's own
+		// connector: a tee when it has a sibling below, an elbow when it's last.
 		const guides: Guide[] = []
 		for (let i = 0; i < depth; i++) {
-			if (i < depth - 1) guides.push(trail[i] ? 'vert' : 'none')
+			if (i < depth - 1) guides.push(trail[i + 1] ? 'vert' : 'none')
 			else guides.push(isLast ? 'elbow' : 'tee')
 		}
 		const kids = childrenOf.get(row.id) ?? []

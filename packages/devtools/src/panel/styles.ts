@@ -179,7 +179,10 @@ export const PANEL_CSS = `
   .log.tree .id { width: auto; white-space: nowrap; }
   .treecell { display: flex; align-items: center; height: 24px; }
   .treecell .caret, .treecell .caret-spacer { flex: none; }
-  .caret-spacer { display: inline-block; width: 22px; }
+  /* A childless row's caret slot is indent held for arrow alignment; fill it
+     with the horizontal connector line so it reaches the id instead of a gap. */
+  .caret-spacer { display: inline-block; width: 22px; position: relative; }
+  .caret-spacer::before { content: ""; position: absolute; top: 50%; left: 0; width: 100%; height: 1px; background: var(--border-strong); }
   .treecell .lid { margin-left: 2px; }
   tr.selected td { background: color-mix(in srgb, var(--thread) 8%, var(--bg)) !important; }
   tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--thread); }
