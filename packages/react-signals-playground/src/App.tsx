@@ -36,6 +36,15 @@ const count = createAtom(0, 'count')
 const doubled = createComputed(() => count.state * 2, 'doubled')
 const parity = createComputed(() => (count.state % 2 === 0 ? 'even' : 'odd'), 'parity')
 
+// A deliberately-throwing computed, armed from a button, so the devtools'
+// errored-node UI (and "errored at") can be exercised. Reading it throws while
+// armed; an error boundary below keeps the app alive.
+const errorArmed = createAtom(false, 'errorArmed')
+const errorBoom = createComputed(() => {
+	if (errorArmed.state) throw new Error('deliberate error for devtools testing')
+	return count.state
+}, 'errorBoom')
+
 // The urgent clock: an interval-driven signal. Its continued ticking while a
 // transition is held open is direct visual proof the committed tree stays
 // live and keeps committing urgent updates.
@@ -620,13 +629,38 @@ function StatsPanel(): React.ReactElement {
 // "Normal app stuff": every handler here writes urgently (no transition), so
 // these must commit immediately even while a navigation is held open.
 
+// Reads the throwing computed; the boundary catches its throw while armed so
+// the errored node shows in the devtools without taking the page down.
+function BoomReader(): React.ReactElement {
+	return <span data-testid="boom-value">{String(useSignal(errorBoom))}</span>
+}
+class BoomBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+	state = { failed: false }
+	static getDerivedStateFromError(): { failed: boolean } {
+		return { failed: true }
+	}
+	render(): React.ReactNode {
+		return this.state.failed ? <span data-testid="boom-caught">⚠ errored</span> : this.props.children
+	}
+}
+
 function Controls(): React.ReactElement {
 	useCommittedRenderTally()
 	const value = useSignal(count)
 	const evens = useSignal(markEvens)
 	const filter = useSignal(filterText)
 	const total = useSignal(rowCount)
+	const armed = useSignal(errorArmed)
 	useUrgentCommitTick([value, evens, filter, total])
+	// A signal effect reacting to the urgent counter, so effect nodes/events show
+	// up as soon as you click +1 (the nav effects only fire on navigation).
+	useSignalEffect(
+		() => count.state,
+		(c) => {
+			document.documentElement.dataset.devtoolsCount = String(c)
+		},
+		[],
+	)
 
 	return (
 		<section id="controls" aria-label="urgent controls">
@@ -644,6 +678,22 @@ function Controls(): React.ReactElement {
 			>
 				+10 in transition
 			</button>
+			<button
+				type="button"
+				data-testid="arm-error"
+				className={armed ? 'on' : undefined}
+				aria-pressed={armed}
+				onClick={() => errorArmed.update((a) => !a)}
+			>
+				{armed ? 'error armed' : 'arm error'}
+			</button>
+			<span className="cell">
+				<label>boom</label>
+				{/* Remount on toggle so disarming clears the boundary's caught state. */}
+				<BoomBoundary key={armed ? 'armed' : 'ok'}>
+					<BoomReader />
+				</BoomBoundary>
+			</span>
 			<button
 				type="button"
 				data-testid="toggle-evens"
