@@ -22,11 +22,11 @@ event log. One panel, two hosts (inline in-page, or a Chrome DevTools panel).
 ## Inline use
 
 ```ts
-import { attachCosignalsDevtools } from 'cosignals-devtools/cosignals'
-import { mountDevtools } from 'cosignals-devtools/panel'
+import { attachCosignalsDevtools } from "cosignals-devtools/cosignals"
+import { mountDevtools } from "cosignals-devtools/panel"
 
 const { collector } = attachCosignalsDevtools()
-mountDevtools(document.getElementById('devtools')!, collector)
+mountDevtools(document.getElementById("devtools")!, collector)
 ```
 
 ## Chrome extension

@@ -10,11 +10,11 @@ outside React, and waits for the committed DOM to change using real timers.
 
 Three scenarios, each one CSV row per contender:
 
-| test | shape | time column |
-| --- | --- | --- |
-| `fanout` | 5000 independent cells, one component each; 200 single-cell writes from outside React | median write-to-commit latency (ms) |
+| test         | shape                                                                                                                               | time column                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `fanout`     | 5000 independent cells, one component each; 200 single-cell writes from outside React                                               | median write-to-commit latency (ms)      |
 | `transition` | 2000 cells rewritten inside `React.startTransition` while an unrelated urgent `useState` input updates 30 times at ~16 ms intervals | p95 urgent update-to-commit latency (ms) |
-| `mount` | mount + first commit of the 5000-cell tree, 5 fresh roots | median mount time (ms) |
+| `mount`      | mount + first commit of the 5000-cell tree, 5 fresh roots                                                                           | median mount time (ms)                   |
 
 Secondary stats (cell re-renders per write, transition completion time,
 Profiler `actualDuration` totals) are printed to stderr as `# ...` comment
@@ -40,13 +40,13 @@ p95 asymmetry between these groups is the point of the scenario, not noise.
 
 ## Contenders
 
-| name | reads | writes |
-| --- | --- | --- |
-| `cosignals-react` | `useSignal(atom)` from the cosignals-first-draft package's own bindings | `atom.set(v)`, batched with `batch()`, transitions via `startTransition` |
-| `alien-uses` | upstream alien-signals through the shared `useSyncExternalStore` adapter (`src/adapters/useReactive.ts`) | `sig(v)`, batched with `startBatch`/`endBatch` |
-| `dalien-uses` | dalien-signals through the identical adapter | same call style as alien-signals |
-| `baseline-context` | one root `useReducer`, values distributed through a single context | dispatch captured at mount; every consumer re-renders per write (the honest context cost — `React.memo` cannot help because context bypasses it) |
-| `baseline-local` | each cell owns its `useState` | setters registered in a module-level array, called directly — the "if state were local" floor |
+| name               | reads                                                                                                    | writes                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cosignals-react`  | `useSignal(atom)` from the cosignals-first-draft package's own bindings                                  | `atom.set(v)`, batched with `batch()`, transitions via `startTransition`                                                                         |
+| `alien-uses`       | upstream alien-signals through the shared `useSyncExternalStore` adapter (`src/adapters/useReactive.ts`) | `sig(v)`, batched with `startBatch`/`endBatch`                                                                                                   |
+| `dalien-uses`      | dalien-signals through the identical adapter                                                             | same call style as alien-signals                                                                                                                 |
+| `baseline-context` | one root `useReducer`, values distributed through a single context                                       | dispatch captured at mount; every consumer re-renders per write (the honest context cost — `React.memo` cannot help because context bypasses it) |
+| `baseline-local`   | each cell owns its `useState`                                                                            | setters registered in a module-level array, called directly — the "if state were local" floor                                                    |
 
 ## Methodology
 

@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
-import type { LogRow } from './viewmodel.ts'
-import { fmtId } from './viewmodel.ts'
+import type { ReactNode } from "react"
+import type { LogRow } from "./viewmodel.ts"
+import { fmtId } from "./viewmodel.ts"
 
 /**
  * One event, rendered the same everywhere it's named: a color-coded kind chip,
@@ -13,21 +13,29 @@ import { fmtId } from './viewmodel.ts'
  * inspector's own "last event" line, where the name would just repeat the node
  * being inspected).
  */
-export function EventRef({ row, onClick, showName = true }: { row: LogRow; onClick?: () => void; showName?: boolean }) {
-	const inner = (
-		<>
-			<span className={`chip ${row.cls}`}>{row.kind}</span>
-			{showName && row.name !== null ? <span className="lname">{row.name}</span> : null}
-			<span className="eid">{fmtId('event', row.id)}</span>
-		</>
-	)
-	return onClick ? (
-		<button className="evref" onClick={onClick}>
-			{inner}
-		</button>
-	) : (
-		<span className="evref">{inner}</span>
-	)
+export function EventRef({
+  row,
+  onClick,
+  showName = true,
+}: {
+  row: LogRow
+  onClick?: () => void
+  showName?: boolean
+}) {
+  const inner = (
+    <>
+      <span className={`chip ${row.cls}`}>{row.kind}</span>
+      {showName && row.name !== null ? <span className="lname">{row.name}</span> : null}
+      <span className="eid">{fmtId("event", row.id)}</span>
+    </>
+  )
+  return onClick ? (
+    <button className="evref" onClick={onClick}>
+      {inner}
+    </button>
+  ) : (
+    <span className="evref">{inner}</span>
+  )
 }
 
 /**
@@ -39,27 +47,27 @@ export function EventRef({ row, onClick, showName = true }: { row: LogRow; onCli
  * log). `renderExtra` decorates the terminus, e.g. the log's operation rollup.
  */
 export function CauseSpine({
-	chain,
-	onPick,
-	renderExtra,
+  chain,
+  onPick,
+  renderExtra,
 }: {
-	chain: LogRow[]
-	onPick: (row: LogRow) => void
-	renderExtra?: (terminus: LogRow) => ReactNode
+  chain: LogRow[]
+  onPick: (row: LogRow) => void
+  renderExtra?: (terminus: LogRow) => ReactNode
 }) {
-	if (chain.length === 0) return <div className="sumline">no recorded activity yet</div>
-	return (
-		<ol className="spine">
-			{[...chain].reverse().map((e, i) => (
-				<li key={e.id} className={i === 0 ? 'terminus' : undefined}>
-					<div className="knot" />
-					<div className="ev">
-						<EventRef row={e} onClick={() => onPick(e)} />
-					</div>
-					{e.summary ? <div className="because">{e.summary}</div> : null}
-					{i === 0 && renderExtra ? renderExtra(e) : null}
-				</li>
-			))}
-		</ol>
-	)
+  if (chain.length === 0) return <div className="sumline">no recorded activity yet</div>
+  return (
+    <ol className="spine">
+      {[...chain].reverse().map((e, i) => (
+        <li key={e.id} className={i === 0 ? "terminus" : undefined}>
+          <div className="knot" />
+          <div className="ev">
+            <EventRef row={e} onClick={() => onPick(e)} />
+          </div>
+          {e.summary ? <div className="because">{e.summary}</div> : null}
+          {i === 0 && renderExtra ? renderExtra(e) : null}
+        </li>
+      ))}
+    </ol>
+  )
 }

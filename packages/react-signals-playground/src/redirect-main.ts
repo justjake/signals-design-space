@@ -6,6 +6,6 @@
  * default in exactly one place; the engine loaders are dynamic imports, so
  * none of them load here.
  */
-import { defaultImplementation, implementationHref } from './shims/implementations'
+import { defaultImplementation, implementationHref } from "./shims/implementations"
 
 location.replace(implementationHref(defaultImplementation) + location.search + location.hash)

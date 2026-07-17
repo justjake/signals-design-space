@@ -64,7 +64,7 @@ visited by every wave — paid even when no tracer has ever been attached.
 attached (one branch on a value the compiler can hoist out of the loop).
 The same pattern gates the async machinery: computeds that suspend on
 promises need an extra state probe on every read, so a single module flag
-records whether *anything* has ever entered an async state, and until then
+records whether _anything_ has ever entered an async state, and until then
 every read skips the probe. A fully synchronous application never pays for
 features it does not use.
 
@@ -108,7 +108,7 @@ because the handle is one flat object and nothing else happens.
 
 ## 5. Cells never need the finalization registry
 
-**Problem.** Even with lazy records, a signal that *does* join the graph
+**Problem.** Even with lazy records, a signal that _does_ join the graph
 would need registry coverage so its record is reclaimed when the handle is
 dropped. Registration cost therefore just moved from creation time to
 first-read time.
@@ -155,7 +155,7 @@ run.
 
 ## 7. Feeding the JIT: small hot functions
 
-**Problem.** V8 decides whether to inline a function by its *bytecode* size,
+**Problem.** V8 decides whether to inline a function by its _bytecode_ size,
 and typed-array field access compiles to roughly double the bytecode of an
 object field access (an extra context load and index add per access). The
 engine's hot functions — validate, recompute, track-a-read — had quietly
@@ -173,14 +173,14 @@ logic and worth 8–13% on propagation-heavy workloads.
 ## 8. Chains validate without recursion
 
 **Problem.** Validation is naturally recursive: "am I stale?" asks each
-dependency "are *you* stale?" first. Long chains of single-input computeds —
+dependency "are _you_ stale?" first. Long chains of single-input computeds —
 a very common shape — paid a full function-call frame, argument shuffling,
 and bookkeeping per level.
 
 **Change.** A chain of nodes that each have exactly one dependency and one
-subscriber needs none of that generality. The engine walks *down* the chain
+subscriber needs none of that generality. The engine walks _down_ the chain
 following the single dependency edges until it finds the deepest change (or
-a node with nothing to resolve below it), then walks back *up* through the
+a node with nothing to resolve below it), then walks back _up_ through the
 unique subscriber edges; at each level, one clock-reading comparison decides
 "recompute" versus "mark current". Two tight loops, no stack, no frames. Any
 shape that breaks the assumption — a branch, a shared node — bails out to
@@ -191,7 +191,7 @@ the general path before touching anything. Deep-chain propagation went from
 
 **Problem.** The arena array was a module-level `const`. Bundlers rewrite
 top-level declarations to `var`, and a `var` binding can never be treated as
-constant — so in bundled output, *every* arena access re-loaded the binding
+constant — so in bundled output, _every_ arena access re-loaded the binding
 from its context slot, and no access could be folded or reused across a
 function call. This is invisible in source and cost double-digit percentages
 on wide propagation.
@@ -222,8 +222,8 @@ the load happens once per call instead of once per access.
 ## 10. Free lists that don't chain loads
 
 **Problem.** Freed records were kept on an intrusive free list — each free
-record storing the id of the next — so every allocation *read the record it
-was allocating* to find the next head. That makes each allocation depend on
+record storing the id of the next — so every allocation _read the record it
+was allocating_ to find the next head. That makes each allocation depend on
 the previous one's memory load: a serial pointer chase, in exactly the
 mass-create patterns where allocation dominates.
 
@@ -271,7 +271,7 @@ Honest negatives, because they shape the design as much as the wins:
   raw record id (the wave, the validation loops). Moving any field to the
   handle side makes the id side pay an extra lookup, and vice versa — the
   split representation pays double addressing at whichever boundary it
-  draws. An engine whose nodes are plain objects keeps *all* per-node state
+  draws. An engine whose nodes are plain objects keeps _all_ per-node state
   behind one pointer and wins every workload that fits in cache; the arena
   wins every workload that does not, plus creation and reclamation. The two
   designs are each optimal on their own side of the cache line, and no

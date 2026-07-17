@@ -1,15 +1,15 @@
 {
-	"extends": "../../../tsconfig.base.json",
-	"compilerOptions": {
-		"jsx": "react-jsx",
-		// DOM types: helpers' page.evaluate callbacks execute in the browser.
-		"lib": ["ESNext", "DOM", "DOM.Iterable"],
-		"types": ["node"],
-		"allowImportingTsExtensions": true
-	},
-	"include": [
-		".",
-		// Type-only imports from the app (TestStore, implementations table).
-		"../src"
-	]
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    // DOM types: helpers' page.evaluate callbacks execute in the browser.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    ".",
+    // Type-only imports from the app (TestStore, implementations table).
+    "../src"
+  ]
 }

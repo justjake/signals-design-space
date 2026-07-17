@@ -12,21 +12,21 @@
  * provider). No setup call is needed; registerReactSignals stays
  * exported for code that wants the disposer handle.
  */
-import { registerReactSignals } from './host.ts'
+import { registerReactSignals } from "./host.ts"
 
 registerReactSignals()
 
-export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from './host.ts'
-export { CosignalsProvider, wrapCreateRoot } from './CosignalsProvider.ts'
+export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from "./host.ts"
+export { CosignalsProvider, wrapCreateRoot } from "./CosignalsProvider.ts"
 export {
-	useSignal,
-	useComputed,
-	useSignalEffect,
-	useSignalLayoutEffect,
-	useIsPending,
-	useAtom,
-	type SignalEffectSpec,
-	type WatchSource,
-	type WatchValue,
-} from './hooks.ts'
-export { startSignalTransition, useSignalTransition } from './transitions.ts'
+  useSignal,
+  useComputed,
+  useSignalEffect,
+  useSignalLayoutEffect,
+  useIsPending,
+  useAtom,
+  type SignalEffectSpec,
+  type WatchSource,
+  type WatchValue,
+} from "./hooks.ts"
+export { startSignalTransition, useSignalTransition } from "./transitions.ts"

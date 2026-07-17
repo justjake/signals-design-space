@@ -14,48 +14,48 @@
  * unless a measurement shows the edge is worth real time AND it stays
  * stable across runs.
  */
-import type { AdapterName } from '../adapters/index'
+import type { AdapterName } from "../adapters/index"
 
 export interface InliningExpectation {
-	framework: AdapterName
-	/** Floor on DISTINCT named (callee → into) pairs TurboFan inlines. */
-	minInlinedPairs: number
-	/** Small hot functions that must inline somewhere, without pinning a caller. */
-	mustInline?: string[]
-	/** Functions that must compile standalone or appear as an inlined callee. */
-	mustReachTopTier: string[]
+  framework: AdapterName
+  /** Floor on DISTINCT named (callee → into) pairs TurboFan inlines. */
+  minInlinedPairs: number
+  /** Small hot functions that must inline somewhere, without pinning a caller. */
+  mustInline?: string[]
+  /** Functions that must compile standalone or appear as an inlined callee. */
+  mustReachTopTier: string[]
 }
 
 const SHARED_OPTIMIZE = [
-	'propagate',
-	'flush',
-	'run',
-	'checkDirty',
-	'checkDirtyLoop',
-	'link',
-	'read',
-	'write',
+  "propagate",
+  "flush",
+  "run",
+  "checkDirty",
+  "checkDirtyLoop",
+  "link",
+  "read",
+  "write",
 ]
 
 // Floors sit far under observed reality (~40 distinct named pairs each on
 // Node 24) but far above a cold or deopt-looping run (0).
 export const expectations: InliningExpectation[] = [
-	{
-		framework: 'dalien',
-		minInlinedPairs: 10,
-		mustReachTopTier: [...SHARED_OPTIMIZE, 'readComputed'],
-	},
-	{
-		framework: 'cosignals',
-		minInlinedPairs: 10,
-		mustInline: ['getComputed', 'readAtom', 'readComputed', 'trackRead', 'writeAtom'],
-		mustReachTopTier: [
-			'ensureFreshAt',
-			'recompute',
-			'propagateWave',
-			'scheduleWatcher',
-			'drainLane',
-			'runHandler',
-		],
-	},
+  {
+    framework: "dalien",
+    minInlinedPairs: 10,
+    mustReachTopTier: [...SHARED_OPTIMIZE, "readComputed"],
+  },
+  {
+    framework: "cosignals",
+    minInlinedPairs: 10,
+    mustInline: ["getComputed", "readAtom", "readComputed", "trackRead", "writeAtom"],
+    mustReachTopTier: [
+      "ensureFreshAt",
+      "recompute",
+      "propagateWave",
+      "scheduleWatcher",
+      "drainLane",
+      "runHandler",
+    ],
+  },
 ]

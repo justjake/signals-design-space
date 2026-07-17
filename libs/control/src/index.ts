@@ -5,32 +5,32 @@
  * path (here). Also exports `untracked` (upstream builds it in the adapter
  * from setActiveSub; the behavior is identical).
  */
-import { USE_QUIET_EPOCH } from './flags.js'
-import { createReactiveSystem, ReactiveFlags, type ReactiveNode } from './system.js'
+import { USE_QUIET_EPOCH } from "./flags.js"
+import { createReactiveSystem, ReactiveFlags, type ReactiveNode } from "./system.js"
 
-export { USE_PERSISTENT_STACKS, USE_QUIET_EPOCH } from './flags.js'
+export { USE_PERSISTENT_STACKS, USE_QUIET_EPOCH } from "./flags.js"
 
 interface EffectScopeNode extends ReactiveNode {}
 
 interface EffectNode extends ReactiveNode {
-	fn(): (() => void) | void
-	cleanup: (() => void) | void
+  fn(): (() => void) | void
+  cleanup: (() => void) | void
 }
 
 interface ComputedNode<T = any> extends ReactiveNode {
-	value: T | undefined
-	getter: (previousValue?: T) => T
-	/**
-	 * USE_QUIET_EPOCH: the value of currentEpoch captured immediately BEFORE
-	 * this computed was last verified (recomputed, or checkDirty-confirmed
-	 * clean). 0 = never verified. See QUIET EPOCH SOUNDNESS below.
-	 */
-	verifyEpoch: number
+  value: T | undefined
+  getter: (previousValue?: T) => T
+  /**
+   * USE_QUIET_EPOCH: the value of currentEpoch captured immediately BEFORE
+   * this computed was last verified (recomputed, or checkDirty-confirmed
+   * clean). 0 = never verified. See QUIET EPOCH SOUNDNESS below.
+   */
+  verifyEpoch: number
 }
 
 interface SignalNode<T = any> extends ReactiveNode {
-	currentValue: T
-	pendingValue: T
+  currentValue: T
+  pendingValue: T
 }
 
 // Marks a parent (effect or scope) whose deps include at least one child
@@ -80,7 +80,7 @@ let epochFastPathHits = 0
 
 /** Test/instrumentation hook: how often the quiet-epoch fast path fired. */
 export function __epochFastPathHits(): number {
-	return epochFastPathHits
+  return epochFastPathHits
 }
 
 let cycle = 0
@@ -92,65 +92,65 @@ let activeSub: ReactiveNode | undefined
 
 const queued: (EffectNode | undefined)[] = []
 const { link, unlink, propagate, checkDirty, shallowPropagate } = createReactiveSystem({
-	update(node: SignalNode | ComputedNode | EffectScopeNode): boolean {
-		if ('getter' in node) {
-			return updateComputed(node)
-		}
-		if ('currentValue' in node) {
-			return updateSignal(node)
-		}
-		node.flags = ReactiveFlags.Mutable
-		return true
-	},
-	notify(effect: EffectNode) {
-		let insertIndex = queuedLength
-		let firstInsertedIndex = insertIndex
+  update(node: SignalNode | ComputedNode | EffectScopeNode): boolean {
+    if ("getter" in node) {
+      return updateComputed(node)
+    }
+    if ("currentValue" in node) {
+      return updateSignal(node)
+    }
+    node.flags = ReactiveFlags.Mutable
+    return true
+  },
+  notify(effect: EffectNode) {
+    let insertIndex = queuedLength
+    let firstInsertedIndex = insertIndex
 
-		do {
-			queued[insertIndex++] = effect
-			effect.flags &= ~ReactiveFlags.Watching
-			effect = effect.subs?.sub as EffectNode
-			if (effect === undefined || !(effect.flags & ReactiveFlags.Watching)) {
-				break
-			}
-		} while (true)
+    do {
+      queued[insertIndex++] = effect
+      effect.flags &= ~ReactiveFlags.Watching
+      effect = effect.subs?.sub as EffectNode
+      if (effect === undefined || !(effect.flags & ReactiveFlags.Watching)) {
+        break
+      }
+    } while (true)
 
-		queuedLength = insertIndex
+    queuedLength = insertIndex
 
-		while (firstInsertedIndex < --insertIndex) {
-			const left = queued[firstInsertedIndex]
-			queued[firstInsertedIndex++] = queued[insertIndex]
-			queued[insertIndex] = left
-		}
-	},
-	unwatched(node: SignalNode | ComputedNode | EffectNode | EffectScopeNode) {
-		if ('getter' in node) {
-			if (node.depsTail !== undefined) {
-				node.flags = ReactiveFlags.Mutable | ReactiveFlags.Dirty
-				disposeAllDepsInReverse(node)
-			}
-		} else if ('currentValue' in node) {
-			// Nothing to do for signals, they are always mutable and never dirty until pendingValue changes
-		} else if ('fn' in node) {
-			effectOper.call(node)
-		} else {
-			effectScopeOper.call(node)
-		}
-	},
+    while (firstInsertedIndex < --insertIndex) {
+      const left = queued[firstInsertedIndex]
+      queued[firstInsertedIndex++] = queued[insertIndex]
+      queued[insertIndex] = left
+    }
+  },
+  unwatched(node: SignalNode | ComputedNode | EffectNode | EffectScopeNode) {
+    if ("getter" in node) {
+      if (node.depsTail !== undefined) {
+        node.flags = ReactiveFlags.Mutable | ReactiveFlags.Dirty
+        disposeAllDepsInReverse(node)
+      }
+    } else if ("currentValue" in node) {
+      // Nothing to do for signals, they are always mutable and never dirty until pendingValue changes
+    } else if ("fn" in node) {
+      effectOper.call(node)
+    } else {
+      effectScopeOper.call(node)
+    }
+  },
 })
 
 export function getActiveSub(): ReactiveNode | undefined {
-	return activeSub
+  return activeSub
 }
 
 export function setActiveSub(sub?: ReactiveNode) {
-	const prevSub = activeSub
-	activeSub = sub
-	return prevSub
+  const prevSub = activeSub
+  activeSub = sub
+  return prevSub
 }
 
 export function getBatchDepth(): number {
-	return batchDepth
+  return batchDepth
 }
 
 /**
@@ -158,378 +158,378 @@ export function getBatchDepth(): number {
  * upstream conformance adapter builds from setActiveSub(undefined).
  */
 export function untracked<T>(fn: () => T): T {
-	const prevSub = setActiveSub(undefined)
-	try {
-		return fn()
-	} finally {
-		activeSub = prevSub
-	}
+  const prevSub = setActiveSub(undefined)
+  try {
+    return fn()
+  } finally {
+    activeSub = prevSub
+  }
 }
 
 export function startBatch() {
-	++batchDepth
+  ++batchDepth
 }
 
 export function endBatch() {
-	if (!--batchDepth) {
-		flush()
-	}
+  if (!--batchDepth) {
+    flush()
+  }
 }
 
 export function isSignal(fn: () => void): boolean {
-	return fn.name === 'bound ' + signalOper.name
+  return fn.name === "bound " + signalOper.name
 }
 
 export function isComputed(fn: () => void): boolean {
-	return fn.name === 'bound ' + computedOper.name
+  return fn.name === "bound " + computedOper.name
 }
 
 export function isEffect(fn: () => void): boolean {
-	return fn.name === 'bound ' + effectOper.name
+  return fn.name === "bound " + effectOper.name
 }
 
 export function isEffectScope(fn: () => void): boolean {
-	return fn.name === 'bound ' + effectScopeOper.name
+  return fn.name === "bound " + effectScopeOper.name
 }
 
 export function signal<T>(): {
-	(): T | undefined
-	(value: T | undefined): void
+  (): T | undefined
+  (value: T | undefined): void
 }
 export function signal<T>(initialValue: T): {
-	(): T
-	(value: T): void
+  (): T
+  (value: T): void
 }
 export function signal<T>(initialValue?: T): {
-	(): T | undefined
-	(value: T | undefined): void
+  (): T | undefined
+  (value: T | undefined): void
 } {
-	return signalOper.bind({
-		currentValue: initialValue,
-		pendingValue: initialValue,
-		subs: undefined,
-		subsTail: undefined,
-		flags: ReactiveFlags.Mutable,
-	}) as () => T | undefined
+  return signalOper.bind({
+    currentValue: initialValue,
+    pendingValue: initialValue,
+    subs: undefined,
+    subsTail: undefined,
+    flags: ReactiveFlags.Mutable,
+  }) as () => T | undefined
 }
 
 export function computed<T>(getter: (previousValue?: T) => T): () => T {
-	return computedOper.bind({
-		value: undefined,
-		subs: undefined,
-		subsTail: undefined,
-		deps: undefined,
-		depsTail: undefined,
-		flags: ReactiveFlags.None,
-		getter: getter as (previousValue?: unknown) => unknown,
-		verifyEpoch: 0,
-	}) as () => T
+  return computedOper.bind({
+    value: undefined,
+    subs: undefined,
+    subsTail: undefined,
+    deps: undefined,
+    depsTail: undefined,
+    flags: ReactiveFlags.None,
+    getter: getter as (previousValue?: unknown) => unknown,
+    verifyEpoch: 0,
+  }) as () => T
 }
 
 export function effect(fn: () => void | (() => void)): () => void {
-	const e: EffectNode = {
-		fn,
-		cleanup: undefined,
-		subs: undefined,
-		subsTail: undefined,
-		deps: undefined,
-		depsTail: undefined,
-		flags: ReactiveFlags.Watching | ReactiveFlags.RecursedCheck,
-	}
-	const prevSub = setActiveSub(e)
-	if (prevSub !== undefined) {
-		link(e, prevSub, 0)
-		prevSub.flags |= HasChildEffect
-	}
-	try {
-		++runDepth
-		e.cleanup = e.fn()
-	} finally {
-		--runDepth
-		activeSub = prevSub
-		e.flags &= ~ReactiveFlags.RecursedCheck
-	}
-	return effectOper.bind(e)
+  const e: EffectNode = {
+    fn,
+    cleanup: undefined,
+    subs: undefined,
+    subsTail: undefined,
+    deps: undefined,
+    depsTail: undefined,
+    flags: ReactiveFlags.Watching | ReactiveFlags.RecursedCheck,
+  }
+  const prevSub = setActiveSub(e)
+  if (prevSub !== undefined) {
+    link(e, prevSub, 0)
+    prevSub.flags |= HasChildEffect
+  }
+  try {
+    ++runDepth
+    e.cleanup = e.fn()
+  } finally {
+    --runDepth
+    activeSub = prevSub
+    e.flags &= ~ReactiveFlags.RecursedCheck
+  }
+  return effectOper.bind(e)
 }
 
 export function effectScope(fn: () => void): () => void {
-	const e: EffectScopeNode = {
-		deps: undefined,
-		depsTail: undefined,
-		subs: undefined,
-		subsTail: undefined,
-		flags: ReactiveFlags.Mutable,
-	}
-	const prevSub = setActiveSub(e)
-	if (prevSub !== undefined) {
-		link(e, prevSub, 0)
-		prevSub.flags |= HasChildEffect
-	}
-	try {
-		fn()
-	} finally {
-		activeSub = prevSub
-	}
-	return effectScopeOper.bind(e)
+  const e: EffectScopeNode = {
+    deps: undefined,
+    depsTail: undefined,
+    subs: undefined,
+    subsTail: undefined,
+    flags: ReactiveFlags.Mutable,
+  }
+  const prevSub = setActiveSub(e)
+  if (prevSub !== undefined) {
+    link(e, prevSub, 0)
+    prevSub.flags |= HasChildEffect
+  }
+  try {
+    fn()
+  } finally {
+    activeSub = prevSub
+  }
+  return effectScopeOper.bind(e)
 }
 
 export function trigger(fn: () => void) {
-	const sub: ReactiveNode = {
-		deps: undefined,
-		depsTail: undefined,
-		flags: ReactiveFlags.Watching | ReactiveFlags.RecursedCheck,
-	}
-	const prevSub = setActiveSub(sub)
-	++batchDepth
-	try {
-		fn()
-	} finally {
-		activeSub = prevSub
-		sub.flags = ReactiveFlags.None
-		if (USE_QUIET_EPOCH) {
-			// trigger() is the one propagate call site without a value-change
-			// bump. Without this, a computed verified at the current epoch
-			// and then marked Pending here would satisfy the fast path and
-			// skip the re-check trigger() exists to force (see
-			// quiet-epoch.test.ts "trigger must bump").
-			++currentEpoch
-		}
-		let link = sub.deps
-		while (link !== undefined) {
-			const dep = link.dep
-			link = unlink(link, sub)
-			const subs = dep.subs
-			if (subs !== undefined) {
-				propagate(subs, !!runDepth)
-				shallowPropagate(subs)
-			}
-		}
-		if (!--batchDepth) {
-			flush()
-		}
-	}
+  const sub: ReactiveNode = {
+    deps: undefined,
+    depsTail: undefined,
+    flags: ReactiveFlags.Watching | ReactiveFlags.RecursedCheck,
+  }
+  const prevSub = setActiveSub(sub)
+  ++batchDepth
+  try {
+    fn()
+  } finally {
+    activeSub = prevSub
+    sub.flags = ReactiveFlags.None
+    if (USE_QUIET_EPOCH) {
+      // trigger() is the one propagate call site without a value-change
+      // bump. Without this, a computed verified at the current epoch
+      // and then marked Pending here would satisfy the fast path and
+      // skip the re-check trigger() exists to force (see
+      // quiet-epoch.test.ts "trigger must bump").
+      ++currentEpoch
+    }
+    let link = sub.deps
+    while (link !== undefined) {
+      const dep = link.dep
+      link = unlink(link, sub)
+      const subs = dep.subs
+      if (subs !== undefined) {
+        propagate(subs, !!runDepth)
+        shallowPropagate(subs)
+      }
+    }
+    if (!--batchDepth) {
+      flush()
+    }
+  }
 }
 
 function updateComputed(c: ComputedNode): boolean {
-	// Captured at entry: before the unlink loop below (which can run user
-	// effect cleanups via unwatched) and before the getter. Stamping this
-	// pre-user-code epoch keeps the quiet-epoch fast path sound under inner
-	// writes: a write during the run bumps currentEpoch past the stamp.
-	const epochAtStart = currentEpoch
-	if (c.flags & HasChildEffect) {
-		let link = c.depsTail
-		while (link !== undefined) {
-			const prev = link.prevDep
-			const dep = link.dep
-			if (!('getter' in dep) && !('currentValue' in dep)) {
-				unlink(link, c)
-			}
-			link = prev
-		}
-	}
-	c.depsTail = undefined
-	c.flags = ReactiveFlags.Mutable | ReactiveFlags.RecursedCheck
-	const prevSub = setActiveSub(c)
-	try {
-		++cycle
-		const oldValue = c.value
-		return oldValue !== (c.value = c.getter(oldValue))
-	} finally {
-		activeSub = prevSub
-		if (USE_QUIET_EPOCH) {
-			c.verifyEpoch = epochAtStart
-		}
-		c.flags &= ~ReactiveFlags.RecursedCheck
-		purgeDeps(c)
-	}
+  // Captured at entry: before the unlink loop below (which can run user
+  // effect cleanups via unwatched) and before the getter. Stamping this
+  // pre-user-code epoch keeps the quiet-epoch fast path sound under inner
+  // writes: a write during the run bumps currentEpoch past the stamp.
+  const epochAtStart = currentEpoch
+  if (c.flags & HasChildEffect) {
+    let link = c.depsTail
+    while (link !== undefined) {
+      const prev = link.prevDep
+      const dep = link.dep
+      if (!("getter" in dep) && !("currentValue" in dep)) {
+        unlink(link, c)
+      }
+      link = prev
+    }
+  }
+  c.depsTail = undefined
+  c.flags = ReactiveFlags.Mutable | ReactiveFlags.RecursedCheck
+  const prevSub = setActiveSub(c)
+  try {
+    ++cycle
+    const oldValue = c.value
+    return oldValue !== (c.value = c.getter(oldValue))
+  } finally {
+    activeSub = prevSub
+    if (USE_QUIET_EPOCH) {
+      c.verifyEpoch = epochAtStart
+    }
+    c.flags &= ~ReactiveFlags.RecursedCheck
+    purgeDeps(c)
+  }
 }
 
 function updateSignal(s: SignalNode): boolean {
-	s.flags = ReactiveFlags.Mutable
-	return s.currentValue !== (s.currentValue = s.pendingValue)
+  s.flags = ReactiveFlags.Mutable
+  return s.currentValue !== (s.currentValue = s.pendingValue)
 }
 
 function run(e: EffectNode): void {
-	const flags = e.flags
-	if (flags & ReactiveFlags.Dirty || (flags & ReactiveFlags.Pending && checkDirty(e.deps!, e))) {
-		if (flags & HasChildEffect) {
-			let link = e.depsTail
-			while (link !== undefined) {
-				const prev = link.prevDep
-				const dep = link.dep
-				if (!('getter' in dep) && !('currentValue' in dep)) {
-					unlink(link, e)
-				}
-				link = prev
-			}
-		}
-		if (e.cleanup) {
-			runCleanup(e)
-			if (!e.flags) {
-				return
-			}
-		}
-		e.depsTail = undefined
-		e.flags = ReactiveFlags.Watching | ReactiveFlags.RecursedCheck
-		const prevSub = setActiveSub(e)
-		try {
-			++cycle
-			++runDepth
-			e.cleanup = e.fn()
-		} finally {
-			--runDepth
-			activeSub = prevSub
-			e.flags &= ~ReactiveFlags.RecursedCheck
-			purgeDeps(e)
-		}
-	} else if (e.deps !== undefined) {
-		e.flags = ReactiveFlags.Watching | (flags & HasChildEffect)
-	}
+  const flags = e.flags
+  if (flags & ReactiveFlags.Dirty || (flags & ReactiveFlags.Pending && checkDirty(e.deps!, e))) {
+    if (flags & HasChildEffect) {
+      let link = e.depsTail
+      while (link !== undefined) {
+        const prev = link.prevDep
+        const dep = link.dep
+        if (!("getter" in dep) && !("currentValue" in dep)) {
+          unlink(link, e)
+        }
+        link = prev
+      }
+    }
+    if (e.cleanup) {
+      runCleanup(e)
+      if (!e.flags) {
+        return
+      }
+    }
+    e.depsTail = undefined
+    e.flags = ReactiveFlags.Watching | ReactiveFlags.RecursedCheck
+    const prevSub = setActiveSub(e)
+    try {
+      ++cycle
+      ++runDepth
+      e.cleanup = e.fn()
+    } finally {
+      --runDepth
+      activeSub = prevSub
+      e.flags &= ~ReactiveFlags.RecursedCheck
+      purgeDeps(e)
+    }
+  } else if (e.deps !== undefined) {
+    e.flags = ReactiveFlags.Watching | (flags & HasChildEffect)
+  }
 }
 
 function flush(): void {
-	try {
-		while (notifyIndex < queuedLength) {
-			const effect = queued[notifyIndex]!
-			queued[notifyIndex++] = undefined
-			run(effect)
-		}
-	} finally {
-		while (notifyIndex < queuedLength) {
-			const effect = queued[notifyIndex]!
-			queued[notifyIndex++] = undefined
-			effect.flags |= ReactiveFlags.Watching | ReactiveFlags.Recursed
-		}
-		notifyIndex = 0
-		queuedLength = 0
-	}
+  try {
+    while (notifyIndex < queuedLength) {
+      const effect = queued[notifyIndex]!
+      queued[notifyIndex++] = undefined
+      run(effect)
+    }
+  } finally {
+    while (notifyIndex < queuedLength) {
+      const effect = queued[notifyIndex]!
+      queued[notifyIndex++] = undefined
+      effect.flags |= ReactiveFlags.Watching | ReactiveFlags.Recursed
+    }
+    notifyIndex = 0
+    queuedLength = 0
+  }
 }
 
 function computedOper<T>(this: ComputedNode<T>): T {
-	// Upstream expresses this staleness resolution as one boolean
-	// expression; it is unrolled into statements here (same order, same
-	// effects) so the quiet-epoch path can capture the epoch in a local.
-	const flags = this.flags
-	let stale = (flags & ReactiveFlags.Dirty) !== 0
-	if (!stale && flags & ReactiveFlags.Pending) {
-		if (USE_QUIET_EPOCH && this.verifyEpoch === currentEpoch) {
-			// Quiet-epoch fast path: verified clean at the current epoch and
-			// nothing has changed anywhere since — skip checkDirty.
-			// (Unreachable by the invariant documented above; instrumented.)
-			++epochFastPathHits
-			this.flags = flags & ~ReactiveFlags.Pending
-		} else {
-			const epochAtStart = currentEpoch
-			if (checkDirty(this.deps!, this)) {
-				stale = true
-			} else {
-				if (USE_QUIET_EPOCH) {
-					this.verifyEpoch = epochAtStart
-				}
-				this.flags = flags & ~ReactiveFlags.Pending
-			}
-		}
-	}
-	if (stale) {
-		if (updateComputed(this)) {
-			const subs = this.subs
-			if (subs !== undefined) {
-				shallowPropagate(subs)
-			}
-		}
-	} else if (!flags) {
-		this.flags = ReactiveFlags.Mutable | ReactiveFlags.RecursedCheck
-		const prevSub = setActiveSub(this)
-		try {
-			this.value = this.getter()
-		} finally {
-			activeSub = prevSub
-			this.flags &= ~ReactiveFlags.RecursedCheck
-		}
-	}
-	const sub = activeSub
-	if (sub !== undefined) {
-		link(this, sub, cycle)
-	}
-	return this.value!
+  // Upstream expresses this staleness resolution as one boolean
+  // expression; it is unrolled into statements here (same order, same
+  // effects) so the quiet-epoch path can capture the epoch in a local.
+  const flags = this.flags
+  let stale = (flags & ReactiveFlags.Dirty) !== 0
+  if (!stale && flags & ReactiveFlags.Pending) {
+    if (USE_QUIET_EPOCH && this.verifyEpoch === currentEpoch) {
+      // Quiet-epoch fast path: verified clean at the current epoch and
+      // nothing has changed anywhere since — skip checkDirty.
+      // (Unreachable by the invariant documented above; instrumented.)
+      ++epochFastPathHits
+      this.flags = flags & ~ReactiveFlags.Pending
+    } else {
+      const epochAtStart = currentEpoch
+      if (checkDirty(this.deps!, this)) {
+        stale = true
+      } else {
+        if (USE_QUIET_EPOCH) {
+          this.verifyEpoch = epochAtStart
+        }
+        this.flags = flags & ~ReactiveFlags.Pending
+      }
+    }
+  }
+  if (stale) {
+    if (updateComputed(this)) {
+      const subs = this.subs
+      if (subs !== undefined) {
+        shallowPropagate(subs)
+      }
+    }
+  } else if (!flags) {
+    this.flags = ReactiveFlags.Mutable | ReactiveFlags.RecursedCheck
+    const prevSub = setActiveSub(this)
+    try {
+      this.value = this.getter()
+    } finally {
+      activeSub = prevSub
+      this.flags &= ~ReactiveFlags.RecursedCheck
+    }
+  }
+  const sub = activeSub
+  if (sub !== undefined) {
+    link(this, sub, cycle)
+  }
+  return this.value!
 }
 
 function signalOper<T>(this: SignalNode<T>, ...value: [T]): T | void {
-	if (value.length) {
-		if (this.pendingValue !== (this.pendingValue = value[0])) {
-			if (USE_QUIET_EPOCH) {
-				// Bump BEFORE propagate: any verifyEpoch stamped earlier is
-				// now stale, so the Pending marks below always force a real
-				// checkDirty. No user code runs between here and propagate.
-				++currentEpoch
-			}
-			this.flags = ReactiveFlags.Mutable | ReactiveFlags.Dirty
-			const subs = this.subs
-			if (subs !== undefined) {
-				propagate(subs, !!runDepth)
-				if (!batchDepth) {
-					flush()
-				}
-			}
-		}
-	} else {
-		if (this.flags & ReactiveFlags.Dirty) {
-			if (updateSignal(this)) {
-				const subs = this.subs
-				if (subs !== undefined) {
-					shallowPropagate(subs)
-				}
-			}
-		}
-		const sub = activeSub
-		if (sub !== undefined) {
-			link(this, sub, cycle)
-		}
-		return this.currentValue
-	}
+  if (value.length) {
+    if (this.pendingValue !== (this.pendingValue = value[0])) {
+      if (USE_QUIET_EPOCH) {
+        // Bump BEFORE propagate: any verifyEpoch stamped earlier is
+        // now stale, so the Pending marks below always force a real
+        // checkDirty. No user code runs between here and propagate.
+        ++currentEpoch
+      }
+      this.flags = ReactiveFlags.Mutable | ReactiveFlags.Dirty
+      const subs = this.subs
+      if (subs !== undefined) {
+        propagate(subs, !!runDepth)
+        if (!batchDepth) {
+          flush()
+        }
+      }
+    }
+  } else {
+    if (this.flags & ReactiveFlags.Dirty) {
+      if (updateSignal(this)) {
+        const subs = this.subs
+        if (subs !== undefined) {
+          shallowPropagate(subs)
+        }
+      }
+    }
+    const sub = activeSub
+    if (sub !== undefined) {
+      link(this, sub, cycle)
+    }
+    return this.currentValue
+  }
 }
 
 function runCleanup(e: EffectNode): void {
-	const cleanup = e.cleanup!
-	e.cleanup = undefined
-	const prevSub = activeSub
-	activeSub = undefined
-	try {
-		cleanup()
-	} finally {
-		activeSub = prevSub
-	}
+  const cleanup = e.cleanup!
+  e.cleanup = undefined
+  const prevSub = activeSub
+  activeSub = undefined
+  try {
+    cleanup()
+  } finally {
+    activeSub = prevSub
+  }
 }
 
 function effectOper(this: EffectNode): void {
-	effectScopeOper.call(this)
-	if (this.cleanup) {
-		runCleanup(this)
-	}
+  effectScopeOper.call(this)
+  if (this.cleanup) {
+    runCleanup(this)
+  }
 }
 
 function effectScopeOper(this: EffectScopeNode): void {
-	this.flags = ReactiveFlags.None
-	disposeAllDepsInReverse(this)
-	const sub = this.subs
-	if (sub !== undefined) {
-		unlink(sub)
-	}
+  this.flags = ReactiveFlags.None
+  disposeAllDepsInReverse(this)
+  const sub = this.subs
+  if (sub !== undefined) {
+    unlink(sub)
+  }
 }
 
 function disposeAllDepsInReverse(sub: ReactiveNode): void {
-	let link = sub.depsTail
-	while (link !== undefined) {
-		const prev = link.prevDep
-		unlink(link, sub)
-		link = prev
-	}
+  let link = sub.depsTail
+  while (link !== undefined) {
+    const prev = link.prevDep
+    unlink(link, sub)
+    link = prev
+  }
 }
 
 function purgeDeps(sub: ReactiveNode) {
-	const depsTail = sub.depsTail
-	let dep = depsTail !== undefined ? depsTail.nextDep : sub.deps
-	while (dep !== undefined) {
-		dep = unlink(dep, sub)
-	}
+  const depsTail = sub.depsTail
+  let dep = depsTail !== undefined ? depsTail.nextDep : sub.deps
+  while (dep !== undefined) {
+    dep = unlink(dep, sub)
+  }
 }

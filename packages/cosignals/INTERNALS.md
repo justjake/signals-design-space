@@ -143,14 +143,14 @@ Attached, events go into a ring of `capacity` events (default 4096);
 overflow evicts the oldest and increments `dropped`, never silently.
 
 ```ts
-import { attachTracer, nodeOf } from 'cosignals/debug'
+import { attachTracer, nodeOf } from "cosignals/debug"
 
 const t = attachTracer({ capacity: 4096 })
 // ... run the app ...
-t.whyLastDelivery(nodeOf(count))  // ['#42 notify', '#41 set "count"', ...]
-t.events()                        // retained events, oldest first
-t.dropped                         // events evicted by ring overflow
-t.stop()                          // detach
+t.whyLastDelivery(nodeOf(count)) // ['#42 notify', '#41 set "count"', ...]
+t.events() // retained events, oldest first
+t.dropped // events evicted by ring overflow
+t.stop() // detach
 ```
 
 Every event carries a causal parent id: a re-render chains to the write

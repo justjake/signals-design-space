@@ -29,77 +29,73 @@
  * such gap — is closed before paint by correctSubscription, which replays
  * missed drafts and compares the rendered resolution against current state.
  */
-import type * as React from 'react'
+import type * as React from "react"
 import {
-	useCallback,
-	useContext,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useReducer,
-	useRef,
-	useSyncExternalStore,
-} from 'react'
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useSyncExternalStore,
+} from "react"
 import {
-	createAtom,
-	createComputed,
-	createEffect,
-	isPendingPassive,
-	isUninitialized,
-	nodeOf,
-	type Atom,
-	type AtomOptions,
-	type EqualsFn,
-	type Signal,
-	type SignalValues,
-	type UseFn,
-} from '../signals.ts'
-import { type ErrorBox, type ResolvedState, type Suspension } from '../asyncs.ts'
+  createAtom,
+  createComputed,
+  createEffect,
+  isPendingPassive,
+  isUninitialized,
+  nodeOf,
+  type Atom,
+  type AtomOptions,
+  type EqualsFn,
+  type Signal,
+  type SignalValues,
+  type UseFn,
+} from "../signals.ts"
+import { type ErrorBox, type ResolvedState, type Suspension } from "../asyncs.ts"
 import {
-	trace,
-	Flag,
-	NO_EVENT,
-	observeNode,
-	type GraphChangeClock,
-	type ProducerNode,
-	type RenderWatcherNode,
-	type TraceEventId,
-} from '../graph.ts'
-import { BASE_WORLD, resolveState, worldOf, type DraftId, type World } from '../worlds.ts'
+  trace,
+  Flag,
+  NO_EVENT,
+  observeNode,
+  type GraphChangeClock,
+  type ProducerNode,
+  type RenderWatcherNode,
+  type TraceEventId,
+} from "../graph.ts"
+import { BASE_WORLD, resolveState, worldOf, type DraftId, type World } from "../worlds.ts"
 import {
-	correctSubscription,
-	dispatchDraftWake,
-	dispatchUrgent,
-	noteHookRender,
-	renderPassIds,
-	resolutionDiffers,
-	REPAIR_WAKE,
-	type ReactRootConnection,
-	type RenderedResolution,
-} from './host.ts'
-import {
-	EMPTY_WORLD,
-	ReactRootConnectionContext,
-	worldsReducer,
-} from './CosignalsProvider.ts'
+  correctSubscription,
+  dispatchDraftWake,
+  dispatchUrgent,
+  noteHookRender,
+  renderPassIds,
+  resolutionDiffers,
+  REPAIR_WAKE,
+  type ReactRootConnection,
+  type RenderedResolution,
+} from "./host.ts"
+import { EMPTY_WORLD, ReactRootConnectionContext, worldsReducer } from "./CosignalsProvider.ts"
 
 interface UseValueState {
-	delivered: Set<DraftId>
-	/** What the hook's most recent render resolved (committed or not). */
-	rendered: RenderedResolution
-	repairPending: boolean
-	/** The engine watcher node this hook subscribes with, once its layout effect
-	 * has run. Notifications are recorded against it because the engine delivers
-	 * to a subscription, not to the producer it watches. */
-	watcher: RenderWatcherNode | undefined
-	/**
-	 * What the committed tree shows for this hook. Advances only in the
-	 * layout effect, so a transition's speculative values never enter it
-	 * while the transition is held. The notify predicate compares against
-	 * this, which keeps folds silent when the committed tree already shows
-	 * their values and keeps live appends from double-dispatching repairs.
-	 */
-	committed: RenderedResolution
+  delivered: Set<DraftId>
+  /** What the hook's most recent render resolved (committed or not). */
+  rendered: RenderedResolution
+  repairPending: boolean
+  /** The engine watcher node this hook subscribes with, once its layout effect
+   * has run. Notifications are recorded against it because the engine delivers
+   * to a subscription, not to the producer it watches. */
+  watcher: RenderWatcherNode | undefined
+  /**
+   * What the committed tree shows for this hook. Advances only in the
+   * layout effect, so a transition's speculative values never enter it
+   * while the transition is held. The notify predicate compares against
+   * this, which keeps folds silent when the committed tree already shows
+   * their values and keeps live appends from double-dispatching repairs.
+   */
+  committed: RenderedResolution
 }
 
 const NOOP = (): void => {}
@@ -113,19 +109,19 @@ const NO_IDS: readonly DraftId[] = []
  * no channel for them. Fail at the hook and name both supported fixes.
  */
 function requireRootConnection(hook: string): ReactRootConnection {
-	const connection = useContext(ReactRootConnectionContext)
-	if (connection === null) {
-		const error = new Error(
-			`${hook} was rendered without a CosignalsProvider above it. ` +
-				'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <CosignalsProvider>.',
-		)
-		trace?.emitEvent('policy-error', null, NO_EVENT, {
-			error,
-			phase: 'missing-provider',
-		})
-		throw error
-	}
-	return connection
+  const connection = useContext(ReactRootConnectionContext)
+  if (connection === null) {
+    const error = new Error(
+      `${hook} was rendered without a CosignalsProvider above it. ` +
+        "Create roots with wrapCreateRoot(createRoot), or wrap the tree in <CosignalsProvider>.",
+    )
+    trace?.emitEvent("policy-error", null, NO_EVENT, {
+      error,
+      phase: "missing-provider",
+    })
+    throw error
+  }
+  return connection
 }
 
 /**
@@ -139,34 +135,34 @@ function requireRootConnection(hook: string): ReactRootConnection {
  * - a never-settled value suspends everywhere.
  */
 function unwrapState(
-	st: ResolvedState,
-	world: World,
-	connection: ReactRootConnection,
-	node: ProducerNode,
+  st: ResolvedState,
+  world: World,
+  connection: ReactRootConnection,
+  node: ProducerNode,
 ): unknown {
-	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === 0) {
-		return st.value
-	}
-	if (asyncBits === Flag.AsyncError) {
-		const error = (st.throwable as ErrorBox).error
-		const sink = trace
-		sink?.emitEvent('render-error', node, sink.getCause(node), { error, root: connection })
-		throw error
-	}
-	const suspension = st.throwable as Suspension
-	// Base-world refreshes keep serving settled history while pending.
-	if (world.drafts.length === 0 && !isUninitialized(st.value)) {
-		return st.value
-	}
-	// This render path is about to throw the suspension promise. The root
-	// identifies the rendering connection; it does not claim that React catches
-	// the promise, parks work, or schedules a retry.
-	trace?.emitEvent('render-suspend', node, NO_EVENT, {
-		root: connection,
-		suspension,
-	})
-	throw suspension.promise
+  const asyncBits = st.flags & Flag.AsyncMask
+  if (asyncBits === 0) {
+    return st.value
+  }
+  if (asyncBits === Flag.AsyncError) {
+    const error = (st.throwable as ErrorBox).error
+    const sink = trace
+    sink?.emitEvent("render-error", node, sink.getCause(node), { error, root: connection })
+    throw error
+  }
+  const suspension = st.throwable as Suspension
+  // Base-world refreshes keep serving settled history while pending.
+  if (world.drafts.length === 0 && !isUninitialized(st.value)) {
+    return st.value
+  }
+  // This render path is about to throw the suspension promise. The root
+  // identifies the rendering connection; it does not claim that React catches
+  // the promise, parks work, or schedules a retry.
+  trace?.emitEvent("render-suspend", node, NO_EVENT, {
+    root: connection,
+    suspension,
+  })
+  throw suspension.promise
 }
 
 /**
@@ -187,119 +183,119 @@ function unwrapState(
  * correctSubscription at subscribe time.
  */
 export function useSignal<T>(x: Signal<T>): T {
-	const node = nodeOf(x)
-	const connection = requireRootConnection('useSignal')
-	const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
-	const baseSnapshot = useCallback((): GraphChangeClock => {
-		resolveState(node, BASE_WORLD)
-		return node.changedAtGraphChange
-	}, [node])
-	// This subscription's only job is React's pre-commit snapshot check.
-	// The engine watcher below owns notifications and transition scheduling.
-	useSyncExternalStore(NO_STORE_SUBSCRIPTION, baseSnapshot, baseSnapshot)
-	noteHookRender(connection, hookWorld.ids)
-	const ids = renderPassIds(connection) ?? hookWorld.ids
-	// One record per hook owns the delivery/repair protocol. Initialize it
-	// explicitly because useRef evaluates a non-primitive initializer every
-	// render even though React consumes that value only on mount.
-	const stateRef = useRef<UseValueState | null>(null)
-	let state = stateRef.current
-	if (state === null) {
-		state = {
-			delivered: new Set(),
-			rendered: { ids: NO_IDS, value: undefined, live: false },
-			repairPending: false,
-			watcher: undefined,
-			committed: { ids: NO_IDS, value: undefined, live: false },
-		}
-		stateRef.current = state
-	}
-	// Draft ids delivered to this hook's reducer since its last render. A
-	// repeat id adds nothing while the first is still queued: the dispatch
-	// only schedules, and the pass that consumes it resolves the world
-	// live, later appends included. The set is cleared unconditionally on
-	// every render because a pass that consumed the draft ends that
-	// guarantee — a later append must re-dispatch, or React bails out and
-	// the transition commits a stale frame. Over-clearing (an abandoned
-	// pass, a StrictMode double render) merely permits a redundant
-	// dispatch, which is harmless; writes during render throw, so no
-	// delivery can race the clear.
-	state.delivered.clear()
-	const deliver = useCallback(
-		(id: DraftId, cause: TraceEventId) => {
-			if (state.delivered.has(id)) {
-				return
-			}
-			state.delivered.add(id)
-			trace?.emitEvent('transition-notify', state.watcher ?? node, cause, {
-				draftId: id,
-				root: connection,
-			})
-			dispatchDraftWake(id, wake)
-		},
-		[connection, node, state, wake],
-	)
-	// At most one REPAIR_WAKE per render window, cleared alongside
-	// `delivered` under the same reasoning: a pending dispatch already
-	// guarantees a re-render against current state.
-	state.repairPending = false
-	// Render-notify delivery: the engine says "something over your sources
-	// moved" (a base wave, a poke, a fold), and the predicate answers
-	// "would the committed tree show anything different if re-rendered
-	// now?". The dispatch inherits the ambient scheduling context —
-	// exactly useState's semantics for the write that caused it.
-	const onNotify = useCallback(
-		(cause: TraceEventId) => {
-			// The connection's first-child marker confirms before descendant layout
-			// effects. During that narrow window this render is the one committing,
-			// so compare against it directly; outside it, never trust speculative
-			// render state over the last completed commit.
-			const stash = connection.committing ? state.rendered : state.committed
-			if (!stash.live || state.repairPending) {
-				return
-			}
-			if (!resolutionDiffers(node, stash)) {
-				return
-			}
-			state.repairPending = true
-			// The state change that woke this watcher (the write/settle/fold the
-			// invalidation stamped) causes the notify; the render this dispatch
-			// produces is caused by the notify in turn.
-			trace?.emitEvent('notify', state.watcher ?? node, cause, { root: connection })
-			wake(REPAIR_WAKE)
-		},
-		[node, connection, state, wake],
-	)
-	// Subscribe in a layout effect so correctSubscription repairs a value
-	// that changed during a time-sliced mount before the frame can paint.
-	useLayoutEffect(() => {
-		const off = observeNode(node, onNotify, deliver)
-		state.watcher = off.watcher
-		if (state.rendered.live) {
-			correctSubscription(node, state.rendered, connection, deliver, wake)
-		}
-		return () => {
-			state.watcher = undefined
-			off()
-		}
-	}, [node, connection, state, deliver, wake, onNotify])
-	const world = worldOf(ids)
-	const st = resolveState(node, world)
-	const value = unwrapState(st, world, connection, node)
-	const stash = state.rendered
-	stash.ids = ids
-	stash.value = value
-	stash.live = true
-	// Advance the committed stash at commit time. No dependency array: the
-	// effect runs on every commit with that render's resolution, and a
-	// suspended render never reaches it.
-	useLayoutEffect(() => {
-		const c = state.committed
-		c.ids = ids
-		c.value = value
-		c.live = true
-	})
-	return value as T
+  const node = nodeOf(x)
+  const connection = requireRootConnection("useSignal")
+  const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
+  const baseSnapshot = useCallback((): GraphChangeClock => {
+    resolveState(node, BASE_WORLD)
+    return node.changedAtGraphChange
+  }, [node])
+  // This subscription's only job is React's pre-commit snapshot check.
+  // The engine watcher below owns notifications and transition scheduling.
+  useSyncExternalStore(NO_STORE_SUBSCRIPTION, baseSnapshot, baseSnapshot)
+  noteHookRender(connection, hookWorld.ids)
+  const ids = renderPassIds(connection) ?? hookWorld.ids
+  // One record per hook owns the delivery/repair protocol. Initialize it
+  // explicitly because useRef evaluates a non-primitive initializer every
+  // render even though React consumes that value only on mount.
+  const stateRef = useRef<UseValueState | null>(null)
+  let state = stateRef.current
+  if (state === null) {
+    state = {
+      delivered: new Set(),
+      rendered: { ids: NO_IDS, value: undefined, live: false },
+      repairPending: false,
+      watcher: undefined,
+      committed: { ids: NO_IDS, value: undefined, live: false },
+    }
+    stateRef.current = state
+  }
+  // Draft ids delivered to this hook's reducer since its last render. A
+  // repeat id adds nothing while the first is still queued: the dispatch
+  // only schedules, and the pass that consumes it resolves the world
+  // live, later appends included. The set is cleared unconditionally on
+  // every render because a pass that consumed the draft ends that
+  // guarantee — a later append must re-dispatch, or React bails out and
+  // the transition commits a stale frame. Over-clearing (an abandoned
+  // pass, a StrictMode double render) merely permits a redundant
+  // dispatch, which is harmless; writes during render throw, so no
+  // delivery can race the clear.
+  state.delivered.clear()
+  const deliver = useCallback(
+    (id: DraftId, cause: TraceEventId) => {
+      if (state.delivered.has(id)) {
+        return
+      }
+      state.delivered.add(id)
+      trace?.emitEvent("transition-notify", state.watcher ?? node, cause, {
+        draftId: id,
+        root: connection,
+      })
+      dispatchDraftWake(id, wake)
+    },
+    [connection, node, state, wake],
+  )
+  // At most one REPAIR_WAKE per render window, cleared alongside
+  // `delivered` under the same reasoning: a pending dispatch already
+  // guarantees a re-render against current state.
+  state.repairPending = false
+  // Render-notify delivery: the engine says "something over your sources
+  // moved" (a base wave, a poke, a fold), and the predicate answers
+  // "would the committed tree show anything different if re-rendered
+  // now?". The dispatch inherits the ambient scheduling context —
+  // exactly useState's semantics for the write that caused it.
+  const onNotify = useCallback(
+    (cause: TraceEventId) => {
+      // The connection's first-child marker confirms before descendant layout
+      // effects. During that narrow window this render is the one committing,
+      // so compare against it directly; outside it, never trust speculative
+      // render state over the last completed commit.
+      const stash = connection.committing ? state.rendered : state.committed
+      if (!stash.live || state.repairPending) {
+        return
+      }
+      if (!resolutionDiffers(node, stash)) {
+        return
+      }
+      state.repairPending = true
+      // The state change that woke this watcher (the write/settle/fold the
+      // invalidation stamped) causes the notify; the render this dispatch
+      // produces is caused by the notify in turn.
+      trace?.emitEvent("notify", state.watcher ?? node, cause, { root: connection })
+      wake(REPAIR_WAKE)
+    },
+    [node, connection, state, wake],
+  )
+  // Subscribe in a layout effect so correctSubscription repairs a value
+  // that changed during a time-sliced mount before the frame can paint.
+  useLayoutEffect(() => {
+    const off = observeNode(node, onNotify, deliver)
+    state.watcher = off.watcher
+    if (state.rendered.live) {
+      correctSubscription(node, state.rendered, connection, deliver, wake)
+    }
+    return () => {
+      state.watcher = undefined
+      off()
+    }
+  }, [node, connection, state, deliver, wake, onNotify])
+  const world = worldOf(ids)
+  const st = resolveState(node, world)
+  const value = unwrapState(st, world, connection, node)
+  const stash = state.rendered
+  stash.ids = ids
+  stash.value = value
+  stash.live = true
+  // Advance the committed stash at commit time. No dependency array: the
+  // effect runs on every commit with that render's resolution, and a
+  // suspended render never reaches it.
+  useLayoutEffect(() => {
+    const c = state.committed
+    c.ids = ids
+    c.value = value
+    c.live = true
+  })
+  return value as T
 }
 
 /**
@@ -310,13 +306,13 @@ export function useSignal<T>(x: Signal<T>): T {
  * dependencies, so dropping it at unmount makes it garbage-collectible.
  */
 export function useComputed<T>(
-	fn: (use: UseFn, previous: T | undefined) => T,
-	deps: React.DependencyList,
+  fn: (use: UseFn, previous: T | undefined) => T,
+  deps: React.DependencyList,
 ): T {
-	requireRootConnection('useComputed') // fail with this hook's name, not useSignal's
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const c = useMemo(() => createComputed(fn), deps)
-	return useSignal(c)
+  requireRootConnection("useComputed") // fail with this hook's name, not useSignal's
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const c = useMemo(() => createComputed(fn), deps)
+  return useSignal(c)
 }
 
 /**
@@ -325,19 +321,19 @@ export function useComputed<T>(
  * {@link createEffect} accepts as its first argument.
  */
 export type WatchSource =
-	| ((use: UseFn, previous: any) => unknown)
-	| Signal<any>
-	| readonly Signal<any>[]
-	| Record<string, Signal<any>>
+  | ((use: UseFn, previous: any) => unknown)
+  | Signal<any>
+  | readonly Signal<any>[]
+  | Record<string, Signal<any>>
 
 /** The value a watch source delivers to run(). */
 export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
-	? T
-	: S extends Signal<infer V>
-		? V
-		: S extends readonly Signal<any>[] | Record<string, Signal<any>>
-			? SignalValues<S>
-			: never
+  ? T
+  : S extends Signal<infer V>
+    ? V
+    : S extends readonly Signal<any>[] | Record<string, Signal<any>>
+      ? SignalValues<S>
+      : never
 
 /**
  * One component-owned signal effect, as built by the factory passed to
@@ -345,32 +341,32 @@ export type WatchValue<S> = S extends (use: UseFn, previous: any) => infer T
  * decides the schedule; everything else is described per field.
  */
 export interface SignalEffectSpec<S extends WatchSource> {
-	/**
-	 * What the effect reacts to. One of:
-	 * - a compute function: tracked while it runs, so the signals it read
-	 *   — and only those — become dependencies, branch by branch;
-	 * - a signal: shorthand for a compute that reads it;
-	 * - a tuple or record of signals: shorthand for a compute that reads
-	 *   each one into a same-shaped tuple or record of values.
-	 * These are the same shapes {@link createEffect} accepts as its first
-	 * argument.
-	 */
-	watch: S
-	/**
-	 * What the effect does: called with the watched value and the previous
-	 * value it handled (undefined on the first call). May return a cleanup,
-	 * which runs before the next call and when the effect is disposed.
-	 * Reads inside run() are not tracked — a value the effect should react
-	 * to belongs in `watch`.
-	 */
-	run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
-	/**
-	 * Delivery cutoff; defaults to Object.is, or the package's
-	 * `shallowEquals` for tuple and record watches.
-	 */
-	equals?: EqualsFn<WatchValue<S>>
-	/** Debug name shown in trace output. */
-	label?: string
+  /**
+   * What the effect reacts to. One of:
+   * - a compute function: tracked while it runs, so the signals it read
+   *   — and only those — become dependencies, branch by branch;
+   * - a signal: shorthand for a compute that reads it;
+   * - a tuple or record of signals: shorthand for a compute that reads
+   *   each one into a same-shaped tuple or record of values.
+   * These are the same shapes {@link createEffect} accepts as its first
+   * argument.
+   */
+  watch: S
+  /**
+   * What the effect does: called with the watched value and the previous
+   * value it handled (undefined on the first call). May return a cleanup,
+   * which runs before the next call and when the effect is disposed.
+   * Reads inside run() are not tracked — a value the effect should react
+   * to belongs in `watch`.
+   */
+  run: (value: WatchValue<S>, previous: WatchValue<S> | undefined) => void | (() => void)
+  /**
+   * Delivery cutoff; defaults to Object.is, or the package's
+   * `shallowEquals` for tuple and record watches.
+   */
+  equals?: EqualsFn<WatchValue<S>>
+  /** Debug name shown in trace output. */
+  label?: string
 }
 
 /**
@@ -383,16 +379,16 @@ export interface SignalEffectSpec<S extends WatchSource> {
  * Both hooks observe base state and therefore need no provider.
  */
 function useSignalPhaseEffect(
-	usePhaseEffect: typeof useEffect,
-	schedule: 'useLayoutEffect' | 'useEffect',
-	create: () => SignalEffectSpec<any>,
-	deps: React.DependencyList,
+  usePhaseEffect: typeof useEffect,
+  schedule: "useLayoutEffect" | "useEffect",
+  create: () => SignalEffectSpec<any>,
+  deps: React.DependencyList,
 ): void {
-	usePhaseEffect(() => {
-		const spec = create()
-		return createEffect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, deps)
+  usePhaseEffect(() => {
+    const spec = create()
+    return createEffect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
 }
 
 /**
@@ -414,10 +410,10 @@ function useSignalPhaseEffect(
  * path of the frame.
  */
 export function useSignalEffect<const S extends WatchSource>(
-	create: () => SignalEffectSpec<S>,
-	deps: React.DependencyList,
+  create: () => SignalEffectSpec<S>,
+  deps: React.DependencyList,
 ): void {
-	useSignalPhaseEffect(useEffect, 'useEffect', create, deps)
+  useSignalPhaseEffect(useEffect, "useEffect", create, deps)
 }
 
 /**
@@ -441,10 +437,10 @@ export function useSignalEffect<const S extends WatchSource>(
  * and writes in `run` land in the same frame as React's output.
  */
 export function useSignalLayoutEffect<const S extends WatchSource>(
-	create: () => SignalEffectSpec<S>,
-	deps: React.DependencyList,
+  create: () => SignalEffectSpec<S>,
+  deps: React.DependencyList,
 ): void {
-	useSignalPhaseEffect(useLayoutEffect, 'useLayoutEffect', create, deps)
+  useSignalPhaseEffect(useLayoutEffect, "useLayoutEffect", create, deps)
 }
 
 /**
@@ -454,21 +450,21 @@ export function useSignalLayoutEffect<const S extends WatchSource>(
  *   keeps serving.
  */
 export function useIsPending(x: Signal<any>): boolean {
-	const node = nodeOf(x)
-	noteHookRender(requireRootConnection('useIsPending'), null)
-	const subscribe = useCallback(
-		(notify: () => void) =>
-			observeNode(node, () => {
-				// The flip escapes any ambient transition: an indicator scheduled
-				// inside the transition it indicates would be held hostage by it.
-				// React's own useTransition schedules isPending before entering the
-				// transition for the same reason.
-				dispatchUrgent(notify)
-			}),
-		[node],
-	)
-	const getSnapshot = useCallback(() => isPendingPassive(node, null), [node])
-	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const node = nodeOf(x)
+  noteHookRender(requireRootConnection("useIsPending"), null)
+  const subscribe = useCallback(
+    (notify: () => void) =>
+      observeNode(node, () => {
+        // The flip escapes any ambient transition: an indicator scheduled
+        // inside the transition it indicates would be held hostage by it.
+        // React's own useTransition schedules isPending before entering the
+        // transition for the same reason.
+        dispatchUrgent(notify)
+      }),
+    [node],
+  )
+  const getSnapshot = useCallback(() => isPendingPassive(node, null), [node])
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 /**
@@ -476,7 +472,7 @@ export function useIsPending(x: Signal<any>): boolean {
  * unmount when the component's references to it drop.
  */
 export function useAtom<T>(initial: T | (() => T), opts?: AtomOptions<T>): Atom<T> {
-	const atomRef = useRef<Atom<T> | null>(null)
-	atomRef.current ??= createAtom(initial, opts)
-	return atomRef.current
+  const atomRef = useRef<Atom<T> | null>(null)
+  atomRef.current ??= createAtom(initial, opts)
+  return atomRef.current
 }

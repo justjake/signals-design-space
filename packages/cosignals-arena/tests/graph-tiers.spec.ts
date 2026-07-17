@@ -8,92 +8,88 @@
  *   of the behavior under test, then made to pass.
  * - [parity]: pins internal structure or exact recompute counts.
  */
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from "vitest"
 import {
-	type CellNode,
-	type DerivedNode,
-	type EffectNode,
-	type Link,
-	type ReactiveNode,
-	Flag,
-	Lane,
-	NO_EVENT,
-	batch,
-	currentGraphChange,
-	dependencyOf,
-	flushScheduledEffects,
-	invalidateDerived,
-	makeEffect,
-	makeScope,
-	nextDependency,
-	nextSubscriber,
-	observeNode,
-	pokeDraftWatchers,
-	readCell,
-	readDerived,
-	subscriberOf,
-	writeCell,
-	type TraceEventId,
-} from '../src/graph.ts'
+  type CellNode,
+  type DerivedNode,
+  type EffectNode,
+  type Link,
+  type ReactiveNode,
+  Flag,
+  Lane,
+  NO_EVENT,
+  batch,
+  currentGraphChange,
+  dependencyOf,
+  flushScheduledEffects,
+  invalidateDerived,
+  makeEffect,
+  makeScope,
+  nextDependency,
+  nextSubscriber,
+  observeNode,
+  pokeDraftWatchers,
+  readCell,
+  readDerived,
+  subscriberOf,
+  writeCell,
+  type TraceEventId,
+} from "../src/graph.ts"
 import {
-	createAtom,
-	createComputed,
-	effect,
-	nodeOf,
-	resetEngineForTest,
-	type AtomOptions,
-	type Computed,
-} from '../src/index.ts'
-import {
-	appendDraftIntent,
-	discardDraft,
-	openDraft,
-} from '../src/worlds.ts'
+  createAtom,
+  createComputed,
+  effect,
+  nodeOf,
+  resetEngineForTest,
+  type AtomOptions,
+  type Computed,
+} from "../src/index.ts"
+import { appendDraftIntent, discardDraft, openDraft } from "../src/worlds.ts"
 
 function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): CellNode<T> {
-	return nodeOf(createAtom(initial, opts)) as CellNode<T>
+  return nodeOf(createAtom(initial, opts)) as CellNode<T>
 }
 
-function makeGraphComputed<T>(fn: DerivedNode<T>['fn']): DerivedNode<T> {
-	return nodeOf(createComputed(fn)) as DerivedNode<T>
+function makeGraphComputed<T>(fn: DerivedNode<T>["fn"]): DerivedNode<T> {
+  return nodeOf(createComputed(fn)) as DerivedNode<T>
 }
 
 /** A sync-lane engine effect over a spec-local compute. */
 function syncEffect<T>(
-	read: () => T,
-	handler: (value: T, previous: T | undefined) => void | (() => void) = () => {},
+  read: () => T,
+  handler: (value: T, previous: T | undefined) => void | (() => void) = () => {},
 ): () => void {
-	return makeEffect(
-		read,
-		handler as (value: unknown, previous: unknown) => void | (() => void),
-		Lane.Sync,
-	)
+  return makeEffect(
+    read,
+    handler as (value: unknown, previous: unknown) => void | (() => void),
+    Lane.Sync,
+  )
 }
 
 /** Edges in dep's subscriber list pointing at sub (watched edges only). */
 function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
-	let n = 0
-	for (let l: Link | undefined = dep.subs; l !== undefined; l = nextSubscriber(l)) {
-		if (sub === undefined || subscriberOf(l) === sub) {
-			n++
-		}
-	}
-	return n
+  let n = 0
+  for (let l: Link | undefined = dep.subs; l !== undefined; l = nextSubscriber(l)) {
+    if (sub === undefined || subscriberOf(l) === sub) {
+      n++
+    }
+  }
+  return n
 }
 
 /** Edges in sub's dependency list pointing at dep (both tiers). */
 function depEdgeCount(sub: ReactiveNode, dep: ReactiveNode): number {
-	let n = 0
-	for (let l: Link | undefined = sub.deps; l !== undefined; l = nextDependency(l)) {
-		if (dependencyOf(l) === dep) {
-			n++
-		}
-	}
-	return n
+  let n = 0
+  for (let l: Link | undefined = sub.deps; l !== undefined; l = nextDependency(l)) {
+    if (dependencyOf(l) === dep) {
+      n++
+    }
+  }
+  return n
 }
 
 function isWatched(n: ReactiveNode): boolean {
-	return (n.flags & Flag.Watched) !== 0
+  return (n.flags & Flag.Watched) !== 0
 }
 
 /**
@@ -103,939 +99,923 @@ function isWatched(n: ReactiveNode): boolean {
  * resurrect the stale-Clean serve that promote exists to prevent.
  */
 function expectTierInvariant(nodes: ReactiveNode[]): void {
-	for (const n of nodes) {
-		if ((n.flags & Flag.Watching) !== 0) {
-			continue
-		}
-		expect(isWatched(n)).toBe(n.observerCount > 0)
-	}
+  for (const n of nodes) {
+    if ((n.flags & Flag.Watching) !== 0) {
+      continue
+    }
+    expect(isWatched(n)).toBe(n.observerCount > 0)
+  }
 }
 
-describe('two-tier graph: promote validation', () => {
-	test('T1 [falsify-first] subscribe-without-pull then read serves the fresh value', () => {
-		// Pre-rebuild failure: AssertionError: expected 2 to be 4 — promote
-		// installed back-edges and trusted the stale Clean flags, so the watched
-		// fast path served the cached value.
-		const a = atom(1)
-		const d = makeGraphComputed(() => readCell(a) * 2)
-		expect(readDerived(d)).toBe(2) // caches while unwatched
-		writeCell(a, 2) // no back-edges: no push mark reaches d
-		const stop = observeNode(d, () => {}) // subscribe without pulling
-		expect(readDerived(d)).toBe(4)
-		stop()
-	})
+describe("two-tier graph: promote validation", () => {
+  test("T1 [falsify-first] subscribe-without-pull then read serves the fresh value", () => {
+    // Pre-rebuild failure: AssertionError: expected 2 to be 4 — promote
+    // installed back-edges and trusted the stale Clean flags, so the watched
+    // fast path served the cached value.
+    const a = atom(1)
+    const d = makeGraphComputed(() => readCell(a) * 2)
+    expect(readDerived(d)).toBe(2) // caches while unwatched
+    writeCell(a, 2) // no back-edges: no push mark reaches d
+    const stop = observeNode(d, () => {}) // subscribe without pulling
+    expect(readDerived(d)).toBe(4)
+    stop()
+  })
 
-	test('T2 [falsify-first] subscribing to a stale node delivers the pending edge once; a pull re-arms', () => {
-		// Pre-rebuild failure: AssertionError: expected +0 to be 1 — the node
-		// was stale when the subscriber arrived, and the wave's early-return on
-		// pre-existing staleness meant the new subscriber never heard anything.
-		const a = atom(1)
-		const d = makeGraphComputed(() => readCell(a) * 2)
-		const stopEffect = syncEffect(() => readDerived(d))
-		batch(() => {
-			writeCell(a, 2) // marks d through the watched edge
-			stopEffect() // demote runs while d is stale
-		})
-		let notifies = 0
-		const stop = observeNode(d, () => notifies++)
-		expect(notifies).toBe(1) // the missed staleness edge, delivered at subscribe
-		expect(readDerived(d)).toBe(4) // pull re-arms the edge trigger
-		writeCell(a, 3)
-		expect(notifies).toBe(2)
-		stop()
-	})
+  test("T2 [falsify-first] subscribing to a stale node delivers the pending edge once; a pull re-arms", () => {
+    // Pre-rebuild failure: AssertionError: expected +0 to be 1 — the node
+    // was stale when the subscriber arrived, and the wave's early-return on
+    // pre-existing staleness meant the new subscriber never heard anything.
+    const a = atom(1)
+    const d = makeGraphComputed(() => readCell(a) * 2)
+    const stopEffect = syncEffect(() => readDerived(d))
+    batch(() => {
+      writeCell(a, 2) // marks d through the watched edge
+      stopEffect() // demote runs while d is stale
+    })
+    let notifies = 0
+    const stop = observeNode(d, () => notifies++)
+    expect(notifies).toBe(1) // the missed staleness edge, delivered at subscribe
+    expect(readDerived(d)).toBe(4) // pull re-arms the edge trigger
+    writeCell(a, 3)
+    expect(notifies).toBe(2)
+    stop()
+  })
 
-	test('T3 [falsify-first] promote validates transitively through the dep closure', () => {
-		// Pre-rebuild failure: AssertionError: expected 20 to be 30 — the write
-		// invalidated c -> d1 while everything was unwatched; promote linked the
-		// closure without checking whether the flags deserved trust.
-		const c = atom(1)
-		const d1 = makeGraphComputed(() => readCell(c) + 1)
-		const d2 = makeGraphComputed(() => readDerived(d1) * 10)
-		expect(readDerived(d2)).toBe(20)
-		writeCell(c, 2)
-		const stop = observeNode(d2, () => {})
-		expect(readDerived(d2)).toBe(30)
-		stop()
-	})
+  test("T3 [falsify-first] promote validates transitively through the dep closure", () => {
+    // Pre-rebuild failure: AssertionError: expected 20 to be 30 — the write
+    // invalidated c -> d1 while everything was unwatched; promote linked the
+    // closure without checking whether the flags deserved trust.
+    const c = atom(1)
+    const d1 = makeGraphComputed(() => readCell(c) + 1)
+    const d2 = makeGraphComputed(() => readDerived(d1) * 10)
+    expect(readDerived(d2)).toBe(20)
+    writeCell(c, 2)
+    const stop = observeNode(d2, () => {})
+    expect(readDerived(d2)).toBe(30)
+    stop()
+  })
 })
 
-describe('two-tier graph: promote/demote structure', () => {
-	test('an effect is the evaluated subscriber; a render watcher retains one pinned link', () => {
-		const effectSource = atom(1)
-		const stopEffect = makeEffect(
-			() => readCell(effectSource),
-			() => {},
-			Lane.Sync,
-		)
-		const effectLink = effectSource.subs!
-		const effectNode = subscriberOf(effectLink) as EffectNode
-		const source = atom(1)
-		const stopSubscription = observeNode(source, () => {})
-		const subscriptionLink = source.subs!
-		const subscriptionWatcher = subscriberOf(subscriptionLink)
-		try {
-			expect(effectNode.deps).toBe(effectLink)
-			expect(dependencyOf(effectLink)).toBe(effectSource)
-			expect(nextSubscriber(effectLink)).toBeUndefined()
-			expect(nextDependency(effectLink)).toBeUndefined()
-			expect(effectNode.flags & Flag.WatchRunEffect).toBe(Flag.WatchRunEffect)
-			// Handle-owned state is own properties; record-backed state lives
-			// behind the prototype's getters and is never an own property.
-			expect(Object.hasOwn(effectNode, 'handler')).toBe(true)
-			expect(Object.hasOwn(effectNode, 'depsTail')).toBe(true)
-			expect(Object.hasOwn(effectNode, 'throwable')).toBe(true)
-			expect(Object.hasOwn(effectNode, 'flags')).toBe(false)
-			expect(Object.hasOwn(effectNode, 'subs')).toBe(false)
-			expect(Object.hasOwn(effectNode, 'observerCount')).toBe(false)
-			expect(Object.hasOwn(effectNode, 'worldMemos')).toBe(false)
-			expect(Object.hasOwn(effectNode, 'get')).toBe(false)
-			expect(Object.hasOwn(effectNode, 'peek')).toBe(false)
+describe("two-tier graph: promote/demote structure", () => {
+  test("an effect is the evaluated subscriber; a render watcher retains one pinned link", () => {
+    const effectSource = atom(1)
+    const stopEffect = makeEffect(
+      () => readCell(effectSource),
+      () => {},
+      Lane.Sync,
+    )
+    const effectLink = effectSource.subs!
+    const effectNode = subscriberOf(effectLink) as EffectNode
+    const source = atom(1)
+    const stopSubscription = observeNode(source, () => {})
+    const subscriptionLink = source.subs!
+    const subscriptionWatcher = subscriberOf(subscriptionLink)
+    try {
+      expect(effectNode.deps).toBe(effectLink)
+      expect(dependencyOf(effectLink)).toBe(effectSource)
+      expect(nextSubscriber(effectLink)).toBeUndefined()
+      expect(nextDependency(effectLink)).toBeUndefined()
+      expect(effectNode.flags & Flag.WatchRunEffect).toBe(Flag.WatchRunEffect)
+      // Handle-owned state is own properties; record-backed state lives
+      // behind the prototype's getters and is never an own property.
+      expect(Object.hasOwn(effectNode, "handler")).toBe(true)
+      expect(Object.hasOwn(effectNode, "depsTail")).toBe(true)
+      expect(Object.hasOwn(effectNode, "throwable")).toBe(true)
+      expect(Object.hasOwn(effectNode, "flags")).toBe(false)
+      expect(Object.hasOwn(effectNode, "subs")).toBe(false)
+      expect(Object.hasOwn(effectNode, "observerCount")).toBe(false)
+      expect(Object.hasOwn(effectNode, "worldMemos")).toBe(false)
+      expect(Object.hasOwn(effectNode, "get")).toBe(false)
+      expect(Object.hasOwn(effectNode, "peek")).toBe(false)
 
-			expect(subscriptionWatcher.deps).toBe(subscriptionLink)
-			expect(Object.hasOwn(subscriptionWatcher, 'onNotify')).toBe(true)
-			expect(Object.hasOwn(subscriptionWatcher, 'handler')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'depsTail')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'label')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'changedAtGraphChange')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'throwable')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'subs')).toBe(false)
-			expect(Object.hasOwn(subscriptionWatcher, 'observerCount')).toBe(false)
-		} finally {
-			stopSubscription()
-			stopEffect()
-		}
-		expect(effectNode.deps).toBeUndefined()
-		expect(effectNode.depsTail).toBe(0)
-	})
+      expect(subscriptionWatcher.deps).toBe(subscriptionLink)
+      expect(Object.hasOwn(subscriptionWatcher, "onNotify")).toBe(true)
+      expect(Object.hasOwn(subscriptionWatcher, "handler")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "depsTail")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "label")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "changedAtGraphChange")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "throwable")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "subs")).toBe(false)
+      expect(Object.hasOwn(subscriptionWatcher, "observerCount")).toBe(false)
+    } finally {
+      stopSubscription()
+      stopEffect()
+    }
+    expect(effectNode.deps).toBeUndefined()
+    expect(effectNode.depsTail).toBe(0)
+  })
 
-	test('a rerunning effect releases dependencies read after disposing itself', () => {
-		const beforeDispose = atom(0)
-		const afterDispose = atom(0)
-		let stop = () => {}
-		let runs = 0
-		stop = makeEffect(
-			() => {
-				runs++
-				const value = readCell(beforeDispose)
-				if (value === 1) {
-					stop()
-					return value + readCell(afterDispose)
-				}
-				return value
-			},
-			() => {},
-			Lane.Sync,
-		)
-		const effectNode = subscriberOf(beforeDispose.subs!) as EffectNode
+  test("a rerunning effect releases dependencies read after disposing itself", () => {
+    const beforeDispose = atom(0)
+    const afterDispose = atom(0)
+    let stop = () => {}
+    let runs = 0
+    stop = makeEffect(
+      () => {
+        runs++
+        const value = readCell(beforeDispose)
+        if (value === 1) {
+          stop()
+          return value + readCell(afterDispose)
+        }
+        return value
+      },
+      () => {},
+      Lane.Sync,
+    )
+    const effectNode = subscriberOf(beforeDispose.subs!) as EffectNode
 
-		writeCell(beforeDispose, 1)
+    writeCell(beforeDispose, 1)
 
-		expect(runs).toBe(2)
-		expect(effectNode.deps).toBeUndefined()
-		expect(effectNode.depsTail).toBe(0)
-		expect(beforeDispose.subs).toBeUndefined()
-		expect(afterDispose.subs).toBeUndefined()
-		expect(beforeDispose.observerCount).toBe(0)
-		expect(afterDispose.observerCount).toBe(0)
+    expect(runs).toBe(2)
+    expect(effectNode.deps).toBeUndefined()
+    expect(effectNode.depsTail).toBe(0)
+    expect(beforeDispose.subs).toBeUndefined()
+    expect(afterDispose.subs).toBeUndefined()
+    expect(beforeDispose.observerCount).toBe(0)
+    expect(afterDispose.observerCount).toBe(0)
 
-		writeCell(afterDispose, 1)
-		expect(runs).toBe(2)
-	})
+    writeCell(afterDispose, 1)
+    expect(runs).toBe(2)
+  })
 
-	test('a mid-compute self-dispose returns the record at the unwind, uncorrupted', () => {
-		const src = atom(0)
-		let stop = () => {}
-		let runs = 0
-		stop = syncEffect(() => {
-			runs++
-			const value = readCell(src)
-			if (value === 1) {
-				stop()
-			}
-			return value
-		})
-		const recordId = subscriberOf(src.subs!).id
-		writeCell(src, 1) // the compute disposes its own effect mid-evaluation
-		expect(runs).toBe(2)
-		// The unwinding evaluation stamped the record and then returned it to
-		// the pool, so the very next effect pops the same record and works.
-		const probeSrc = atom(0)
-		let probeRuns = 0
-		const stopProbe = syncEffect(
-			() => readCell(probeSrc),
-			() => {
-				probeRuns++
-			},
-		)
-		expect(subscriberOf(probeSrc.subs!).id).toBe(recordId)
-		writeCell(probeSrc, 1)
-		expect(probeRuns).toBe(2)
-		writeCell(src, 2) // the disposed effect never re-runs
-		expect(runs).toBe(2)
-		stopProbe()
-	})
+  test("a mid-compute self-dispose returns the record at the unwind, uncorrupted", () => {
+    const src = atom(0)
+    let stop = () => {}
+    let runs = 0
+    stop = syncEffect(() => {
+      runs++
+      const value = readCell(src)
+      if (value === 1) {
+        stop()
+      }
+      return value
+    })
+    const recordId = subscriberOf(src.subs!).id
+    writeCell(src, 1) // the compute disposes its own effect mid-evaluation
+    expect(runs).toBe(2)
+    // The unwinding evaluation stamped the record and then returned it to
+    // the pool, so the very next effect pops the same record and works.
+    const probeSrc = atom(0)
+    let probeRuns = 0
+    const stopProbe = syncEffect(
+      () => readCell(probeSrc),
+      () => {
+        probeRuns++
+      },
+    )
+    expect(subscriberOf(probeSrc.subs!).id).toBe(recordId)
+    writeCell(probeSrc, 1)
+    expect(probeRuns).toBe(2)
+    writeCell(src, 2) // the disposed effect never re-runs
+    expect(runs).toBe(2)
+    stopProbe()
+  })
 
-	test('atoms do not carry consumer-only graph state', () => {
-		const source = atom(1)
-		const computed = makeGraphComputed(() => readCell(source))
-		// deps lives in the record (a prototype getter on every handle); the
-		// dependency cursor is a handle field on consumers only.
-		expect(Object.hasOwn(source, 'deps')).toBe(false)
-		expect(Object.hasOwn(source, 'depsTail')).toBe(false)
-		expect(Object.hasOwn(computed, 'deps')).toBe(false)
-		expect(Object.hasOwn(computed, 'depsTail')).toBe(true)
-	})
+  test("atoms do not carry consumer-only graph state", () => {
+    const source = atom(1)
+    const computed = makeGraphComputed(() => readCell(source))
+    // deps lives in the record (a prototype getter on every handle); the
+    // dependency cursor is a handle field on consumers only.
+    expect(Object.hasOwn(source, "deps")).toBe(false)
+    expect(Object.hasOwn(source, "depsTail")).toBe(false)
+    expect(Object.hasOwn(computed, "deps")).toBe(false)
+    expect(Object.hasOwn(computed, "depsTail")).toBe(true)
+  })
 
-	test('T4 [parity] promote links the dep closure; demote reverses it exactly', () => {
-		const c = atom(1)
-		const d1 = makeGraphComputed(() => readCell(c) + 1)
-		const d2 = makeGraphComputed(() => readDerived(d1) + 1)
-		expect(readDerived(d2)).toBe(3)
-		// Unwatched evaluation registered nothing subscriber-side.
-		expect(subEdgeCount(c)).toBe(0)
-		expect(subEdgeCount(d1)).toBe(0)
-		expectTierInvariant([c, d1, d2])
+  test("T4 [parity] promote links the dep closure; demote reverses it exactly", () => {
+    const c = atom(1)
+    const d1 = makeGraphComputed(() => readCell(c) + 1)
+    const d2 = makeGraphComputed(() => readDerived(d1) + 1)
+    expect(readDerived(d2)).toBe(3)
+    // Unwatched evaluation registered nothing subscriber-side.
+    expect(subEdgeCount(c)).toBe(0)
+    expect(subEdgeCount(d1)).toBe(0)
+    expectTierInvariant([c, d1, d2])
 
-		const stop = observeNode(d2, () => {})
-		expect(subEdgeCount(c, d1)).toBe(1)
-		expect(subEdgeCount(d1, d2)).toBe(1)
-		expect(subEdgeCount(d2)).toBe(1) // the subscription
-		expect(c.observerCount).toBe(1)
-		expect(d1.observerCount).toBe(1)
-		expect(d2.observerCount).toBe(1)
-		expect(isWatched(c) && isWatched(d1) && isWatched(d2)).toBe(true)
-		expectTierInvariant([c, d1, d2])
+    const stop = observeNode(d2, () => {})
+    expect(subEdgeCount(c, d1)).toBe(1)
+    expect(subEdgeCount(d1, d2)).toBe(1)
+    expect(subEdgeCount(d2)).toBe(1) // the subscription
+    expect(c.observerCount).toBe(1)
+    expect(d1.observerCount).toBe(1)
+    expect(d2.observerCount).toBe(1)
+    expect(isWatched(c) && isWatched(d1) && isWatched(d2)).toBe(true)
+    expectTierInvariant([c, d1, d2])
 
-		stop()
-		expect(subEdgeCount(c)).toBe(0)
-		expect(subEdgeCount(d1)).toBe(0)
-		expect(subEdgeCount(d2)).toBe(0)
-		expect(c.observerCount).toBe(0)
-		expect(d1.observerCount).toBe(0)
-		expect(d2.observerCount).toBe(0)
-		expect(isWatched(c) || isWatched(d1) || isWatched(d2)).toBe(false)
-		expectTierInvariant([c, d1, d2])
-		// Forward edges survive for the unwatched tier's pull validation.
-		expect(depEdgeCount(d2, d1)).toBe(1)
-		expect(depEdgeCount(d1, c)).toBe(1)
-	})
+    stop()
+    expect(subEdgeCount(c)).toBe(0)
+    expect(subEdgeCount(d1)).toBe(0)
+    expect(subEdgeCount(d2)).toBe(0)
+    expect(c.observerCount).toBe(0)
+    expect(d1.observerCount).toBe(0)
+    expect(d2.observerCount).toBe(0)
+    expect(isWatched(c) || isWatched(d1) || isWatched(d2)).toBe(false)
+    expectTierInvariant([c, d1, d2])
+    // Forward edges survive for the unwatched tier's pull validation.
+    expect(depEdgeCount(d2, d1)).toBe(1)
+    expect(depEdgeCount(d1, c)).toBe(1)
+  })
 
-	test('T5 [parity] demote seeds validAtGraphChange: the clock reading when Clean, 0 when stale', () => {
-		const c = atom(1)
-		const d1 = makeGraphComputed(() => readCell(c) + 1)
-		const d2 = makeGraphComputed(() => readDerived(d1) + 1)
-		const stop = observeNode(d2, () => {})
-		expect(readDerived(d2)).toBe(3)
-		stop() // Clean at demote: the next quiet read must short-circuit O(1)
-		expect(d1.validAtGraphChange).toBe(currentGraphChange())
-		expect(d2.validAtGraphChange).toBe(currentGraphChange())
+  test("T5 [parity] demote seeds validAtGraphChange: the clock reading when Clean, 0 when stale", () => {
+    const c = atom(1)
+    const d1 = makeGraphComputed(() => readCell(c) + 1)
+    const d2 = makeGraphComputed(() => readDerived(d1) + 1)
+    const stop = observeNode(d2, () => {})
+    expect(readDerived(d2)).toBe(3)
+    stop() // Clean at demote: the next quiet read must short-circuit O(1)
+    expect(d1.validAtGraphChange).toBe(currentGraphChange())
+    expect(d2.validAtGraphChange).toBe(currentGraphChange())
 
-		const stop2 = observeNode(d2, () => {})
-		batch(() => {
-			writeCell(c, 2) // wave marks d1/d2 before the flush is due
-			stop2() // stale at demote: force the up-walk on next read
-		})
-		expect(d1.validAtGraphChange).toBe(0)
-		expect(d2.validAtGraphChange).toBe(0)
-		expect(readDerived(d2)).toBe(4)
-	})
+    const stop2 = observeNode(d2, () => {})
+    batch(() => {
+      writeCell(c, 2) // wave marks d1/d2 before the flush is due
+      stop2() // stale at demote: force the up-walk on next read
+    })
+    expect(d1.validAtGraphChange).toBe(0)
+    expect(d2.validAtGraphChange).toBe(0)
+    expect(readDerived(d2)).toBe(4)
+  })
 
-	test('T6 [parity pin] recompute counts across watch -> demote -> quiet-read cycles', () => {
-		let e1 = 0
-		let e2 = 0
-		const c = atom(1)
-		const d1 = makeGraphComputed(() => (e1++, readCell(c) + 1))
-		const d2 = makeGraphComputed(() => (e2++, readDerived(d1) + 1))
-		expect(readDerived(d2)).toBe(3)
-		expect([e1, e2]).toEqual([1, 1])
+  test("T6 [parity pin] recompute counts across watch -> demote -> quiet-read cycles", () => {
+    let e1 = 0
+    let e2 = 0
+    const c = atom(1)
+    const d1 = makeGraphComputed(() => (e1++, readCell(c) + 1))
+    const d2 = makeGraphComputed(() => (e2++, readDerived(d1) + 1))
+    expect(readDerived(d2)).toBe(3)
+    expect([e1, e2]).toEqual([1, 1])
 
-		const stop = observeNode(d2, () => {})
-		expect([e1, e2]).toEqual([1, 1]) // subscribing evaluates nothing
-		writeCell(c, 2)
-		expect([e1, e2]).toEqual([1, 1]) // marking is lazy
-		expect(readDerived(d2)).toBe(4)
-		expect([e1, e2]).toEqual([2, 2])
+    const stop = observeNode(d2, () => {})
+    expect([e1, e2]).toEqual([1, 1]) // subscribing evaluates nothing
+    writeCell(c, 2)
+    expect([e1, e2]).toEqual([1, 1]) // marking is lazy
+    expect(readDerived(d2)).toBe(4)
+    expect([e1, e2]).toEqual([2, 2])
 
-		stop() // Clean at demote
-		expect(readDerived(d2)).toBe(4) // quiet read: no walk, no recompute
-		expect(readDerived(d2)).toBe(4)
-		expect([e1, e2]).toEqual([2, 2])
+    stop() // Clean at demote
+    expect(readDerived(d2)).toBe(4) // quiet read: no walk, no recompute
+    expect(readDerived(d2)).toBe(4)
+    expect([e1, e2]).toEqual([2, 2])
 
-		writeCell(c, 3) // unwatched: versions move, no marks
-		expect(readDerived(d2)).toBe(5) // up-walk finds the moved version
-		expect([e1, e2]).toEqual([3, 3])
+    writeCell(c, 3) // unwatched: versions move, no marks
+    expect(readDerived(d2)).toBe(5) // up-walk finds the moved version
+    expect([e1, e2]).toEqual([3, 3])
 
-		writeCell(c, 3) // equal write: no version movement
-		expect(readDerived(d2)).toBe(5)
-		expect([e1, e2]).toEqual([3, 3])
-	})
+    writeCell(c, 3) // equal write: no version movement
+    expect(readDerived(d2)).toBe(5)
+    expect([e1, e2]).toEqual([3, 3])
+  })
 
-	test('T8 [parity] quiet reads short-circuit: zero recomputes on a wide validated graph', () => {
-		const atoms = Array.from({ length: 50 }, (_, i) => atom(i))
-		let evals = 0
-		const wide = makeGraphComputed(() => {
-			evals++
-			let sum = 0
-			for (const c of atoms) {
-				sum += readCell(c)
-			}
-			return sum
-		})
-		expect(readDerived(wide)).toBe(1225)
-		expect(evals).toBe(1)
-		// Precondition of the O(1) return: Clean plus a current validAtGraphChange reading.
-		expect(wide.validAtGraphChange).toBe(currentGraphChange())
-		expect((wide.flags & (Flag.StaleCheck | Flag.StaleDirty)) === 0).toBe(true)
-		for (let i = 0; i < 100; i++) {
-			readDerived(wide)
-		}
-		expect(evals).toBe(1)
-	})
+  test("T8 [parity] quiet reads short-circuit: zero recomputes on a wide validated graph", () => {
+    const atoms = Array.from({ length: 50 }, (_, i) => atom(i))
+    let evals = 0
+    const wide = makeGraphComputed(() => {
+      evals++
+      let sum = 0
+      for (const c of atoms) {
+        sum += readCell(c)
+      }
+      return sum
+    })
+    expect(readDerived(wide)).toBe(1225)
+    expect(evals).toBe(1)
+    // Precondition of the O(1) return: Clean plus a current validAtGraphChange reading.
+    expect(wide.validAtGraphChange).toBe(currentGraphChange())
+    expect((wide.flags & (Flag.StaleCheck | Flag.StaleDirty)) === 0).toBe(true)
+    for (let i = 0; i < 100; i++) {
+      readDerived(wide)
+    }
+    expect(evals).toBe(1)
+  })
 
-	test('T12 [parity] promoting a computing node with an unmatched deps suffix stays consistent', () => {
-		const x = atom(1)
-		const y = atom(2)
-		let subscribeNow = false
-		let stop: (() => void) | undefined
-		let notified = 0
-		const d: DerivedNode<number> = makeGraphComputed(() => {
-			const vx = readCell(x)
-			if (subscribeNow) {
-				subscribeNow = false
-				// Subscribe to the node mid-evaluation: promote walks the full deps
-				// list, including the y edge beyond the cursor that this pass will
-				// not re-read.
-				stop = observeNode(d, () => notified++)
-				return vx
-			}
-			return vx + readCell(y)
-		})
-		expect(readDerived(d)).toBe(3) // deps [x, y], unwatched
-		subscribeNow = true
-		writeCell(x, 5) // unwatched: versions move, no marks
-		expect(readDerived(d)).toBe(5) // mid-eval promote; trimDeps drops the y suffix
-		expect(y.subs).toBeUndefined()
-		expect(y.observerCount).toBe(0) // suffix unlink kept observer bookkeeping symmetric
-		expect(x.observerCount).toBe(1)
-		expect(d.observerCount).toBe(1)
-		expect(isWatched(d) && isWatched(x)).toBe(true)
-		expect(isWatched(y)).toBe(false)
-		expectTierInvariant([x, y, d])
+  test("T12 [parity] promoting a computing node with an unmatched deps suffix stays consistent", () => {
+    const x = atom(1)
+    const y = atom(2)
+    let subscribeNow = false
+    let stop: (() => void) | undefined
+    let notified = 0
+    const d: DerivedNode<number> = makeGraphComputed(() => {
+      const vx = readCell(x)
+      if (subscribeNow) {
+        subscribeNow = false
+        // Subscribe to the node mid-evaluation: promote walks the full deps
+        // list, including the y edge beyond the cursor that this pass will
+        // not re-read.
+        stop = observeNode(d, () => notified++)
+        return vx
+      }
+      return vx + readCell(y)
+    })
+    expect(readDerived(d)).toBe(3) // deps [x, y], unwatched
+    subscribeNow = true
+    writeCell(x, 5) // unwatched: versions move, no marks
+    expect(readDerived(d)).toBe(5) // mid-eval promote; trimDeps drops the y suffix
+    expect(y.subs).toBeUndefined()
+    expect(y.observerCount).toBe(0) // suffix unlink kept observer bookkeeping symmetric
+    expect(x.observerCount).toBe(1)
+    expect(d.observerCount).toBe(1)
+    expect(isWatched(d) && isWatched(x)).toBe(true)
+    expect(isWatched(y)).toBe(false)
+    expectTierInvariant([x, y, d])
 
-		writeCell(y, 9) // the dropped edge must not notify
-		expect(notified).toBe(0)
-		writeCell(x, 6) // the kept edge must
-		expect(notified).toBe(1)
-		// The pull re-evaluates the full body: y is re-read, re-linked, and —
-		// because d is watched now — promoted back into the watched tier.
-		expect(readDerived(d)).toBe(15)
-		expect(y.observerCount).toBe(1)
-		expect(isWatched(y)).toBe(true)
-		expectTierInvariant([x, y, d])
-		stop!()
-		expect(y.observerCount).toBe(0)
-	})
+    writeCell(y, 9) // the dropped edge must not notify
+    expect(notified).toBe(0)
+    writeCell(x, 6) // the kept edge must
+    expect(notified).toBe(1)
+    // The pull re-evaluates the full body: y is re-read, re-linked, and —
+    // because d is watched now — promoted back into the watched tier.
+    expect(readDerived(d)).toBe(15)
+    expect(y.observerCount).toBe(1)
+    expect(isWatched(y)).toBe(true)
+    expectTierInvariant([x, y, d])
+    stop!()
+    expect(y.observerCount).toBe(0)
+  })
 })
 
-describe('two-tier graph: tracking and waves', () => {
-	test('T9 [falsify-first] non-adjacent re-reads in one watched pass dedup to a single edge', () => {
-		// Pre-rebuild failure: AssertionError: expected 2 to be 1 — the second
-		// read of `a` (non-adjacent, past the cursor) created a duplicate
-		// watched edge, double-counting the observer.
-		const a = atom(1)
-		const b = atom(2)
-		const d = makeGraphComputed(() => readCell(a) + readCell(b) + readCell(a))
-		const stop = observeNode(d, () => {})
-		expect(readDerived(d)).toBe(4)
-		expect(subEdgeCount(a, d)).toBe(1)
-		expect(depEdgeCount(d, a)).toBe(1)
-		expect(a.observerCount).toBe(1)
-		// The dedup is stable across re-evaluations.
-		writeCell(b, 5)
-		expect(readDerived(d)).toBe(7)
-		expect(subEdgeCount(a, d)).toBe(1)
-		expect(a.observerCount).toBe(1)
-		stop()
-		expect(a.observerCount).toBe(0)
-	})
+describe("two-tier graph: tracking and waves", () => {
+  test("T9 [falsify-first] non-adjacent re-reads in one watched pass dedup to a single edge", () => {
+    // Pre-rebuild failure: AssertionError: expected 2 to be 1 — the second
+    // read of `a` (non-adjacent, past the cursor) created a duplicate
+    // watched edge, double-counting the observer.
+    const a = atom(1)
+    const b = atom(2)
+    const d = makeGraphComputed(() => readCell(a) + readCell(b) + readCell(a))
+    const stop = observeNode(d, () => {})
+    expect(readDerived(d)).toBe(4)
+    expect(subEdgeCount(a, d)).toBe(1)
+    expect(depEdgeCount(d, a)).toBe(1)
+    expect(a.observerCount).toBe(1)
+    // The dedup is stable across re-evaluations.
+    writeCell(b, 5)
+    expect(readDerived(d)).toBe(7)
+    expect(subEdgeCount(a, d)).toBe(1)
+    expect(a.observerCount).toBe(1)
+    stop()
+    expect(a.observerCount).toBe(0)
+  })
 
-	test('T10 [parity pin] render notification is edge-triggered; a pull re-arms', () => {
-		const a = atom(1)
-		const d = makeGraphComputed(() => readCell(a) * 2)
-		expect(readDerived(d)).toBe(2) // Clean before subscribing: no wake due
-		let n = 0
-		const stop = observeNode(d, () => n++)
-		writeCell(a, 2)
-		const afterFirst = n
-		writeCell(a, 3) // no pull between: the edge already fired
-		const afterSecond = n
-		expect(readDerived(d)).toBe(6) // re-arm
-		writeCell(a, 4)
-		const afterThird = n
-		expect({ afterFirst, afterSecond, afterThird }).toEqual({
-			afterFirst: 1,
-			afterSecond: 1,
-			afterThird: 2,
-		})
-		stop()
-	})
+  test("T10 [parity pin] render notification is edge-triggered; a pull re-arms", () => {
+    const a = atom(1)
+    const d = makeGraphComputed(() => readCell(a) * 2)
+    expect(readDerived(d)).toBe(2) // Clean before subscribing: no wake due
+    let n = 0
+    const stop = observeNode(d, () => n++)
+    writeCell(a, 2)
+    const afterFirst = n
+    writeCell(a, 3) // no pull between: the edge already fired
+    const afterSecond = n
+    expect(readDerived(d)).toBe(6) // re-arm
+    writeCell(a, 4)
+    const afterThird = n
+    expect({ afterFirst, afterSecond, afterThird }).toEqual({
+      afterFirst: 1,
+      afterSecond: 1,
+      afterThird: 2,
+    })
+    stop()
+  })
 
-	test('T10a [falsify-first] changed writes propagate while equality and batching stay quiet', () => {
-		const source = atom(0)
-		const seen: number[] = []
-		const stop = syncEffect(
-			() => readCell(source),
-			(v) => {
-				seen.push(v)
-			},
-		)
+  test("T10a [falsify-first] changed writes propagate while equality and batching stay quiet", () => {
+    const source = atom(0)
+    const seen: number[] = []
+    const stop = syncEffect(
+      () => readCell(source),
+      (v) => {
+        seen.push(v)
+      },
+    )
 
-		expect(writeCell(source, 0)).toBe(false)
-		batch(() => {
-			expect(writeCell(source, 1)).toBe(true)
-			expect(writeCell(source, 2)).toBe(true)
-			expect(seen).toEqual([0])
-		})
-		expect(seen).toEqual([0, 2])
-		stop()
-	})
+    expect(writeCell(source, 0)).toBe(false)
+    batch(() => {
+      expect(writeCell(source, 1)).toBe(true)
+      expect(writeCell(source, 2)).toBe(true)
+      expect(seen).toEqual([0])
+    })
+    expect(seen).toEqual([0, 2])
+    stop()
+  })
 
-	test('T11b [falsify-first] a drafted write pokes subscribers through a deep watched chain', () => {
-		// The drafted twin of T11: a draft intent travels the same watched
-		// closure as the wave (draft activity must reach subscribers of
-		// computeds over the drafted atom), so its walk needs the same
-		// iterative discipline. Pre-change failure quoted in the commit.
-		const DEPTH = 150_000
-		const base = createAtom(0)
-		const disposers: Array<() => void> = []
-		let topNotified = 0
-		const wakes: number[] = []
-		const cutoffBreaker = atom(0)
-		let prev: Computed<number> = base
-		for (let i = 0; i < DEPTH; i++) {
-			const p = prev
-			const d = createComputed(() => p.get() + 1)
-			const node = nodeOf(d)
-			disposers.push(
-				i === DEPTH - 1
-					? observeNode(
-							node,
-							() => topNotified++,
-							(id) => wakes.push(id),
-						)
-					: observeNode(node, () => {}),
-			)
-			d.get()
-			prev = d
-		}
-		const draft = openDraft()
-		// Isolate the iterative poke walk: the cutoff's dependency certificates
-		// are a separate concern from this deliberately 150k-deep traversal.
-		writeCell(cutoffBreaker, 1)
-		appendDraftIntent(draft, nodeOf(base) as CellNode<unknown>, 'set', 1)
-		expect(topNotified).toBe(1) // the poke reached the deepest subscriber
-		expect(wakes).toEqual([draft.id]) // and so did the draft-lane wake
-		discardDraft(draft.id) // rollback pokes the same closure again
-		expect(topNotified).toBe(2)
-		for (let i = disposers.length - 1; i >= 0; i--) {
-			disposers[i]()
-		}
-		expect(subEdgeCount(nodeOf(base))).toBe(0)
-	})
+  test("T11b [falsify-first] a drafted write pokes subscribers through a deep watched chain", () => {
+    // The drafted twin of T11: a draft intent travels the same watched
+    // closure as the wave (draft activity must reach subscribers of
+    // computeds over the drafted atom), so its walk needs the same
+    // iterative discipline. Pre-change failure quoted in the commit.
+    const DEPTH = 150_000
+    const base = createAtom(0)
+    const disposers: Array<() => void> = []
+    let topNotified = 0
+    const wakes: number[] = []
+    const cutoffBreaker = atom(0)
+    let prev: Computed<number> = base
+    for (let i = 0; i < DEPTH; i++) {
+      const p = prev
+      const d = createComputed(() => p.get() + 1)
+      const node = nodeOf(d)
+      disposers.push(
+        i === DEPTH - 1
+          ? observeNode(
+              node,
+              () => topNotified++,
+              (id) => wakes.push(id),
+            )
+          : observeNode(node, () => {}),
+      )
+      d.get()
+      prev = d
+    }
+    const draft = openDraft()
+    // Isolate the iterative poke walk: the cutoff's dependency certificates
+    // are a separate concern from this deliberately 150k-deep traversal.
+    writeCell(cutoffBreaker, 1)
+    appendDraftIntent(draft, nodeOf(base) as CellNode<unknown>, "set", 1)
+    expect(topNotified).toBe(1) // the poke reached the deepest subscriber
+    expect(wakes).toEqual([draft.id]) // and so did the draft-lane wake
+    discardDraft(draft.id) // rollback pokes the same closure again
+    expect(topNotified).toBe(2)
+    for (let i = disposers.length - 1; i >= 0; i--) {
+      disposers[i]()
+    }
+    expect(subEdgeCount(nodeOf(base))).toBe(0)
+  })
 
-	test('render subscribers own draft pokes while effects remain base-only', () => {
-		const source = atom(0)
-		let probeNotifies = 0
-		let renderNotifies = 0
-		let effectRuns = 0
-		const wakes: Array<[number, TraceEventId]> = []
-		const stopProbe = observeNode(source, () => probeNotifies++)
-		const stopRender = observeNode(
-			source,
-			() => renderNotifies++,
-			(id, cause) => wakes.push([id, cause]),
-		)
-		const stopEffect = syncEffect(
-			() => readCell(source),
-			() => {
-				effectRuns++
-			},
-		)
-		const cause = 123 as TraceEventId
-		const draft = openDraft()
-		try {
-			pokeDraftWatchers(source, cause, undefined, () => false)
-			expect(probeNotifies).toBe(1)
-			expect(renderNotifies).toBe(0)
-			expect(effectRuns).toBe(1)
+  test("render subscribers own draft pokes while effects remain base-only", () => {
+    const source = atom(0)
+    let probeNotifies = 0
+    let renderNotifies = 0
+    let effectRuns = 0
+    const wakes: Array<[number, TraceEventId]> = []
+    const stopProbe = observeNode(source, () => probeNotifies++)
+    const stopRender = observeNode(
+      source,
+      () => renderNotifies++,
+      (id, cause) => wakes.push([id, cause]),
+    )
+    const stopEffect = syncEffect(
+      () => readCell(source),
+      () => {
+        effectRuns++
+      },
+    )
+    const cause = 123 as TraceEventId
+    const draft = openDraft()
+    try {
+      pokeDraftWatchers(source, cause, undefined, () => false)
+      expect(probeNotifies).toBe(1)
+      expect(renderNotifies).toBe(0)
+      expect(effectRuns).toBe(1)
 
-			pokeDraftWatchers(source, cause, draft.id)
-			expect(probeNotifies).toBe(2)
-			expect(renderNotifies).toBe(1)
-			expect(wakes).toEqual([[draft.id, cause]])
-			expect(effectRuns).toBe(1)
-		} finally {
-			stopEffect()
-			stopRender()
-			stopProbe()
-			discardDraft(draft.id)
-		}
-	})
+      pokeDraftWatchers(source, cause, draft.id)
+      expect(probeNotifies).toBe(2)
+      expect(renderNotifies).toBe(1)
+      expect(wakes).toEqual([[draft.id, cause]])
+      expect(effectRuns).toBe(1)
+    } finally {
+      stopEffect()
+      stopRender()
+      stopProbe()
+      discardDraft(draft.id)
+    }
+  })
 
-	test('T11 [falsify-first] a write through a deep watched chain completes', () => {
-		// Pre-rebuild failure: RangeError: Maximum call stack size exceeded —
-		// the recursive wave overflowed at this depth; the iterative propagate
-		// carries it. The final read also guards pull-side validation.
-		const DEPTH = 150_000
-		const base = atom(0)
-		const side = atom(0)
-		const disposers: Array<() => void> = []
-		let topNotified = 0
-		let prev: ReactiveNode = makeGraphComputed(() => readCell(base) + readCell(side))
-		disposers.push(observeNode(prev, () => {}))
-		readDerived(prev as DerivedNode<number>)
-		for (let i = 0; i < DEPTH; i++) {
-			const p = prev
-			const d = makeGraphComputed(
-				() =>
-					((p.flags & Flag.KindCell) !== 0
-						? readCell(p as CellNode<number>)
-						: readDerived(p as DerivedNode<number>)) + 1,
-			)
-			// Watch and evaluate incrementally so promote and pull stay depth-1;
-			// only the write's wave spans the whole chain.
-			disposers.push(observeNode(d, i === DEPTH - 1 ? () => topNotified++ : () => {}))
-			readDerived(d)
-			prev = d
-		}
-		expect((prev as DerivedNode<number>).value).toBe(DEPTH)
-		writeCell(base, 1)
-		expect(topNotified).toBe(1)
-		expect(readDerived(prev as DerivedNode<number>)).toBe(DEPTH + 1)
-		// Reverse order keeps demote cascades depth-1 as well.
-		for (let i = disposers.length - 1; i >= 0; i--) {
-			disposers[i]()
-		}
-		expect(subEdgeCount(base)).toBe(0)
-	})
+  test("T11 [falsify-first] a write through a deep watched chain completes", () => {
+    // Pre-rebuild failure: RangeError: Maximum call stack size exceeded —
+    // the recursive wave overflowed at this depth; the iterative propagate
+    // carries it. The final read also guards pull-side validation.
+    const DEPTH = 150_000
+    const base = atom(0)
+    const side = atom(0)
+    const disposers: Array<() => void> = []
+    let topNotified = 0
+    let prev: ReactiveNode = makeGraphComputed(() => readCell(base) + readCell(side))
+    disposers.push(observeNode(prev, () => {}))
+    readDerived(prev as DerivedNode<number>)
+    for (let i = 0; i < DEPTH; i++) {
+      const p = prev
+      const d = makeGraphComputed(
+        () =>
+          ((p.flags & Flag.KindCell) !== 0
+            ? readCell(p as CellNode<number>)
+            : readDerived(p as DerivedNode<number>)) + 1,
+      )
+      // Watch and evaluate incrementally so promote and pull stay depth-1;
+      // only the write's wave spans the whole chain.
+      disposers.push(observeNode(d, i === DEPTH - 1 ? () => topNotified++ : () => {}))
+      readDerived(d)
+      prev = d
+    }
+    expect((prev as DerivedNode<number>).value).toBe(DEPTH)
+    writeCell(base, 1)
+    expect(topNotified).toBe(1)
+    expect(readDerived(prev as DerivedNode<number>)).toBe(DEPTH + 1)
+    // Reverse order keeps demote cascades depth-1 as well.
+    for (let i = disposers.length - 1; i >= 0; i--) {
+      disposers[i]()
+    }
+    expect(subEdgeCount(base)).toBe(0)
+  })
 
-	test('T11c reentrant disposal cannot strand the chain top stale', () => {
-		const base = createAtom(1)
-		const side = createAtom(0)
-		let stop = () => {}
-		const first = createComputed(() => {
-			const value = base.get()
-			if (value === 2) {
-				stop()
-			}
-			return value * 10 + side.get()
-		})
-		let top = first
-		for (let i = 0; i < 20; i++) {
-			const previous = top
-			top = createComputed(() => previous.get() + 1)
-		}
-		stop = syncEffect(() => top.get())
-		base.set(2)
-		expect((nodeOf(top) as DerivedNode<number>).value).toBe(40)
-		expect(top.get()).toBe(40)
-	})
+  test("T11c reentrant disposal cannot strand the chain top stale", () => {
+    const base = createAtom(1)
+    const side = createAtom(0)
+    let stop = () => {}
+    const first = createComputed(() => {
+      const value = base.get()
+      if (value === 2) {
+        stop()
+      }
+      return value * 10 + side.get()
+    })
+    let top = first
+    for (let i = 0; i < 20; i++) {
+      const previous = top
+      top = createComputed(() => previous.get() + 1)
+    }
+    stop = syncEffect(() => top.get())
+    base.set(2)
+    expect((nodeOf(top) as DerivedNode<number>).value).toBe(40)
+    expect(top.get()).toBe(40)
+  })
 })
 
 describe.each([
-	['sync', Lane.Sync, () => {}],
-	['useLayoutEffect', Lane.UseLayoutEffect, flushScheduledEffects],
-] as const)('%s lane drain re-entrancy', (_name, lane, nestedFlush) => {
-	test('a handler write waits until that handler returns', () => {
-		const source = atom(0)
-		const events: string[] = []
-		const stop = makeEffect(
-			() => readCell(source),
-			(value) => {
-				events.push(`run:${value}:begin`)
-				if (value === 1) {
-					writeCell(source, 2)
-					nestedFlush()
-				}
-				events.push(`run:${value}:end`)
-			},
-			lane,
-		)
-		events.length = 0
-		writeCell(source, 1)
-		nestedFlush()
-		expect(events).toEqual([
-			'run:1:begin',
-			'run:1:end',
-			'run:2:begin',
-			'run:2:end',
-		])
-		stop()
-	})
+  ["sync", Lane.Sync, () => {}],
+  ["useLayoutEffect", Lane.UseLayoutEffect, flushScheduledEffects],
+] as const)("%s lane drain re-entrancy", (_name, lane, nestedFlush) => {
+  test("a handler write waits until that handler returns", () => {
+    const source = atom(0)
+    const events: string[] = []
+    const stop = makeEffect(
+      () => readCell(source),
+      (value) => {
+        events.push(`run:${value}:begin`)
+        if (value === 1) {
+          writeCell(source, 2)
+          nestedFlush()
+        }
+        events.push(`run:${value}:end`)
+      },
+      lane,
+    )
+    events.length = 0
+    writeCell(source, 1)
+    nestedFlush()
+    expect(events).toEqual(["run:1:begin", "run:1:end", "run:2:begin", "run:2:end"])
+    stop()
+  })
 
-	test('a cleanup write waits until the cleanup-handler pair completes', () => {
-		const source = atom(0)
-		const events: string[] = []
-		const stop = makeEffect(
-			() => readCell(source),
-			(value) => {
-				events.push(`run:${value}`)
-				return () => {
-					events.push(`cleanup:${value}:begin`)
-					if (value === 0) {
-						writeCell(source, 2)
-						nestedFlush()
-					}
-					events.push(`cleanup:${value}:end`)
-				}
-			},
-			lane,
-		)
-		events.length = 0
-		writeCell(source, 1)
-		nestedFlush()
-		expect(events).toEqual([
-			'cleanup:0:begin',
-			'cleanup:0:end',
-			'run:1',
-			'cleanup:1:begin',
-			'cleanup:1:end',
-			'run:2',
-		])
-		stop()
-	})
+  test("a cleanup write waits until the cleanup-handler pair completes", () => {
+    const source = atom(0)
+    const events: string[] = []
+    const stop = makeEffect(
+      () => readCell(source),
+      (value) => {
+        events.push(`run:${value}`)
+        return () => {
+          events.push(`cleanup:${value}:begin`)
+          if (value === 0) {
+            writeCell(source, 2)
+            nestedFlush()
+          }
+          events.push(`cleanup:${value}:end`)
+        }
+      },
+      lane,
+    )
+    events.length = 0
+    writeCell(source, 1)
+    nestedFlush()
+    expect(events).toEqual([
+      "cleanup:0:begin",
+      "cleanup:0:end",
+      "run:1",
+      "cleanup:1:begin",
+      "cleanup:1:end",
+      "run:2",
+    ])
+    stop()
+  })
 })
 
-test('a public engine reset cannot erase an active sync drain', () => {
-	const source = createAtom(0)
-	const events: string[] = []
-	const stop = effect(
-		() => source.get(),
-		(value) => {
-			events.push(`run:${value}:begin`)
-			if (value === 1) {
-				resetEngineForTest()
-				source.set(2)
-			}
-			events.push(`run:${value}:end`)
-		},
-	)
-	events.length = 0
-	source.set(1)
-	expect(events).toEqual([
-		'run:1:begin',
-		'run:1:end',
-		'run:2:begin',
-		'run:2:end',
-	])
-	stop()
+test("a public engine reset cannot erase an active sync drain", () => {
+  const source = createAtom(0)
+  const events: string[] = []
+  const stop = effect(
+    () => source.get(),
+    (value) => {
+      events.push(`run:${value}:begin`)
+      if (value === 1) {
+        resetEngineForTest()
+        source.set(2)
+      }
+      events.push(`run:${value}:end`)
+    },
+  )
+  events.length = 0
+  source.set(1)
+  expect(events).toEqual(["run:1:begin", "run:1:end", "run:2:begin", "run:2:end"])
+  stop()
 })
 
-test('a nested useLayoutEffect flush cannot let useEffect work overtake its next round', () => {
-	const beforeSource = atom(0)
-	const afterSource = atom(0)
-	const events: string[] = []
-	const stopBefore = makeEffect(
-		() => readCell(beforeSource),
-		(value) => {
-			events.push(`before:${value}:begin`)
-			if (value === 1) {
-				writeCell(beforeSource, 2)
-				writeCell(afterSource, 1)
-				flushScheduledEffects()
-			}
-			events.push(`before:${value}:end`)
-		},
-		Lane.UseLayoutEffect,
-	)
-	const stopAfter = makeEffect(
-		() => readCell(afterSource),
-		(value) => {
-			events.push(`after:${value}`)
-		},
-		Lane.UseEffect,
-	)
-	events.length = 0
-	writeCell(beforeSource, 1)
-	flushScheduledEffects()
-	expect(events).toEqual([
-		'before:1:begin',
-		'before:1:end',
-		'before:2:begin',
-		'before:2:end',
-		'after:1',
-	])
-	stopBefore()
-	stopAfter()
+test("a nested useLayoutEffect flush cannot let useEffect work overtake its next round", () => {
+  const beforeSource = atom(0)
+  const afterSource = atom(0)
+  const events: string[] = []
+  const stopBefore = makeEffect(
+    () => readCell(beforeSource),
+    (value) => {
+      events.push(`before:${value}:begin`)
+      if (value === 1) {
+        writeCell(beforeSource, 2)
+        writeCell(afterSource, 1)
+        flushScheduledEffects()
+      }
+      events.push(`before:${value}:end`)
+    },
+    Lane.UseLayoutEffect,
+  )
+  const stopAfter = makeEffect(
+    () => readCell(afterSource),
+    (value) => {
+      events.push(`after:${value}`)
+    },
+    Lane.UseEffect,
+  )
+  events.length = 0
+  writeCell(beforeSource, 1)
+  flushScheduledEffects()
+  expect(events).toEqual([
+    "before:1:begin",
+    "before:1:end",
+    "before:2:begin",
+    "before:2:end",
+    "after:1",
+  ])
+  stopBefore()
+  stopAfter()
 })
 
-describe('two-tier graph: render-notify delivery re-entrancy', () => {
-	// A subscriber's onNotify may write, and that write flushes re-entrantly (the
-	// effect stage is guarded by the sync lane's active cursor; delivery is not).
-	// These tests pin the wave-snapshot contract: a wave's iteration never sees
-	// subscribers marked during its own delivery — they are delivered by the nested
-	// wave the marking write triggers, exactly once.
+describe("two-tier graph: render-notify delivery re-entrancy", () => {
+  // A subscriber's onNotify may write, and that write flushes re-entrantly (the
+  // effect stage is guarded by the sync lane's active cursor; delivery is not).
+  // These tests pin the wave-snapshot contract: a wave's iteration never sees
+  // subscribers marked during its own delivery — they are delivered by the nested
+  // wave the marking write triggers, exactly once.
 
-	test('Q1 [guard: passes pre- and post-storage-change] a subscriber marked during delivery is delivered by the nested wave, not the current iteration', () => {
-		const x = atom(0)
-		const y = atom(0)
-		const events: string[] = []
-		const stopL1 = observeNode(x, () => {
-			events.push('L1:begin')
-			writeCell(y, readCell(y) + 1) // marks L2; flushes re-entrantly
-			events.push('L1:end')
-		})
-		const stopL2 = observeNode(y, () => events.push('L2'))
-		const stopL3 = observeNode(x, () => events.push('L3'))
-		writeCell(x, 1)
-		// L2 rides the nested wave inside L1's callback; the outer wave's
-		// iteration stays exactly its snapshot [L1, L3]. Each delivered once.
-		expect(events).toEqual(['L1:begin', 'L2', 'L1:end', 'L3'])
-		stopL1()
-		stopL2()
-		stopL3()
-	})
+  test("Q1 [guard: passes pre- and post-storage-change] a subscriber marked during delivery is delivered by the nested wave, not the current iteration", () => {
+    const x = atom(0)
+    const y = atom(0)
+    const events: string[] = []
+    const stopL1 = observeNode(x, () => {
+      events.push("L1:begin")
+      writeCell(y, readCell(y) + 1) // marks L2; flushes re-entrantly
+      events.push("L1:end")
+    })
+    const stopL2 = observeNode(y, () => events.push("L2"))
+    const stopL3 = observeNode(x, () => events.push("L3"))
+    writeCell(x, 1)
+    // L2 rides the nested wave inside L1's callback; the outer wave's
+    // iteration stays exactly its snapshot [L1, L3]. Each delivered once.
+    expect(events).toEqual(["L1:begin", "L2", "L1:end", "L3"])
+    stopL1()
+    stopL2()
+    stopL3()
+  })
 
-	test('Q2 [guard: passes pre- and post-storage-change] doubly-nested delivery keeps every undelivered snapshot entry intact', () => {
-		// Three waves deep: the outer wave still holds an undelivered subscriber (L5)
-		// while two nested waves mark and deliver. A buffer-reuse scheme that
-		// handed the outer wave's storage to a nested wave would overwrite L5's
-		// slot with L4b and lose the notification; the sequence pins against it.
-		const x = atom(0)
-		const y = atom(0)
-		const z = atom(0)
-		const events: string[] = []
-		const stops: Array<() => void> = []
-		stops.push(
-			observeNode(x, () => {
-				events.push('L1:begin')
-				writeCell(y, readCell(y) + 1) // marks L2
-				events.push('L1:end')
-			}),
-		)
-		stops.push(
-			observeNode(y, () => {
-				events.push('L2:begin')
-				writeCell(z, readCell(z) + 1) // marks L4a, L4b two waves deep
-				events.push('L2:end')
-			}),
-		)
-		stops.push(observeNode(z, () => events.push('L4a')))
-		stops.push(observeNode(z, () => events.push('L4b')))
-		stops.push(observeNode(x, () => events.push('L5')))
-		writeCell(x, 1)
-		expect(events).toEqual(['L1:begin', 'L2:begin', 'L4a', 'L4b', 'L2:end', 'L1:end', 'L5'])
-		for (const stop of stops) {
-			stop()
-		}
-	})
+  test("Q2 [guard: passes pre- and post-storage-change] doubly-nested delivery keeps every undelivered snapshot entry intact", () => {
+    // Three waves deep: the outer wave still holds an undelivered subscriber (L5)
+    // while two nested waves mark and deliver. A buffer-reuse scheme that
+    // handed the outer wave's storage to a nested wave would overwrite L5's
+    // slot with L4b and lose the notification; the sequence pins against it.
+    const x = atom(0)
+    const y = atom(0)
+    const z = atom(0)
+    const events: string[] = []
+    const stops: Array<() => void> = []
+    stops.push(
+      observeNode(x, () => {
+        events.push("L1:begin")
+        writeCell(y, readCell(y) + 1) // marks L2
+        events.push("L1:end")
+      }),
+    )
+    stops.push(
+      observeNode(y, () => {
+        events.push("L2:begin")
+        writeCell(z, readCell(z) + 1) // marks L4a, L4b two waves deep
+        events.push("L2:end")
+      }),
+    )
+    stops.push(observeNode(z, () => events.push("L4a")))
+    stops.push(observeNode(z, () => events.push("L4b")))
+    stops.push(observeNode(x, () => events.push("L5")))
+    writeCell(x, 1)
+    expect(events).toEqual(["L1:begin", "L2:begin", "L4a", "L4b", "L2:end", "L1:end", "L5"])
+    for (const stop of stops) {
+      stop()
+    }
+  })
 })
 
-describe('watcher ownership', () => {
-	test('failed watcher setup releases every edge before rethrowing', () => {
-		const source = atom(0)
-		expect(() =>
-			syncEffect(() => {
-				readCell(source)
-				throw new Error('effect setup')
-			}),
-		).toThrow('effect setup')
-		expect(source.observerCount).toBe(0)
+describe("watcher ownership", () => {
+  test("failed watcher setup releases every edge before rethrowing", () => {
+    const source = atom(0)
+    expect(() =>
+      syncEffect(() => {
+        readCell(source)
+        throw new Error("effect setup")
+      }),
+    ).toThrow("effect setup")
+    expect(source.observerCount).toBe(0)
 
-		expect(() =>
-			makeScope(() => {
-				syncEffect(() => readCell(source))
-				throw new Error('scope setup')
-			}),
-		).toThrow('scope setup')
-		expect(source.observerCount).toBe(0)
+    expect(() =>
+      makeScope(() => {
+        syncEffect(() => readCell(source))
+        throw new Error("scope setup")
+      }),
+    ).toThrow("scope setup")
+    expect(source.observerCount).toBe(0)
 
-		const computed = makeGraphComputed<unknown>(() => readCell(source))
-		readDerived(computed)
-		invalidateDerived(computed, NO_EVENT)
-		expect(() =>
-			observeNode(computed, () => {
-				throw new Error('subscription setup')
-			}),
-		).toThrow('subscription setup')
-		expect(computed.observerCount).toBe(0)
-		expect(source.observerCount).toBe(0)
-	})
+    const computed = makeGraphComputed<unknown>(() => readCell(source))
+    readDerived(computed)
+    invalidateDerived(computed, NO_EVENT)
+    expect(() =>
+      observeNode(computed, () => {
+        throw new Error("subscription setup")
+      }),
+    ).toThrow("subscription setup")
+    expect(computed.observerCount).toBe(0)
+    expect(source.observerCount).toBe(0)
+  })
 
-	test('a throwing child cleanup does not retain its siblings', () => {
-		const first = atom(0)
-		const second = atom(0)
-		const stop = makeScope(() => {
-			syncEffect(
-				() => readCell(first),
-				() => () => {
-					throw new Error('cleanup')
-				},
-			)
-			syncEffect(() => readCell(second))
-		})
-		expect([first.observerCount, second.observerCount]).toEqual([1, 1])
-		expect(stop).toThrow('cleanup')
-		expect([first.observerCount, second.observerCount]).toEqual([0, 0])
-		expect(stop).not.toThrow()
-	})
+  test("a throwing child cleanup does not retain its siblings", () => {
+    const first = atom(0)
+    const second = atom(0)
+    const stop = makeScope(() => {
+      syncEffect(
+        () => readCell(first),
+        () => () => {
+          throw new Error("cleanup")
+        },
+      )
+      syncEffect(() => readCell(second))
+    })
+    expect([first.observerCount, second.observerCount]).toEqual([1, 1])
+    expect(stop).toThrow("cleanup")
+    expect([first.observerCount, second.observerCount]).toEqual([0, 0])
+    expect(stop).not.toThrow()
+  })
 
-	test('an effect replaces the children owned by its previous run', () => {
-		const source = atom(0)
-		const events: string[] = []
-		const stop = syncEffect(
-			() => readCell(source),
-			(value) => {
-				events.push(`parent:${value}`)
-				void syncEffect(
-					() => 0,
-					() => {
-						events.push(`child:${value}`)
-						return () => events.push(`cleanup:${value}`)
-					},
-				)
-			},
-		)
+  test("an effect replaces the children owned by its previous run", () => {
+    const source = atom(0)
+    const events: string[] = []
+    const stop = syncEffect(
+      () => readCell(source),
+      (value) => {
+        events.push(`parent:${value}`)
+        void syncEffect(
+          () => 0,
+          () => {
+            events.push(`child:${value}`)
+            return () => events.push(`cleanup:${value}`)
+          },
+        )
+      },
+    )
 
-		writeCell(source, 1)
-		expect(events).toEqual([
-			'parent:0',
-			'child:0',
-			'cleanup:0',
-			'parent:1',
-			'child:1',
-		])
-		stop()
-		expect(events.at(-1)).toBe('cleanup:1')
-	})
+    writeCell(source, 1)
+    expect(events).toEqual(["parent:0", "child:0", "cleanup:0", "parent:1", "child:1"])
+    stop()
+    expect(events.at(-1)).toBe("cleanup:1")
+  })
 
-	test('an effect created after its owner disposes itself remains independent', () => {
-		const parentSource = atom(0)
-		const childSource = atom(0)
-		let parentRuns = 0
-		let childRuns = 0
-		let stopParent = () => {}
-		let stopChild = () => {}
-		stopParent = syncEffect(
-			() => readCell(parentSource),
-			() => {
-				parentRuns++
-				if (parentRuns === 2) {
-					stopParent()
-					stopChild = syncEffect(
-						() => readCell(childSource),
-						() => {
-							childRuns++
-						},
-					)
-				}
-			},
-		)
+  test("an effect created after its owner disposes itself remains independent", () => {
+    const parentSource = atom(0)
+    const childSource = atom(0)
+    let parentRuns = 0
+    let childRuns = 0
+    let stopParent = () => {}
+    let stopChild = () => {}
+    stopParent = syncEffect(
+      () => readCell(parentSource),
+      () => {
+        parentRuns++
+        if (parentRuns === 2) {
+          stopParent()
+          stopChild = syncEffect(
+            () => readCell(childSource),
+            () => {
+              childRuns++
+            },
+          )
+        }
+      },
+    )
 
-		writeCell(parentSource, 1)
-		writeCell(parentSource, 2)
-		writeCell(childSource, 1)
-		stopParent()
-		writeCell(childSource, 2)
-		expect([parentRuns, childRuns]).toEqual([2, 3])
-		stopChild()
-	})
+    writeCell(parentSource, 1)
+    writeCell(parentSource, 2)
+    writeCell(childSource, 1)
+    stopParent()
+    writeCell(childSource, 2)
+    expect([parentRuns, childRuns]).toEqual([2, 3])
+    stopChild()
+  })
 })
 
-describe('watermark validation ordering (the changedAt/validAt discipline)', () => {
-	test('lazy chain: deps freshen before their readings are compared', () => {
-		// a → c1 → c2, all unwatched. After a write, reading c2 must freshen
-		// c1 first (its recompute stamps changedAt with the current clock)
-		// and only then compare; comparing before freshening would miss the
-		// change.
-		let c1Runs = 0
-		let c2Runs = 0
-		const a = atom(1)
-		const c1 = makeGraphComputed(() => {
-			c1Runs++
-			return readCell(a) * 10
-		})
-		const c2 = makeGraphComputed(() => {
-			c2Runs++
-			return readDerived(c1) + 1
-		})
-		expect(readDerived(c2)).toBe(11)
-		expect([c1Runs, c2Runs]).toEqual([1, 1])
-		writeCell(a, 2)
-		expect(readDerived(c2)).toBe(21)
-		expect([c1Runs, c2Runs]).toEqual([2, 2])
-	})
+describe("watermark validation ordering (the changedAt/validAt discipline)", () => {
+  test("lazy chain: deps freshen before their readings are compared", () => {
+    // a → c1 → c2, all unwatched. After a write, reading c2 must freshen
+    // c1 first (its recompute stamps changedAt with the current clock)
+    // and only then compare; comparing before freshening would miss the
+    // change.
+    let c1Runs = 0
+    let c2Runs = 0
+    const a = atom(1)
+    const c1 = makeGraphComputed(() => {
+      c1Runs++
+      return readCell(a) * 10
+    })
+    const c2 = makeGraphComputed(() => {
+      c2Runs++
+      return readDerived(c1) + 1
+    })
+    expect(readDerived(c2)).toBe(11)
+    expect([c1Runs, c2Runs]).toEqual([1, 1])
+    writeCell(a, 2)
+    expect(readDerived(c2)).toBe(21)
+    expect([c1Runs, c2Runs]).toEqual([2, 2])
+  })
 
-	test('equality cutoff does not advance changedAt: downstream skips recompute', () => {
-		// c1 collapses distinct inputs; its recompute must not advance its
-		// changedAt reading, so c2 validates as unchanged and never re-runs.
-		let c1Runs = 0
-		let c2Runs = 0
-		const a = atom(1)
-		const c1 = makeGraphComputed(() => {
-			c1Runs++
-			return readCell(a) % 2
-		})
-		const c2 = makeGraphComputed(() => {
-			c2Runs++
-			return readDerived(c1) * 100
-		})
-		expect(readDerived(c2)).toBe(100)
-		writeCell(a, 3) // parity unchanged
-		expect(readDerived(c2)).toBe(100)
-		expect(c1Runs).toBe(2) // c1 had to confirm
-		expect(c2Runs).toBe(1) // c2 did not
-	})
+  test("equality cutoff does not advance changedAt: downstream skips recompute", () => {
+    // c1 collapses distinct inputs; its recompute must not advance its
+    // changedAt reading, so c2 validates as unchanged and never re-runs.
+    let c1Runs = 0
+    let c2Runs = 0
+    const a = atom(1)
+    const c1 = makeGraphComputed(() => {
+      c1Runs++
+      return readCell(a) % 2
+    })
+    const c2 = makeGraphComputed(() => {
+      c2Runs++
+      return readDerived(c1) * 100
+    })
+    expect(readDerived(c2)).toBe(100)
+    writeCell(a, 3) // parity unchanged
+    expect(readDerived(c2)).toBe(100)
+    expect(c1Runs).toBe(2) // c1 had to confirm
+    expect(c2Runs).toBe(1) // c2 did not
+  })
 
-	test('a computed read between a write and its batch net-revert cannot leave a stale cache', () => {
-		const a = atom(1)
-		const c1 = makeGraphComputed(() => readCell(a) * 10)
-		expect(readDerived(c1)).toBe(10)
-		batch(() => {
-			writeCell(a, 5)
-			expect(readDerived(c1)).toBe(50)
-			writeCell(a, 1) // net-revert
-		})
-		expect(readDerived(c1)).toBe(10)
-	})
+  test("a computed read between a write and its batch net-revert cannot leave a stale cache", () => {
+    const a = atom(1)
+    const c1 = makeGraphComputed(() => readCell(a) * 10)
+    expect(readDerived(c1)).toBe(10)
+    batch(() => {
+      writeCell(a, 5)
+      expect(readDerived(c1)).toBe(50)
+      writeCell(a, 1) // net-revert
+    })
+    expect(readDerived(c1)).toBe(10)
+  })
 })
 
-describe('deps-from-eval invariant (test-side check, was a shipped dev assertion)', () => {
-	/**
-	 * The invariant: a computed's deps list is exactly what its last
-	 * evaluation read, in read order — evaluation is the only site that
-	 * creates or keeps dep edges. Checked from the test by walking the list,
-	 * per the owner's rule that invariant nets live in tests, not the
-	 * library.
-	 */
-	const depsOf = (node: ReactiveNode) => {
-		const out: unknown[] = []
-		for (let l = node.deps; l !== undefined; l = nextDependency(l)) {
-			out.push(dependencyOf(l))
-		}
-		return out
-	}
+describe("deps-from-eval invariant (test-side check, was a shipped dev assertion)", () => {
+  /**
+   * The invariant: a computed's deps list is exactly what its last
+   * evaluation read, in read order — evaluation is the only site that
+   * creates or keeps dep edges. Checked from the test by walking the list,
+   * per the owner's rule that invariant nets live in tests, not the
+   * library.
+   */
+  const depsOf = (node: ReactiveNode) => {
+    const out: unknown[] = []
+    for (let l = node.deps; l !== undefined; l = nextDependency(l)) {
+      out.push(dependencyOf(l))
+    }
+    return out
+  }
 
-	test('a branch switch leaves exactly the taken branch, in read order', () => {
-		const flag = atom(true, { label: 'flag' })
-		const x = atom(1, { label: 'x' })
-		const y = atom(2, { label: 'y' })
-		const d = makeGraphComputed(() => (readCell(flag) ? readCell(x) : readCell(y)))
-		expect(readDerived(d)).toBe(1)
-		expect(depsOf(d)).toEqual([flag, x])
-		writeCell(flag, false)
-		expect(readDerived(d)).toBe(2)
-		expect(depsOf(d)).toEqual([flag, y]) // x pruned, y appended, order = read order
-		writeCell(flag, true)
-		expect(readDerived(d)).toBe(1)
-		expect(depsOf(d)).toEqual([flag, x])
-	})
+  test("a branch switch leaves exactly the taken branch, in read order", () => {
+    const flag = atom(true, { label: "flag" })
+    const x = atom(1, { label: "x" })
+    const y = atom(2, { label: "y" })
+    const d = makeGraphComputed(() => (readCell(flag) ? readCell(x) : readCell(y)))
+    expect(readDerived(d)).toBe(1)
+    expect(depsOf(d)).toEqual([flag, x])
+    writeCell(flag, false)
+    expect(readDerived(d)).toBe(2)
+    expect(depsOf(d)).toEqual([flag, y]) // x pruned, y appended, order = read order
+    writeCell(flag, true)
+    expect(readDerived(d)).toBe(1)
+    expect(depsOf(d)).toEqual([flag, x])
+  })
 
-	test('repeat reads within one evaluation keep one edge', () => {
-		const x = atom(3, { label: 'x' })
-		const d = makeGraphComputed(() => readCell(x) + readCell(x) + readCell(x))
-		expect(readDerived(d)).toBe(9)
-		expect(depsOf(d)).toEqual([x])
-	})
+  test("repeat reads within one evaluation keep one edge", () => {
+    const x = atom(3, { label: "x" })
+    const d = makeGraphComputed(() => readCell(x) + readCell(x) + readCell(x))
+    expect(readDerived(d)).toBe(9)
+    expect(depsOf(d)).toEqual([x])
+  })
 })

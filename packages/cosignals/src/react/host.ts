@@ -20,30 +20,30 @@
 // scheduler.d.ts. The reference pulls it into any program that includes this
 // file (external tools typecheck the adapter without the full src tree).
 /// <reference path="./scheduler.d.ts" />
-import * as React from 'react'
-import * as Scheduler from 'scheduler'
+import * as React from "react"
+import * as Scheduler from "scheduler"
 import {
-	trace,
-	Flag,
-	isUninitialized,
-	NO_EVENT,
-	pokeDraftWatchers,
-	repumpDeferredLanes,
-	setLanePump,
-	type ProducerNode,
-	type TraceEventId,
-} from '../graph.ts'
+  trace,
+  Flag,
+  isUninitialized,
+  NO_EVENT,
+  pokeDraftWatchers,
+  repumpDeferredLanes,
+  setLanePump,
+  type ProducerNode,
+  type TraceEventId,
+} from "../graph.ts"
 import {
-	type Draft,
-	type DraftId,
-	draftsAffecting,
-	openDraft,
-	resolveState,
-	retireDraft,
-	setAmbientClassifier,
-	worldOf,
-} from '../worlds.ts'
-import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../signals.ts'
+  type Draft,
+  type DraftId,
+  draftsAffecting,
+  openDraft,
+  resolveState,
+  retireDraft,
+  setAmbientClassifier,
+  worldOf,
+} from "../worlds.ts"
+import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from "../signals.ts"
 
 /**
  * One registered connection per CosignalsProvider. The record is
@@ -52,44 +52,44 @@ import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from 
  * validate render-world notes.
  */
 export interface ReactRootConnection {
-	/**
-	 * Draft ids delivered here become part of the worlds this root's
-	 * render passes carry.
-	 */
-	dispatch: (id: DraftId) => void
-	/**
-	 * True only while the first-child commit marker confirms this root's
-	 * current render, before descendant layout effects advance hook stashes.
-	 */
-	committing: boolean
+  /**
+   * Draft ids delivered here become part of the worlds this root's
+   * render passes carry.
+   */
+  dispatch: (id: DraftId) => void
+  /**
+   * True only while the first-child commit marker confirms this root's
+   * current render, before descendant layout effects advance hook stashes.
+   */
+  committing: boolean
 }
 
 /** Returned by registerReactSignals(): tears the registration down. */
 export interface ReactSignalsHandle {
-	/** Remove the engine hooks installed by {@link registerReactSignals}. */
-	dispose(): void
+  /** Remove the engine hooks installed by {@link registerReactSignals}. */
+  dispose(): void
 }
 
 const rootConnections = new Set<ReactRootConnection>()
 interface HostedDraft {
-	draft: Draft
-	/**
-	 * The React transition object that owns this draft. Late deliveries
-	 * restore it so their dispatches join the original transition's
-	 * updates.
-	 */
-	owner: object | null
-	/**
-	 * Root connections that received the draft and have not committed it;
-	 * the draft retires when this empties.
-	 */
-	recipients: Set<ReactRootConnection>
-	/**
-	 * Every connection that received the draft at broadcast time. A root
-	 * mounted later is absent, and its subscribers rely on the retirement
-	 * fold notifying them, since none of their passes carried the draft.
-	 */
-	audience: Set<ReactRootConnection>
+  draft: Draft
+  /**
+   * The React transition object that owns this draft. Late deliveries
+   * restore it so their dispatches join the original transition's
+   * updates.
+   */
+  owner: object | null
+  /**
+   * Root connections that received the draft and have not committed it;
+   * the draft retires when this empties.
+   */
+  recipients: Set<ReactRootConnection>
+  /**
+   * Every connection that received the draft at broadcast time. A root
+   * mounted later is absent, and its subscribers rely on the retirement
+   * fold notifying them, since none of their passes carried the draft.
+   */
+  audience: Set<ReactRootConnection>
 }
 
 const hostedDrafts = new Map<DraftId, HostedDraft>()
@@ -97,14 +97,14 @@ const hostedDrafts = new Map<DraftId, HostedDraft>()
 let handle: ReactSignalsHandle | null = null
 
 interface SharedInternals {
-	H?: { useEffect?: unknown; useState?: unknown } | null
-	T?: object | null
+  H?: { useEffect?: unknown; useState?: unknown } | null
+  T?: object | null
 }
 
 const reactInternals: SharedInternals =
-	((React as unknown as Record<string, unknown>)[
-		'__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE'
-	] as SharedInternals | undefined) ?? {}
+  ((React as unknown as Record<string, unknown>)[
+    "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"
+  ] as SharedInternals | undefined) ?? {}
 
 /**
  * React parks a context-only dispatcher between renders. All of its hooks
@@ -114,34 +114,34 @@ const reactInternals: SharedInternals =
  * write without letting it mutate state first.
  */
 function isRendering(): boolean {
-	const H = reactInternals.H
-	return H != null && H.useState !== H.useEffect
+  const H = reactInternals.H
+  return H != null && H.useState !== H.useEffect
 }
 
 let rejectedRenderWrite = false
 
 function renderWriteGuard(): void {
-	if (isRendering() || rejectedRenderWrite) {
-		if (!rejectedRenderWrite) {
-			// React may call the component again outside its render dispatcher
-			// while it builds the error stack. Keep rejecting writes through that
-			// synchronous diagnostic replay so it cannot perform the mutation the
-			// real render rejected.
-			rejectedRenderWrite = true
-			queueMicrotask(() => {
-				rejectedRenderWrite = false
-			})
-		}
-		const error = new Error(
-			'cosignals: state was written during a React render. ' +
-				'Render must be pure; move the write into an event handler or effect.',
-		)
-		trace?.emitEvent('policy-error', null, NO_EVENT, {
-			error,
-			phase: 'render-write',
-		})
-		throw error
-	}
+  if (isRendering() || rejectedRenderWrite) {
+    if (!rejectedRenderWrite) {
+      // React may call the component again outside its render dispatcher
+      // while it builds the error stack. Keep rejecting writes through that
+      // synchronous diagnostic replay so it cannot perform the mutation the
+      // real render rejected.
+      rejectedRenderWrite = true
+      queueMicrotask(() => {
+        rejectedRenderWrite = false
+      })
+    }
+    const error = new Error(
+      "cosignals: state was written during a React render. " +
+        "Render must be pure; move the write into an event handler or effect.",
+    )
+    trace?.emitEvent("policy-error", null, NO_EVENT, {
+      error,
+      phase: "render-write",
+    })
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,37 +172,37 @@ function renderWriteGuard(): void {
  * or leaking drafts into an urgent pass, is never acceptable.
  */
 interface RenderWorldNote {
-	connection: ReactRootConnection | null
-	ids: readonly DraftId[]
+  connection: ReactRootConnection | null
+  ids: readonly DraftId[]
 }
 
 let note: RenderWorldNote | null = null
 
 function expiryFor(mine: RenderWorldNote): () => void {
-	return () => {
-		if (note === mine) {
-			note = null
-		}
-	}
+  return () => {
+    if (note === mine) {
+      note = null
+    }
+  }
 }
 
 function armNoteExpiry(mine: RenderWorldNote): void {
-	const expire = expiryFor(mine)
-	queueMicrotask(expire)
-	// The scheduler's task queue is a min-heap on expiration: an immediate
-	// task scheduled now runs before any waiting normal-priority render task,
-	// even when the work loop continues in the same stack.
-	try {
-		Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire)
-	} catch (error) {
-		trace?.emitEvent('scheduler-fallback', null, NO_EVENT, {
-			error,
-			phase: 'render-note-expiry',
-			root: mine.connection ?? undefined,
-		})
-		// No scheduler host (non-DOM test rigs): the microtask still covers
-		// every path that unwinds the stack.
-	}
+  const expire = expiryFor(mine)
+  queueMicrotask(expire)
+  // The scheduler's task queue is a min-heap on expiration: an immediate
+  // task scheduled now runs before any waiting normal-priority render task,
+  // even when the work loop continues in the same stack.
+  try {
+    Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire)
+  } catch (error) {
+    trace?.emitEvent("scheduler-fallback", null, NO_EVENT, {
+      error,
+      phase: "render-note-expiry",
+      root: mine.connection ?? undefined,
+    })
+    // No scheduler host (non-DOM test rigs): the microtask still covers
+    // every path that unwinds the stack.
+  }
 }
 
 /**
@@ -212,15 +212,15 @@ function armNoteExpiry(mine: RenderWorldNote): void {
  * state renders stay allocation-free.
  */
 export function noteRenderWorld(connection: ReactRootConnection, ids: readonly DraftId[]): void {
-	if (ids.length === 0) {
-		note = null
-		return
-	}
-	if (note !== null && note.connection === connection && note.ids === ids) {
-		return
-	} // StrictMode re-render
-	note = { connection, ids }
-	armNoteExpiry(note)
+  if (ids.length === 0) {
+    note = null
+    return
+  }
+  if (note !== null && note.connection === connection && note.ids === ids) {
+    return
+  } // StrictMode re-render
+  note = { connection, ids }
+  armNoteExpiry(note)
 }
 
 /**
@@ -231,16 +231,16 @@ export function noteRenderWorld(connection: ReactRootConnection, ids: readonly D
  * ahead of it.
  */
 export function noteHookRender(
-	connection: ReactRootConnection | null,
-	ids: readonly DraftId[] | null,
+  connection: ReactRootConnection | null,
+  ids: readonly DraftId[] | null,
 ): void {
-	if (note !== null && note.connection !== connection) {
-		note = null
-	}
-	if (note === null && ids !== null && ids.length > 0) {
-		note = { connection, ids }
-		armNoteExpiry(note)
-	}
+  if (note !== null && note.connection !== connection) {
+    note = null
+  }
+  if (note === null && ids !== null && ids.length > 0) {
+    note = { connection, ids }
+    armNoteExpiry(note)
+  }
 }
 
 /**
@@ -249,14 +249,14 @@ export function noteHookRender(
  * transition pass, whose own reducers never received the dispatch.
  */
 export function renderPassIds(connection: ReactRootConnection | null): readonly DraftId[] | null {
-	return note !== null && note.connection === connection ? note.ids : null
+  return note !== null && note.connection === connection ? note.ids : null
 }
 
-function renderWorldProvider(): readonly DraftId[] | 'base' | null {
-	if (!isRendering()) {
-		return null
-	} // not rendering: ambient reads see the newest view
-	return note === null ? 'base' : note.ids
+function renderWorldProvider(): readonly DraftId[] | "base" | null {
+  if (!isRendering()) {
+    return null
+  } // not rendering: ambient reads see the newest view
+  return note === null ? "base" : note.ids
 }
 
 // ---------------------------------------------------------------------------
@@ -274,22 +274,22 @@ function renderWorldProvider(): readonly DraftId[] | 'base' | null {
  * frame.
  */
 export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
-	if (reactInternals.T != null) {
-		dispatch(id)
-		return
-	}
-	const owner = hostedDrafts.get(id)?.owner
-	if (owner == null) {
-		dispatch(id)
-		return
-	}
-	const prev = reactInternals.T
-	reactInternals.T = owner
-	try {
-		dispatch(id)
-	} finally {
-		reactInternals.T = prev
-	}
+  if (reactInternals.T != null) {
+    dispatch(id)
+    return
+  }
+  const owner = hostedDrafts.get(id)?.owner
+  if (owner == null) {
+    dispatch(id)
+    return
+  }
+  const prev = reactInternals.T
+  reactInternals.T = owner
+  try {
+    dispatch(id)
+  } finally {
+    reactInternals.T = prev
+  }
 }
 
 /**
@@ -300,17 +300,17 @@ export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void):
  * transition it indicates.
  */
 export function dispatchUrgent(dispatch: () => void): void {
-	const prev = reactInternals.T
-	if (prev == null) {
-		dispatch()
-		return
-	}
-	reactInternals.T = null
-	try {
-		dispatch()
-	} finally {
-		reactInternals.T = prev
-	}
+  const prev = reactInternals.T
+  if (prev == null) {
+    dispatch()
+    return
+  }
+  reactInternals.T = null
+  try {
+    dispatch()
+  } finally {
+    reactInternals.T = prev
+  }
 }
 
 /**
@@ -327,10 +327,10 @@ export const REPAIR_WAKE: DraftId = 0
  * notify predicate (resolutionDiffers) compare current state against it.
  */
 export interface RenderedResolution {
-	ids: readonly DraftId[]
-	value: unknown
-	/** False until the hook's first completed render fills the stash. */
-	live: boolean
+  ids: readonly DraftId[]
+  value: unknown
+  /** False until the hook's first completed render fills the stash. */
+  live: boolean
 }
 
 /**
@@ -353,25 +353,25 @@ export interface RenderedResolution {
  * the urgent repair bump.
  */
 export function correctSubscription(
-	node: ProducerNode,
-	rendered: RenderedResolution,
-	connection: ReactRootConnection,
-	deliver: (id: DraftId, cause: TraceEventId) => void,
-	dispatch: (id: DraftId) => void,
+  node: ProducerNode,
+  rendered: RenderedResolution,
+  connection: ReactRootConnection,
+  deliver: (id: DraftId, cause: TraceEventId) => void,
+  dispatch: (id: DraftId) => void,
 ): void {
-	for (const id of draftsAffecting(node)) {
-		if (rendered.ids.includes(id)) {
-			continue
-		}
-		const hosted = hostedDrafts.get(id)
-		if (hosted === undefined || !hosted.audience.has(connection)) {
-			continue
-		}
-		deliver(id, trace?.getDraftWrite(hosted.draft) ?? NO_EVENT)
-	}
-	if (resolutionDiffers(node, rendered)) {
-		dispatch(REPAIR_WAKE)
-	}
+  for (const id of draftsAffecting(node)) {
+    if (rendered.ids.includes(id)) {
+      continue
+    }
+    const hosted = hostedDrafts.get(id)
+    if (hosted === undefined || !hosted.audience.has(connection)) {
+      continue
+    }
+    deliver(id, trace?.getDraftWrite(hosted.draft) ?? NO_EVENT)
+  }
+  if (resolutionDiffers(node, rendered)) {
+    dispatch(REPAIR_WAKE)
+  }
 }
 
 /**
@@ -390,15 +390,15 @@ export function correctSubscription(
  * subscriber must suspend.
  */
 export function resolutionDiffers(node: ProducerNode, rendered: RenderedResolution): boolean {
-	const st = resolveState(node, worldOf(rendered.ids))
-	const asyncBits = st.flags & Flag.AsyncMask
-	if (asyncBits === Flag.AsyncError) {
-		return true
-	}
-	if (asyncBits === Flag.AsyncSuspended && isUninitialized(st.value)) {
-		return true
-	}
-	return !Object.is(st.value, rendered.value)
+  const st = resolveState(node, worldOf(rendered.ids))
+  const asyncBits = st.flags & Flag.AsyncMask
+  if (asyncBits === Flag.AsyncError) {
+    return true
+  }
+  if (asyncBits === Flag.AsyncSuspended && isUninitialized(st.value)) {
+    return true
+  }
+  return !Object.is(st.value, rendered.value)
 }
 
 // ---------------------------------------------------------------------------
@@ -414,21 +414,21 @@ export function resolutionDiffers(node: ProducerNode, rendered: RenderedResoluti
 const draftsByTransition = new WeakMap<object, Draft>()
 
 function ambientClassifier(): Draft | null {
-	const T = reactInternals.T
-	if (T == null) {
-		return null
-	}
-	let draft = draftsByTransition.get(T)
-	if (draft === undefined) {
-		draft = openDraft()
-		draftsByTransition.set(T, draft)
-		broadcastDraft(draft)
-	}
-	// A retired or discarded draft classifies as urgent: its effects are
-	// already folded into base state or rolled back, so a late write under
-	// the same transition object must be a plain base-state write, never
-	// an append to a finished batch.
-	return draft.state === 'open' ? draft : null
+  const T = reactInternals.T
+  if (T == null) {
+    return null
+  }
+  let draft = draftsByTransition.get(T)
+  if (draft === undefined) {
+    draft = openDraft()
+    draftsByTransition.set(T, draft)
+    broadcastDraft(draft)
+  }
+  // A retired or discarded draft classifies as urgent: its effects are
+  // already folded into base state or rolled back, so a late write under
+  // the same transition object must be a plain base-state write, never
+  // an append to a finished batch.
+  return draft.state === "open" ? draft : null
 }
 
 /**
@@ -439,114 +439,111 @@ function ambientClassifier(): Draft | null {
  * connection plus exactly the subscribers its writes touch.
  */
 export function broadcastDraft(draft: Draft): void {
-	// Prune finished drafts: an engine-side discard can finish a draft
-	// without ever visiting the host's bookkeeping.
-	for (const [id, hosted] of hostedDrafts) {
-		if (hosted.draft.state !== 'open') {
-			hostedDrafts.delete(id)
-		}
-	}
-	const recipients = new Set(rootConnections)
-	const hosted: HostedDraft = {
-		draft,
-		owner: reactInternals.T ?? null,
-		recipients,
-		audience: new Set(recipients),
-	}
-	hostedDrafts.set(draft.id, hosted)
-	for (const connection of recipients) {
-		connection.dispatch(draft.id)
-	}
-	if (recipients.size === 0) {
-		// No mounted connection observes this draft, so nothing will ever commit
-		// it; retire it as soon as the writing callback finishes. The microtask
-		// keeps the retirement after any writes still being appended.
-		queueMicrotask(() => {
-			if (hostedDrafts.get(draft.id) === hosted && hosted.recipients.size === 0) {
-				hostedDrafts.delete(draft.id)
-				retireDraft(draft.id)
-			}
-		})
-	}
+  // Prune finished drafts: an engine-side discard can finish a draft
+  // without ever visiting the host's bookkeeping.
+  for (const [id, hosted] of hostedDrafts) {
+    if (hosted.draft.state !== "open") {
+      hostedDrafts.delete(id)
+    }
+  }
+  const recipients = new Set(rootConnections)
+  const hosted: HostedDraft = {
+    draft,
+    owner: reactInternals.T ?? null,
+    recipients,
+    audience: new Set(recipients),
+  }
+  hostedDrafts.set(draft.id, hosted)
+  for (const connection of recipients) {
+    connection.dispatch(draft.id)
+  }
+  if (recipients.size === 0) {
+    // No mounted connection observes this draft, so nothing will ever commit
+    // it; retire it as soon as the writing callback finishes. The microtask
+    // keeps the retirement after any writes still being appended.
+    queueMicrotask(() => {
+      if (hostedDrafts.get(draft.id) === hosted && hosted.recipients.size === 0) {
+        hostedDrafts.delete(draft.id)
+        retireDraft(draft.id)
+      }
+    })
+  }
 }
 
 export function registerRootConnection(connection: ReactRootConnection): () => void {
-	rootConnections.add(connection)
-	return () => {
-		rootConnections.delete(connection)
-		for (const [id, hosted] of hostedDrafts) {
-			if (hosted.recipients.delete(connection) && hosted.recipients.size === 0) {
-				hostedDrafts.delete(id)
-				retireDraft(id)
-			}
-		}
-	}
+  rootConnections.add(connection)
+  return () => {
+    rootConnections.delete(connection)
+    for (const [id, hosted] of hostedDrafts) {
+      if (hosted.recipients.delete(connection) && hosted.recipients.size === 0) {
+        hostedDrafts.delete(id)
+        retireDraft(id)
+      }
+    }
+  }
 }
 
 /** A root committed a render pass whose world contained these drafts. */
-export function confirmRootCommit(
-	connection: ReactRootConnection,
-	ids: readonly DraftId[],
-): void {
-	connection.committing = true
-	try {
-		const sink = trace
-		let commitEvent: TraceEventId = NO_EVENT
-		if (sink !== null) {
-			// The commit is caused by the committed draft's last write (its
-			// open event when it never wrote), so the committed frame chains
-			// back to the transition's origin instead of rooting itself.
-			let commitCause: TraceEventId = NO_EVENT
-			for (const id of ids) {
-				const draft = hostedDrafts.get(id)?.draft
-				if (draft !== undefined) {
-					const lastWrite = sink.getDraftWrite(draft)
-					commitCause = lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft)
-				}
-			}
-			commitEvent = sink.emitEvent('transition-commit', null, commitCause, {
-				root: connection,
-				world: ids,
-			})
-		}
-		// This root's committed view changed; poke the draft watchers of every
-		// atom the committed drafts touched. This is cheap: value subscribers
-		// bail through the notify predicate when their resolution is
-		// unchanged. The poke carries the commit event, so a subscriber it
-		// does re-render (one whose passes never carried the draft) traces
-		// back through the commit to the transition's writes. All pokes run
-		// before any retirement, because pokes can flush synchronously while
-		// retirement folds state and starts its own notification wave.
-		for (const id of ids) {
-			const hosted = hostedDrafts.get(id)
-			if (hosted === undefined || hosted.draft.state !== 'open') {
-				continue
-			}
-			for (const atom of hosted.draft.atoms) {
-				pokeDraftWatchers(atom, commitEvent)
-			}
-		}
-		for (const id of ids) {
-			const hosted = hostedDrafts.get(id)
-			if (
-				hosted !== undefined &&
-				hosted.recipients.delete(connection) &&
-				hosted.recipients.size === 0
-			) {
-				hostedDrafts.delete(id)
-				// Every recipient committed: fold the draft into base state. The
-				// fold's writes notify every subscriber over the touched atoms,
-				// and each subscriber's render-notify predicate compares its
-				// rendered value against the folded resolution. Subscribers whose
-				// render passes carried the draft compare equal and stay quiet;
-				// subscribers under a connection that never carried it (mounted
-				// mid-transition) see the folded values as new and re-render.
-				retireDraft(id)
-			}
-		}
-	} finally {
-		connection.committing = false
-	}
+export function confirmRootCommit(connection: ReactRootConnection, ids: readonly DraftId[]): void {
+  connection.committing = true
+  try {
+    const sink = trace
+    let commitEvent: TraceEventId = NO_EVENT
+    if (sink !== null) {
+      // The commit is caused by the committed draft's last write (its
+      // open event when it never wrote), so the committed frame chains
+      // back to the transition's origin instead of rooting itself.
+      let commitCause: TraceEventId = NO_EVENT
+      for (const id of ids) {
+        const draft = hostedDrafts.get(id)?.draft
+        if (draft !== undefined) {
+          const lastWrite = sink.getDraftWrite(draft)
+          commitCause = lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft)
+        }
+      }
+      commitEvent = sink.emitEvent("transition-commit", null, commitCause, {
+        root: connection,
+        world: ids,
+      })
+    }
+    // This root's committed view changed; poke the draft watchers of every
+    // atom the committed drafts touched. This is cheap: value subscribers
+    // bail through the notify predicate when their resolution is
+    // unchanged. The poke carries the commit event, so a subscriber it
+    // does re-render (one whose passes never carried the draft) traces
+    // back through the commit to the transition's writes. All pokes run
+    // before any retirement, because pokes can flush synchronously while
+    // retirement folds state and starts its own notification wave.
+    for (const id of ids) {
+      const hosted = hostedDrafts.get(id)
+      if (hosted === undefined || hosted.draft.state !== "open") {
+        continue
+      }
+      for (const atom of hosted.draft.atoms) {
+        pokeDraftWatchers(atom, commitEvent)
+      }
+    }
+    for (const id of ids) {
+      const hosted = hostedDrafts.get(id)
+      if (
+        hosted !== undefined &&
+        hosted.recipients.delete(connection) &&
+        hosted.recipients.size === 0
+      ) {
+        hostedDrafts.delete(id)
+        // Every recipient committed: fold the draft into base state. The
+        // fold's writes notify every subscriber over the touched atoms,
+        // and each subscriber's render-notify predicate compares its
+        // rendered value against the folded resolution. Subscribers whose
+        // render passes carried the draft compare equal and stay quiet;
+        // subscribers under a connection that never carried it (mounted
+        // mid-transition) see the folded values as new and re-render.
+        retireDraft(id)
+      }
+    }
+  } finally {
+    connection.committing = false
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -563,15 +560,15 @@ export function confirmRootCommit(
 const effectHostWakes = new Set<() => void>()
 
 function laneWakePump(): boolean {
-	if (effectHostWakes.size === 0) {
-		return false
-	}
-	for (const wake of effectHostWakes) {
-		// Outside any ambient transition: a drain must not be held hostage by
-		// the pending transition whose scope the triggering write ran in.
-		dispatchUrgent(wake)
-	}
-	return true
+  if (effectHostWakes.size === 0) {
+    return false
+  }
+  for (const wake of effectHostWakes) {
+    // Outside any ambient transition: a drain must not be held hostage by
+    // the pending transition whose scope the triggering write ran in.
+    dispatchUrgent(wake)
+  }
+  return true
 }
 
 /**
@@ -580,11 +577,11 @@ function laneWakePump(): boolean {
  * never commit.
  */
 export function registerEffectHost(wake: () => void): () => void {
-	effectHostWakes.add(wake)
-	return () => {
-		effectHostWakes.delete(wake)
-		repumpDeferredLanes()
-	}
+  effectHostWakes.add(wake)
+  return () => {
+    effectHostWakes.delete(wake)
+    repumpDeferredLanes()
+  }
 }
 
 /**
@@ -593,43 +590,43 @@ export function registerEffectHost(wake: () => void): () => void {
  * pumps). Idempotent per process.
  */
 export function registerReactSignals(): ReactSignalsHandle {
-	if (handle !== null) {
-		return handle
-	}
-	setAmbientClassifier(ambientClassifier)
-	setRenderWriteGuard(renderWriteGuard)
-	setRenderWorldProvider(renderWorldProvider)
-	setLanePump(laneWakePump)
-	handle = {
-		dispose() {
-			if (handle === null) {
-				return
-			}
-			setAmbientClassifier(null)
-			setRenderWriteGuard(null)
-			setRenderWorldProvider(null)
-			setLanePump(null)
-			repumpDeferredLanes()
-			handle = null
-		},
-	}
-	return handle
+  if (handle !== null) {
+    return handle
+  }
+  setAmbientClassifier(ambientClassifier)
+  setRenderWriteGuard(renderWriteGuard)
+  setRenderWorldProvider(renderWorldProvider)
+  setLanePump(laneWakePump)
+  handle = {
+    dispose() {
+      if (handle === null) {
+        return
+      }
+      setAmbientClassifier(null)
+      setRenderWriteGuard(null)
+      setRenderWorldProvider(null)
+      setLanePump(null)
+      repumpDeferredLanes()
+      handle = null
+    },
+  }
+  return handle
 }
 
 /** Test seam: engine reset plus host registry scrub. Keeps registration. */
 export function resetReactSignalsForTest(): void {
-	resetEngineForTest()
-	rootConnections.clear()
-	hostedDrafts.clear()
-	effectHostWakes.clear()
-	note = null
-	rejectedRenderWrite = false
-	if (handle !== null) {
-		// resetEngineForTest cleared the engine hooks; re-arm them.
-		setAmbientClassifier(ambientClassifier)
-		setRenderWriteGuard(renderWriteGuard)
-		setRenderWorldProvider(renderWorldProvider)
-	}
+  resetEngineForTest()
+  rootConnections.clear()
+  hostedDrafts.clear()
+  effectHostWakes.clear()
+  note = null
+  rejectedRenderWrite = false
+  if (handle !== null) {
+    // resetEngineForTest cleared the engine hooks; re-arm them.
+    setAmbientClassifier(ambientClassifier)
+    setRenderWriteGuard(renderWriteGuard)
+    setRenderWorldProvider(renderWorldProvider)
+  }
 }
 
 declare const queueMicrotask: (fn: () => void) => void

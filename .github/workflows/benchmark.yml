@@ -21,21 +21,21 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/cosignals/**'
-      - 'packages/cosignals-arena/**'
-      - 'packages/dalien-signals'
-      - 'milomg-reactivity-benchmark'
-      - '.github/workflows/benchmark.yml'
+      - "packages/cosignals/**"
+      - "packages/cosignals-arena/**"
+      - "packages/dalien-signals"
+      - "milomg-reactivity-benchmark"
+      - ".github/workflows/benchmark.yml"
   workflow_dispatch:
     inputs:
       frameworks:
-        description: 'Framework names (quoted, space-separated), or ALL'
+        description: "Framework names (quoted, space-separated), or ALL"
         required: false
         default: '"Dalien Signals" "Alien Signals" "Cosignals" "Cosignals Arena"'
       rounds:
-        description: 'Interleaved rounds per framework'
+        description: "Interleaved rounds per framework"
         required: false
-        default: '3'
+        default: "3"
 
 concurrency:
   group: benchmark-${{ github.ref }}

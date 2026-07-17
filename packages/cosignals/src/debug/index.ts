@@ -8,5 +8,5 @@
  * `./trace`   — the tracer + the canonical TraceKind vocabulary.
  * `./inspect` — inert node peeking + Flag unpacking + graph walks.
  */
-export * from './trace.ts'
-export * from './inspect.ts'
+export * from "./trace.ts"
+export * from "./inspect.ts"

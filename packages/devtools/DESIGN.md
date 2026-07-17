@@ -13,12 +13,12 @@ fx2-dalien, strata, concurrent-solid-react). Two hosts, one React UI:
 Two views, each anchored to one question:
 
 1. **Graph** — a searchable node list plus the live dependency graph.
-   *Use case: "things are slow — why?"*
+   _Use case: "things are slow — why?"_
 2. **Log** (internally: the event log; the tab says "Log" and copy says
-   "entries" — "event" reads as *browser event* to newcomers) — the causal
-   trace: what happened, and *why* (cause chains).
-   *Use case: "something strange happened in the UI — what happened in the
-   signal graph?"* Empty states and placeholders state these questions.
+   "entries" — "event" reads as _browser event_ to newcomers) — the causal
+   trace: what happened, and _why_ (cause chains).
+   _Use case: "something strange happened in the UI — what happened in the
+   signal graph?"_ Empty states and placeholders state these questions.
 
 Scale target: **graphs up to ~100k nodes** and rings of hundreds of thousands
 of events must stay usable. The design rule that follows: the frontend never
@@ -66,7 +66,7 @@ connects, then streams messages.
 - **Inline host**: panel imports the hook directly — same-realm function calls,
   no serialization needed (values inspected live).
 - **Extension host**: `page hook → window.postMessage → content script →
-  chrome.runtime port → devtools panel`. Everything crossing this boundary is
+chrome.runtime port → devtools panel`. Everything crossing this boundary is
   structured-clone-safe; values become previews (see §3).
 
 The panel code never knows which transport it's on; it talks to a `Backend`
@@ -80,13 +80,17 @@ surface; the adapter (in-page, next to the engine) does the walking:
 ```ts
 interface Backend {
   counts(): { nodes: number; byKind: Record<NodeKind, number>; events: number }
-  search(query: string, cap: number): GraphNode[]        // label/kind match, capped
-  node(id: number): NodeDetails                          // inspector payload, incl. §4 summaries
-  neighbors(id: number, dir: 'up'|'down', depth: number, cap: number):
-    { nodes: GraphNode[]; edges: GraphEdge[]; truncated: FrontierStub[] }
-  subscribeEvents(filter: EventFilter, cb): Unsubscribe   // filter pushed down: node id, kind class
+  search(query: string, cap: number): GraphNode[] // label/kind match, capped
+  node(id: number): NodeDetails // inspector payload, incl. §4 summaries
+  neighbors(
+    id: number,
+    dir: "up" | "down",
+    depth: number,
+    cap: number,
+  ): { nodes: GraphNode[]; edges: GraphEdge[]; truncated: FrontierStub[] }
+  subscribeEvents(filter: EventFilter, cb): Unsubscribe // filter pushed down: node id, kind class
   causeChain(eventId: number): DevtoolsEvent[]
-  inspectValue(nodeId: number, path: string[]): ValuePreview  // lazy expansion
+  inspectValue(nodeId: number, path: string[]): ValuePreview // lazy expansion
 }
 ```
 
@@ -97,7 +101,7 @@ a BFS over the live graph is cheap in-page; shipping 100k nodes is not.
 ### Message flow
 
 - **Graph**: no global snapshot. The panel subscribes to deltas for the
-  *visible node set only* (`node-touched`, `edges-changed`, `node-removed`);
+  _visible node set only_ (`node-touched`, `edges-changed`, `node-removed`);
   the adapter filters at the source.
 - **Events**: batched and flushed on microtask/frame — never one postMessage
   per trace record. Packed tracers (cosignals-first-draft) can ship sealed Int32Array
@@ -108,29 +112,32 @@ a BFS over the live graph is cheap in-page; shipping 100k nodes is not.
 ## 3. Protocol (normalized types)
 
 ```ts
-type NodeKind = 'atom' | 'computed' | 'effect' | 'watcher'
+type NodeKind = "atom" | "computed" | "effect" | "watcher"
 
 interface GraphNode {
-  id: number            // adapter-scoped; (engineId, id) is globally unique
+  id: number // adapter-scoped; (engineId, id) is globally unique
   kind: NodeKind
-  label: string | null  // user-assigned name; null → "atom#12"
-  owner?: string        // owning component, e.g. "<TodoFooter>" (see Ownership below)
-  status?: 'suspended' | 'error'  // absent = ok. From fx2 AsyncSuspended/AsyncError
-                                  // flags, strata suspense state, spec suspend/settle
+  label: string | null // user-assigned name; null → "atom#12"
+  owner?: string // owning component, e.g. "<TodoFooter>" (see Ownership below)
+  status?: "suspended" | "error" // absent = ok. From fx2 AsyncSuspended/AsyncError
+  // flags, strata suspense state, spec suspend/settle
   statusDetail?: string // error message preview, or what the node is awaiting
   valuePreview?: string // short serialized preview, extension-safe
-  meta?: Record<string, string | number>  // library extras: log depth, root, runs…
+  meta?: Record<string, string | number> // library extras: log depth, root, runs…
 }
 
-interface GraphEdge { from: number; to: number }   // dep → sub (data flows from→to)
+interface GraphEdge {
+  from: number
+  to: number
+} // dep → sub (data flows from→to)
 
 interface DevtoolsEvent {
-  id: number            // dense, monotonic per engine
-  kind: string          // library vocabulary passed through, e.g. 'write', 'render-start'
-  cause: number         // provoking event id; 0 = operation root
-  t: number             // µs since trace start (from dt deltas or wall clock)
-  node: number | null   // node this event is about; UI shows its label ("name" column)
-  data: Record<string, unknown>  // kind-specific fields, passed through
+  id: number // dense, monotonic per engine
+  kind: string // library vocabulary passed through, e.g. 'write', 'render-start'
+  cause: number // provoking event id; 0 = operation root
+  t: number // µs since trace start (from dt deltas or wall clock)
+  node: number | null // node this event is about; UI shows its label ("name" column)
+  data: Record<string, unknown> // kind-specific fields, passed through
 }
 ```
 
@@ -146,7 +153,7 @@ protocol gives the UI enough to color/filter without flattening cosignals-first-
 ### Origins: DOM events and stacks
 
 Cause chains should not stop at the first write — the interesting root is
-usually *user input* and *the code that called `set`*:
+usually _user input_ and _the code that called `set`_:
 
 - **DOM event capture**: no listeners needed — when an operation root records,
   the adapter reads `window.event` (the event currently being dispatched) and,
@@ -204,7 +211,7 @@ expandable in place.
 - Static columns (name/kind/owner) sort adapter-side over the full node set,
   paged. Trace-derived columns (recomputes, unchanged, cost) rank over the
   ring-active subset — sorting by them answers "who churned the most
-  *recently*", which is the question that matters and keeps 100k-node sort off
+  _recently_", which is the question that matters and keeps 100k-node sort off
   the bridge.
 - Row click selects (focuses the graph, fills the inspector and drawer).
 
@@ -244,7 +251,7 @@ The canvas never draws the whole graph. It draws a **focus set**:
 No lens/mode switch — every feature is always active. Node color always
 encodes kind; each node box carries its live stats inline on its second line
 (value preview · evals in ring · last eval µs · memo-hit ratio), and the node
-list columns are the way to *rank* by a metric. Liveness pulses, the causal
+list columns are the way to _rank_ by a metric. Liveness pulses, the causal
 thread, and stat badges all coexist.
 
 ### Suspended and errored computeds
@@ -287,13 +294,13 @@ subscription covers only visible nodes, so this costs nothing at 100k.
 - **Value**: preview + lazy path expansion (`inspectValue`).
 - **Evaluation**: last recompute (id, µs, depth, world), `equals` fn, and the
   **reads bar**. Framing rule: every stat is a share of ONE beginner-legible
-  denominator — *times this value was read*. A read is answered three ways:
-  - *from cache* — nothing had changed; no work. ("cache" over "memo": every
+  denominator — _times this value was read_. A read is answered three ways:
+  - _from cache_ — nothing had changed; no work. ("cache" over "memo": every
     developer knows caches; only React people know memo.)
-  - *recomputed — same result* — ran the function, got an equal value,
+  - _recomputed — same result_ — ran the function, got an equal value,
     downstream work stopped here. Paired with the saving estimate ("~258µs
     downstream avoided"). Only a smell when the recompute itself is slow.
-  - *recomputed — new result* — ran and propagated.
+  - _recomputed — new result_ — ran and propagated.
 
   Presentation: counts + percentages together ("12× from cache · 57%"), never
   a bare percentage — earlier drafts ("hit 57% · changed 67%") mixed two
@@ -304,16 +311,17 @@ subscription covers only visible nodes, so this costs nothing at 100k.
   identity every time, defeating caching downstream), it gets an **unstable
   badge** with a full-sentence tooltip naming the fix — the stat surfaces
   only when actionable.
+
 - **Last eval / last render causality**: the cause chain of the most recent
   eval (computed) or delivery/render (watcher) is shown inline, always — no
   "why?" button to click.
 - **Upstream** (direct deps list, then transitive summary): total transitive
-  atom count, and *top recompute causes* — root-write atoms ranked by how many
+  atom count, and _top recompute causes_ — root-write atoms ranked by how many
   of this node's evals their writes caused (attribution: walk each eval
   event's cause chain to its root write; count per atom).
 - **Downstream** (direct subs list, then transitive summary): transitive
   counts by kind, **cost per change** — mean total µs of all events caused by
-  a change of this node — and *most expensive downstream*: downstream nodes
+  a change of this node — and _most expensive downstream_: downstream nodes
   ranked by µs attributable to this node's changes (same chain-walk
   attribution, summing `eval`/effect durations).
 - All attribution stats are computed frontend-side from the trace ring and are
@@ -345,7 +353,7 @@ causality panel.
 
 Two orderings, toggled in the controls; same rows, same columns:
 
-- **Tree** (default): events nest by causal parent — the table *is* the
+- **Tree** (default): events nest by causal parent — the table _is_ the
   consequence tree:
 
 ```
@@ -390,7 +398,7 @@ Every event's consequence subtree is known, so its cost is too. Two surfaces:
 - **Operation headers** roll up: event count, evals (+µs), components
   re-rendered (delivery targets + render-pass µs), effects run (+µs), total µs.
 - **Causality panel → Impact** for the selected event: what it caused
-  *directly* (children), and *ultimately* (full subtree) — broken out as
+  _directly_ (children), and _ultimately_ (full subtree) — broken out as
   evals / re-rendered components (named, with render time) / effects, each
   with summed durations. For a leaf: "causes nothing further", plus the
   containing operation's totals for context.
@@ -398,12 +406,13 @@ Every event's consequence subtree is known, so its cost is too. Two surfaces:
 Computed frontend-side: walk the consequence subtree, sum `eval`/effect/render
 durations, collect delivery targets. Render time attribution uses the
 `render-start`→`render-end` span of passes inside the subtree.
+
 - Columns: `#` · **when** · kind · name · outcome · **took** (trailing —
-  reading order ends on the number). *When* is the start moment with ONE
+  reading order ends on the number). _When_ is the start moment with ONE
   anchor and ONE format for every row: time since recording started
   (`12.414ms`) — mixing absolute and `+offset` formats in one column failed
   review. The offset-into-operation reading lives in the causality panel
-  ("+83µs into the operation") and hover detail. *Took* is the duration
+  ("+83µs into the operation") and hover detail. _Took_ is the duration
   where one exists (recomputes, effects, render passes, whole batches,
   suspensions-so-far); blank means effectively instant. Durations never
   ride inside the outcome text.
@@ -467,7 +476,7 @@ friendly label):
   the signals side — "transaction", "action" — failed review because the fix
   was never renaming; it was assigning each side its own word and banning
   the overlap.)
-  **What's internal vs. structure**: batch-*begin* is visible — it carries the
+  **What's internal vs. structure**: batch-_begin_ is visible — it carries the
   action name, i.e. user intent, and forms the tree skeleton. Only the entries
   with no user intent and no user-felt effect — settle, retire, slot
   claim/release, clock sync — are **internals**: kindClass `system`, hidden by
@@ -478,16 +487,16 @@ friendly label):
   `startTransition` from `useTransition` from a library transition API). The adapter wraps/instruments `startTransition`; changes made
   inside nest under it, and the resulting non-urgent render pass displays as
   a **transition render pass** — with its yields/resumes visible and, when
-  React throws the work away, a *discarded* disposition linked back to the
+  React throws the work away, a _discarded_ disposition linked back to the
   transition ("why did my UI never show that state?"). Timeline draws
   transition passes hatched to distinguish them from urgent passes.
 - **Effect entries display the creating API** — same rule as set/update:
   `effect` (library `effect()`) vs `useSignalEffect` (component hook), owner
   as the secondary signal (`document.title · <TodoFooter>`); tooltips state
-  explicitly that `useSignalEffect` is *not* React's `useEffect`.
+  explicitly that `useSignalEffect` is _not_ React's `useEffect`.
 - **Events → Log**; copy says "entries" ("event" reads as browser event).
-- Memo outcomes: *from cache / recomputed — same result / recomputed — new
-  result*, all shares of one denominator: reads.
+- Memo outcomes: _from cache / recomputed — same result / recomputed — new
+  result_, all shares of one denominator: reads.
 
 ### "Why this …" phrasing
 
@@ -498,8 +507,8 @@ this suspended" — never "last X caused by" or "cause chain".
 ### Tooltips (required, everywhere)
 
 Every stat label, column header, kind chip, badge, and section heading
-carries a tooltip with three parts — *what it is*, *why it'd matter*, *what
-to do about it*. E.g. **unchanged**: "Share of recomputes that produced the
+carries a tooltip with three parts — _what it is_, _why it'd matter_, _what
+to do about it_. E.g. **unchanged**: "Share of recomputes that produced the
 same value as before — downstream work stopped there. Only a problem if this
 node's recompute is itself slow; then consider splitting it or memoizing its
 inputs." Elements with tooltips get a dotted underline + help cursor so
@@ -515,7 +524,7 @@ the component (one source, both hosts).
 Same information, one shape, everywhere:
 
 - **Every row on every surface** (log tree, node drawer, node list) reads as a
-  sentence: *when · took · verb chip · name · outcome* — one concept per
+  sentence: _when · took · verb chip · name · outcome_ — one concept per
   column: when it happened, how long it ran, who did what, what came of it. The **outcome** column is plain
   words ("scheduled re-render", "new result · 14µs", `5 → 4`); raw library
   fields (slot/seq/pin/maskSize) demote to internals and tooltips.
@@ -566,7 +575,7 @@ Banned in user-facing text (→ replacement):
   bare mixed-denominator percentages → counts + the reads denominator ·
   box-drawing tree glyphs → CSS guides.
 
-Allowed exceptions: CSS class names (invisible); tooltips *explaining* an API
+Allowed exceptions: CSS class names (invisible); tooltips _explaining_ an API
 by name (`startTransition, useTransition, …`); raw library fields under the
 internals filter.
 
@@ -580,7 +589,7 @@ everywhere; color = who acted; **when** = start moment and **took** = duration
 — durations never appear inside outcome text.
 
 Non-events are not events. The equality cutoff — a value recomputes to the
-same result, so nothing downstream fires — is the *normal mechanism* of
+same result, so nothing downstream fires — is the _normal mechanism_ of
 reactivity, not an occurrence. A React tracer doesn't log "memo returned the
 same value"; neither do we. It appears only as an **opt-in per-node stat** (the
 reads/memo bar), never as a log entry, a timeline mark, or an operation-header
@@ -618,6 +627,7 @@ tree/flat toggle and filters). The developer copies, pastes into their agent
 chat, and asks.
 
 The serialization is what makes this work, so it carries more than the screen:
+
 - cause chain + consequence structure (ids, parent links), value diffs,
   timings, event kinds, impact rollups;
 - **name-optional + structure-rich**, so it survives minified prod. Where
@@ -678,8 +688,8 @@ trace it's observing), and **ship a Chrome DevTools panel**.
 
 - **`protocol/`** — pure data, no DOM, no signals: `GraphNode` / `GraphEdge` /
   `DevtoolsEvent`, `kindClass()`, the `Backend` interface, wire messages. This
-  is the firewall: it's modeled on the *causal shape* (entry `{id, kind, cause,
-  node, data, t}`), not on fx2's ~5 kinds nor cosignals-first-draft's ~31. Unknown kinds
+  is the firewall: it's modeled on the _causal shape_ (entry `{id, kind, cause,
+node, data, t}`), not on fx2's ~5 kinds nor cosignals-first-draft's ~31. Unknown kinds
   pass through to a default class; the panel renders what's present and
   degrades for what isn't.
 - **`collector/` (in-page, plain JS, zero signals)** — owns the ring buffer of
@@ -702,16 +712,17 @@ trace it's observing), and **ship a Chrome DevTools panel**.
 Strategy (per the leading-impl decision): **fx2's own trace-kind strings ARE
 the vocabulary, renamed at the source to match its public API, and the panel
 shows them verbatim.** No mapping/translation table at runtime. The adapter's
-*only* transformations are (1) unpacking `Flag` bitfields into a kind + status,
+_only_ transformations are (1) unpacking `Flag` bitfields into a kind + status,
 (2) assigning node identity, (3) reading values through `untracked`. Event
 strings, ids, and `cause` links pass straight through.
 
 Verified by reading the code (both earlier "unknowns" are already satisfied):
+
 - **Computed re-evaluation is traced**: `traceHook('compute', node, …)` fires
   right before `node.fn()` (graph.ts:1390, worlds.ts:856) — only on real
   evaluation, not on cache hits. Nothing to add.
 - **State is peekable inertly — but not through the value API.** `node.value`
-  holds the last-computed value *even when stale*, `node.throwable` holds the
+  holds the last-computed value _even when stale_, `node.throwable` holds the
   ErrorBox (AsyncError) or Suspension (AsyncSuspended), and `node.flags` holds
   kind + staleness + async status. Those are plain field reads: zero side
   effects. Calling the reactive read (`read(x)` — even wrapped in
@@ -720,13 +731,14 @@ Verified by reading the code (both earlier "unknowns" are already satisfied):
   reads through the API; it reads the cached fields. fx2 should expose one
   tiny inert accessor — `inspect(node) → { value, status, throwable, stale }`
   — so the devtools doesn't reach into private fields. This is how stale
-  values, errors, and suspensions are read *without* forcing recompute.
+  values, errors, and suspensions are read _without_ forcing recompute.
 - **Identity**: `nodeOf(x)` gives the node; there's no global registry or
   stable id, so the adapter assigns a monotonic id in a `Map` keyed on the
   node object (register-on-create + one backfill walk). Entry ids reuse fx2's
   `TraceEventId` (already monotonic) so `cause` needs no remapping.
 
 Current core trace kinds and the proposed rename (done in fx2 source):
+
 - `write` → **`set`** / **`update`** — the intent (`'set'`/`'update'`) is
   already known at the write site (`appendUrgentIntent(atom, 'set'|'update')`);
   thread it into the emit. `update` even has `previous` in hand for a diff.
@@ -745,6 +757,7 @@ Current core trace kinds and the proposed rename (done in fx2 source):
 
 What must be **added** to fx2 (the React binding emits **no** trace events
 today — confirmed):
+
 - In `src/react/` (CosignalsProvider, host, transitions): emit
   **`notify`** (a watcher delivery — the `deliver` path), **`render`** (pass
   start), **`commit`**, and tag transition-opened drafts. These concepts exist
@@ -755,6 +768,7 @@ today — confirmed):
   eval/hit counter, so the memo bar's "from cache" bucket isn't derivable
   today. Add lightweight per-node counters (read via `untracked`), or ship the
   bar with only compute→same / compute→changed until then.
+
 ### Reading model — no observer effect
 
 Two sources of truth, split by what each is good for:
@@ -788,15 +802,16 @@ main entry. Two reasons, the second more important than the first:
 
 - **Opt-in / tree-shaken.** A prod app that doesn't debug never pulls the
   tracer, `inspect`, graph-walk, or Flag-unpack code into its bundle.
-- **It's the stable contract.** `./debug` is *inside* fx2, so it can read
+- **It's the stable contract.** `./debug` is _inside_ fx2, so it can read
   private node fields (`node.value`, `node.throwable`, `node.flags`) and know
   the `Flag` bits — but it exposes stable shapes (`inspect(node) → {value,
-  status, throwable, stale}`, a `TraceKind` union, dep/sub walkers). The
+status, throwable, stale}`, a `TraceKind` union, dep/sub walkers). The
   devtools imports **only** `signals-royale-fx2/debug`, never core internals,
   so fx2 can refactor internals freely as long as `./debug` holds. This is the
   encapsulation that keeps "no reaching into private fields" true.
 
 Structure:
+
 - `./debug/trace` — the Tracer, `TraceEvent`, and the canonical **`TraceKind`
   union** (the renamed strings live here as the one source of vocabulary; the
   devtools' `kindClass()` is built against it — no separate mapping).

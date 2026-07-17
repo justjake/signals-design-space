@@ -65,7 +65,7 @@ pnpm install                               # link: overrides resolve to the buil
   version comes from `vendor/react/.nvmrc` via mise when available.
 - The workspace consumes the artifacts through `pnpm.overrides` in the root
   `package.json` (`react`/`react-dom`/`scheduler` → `link:vendor/react/
-  build/oss-experimental/*`). `link:` means a rebuild is picked up without
+build/oss-experimental/*`). `link:` means a rebuild is picked up without
   re-running `pnpm install`. No current workspace member depends on react;
   the override binds future `libs/`/`packages/` consumers to the fork.
 

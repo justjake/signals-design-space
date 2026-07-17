@@ -79,7 +79,7 @@ negotiable.
   **untracked**.
 - **Lifetime effects (observed lifecycle)**: an atom option
   `effect: (ctx) => cleanup?` that runs when the atom gains its first subscriber of
-  *any* kind (computed chain, effect, or React component) and whose cleanup runs when
+  _any_ kind (computed chain, effect, or React component) and whose cleanup runs when
   the last subscriber of every kind is gone. Exactly one active observation across
   the union of kinds; observe/unobserve flaps within a tick coalesce (microtask
   debounce is fine); StrictMode double-mount nets to one. Use case: wire an atom to a
@@ -174,14 +174,14 @@ catching third-party ones).
 
 ## Required verification (run these yourself; all green before you claim done)
 
-| Gate | How |
-|---|---|
-| Typecheck | `pnpm typecheck` in both packages (tsc --noEmit, strict, extends repo `tsconfig.base.json`). |
-| Engine conformance — **179/179** | Depend on `reactive-framework-test-suite@0.0.2` (npm). Copy the ~60-line wiring shape from `harness/conformance/conformance.spec.ts` into your tests. Implement `untracked` so nothing skips. |
-| Your own randomized oracle | Write a naive model of YOUR semantics (per-atom write history, memo-free rederivation, world folds) and fuzz your engine against it — the alt-a/alt-b pattern. ≥300 seeds × ~90 steps default, seed count env-tunable, failures print seed + shrunk schedule. Pin found bugs as named regression tests. |
-| Real-React gate | Your own vitest suite against YOUR fork build (jsdom per-file pragma, raw `createRoot` + `act` from `react`, `IS_REACT_ACT_ENVIRONMENT = true`, no RTL — repo convention). Must cover the scenario list below. |
-| Fork protocol tests | Jest suites inside your React checkout (`yarn test --no-watchman <yourSuites>`) covering your protocol's invariants (the incumbent pinned: exactly-once retirement, pass frames, commit reporting, lane pinning — pin the equivalents for YOUR protocol). Upstream suites adjacent to files you touched must stay green. |
-| Leak audit | A GC test (`--expose-gc`, `pool: 'forks'` vitest) proving dropped handles reclaim and quiescence leaves no per-episode state. |
+| Gate                             | How                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Typecheck                        | `pnpm typecheck` in both packages (tsc --noEmit, strict, extends repo `tsconfig.base.json`).                                                                                                                                                                                                                             |
+| Engine conformance — **179/179** | Depend on `reactive-framework-test-suite@0.0.2` (npm). Copy the ~60-line wiring shape from `harness/conformance/conformance.spec.ts` into your tests. Implement `untracked` so nothing skips.                                                                                                                            |
+| Your own randomized oracle       | Write a naive model of YOUR semantics (per-atom write history, memo-free rederivation, world folds) and fuzz your engine against it — the alt-a/alt-b pattern. ≥300 seeds × ~90 steps default, seed count env-tunable, failures print seed + shrunk schedule. Pin found bugs as named regression tests.                  |
+| Real-React gate                  | Your own vitest suite against YOUR fork build (jsdom per-file pragma, raw `createRoot` + `act` from `react`, `IS_REACT_ACT_ENVIRONMENT = true`, no RTL — repo convention). Must cover the scenario list below.                                                                                                           |
+| Fork protocol tests              | Jest suites inside your React checkout (`yarn test --no-watchman <yourSuites>`) covering your protocol's invariants (the incumbent pinned: exactly-once retirement, pass frames, commit reporting, lane pinning — pin the equivalents for YOUR protocol). Upstream suites adjacent to files you touched must stay green. |
+| Leak audit                       | A GC test (`--expose-gc`, `pool: 'forks'` vitest) proving dropped handles reclaim and quiescence leaves no per-episode state.                                                                                                                                                                                            |
 
 ### Real-React gate scenario list (minimum)
 
@@ -304,16 +304,22 @@ your two package dirs (plus the vendor/react gitlink if git insists).
 ### FrameworkAdapter (harness conformance; `royale/harness-adapter.ts`)
 
 ```ts
-export interface AdapterSignal<T> { read(): T; write(value: T): void }
-export interface AdapterComputed<T> { read(): T }
+export interface AdapterSignal<T> {
+  read(): T
+  write(value: T): void
+}
+export interface AdapterComputed<T> {
+  read(): T
+}
 export interface FrameworkAdapter {
-  name: string; // "signals-royale-<slug>"
-  signal<T>(initialValue: T): AdapterSignal<T>;
-  computed<T>(fn: () => T): AdapterComputed<T>;
-  effect(fn: () => void | (() => void)): () => void;
-  effectScope(fn: () => void): () => void;
-  startBatch(): void; endBatch(): void;
-  untracked<T>(fn: () => T): T; // implement it — skips are lost points
+  name: string // "signals-royale-<slug>"
+  signal<T>(initialValue: T): AdapterSignal<T>
+  computed<T>(fn: () => T): AdapterComputed<T>
+  effect(fn: () => void | (() => void)): () => void
+  effectScope(fn: () => void): () => void
+  startBatch(): void
+  endBatch(): void
+  untracked<T>(fn: () => T): T // implement it — skips are lost points
 }
 ```
 
@@ -321,34 +327,34 @@ export interface FrameworkAdapter {
 
 ```ts
 export interface ReactiveFramework<S = unknown> {
-  name: string; // "Royale <SLUG>"
-  createSignal(initialValue: unknown): S;
-  readSignal(signal: S): unknown;
-  writeSignal(signal: S, value: unknown): void;
-  createComputed(fn: () => unknown): S;
-  readComputed(cell: S): unknown;
-  effect(fn: () => void): void; // fn returns undefined by contract
-  withBatch(fn: () => void): void;
-  withBuild<T>(fn: () => T): T; // build inside a scope…
-  cleanup(): void;              // …and dispose it here (no leaks in the bench!)
+  name: string // "Royale <SLUG>"
+  createSignal(initialValue: unknown): S
+  readSignal(signal: S): unknown
+  writeSignal(signal: S, value: unknown): void
+  createComputed(fn: () => unknown): S
+  readComputed(cell: S): unknown
+  effect(fn: () => void): void // fn returns undefined by contract
+  withBatch(fn: () => void): void
+  withBuild<T>(fn: () => T): T // build inside a scope…
+  cleanup(): void // …and dispose it here (no leaks in the bench!)
 }
 ```
 
 ### Contender (react-seam-bench; `royale/seam-bench-adapter.ts`)
 
 ```ts
-import type { ComponentType, ReactNode } from 'react';
+import type { ComponentType, ReactNode } from "react"
 export interface CellStore {
-  useCell(i: number): number;
-  writeCell(i: number, v: number): void;
-  writeMany(updates: Array<[number, number]>): void;
-  writeManyInTransition(updates: Array<[number, number]>): void;
-  dispose(): void;
-  Provider?: ComponentType<{ children: ReactNode }>;
+  useCell(i: number): number
+  writeCell(i: number, v: number): void
+  writeMany(updates: Array<[number, number]>): void
+  writeManyInTransition(updates: Array<[number, number]>): void
+  dispose(): void
+  Provider?: ComponentType<{ children: ReactNode }>
 }
 export interface Contender {
-  name: string; // "royale-<slug>"
-  createCells(n: number): CellStore;
+  name: string // "royale-<slug>"
+  createCells(n: number): CellStore
 }
 // default-export the Contender; module load may register your runtime.
 ```
@@ -368,55 +374,62 @@ export default {
 ### RoyaleAdapter (the shared cross-entrant battery; `royale/adapter.ts`)
 
 ```ts
-export interface RoyaleHandle { dispose(): void }
+export interface RoyaleHandle {
+  dispose(): void
+}
 export interface RoyaleTraceView {
   /** Formatted causal chain from the most recent component delivery caused by
    * this signal/computed, back to its originating write or retirement. */
-  whyLastDelivery(x: unknown): string[];
-  events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>;
-  dropped(): number;
-  stop(): void;
+  whyLastDelivery(x: unknown): string[]
+  events(): Array<{ id: number; kind: string; cause?: number; error?: unknown }>
+  dropped(): number
+  stop(): void
 }
 export interface RoyaleAdapter {
-  slug: string;
+  slug: string
   // Modules from YOUR react build — the battery never imports 'react' itself.
-  React: any;
-  ReactDOMClient: { createRoot(el: Element): { render(node: unknown): void; unmount(): void } };
-  act<T>(fn: () => T | Promise<T>): Promise<undefined>;
-  flushSync(fn: () => void): void;
+  React: any
+  ReactDOMClient: { createRoot(el: Element): { render(node: unknown): void; unmount(): void } }
+  act<T>(fn: () => T | Promise<T>): Promise<undefined>
+  flushSync(fn: () => void): void
   // Lifecycle
-  register(): RoyaleHandle;   // idempotent per process
-  resetForTest(): void;       // engine reset + host registry scrub
+  register(): RoyaleHandle // idempotent per process
+  resetForTest(): void // engine reset + host registry scrub
   // Engine
-  atom<T>(initial: T | (() => T), opts?: {
-    equals?(a: T, b: T): boolean;
-    onObserved?(ctx: { get(): T; set(v: T): void }): void | (() => void);
-    label?: string;
-  }): unknown;
-  set(a: unknown, v: unknown): void;
-  update(a: unknown, fn: (prev: unknown) => unknown): void;
-  computed<T>(fn: (use: <U>(t: PromiseLike<U>) => U) => T,
-              opts?: { equals?(a: T, b: T): boolean; label?: string }): unknown;
-  read(x: unknown): unknown;
-  latest(x: unknown): unknown;
-  committed(x: unknown, container?: unknown): unknown;
-  isPending(x: unknown): boolean;
-  refresh(x: unknown): void;
-  effect(fn: () => void | (() => void)): () => void;
-  batch(fn: () => void): void;
-  untracked<T>(fn: () => T): T;
-  serialize(atoms: unknown[]): string;
-  initialize(json: string, atoms: unknown[]): void;
+  atom<T>(
+    initial: T | (() => T),
+    opts?: {
+      equals?(a: T, b: T): boolean
+      onObserved?(ctx: { get(): T; set(v: T): void }): void | (() => void)
+      label?: string
+    },
+  ): unknown
+  set(a: unknown, v: unknown): void
+  update(a: unknown, fn: (prev: unknown) => unknown): void
+  computed<T>(
+    fn: (use: <U>(t: PromiseLike<U>) => U) => T,
+    opts?: { equals?(a: T, b: T): boolean; label?: string },
+  ): unknown
+  read(x: unknown): unknown
+  latest(x: unknown): unknown
+  committed(x: unknown, container?: unknown): unknown
+  isPending(x: unknown): boolean
+  refresh(x: unknown): void
+  effect(fn: () => void | (() => void)): () => void
+  batch(fn: () => void): void
+  untracked<T>(fn: () => T): T
+  serialize(atoms: unknown[]): string
+  initialize(json: string, atoms: unknown[]): void
   // React surface
-  useValue(x: unknown): unknown;
-  useComputed<T>(fn: () => T, deps: unknown[]): T;
-  useSignalEffect(fn: () => void | (() => void)): void;
-  useIsPending(x: unknown): boolean;
-  useCommitted(x: unknown): unknown;
-  startTransitionWrite(scope: () => void): void;
+  useValue(x: unknown): unknown
+  useComputed<T>(fn: () => T, deps: unknown[]): T
+  useSignalEffect(fn: () => void | (() => void)): void
+  useIsPending(x: unknown): boolean
+  useCommitted(x: unknown): unknown
+  startTransitionWrite(scope: () => void): void
   // Royale features
-  trace(): RoyaleTraceView;                  // starts tracing
-  onDomMutation(cb: (phase: 'start' | 'stop', container: Element) => void): () => void;
+  trace(): RoyaleTraceView // starts tracing
+  onDomMutation(cb: (phase: "start" | "stop", container: Element) => void): () => void
 }
 ```
 

@@ -1,11 +1,11 @@
-import { createAtom, createComputed } from '../../packages/cosignals/src/index.ts'
-import { withWorld } from '../../packages/cosignals/src/graph.ts'
+import { createAtom, createComputed } from "../../packages/cosignals/src/index.ts"
+import { withWorld } from "../../packages/cosignals/src/graph.ts"
 import {
-	discardDraft,
-	openDraft,
-	runWithDraftWrites,
-	worldOf,
-} from '../../packages/cosignals/src/worlds.ts'
+  discardDraft,
+  openDraft,
+  runWithDraftWrites,
+  worldOf,
+} from "../../packages/cosignals/src/worlds.ts"
 
 const warmIters = Number(process.env.SMOKE_WARM ?? 50_000)
 const steadyIters = Number(process.env.SMOKE_STEADY ?? 10_000)
@@ -21,16 +21,16 @@ const world = worldOf([draft.id])
 // through the memo (memoFor/memoValid/recordSource/inheritCertificate on
 // the steady hit path).
 function readWorldComputed(): void {
-	sink ^= computed.get()
+  sink ^= computed.get()
 }
 
 for (let i = 0; i < warmIters; i++) {
-	withWorld(world, readWorldComputed)
+  withWorld(world, readWorldComputed)
 }
-console.log('@@STEADY-START')
+console.log("@@STEADY-START")
 for (let i = 0; i < steadyIters; i++) {
-	withWorld(world, readWorldComputed)
+  withWorld(world, readWorldComputed)
 }
-console.log('@@STEADY-END')
+console.log("@@STEADY-END")
 discardDraft(draft.id)
-console.log('sink:', sink)
+console.log("sink:", sink)

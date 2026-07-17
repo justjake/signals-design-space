@@ -4,9 +4,9 @@
  * that can drift from the runtime major, declare the two members this
  * package touches.
  */
-declare module 'jsdom' {
-	export class JSDOM {
-		constructor(html?: string, options?: Record<string, unknown>)
-		readonly window: Window & typeof globalThis
-	}
+declare module "jsdom" {
+  export class JSDOM {
+    constructor(html?: string, options?: Record<string, unknown>)
+    readonly window: Window & typeof globalThis
+  }
 }

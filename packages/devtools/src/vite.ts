@@ -1,4 +1,4 @@
-import type { Plugin } from 'vite'
+import type { Plugin } from "vite"
 
 /**
  * Vite plugin that lets the devtools' stack-trace links open real files with no
@@ -14,21 +14,21 @@ import type { Plugin } from 'vite'
  *   export default { plugins: [signalsDevtools()] }
  */
 export function signalsDevtools(): Plugin {
-	let root = ''
-	return {
-		name: 'cosignals-devtools',
-		apply: 'serve',
-		configResolved(config) {
-			root = config.root
-		},
-		transformIndexHtml() {
-			return [
-				{
-					tag: 'script',
-					children: `window.__SIGNALS_DEVTOOLS_PROJECT_ROOT__=${JSON.stringify(root)}`,
-					injectTo: 'head-prepend',
-				},
-			]
-		},
-	}
+  let root = ""
+  return {
+    name: "cosignals-devtools",
+    apply: "serve",
+    configResolved(config) {
+      root = config.root
+    },
+    transformIndexHtml() {
+      return [
+        {
+          tag: "script",
+          children: `window.__SIGNALS_DEVTOOLS_PROJECT_ROOT__=${JSON.stringify(root)}`,
+          injectTo: "head-prepend",
+        },
+      ]
+    },
+  }
 }

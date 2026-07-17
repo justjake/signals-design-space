@@ -1,36 +1,36 @@
 {
-	"name": "react-signals-playground",
-	"version": "0.0.0",
-	"private": true,
-	"description": "Vite + React playground that renders one shared App under one entrypoint per concurrent-signals implementation, each at its own named path; '/' redirects to the default (cosignals). App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
-	"license": "MIT",
-	"type": "module",
-	"imports": {
-		"#concurrent-signals-shim": "./src/shims/index.ts"
-	},
-	"scripts": {
-		"dev": "vite --configLoader runner",
-		"build": "vite build --configLoader runner",
-		"preview": "vite preview --configLoader runner",
-		"check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
-		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
-		"battery": "playwright test -c battery",
-		"devtools-e2e": "playwright test -c devtools-e2e"
-	},
-	"dependencies": {
-		"cosignals": "workspace:*",
-		"cosignals-arena": "workspace:*",
-		"cosignals-devtools": "workspace:*",
-		"react": "^19.2.7",
-		"react-dom": "^19.2.7"
-	},
-	"devDependencies": {
-		"@playwright/test": "1.61.1",
-		"@types/node": "24.13.2",
-		"@types/react": "^19.1.8",
-		"@types/react-dom": "^19.1.6",
-		"@vitejs/plugin-react": "6.0.2",
-		"typescript": "7.0.2",
-		"vite": "8.1.0"
-	}
+  "name": "react-signals-playground",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vite + React playground that renders one shared App under one entrypoint per concurrent-signals implementation, each at its own named path; '/' redirects to the default (cosignals). App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+  "license": "MIT",
+  "type": "module",
+  "imports": {
+    "#concurrent-signals-shim": "./src/shims/index.ts"
+  },
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --configLoader runner",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
+    "battery": "playwright test -c battery",
+    "devtools-e2e": "playwright test -c devtools-e2e"
+  },
+  "dependencies": {
+    "cosignals": "workspace:*",
+    "cosignals-arena": "workspace:*",
+    "cosignals-devtools": "workspace:*",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "24.13.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "7.0.2",
+    "vite": "8.1.0"
+  }
 }

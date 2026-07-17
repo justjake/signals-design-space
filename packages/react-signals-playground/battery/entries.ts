@@ -9,38 +9,38 @@
  * engines. The smoke spec verifies this table against the running page
  * (window.__store.holdStyle under ?test=1), so drift fails loudly.
  */
-import { implementationHref, implementations } from '../src/shims/implementations'
+import { implementationHref, implementations } from "../src/shims/implementations"
 
-export type HoldStyle = 'suspense' | 'defer-write'
+export type HoldStyle = "suspense" | "defer-write"
 
 export interface BatteryEntry {
-	/** Playwright project name; also the app tab label. */
-	readonly label: string
-	/** Shim `name` — the impl-name HUD tile must show exactly this. */
-	readonly name: string
-	/** Page path for this implementation. */
-	readonly path: string
-	/** How this implementation holds a transition open on async data. */
-	readonly holdStyle: HoldStyle
+  /** Playwright project name; also the app tab label. */
+  readonly label: string
+  /** Shim `name` — the impl-name HUD tile must show exactly this. */
+  readonly name: string
+  /** Page path for this implementation. */
+  readonly path: string
+  /** How this implementation holds a transition open on async data. */
+  readonly holdStyle: HoldStyle
 }
 
 const HOLD_STYLES: Record<string, HoldStyle> = {
-	cosignals: 'suspense',
-	'cosignals-arena': 'suspense',
+  cosignals: "suspense",
+  "cosignals-arena": "suspense",
 }
 
 export const ENTRIES: readonly BatteryEntry[] = implementations.map((impl) => {
-	const holdStyle = HOLD_STYLES[impl.label]
-	if (holdStyle === undefined) {
-		throw new Error(
-			`battery/entries.ts has no holdStyle for implementation "${impl.label}" — ` +
-				'add it here and to the expectations table',
-		)
-	}
-	return {
-		label: impl.label,
-		name: impl.name,
-		path: implementationHref(impl),
-		holdStyle,
-	}
+  const holdStyle = HOLD_STYLES[impl.label]
+  if (holdStyle === undefined) {
+    throw new Error(
+      `battery/entries.ts has no holdStyle for implementation "${impl.label}" — ` +
+        "add it here and to the expectations table",
+    )
+  }
+  return {
+    label: impl.label,
+    name: impl.name,
+    path: implementationHref(impl),
+    holdStyle,
+  }
 })

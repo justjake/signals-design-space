@@ -1,56 +1,56 @@
 {
-	"name": "cosignals-devtools",
-	"version": "0.1.0",
-	"description": "Dependency graph and causal event devtools for cosignals",
-	"private": true,
-	"type": "module",
-	"exports": {
-		"./protocol": "./src/protocol.ts",
-		"./collector": "./src/collector.ts",
-		"./cosignals": "./src/cosignals.ts",
-		"./cosignals-arena": "./src/cosignals-arena.ts",
-		"./panel": "./src/panel/mount.tsx",
-		"./button": "./src/panel/DevtoolsPanelButton.tsx",
-		"./vite": "./src/vite.ts",
-		"./engine": "./src/engine.ts"
-	},
-	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.build.json",
-		"typecheck": "tsc --noEmit",
-		"test": "vitest run",
-		"build:extension": "node scripts/build-extension.mjs"
-	},
-	"dependencies": {
-		"bippy": "^0.5.39"
-	},
-	"devDependencies": {
-		"@playwright/test": "1.61.1",
-		"@types/chrome": "^0.0.270",
-		"@types/react": "^19.1.0",
-		"@types/react-dom": "^19.1.0",
-		"@vitejs/plugin-react": "6.0.2",
-		"cosignals": "workspace:*",
-		"cosignals-arena": "workspace:*",
-		"esbuild": "^0.28.0",
-		"jsdom": "^26.0.0",
-		"react": "19.2.7",
-		"react-dom": "19.2.7",
-		"typescript": "7.0.2",
-		"vite": "8.1.0",
-		"vitest": "^3.0.0"
-	},
-	"peerDependencies": {
-		"cosignals": ">=0.1.0-0",
-		"cosignals-arena": ">=0.1.0-0",
-		"react": ">=19.0.0",
-		"react-dom": ">=19.0.0"
-	},
-	"peerDependenciesMeta": {
-		"cosignals": {
-			"optional": true
-		},
-		"cosignals-arena": {
-			"optional": true
-		}
-	}
+  "name": "cosignals-devtools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dependency graph and causal event devtools for cosignals",
+  "type": "module",
+  "exports": {
+    "./protocol": "./src/protocol.ts",
+    "./collector": "./src/collector.ts",
+    "./cosignals": "./src/cosignals.ts",
+    "./cosignals-arena": "./src/cosignals-arena.ts",
+    "./panel": "./src/panel/mount.tsx",
+    "./button": "./src/panel/DevtoolsPanelButton.tsx",
+    "./vite": "./src/vite.ts",
+    "./engine": "./src/engine.ts"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:extension": "node scripts/build-extension.mjs"
+  },
+  "dependencies": {
+    "bippy": "^0.5.39"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/chrome": "^0.0.270",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "6.0.2",
+    "cosignals": "workspace:*",
+    "cosignals-arena": "workspace:*",
+    "esbuild": "^0.28.0",
+    "jsdom": "^26.0.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "7.0.2",
+    "vite": "8.1.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "cosignals": ">=0.1.0-0",
+    "cosignals-arena": ">=0.1.0-0",
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "cosignals": {
+      "optional": true
+    },
+    "cosignals-arena": {
+      "optional": true
+    }
+  }
 }

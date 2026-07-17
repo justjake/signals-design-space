@@ -13,16 +13,16 @@ both the implementations and the record of what failed.
 
 ### Implementations
 
-| Path | What it explores |
-| --- | --- |
-| [`packages/cosignals-first-draft`](packages/cosignals-first-draft/) + [`packages/cosignals-react`](packages/cosignals-react/) | The most complete in-tree design: a packed push-pull graph, operation journals, per-render and per-root views, async resources, tracing, reclamation, and bindings to the React fork. |
-| [`packages/strata`](packages/strata/) + [`packages/reack-strata`](packages/reack-strata/) | A smaller branch/journal formulation. The graph stores committed state; React renders fold the operations belonging to their lanes over that base. |
-| [`packages/concurrent-solid-react`](packages/concurrent-solid-react/) | A minimum-evolution experiment based on Solid 2.0's double-buffered values, transitions, async graph state, and scheduler. It asks how much of an existing concurrent signals engine can be hosted by React. |
-| [`packages/cosignals-alt-a`](packages/cosignals-alt-a/) and [`packages/cosignals-alt-b`](packages/cosignals-alt-b/) | Independent implementations of the two arena specifications. They are valuable counterexamples for write-gate activation, overlays, per-world state, and fork size. |
-| [`packages/dalien-signals`](packages/dalien-signals/) | A data-oriented fork of alien-signals. Nodes and links live in an `Int32Array` arena; this is the main packed-layout baseline without the full React world model. |
-| [`libs`](libs/) | Focused kernels and A/B probes: the alien control, graph-free `sweep`, array-edge `arrayd`, the arena port, links-only and host-boundary variants, and read/hook tax probes. |
-| [`upstream-alien-signals`](upstream-alien-signals/) | The upstream semantic and performance baseline. Its compact linked push-pull core is difficult to beat across every graph shape. |
-| [`vendor/react`](vendor/react/) + [`fork`](fork/) | Upstream React sources (stable release tag) kept for reference, plus the retired fork experiment's records. The fork reported write batches, render attempts, root commits, retirement, and the DOM mutation window; the workspace now runs registry React. |
+| Path                                                                                                                          | What it explores                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`packages/cosignals-first-draft`](packages/cosignals-first-draft/) + [`packages/cosignals-react`](packages/cosignals-react/) | The most complete in-tree design: a packed push-pull graph, operation journals, per-render and per-root views, async resources, tracing, reclamation, and bindings to the React fork.                                                                       |
+| [`packages/strata`](packages/strata/) + [`packages/reack-strata`](packages/reack-strata/)                                     | A smaller branch/journal formulation. The graph stores committed state; React renders fold the operations belonging to their lanes over that base.                                                                                                          |
+| [`packages/concurrent-solid-react`](packages/concurrent-solid-react/)                                                         | A minimum-evolution experiment based on Solid 2.0's double-buffered values, transitions, async graph state, and scheduler. It asks how much of an existing concurrent signals engine can be hosted by React.                                                |
+| [`packages/cosignals-alt-a`](packages/cosignals-alt-a/) and [`packages/cosignals-alt-b`](packages/cosignals-alt-b/)           | Independent implementations of the two arena specifications. They are valuable counterexamples for write-gate activation, overlays, per-world state, and fork size.                                                                                         |
+| [`packages/dalien-signals`](packages/dalien-signals/)                                                                         | A data-oriented fork of alien-signals. Nodes and links live in an `Int32Array` arena; this is the main packed-layout baseline without the full React world model.                                                                                           |
+| [`libs`](libs/)                                                                                                               | Focused kernels and A/B probes: the alien control, graph-free `sweep`, array-edge `arrayd`, the arena port, links-only and host-boundary variants, and read/hook tax probes.                                                                                |
+| [`upstream-alien-signals`](upstream-alien-signals/)                                                                           | The upstream semantic and performance baseline. Its compact linked push-pull core is difficult to beat across every graph shape.                                                                                                                            |
+| [`vendor/react`](vendor/react/) + [`fork`](fork/)                                                                             | Upstream React sources (stable release tag) kept for reference, plus the retired fork experiment's records. The fork reported write batches, render attempts, root commits, retirement, and the DOM mutation window; the workspace now runs registry React. |
 
 ### Libraries surveyed
 
@@ -30,31 +30,31 @@ both the implementations and the record of what failed.
 The vendored sources let experiments compare algorithms instead of comparing
 README claims.
 
-| Library | Useful idea or warning |
-| --- | --- |
-| [`alien-signals`](upstream-alien-signals/) | Quad-linked dependency edges, exact dynamic-dependency trimming, and a very small dirty/check push-pull state machine. |
-| [`anod`](vendor/anod/) | Inline-first array edges, tombstones, scratch-stack retracking, level buckets, and an explicit single-dependency fast mode. Especially strong on wide graphs. |
-| [`reactively`](vendor/reactively/) | The clearest small implementation of clean/check/dirty coloring over arrays. |
-| [`Solid 2.0`](vendor/solid/) | Linked dependencies plus height-ordered scheduling, optimistic transition lanes, and pending/error as graph state. |
-| [`Svelte 5`](vendor/svelte/) | Per-node read/write versions, prefix-reused dependency arrays, and async forks. |
-| [`Preact Signals`](vendor/preact-signals/) | The quad-linked edge design alien-signals refined, a global quiet-version fast path, and lazy subscription of computed nodes. |
-| [`signia`](vendor/signia/) | Salsa-like changed/verified epochs, liveness, transactions, and bounded diff histories used in tldraw. |
-| [`cellx`](vendor/cellx/) | Intrusive dependency lists with very low per-node work; also a demonstration that removing edge objects constrains graph sharing. |
-| [`lite-signal`](vendor/lite-signal/) | Pooled linked edges and useful retracking fixes. Its abandoned typed-array version is a reminder that fewer allocations do not automatically mean faster topology changes. |
-| [`Leptos`](vendor/leptos/) | Two generations of a Rust graph: a slot-map arena and a later `Arc`/weak-edge design, with unusually clear evidence about ownership and leaks. |
+| Library                                    | Useful idea or warning                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`alien-signals`](upstream-alien-signals/) | Quad-linked dependency edges, exact dynamic-dependency trimming, and a very small dirty/check push-pull state machine.                                                     |
+| [`anod`](vendor/anod/)                     | Inline-first array edges, tombstones, scratch-stack retracking, level buckets, and an explicit single-dependency fast mode. Especially strong on wide graphs.              |
+| [`reactively`](vendor/reactively/)         | The clearest small implementation of clean/check/dirty coloring over arrays.                                                                                               |
+| [`Solid 2.0`](vendor/solid/)               | Linked dependencies plus height-ordered scheduling, optimistic transition lanes, and pending/error as graph state.                                                         |
+| [`Svelte 5`](vendor/svelte/)               | Per-node read/write versions, prefix-reused dependency arrays, and async forks.                                                                                            |
+| [`Preact Signals`](vendor/preact-signals/) | The quad-linked edge design alien-signals refined, a global quiet-version fast path, and lazy subscription of computed nodes.                                              |
+| [`signia`](vendor/signia/)                 | Salsa-like changed/verified epochs, liveness, transactions, and bounded diff histories used in tldraw.                                                                     |
+| [`cellx`](vendor/cellx/)                   | Intrusive dependency lists with very low per-node work; also a demonstration that removing edge objects constrains graph sharing.                                          |
+| [`lite-signal`](vendor/lite-signal/)       | Pooled linked edges and useful retracking fixes. Its abandoned typed-array version is a reminder that fewer allocations do not automatically mean faster topology changes. |
+| [`Leptos`](vendor/leptos/)                 | Two generations of a Rust graph: a slot-map arena and a later `Arc`/weak-edge design, with unusually clear evidence about ownership and leaks.                             |
 
 ### Evidence and tools
 
-| Path | Purpose |
-| --- | --- |
-| [`harness`](harness/) | The shared 179-case conformance runner, isolated core benchmarks, memory probes, and inlining checks. Results are invalid unless conformance is green. |
-| [`milomg-reactivity-benchmark`](milomg-reactivity-benchmark/) | The core reactivity workload suite used by the harness. Each framework runs in its own process to avoid order and JIT bias. |
-| [`packages/react-seam-bench`](packages/react-seam-bench/) | Measures what React pays: write-to-commit fan-out, urgent latency during a large transition, and mount cost. |
-| [`packages/react-signals-playground`](packages/react-signals-playground/) | One browser app running four implementations through the same shim, plus a Playwright battery and a plain-React control page. |
-| [`packages/cosignals-oracle`](packages/cosignals-oracle/) | A deliberately slow, obvious reference model, invariant checker, seeded schedule generator, shrinker, and lockstep engine referee. |
-| [`royale`](royale/) | Archived results and research notes from the independent-rewrite tournament. |
-| [`daishi-concurrent-benchmark`](daishi-concurrent-benchmark/) | An independent suite of externally observable concurrent-store failure schedules. |
-| [`spec`](spec/) | The mechanism-free [`React Compliance Contract`](spec/react-compliance-contract.md), the cosignals-first-draft spec, and the branching-store model. |
+| Path                                                                                             | Purpose                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`harness`](harness/)                                                                            | The shared 179-case conformance runner, isolated core benchmarks, memory probes, and inlining checks. Results are invalid unless conformance is green.                         |
+| [`milomg-reactivity-benchmark`](milomg-reactivity-benchmark/)                                    | The core reactivity workload suite used by the harness. Each framework runs in its own process to avoid order and JIT bias.                                                    |
+| [`packages/react-seam-bench`](packages/react-seam-bench/)                                        | Measures what React pays: write-to-commit fan-out, urgent latency during a large transition, and mount cost.                                                                   |
+| [`packages/react-signals-playground`](packages/react-signals-playground/)                        | One browser app running four implementations through the same shim, plus a Playwright battery and a plain-React control page.                                                  |
+| [`packages/cosignals-oracle`](packages/cosignals-oracle/)                                        | A deliberately slow, obvious reference model, invariant checker, seeded schedule generator, shrinker, and lockstep engine referee.                                             |
+| [`royale`](royale/)                                                                              | Archived results and research notes from the independent-rewrite tournament.                                                                                                   |
+| [`daishi-concurrent-benchmark`](daishi-concurrent-benchmark/)                                    | An independent suite of externally observable concurrent-store failure schedules.                                                                                              |
+| [`spec`](spec/)                                                                                  | The mechanism-free [`React Compliance Contract`](spec/react-compliance-contract.md), the cosignals-first-draft spec, and the branching-store model.                            |
 | [`research`](research/), [`plans`](plans/), [`reviews`](reviews/), [`design-loop`](design-loop/) | Source studies, measured results, implementation plans, adversarial reviews, and the multi-round design record. These explain why apparently simpler mechanisms were rejected. |
 
 Useful commands from the repository root:
@@ -76,21 +76,21 @@ cached function of signals. An **effect** is work that re-runs when the values i
 read may have changed.
 
 ```ts
-import { Atom, Computed, batch, effect } from 'cosignals-first-draft';
+import { Atom, Computed, batch, effect } from "cosignals-first-draft"
 
-const count = new Atom(1);
-const doubled = new Computed(() => count.state * 2);
+const count = new Atom(1)
+const doubled = new Computed(() => count.state * 2)
 
 const stop = effect(() => {
-  console.log(doubled.state);
-}); // 2
+  console.log(doubled.state)
+}) // 2
 
 batch(() => {
-  count.set(2);
-  count.set(3);
-}); // one effect run: 6
+  count.set(2)
+  count.set(3)
+}) // one effect run: 6
 
-stop();
+stop()
 ```
 
 While the computed or effect runs, the signals engine records its reads. The
@@ -114,12 +114,12 @@ coalesces notifications; it is not the same thing as a React render batch.
 
 Signals resemble React concepts, but the lifetimes differ:
 
-| Signal concept | Rough React analogy | Important difference |
-| --- | --- | --- |
-| atom/signal | `useState` | Usually exists outside any component or Fiber. |
-| computed | `useMemo` or a selector | Tracks signal reads automatically and can be shared by many consumers. |
-| effect | `useEffect` | Usually scheduled by the signals engine, so a React binding must explicitly align it with commits. |
-| dependency edge | a component dependency | React does not normally know that a component read a particular signal. |
+| Signal concept  | Rough React analogy     | Important difference                                                                               |
+| --------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| atom/signal     | `useState`              | Usually exists outside any component or Fiber.                                                     |
+| computed        | `useMemo` or a selector | Tracks signal reads automatically and can be shared by many consumers.                             |
+| effect          | `useEffect`             | Usually scheduled by the signals engine, so a React binding must explicitly align it with commits. |
+| dependency edge | a component dependency  | React does not normally know that a component read a particular signal.                            |
 
 Fine-grained frameworks such as Solid own both the signals scheduler and the DOM
 renderer. React does not. A standalone signals library therefore has to bridge
@@ -143,12 +143,12 @@ urgent work, and then restart or resume the low-priority work.
 
 These four terms are enough to follow the rest of the repository:
 
-| Term | Mental model |
-| --- | --- |
-| **Batch** | A causally related group of updates: for example, updates from one click, transition, or async action. Public React also "batches" several setters into fewer renders. This repo gives the group a stable identity because stock React does not expose one. |
-| **Lane** | A bit in React's priority/work set. Sync, input, default, transition, retry, and idle work occupy different lanes. The scheduler selects the highest-priority unblocked lanes. A lane bit can later be reused, so it is not by itself a durable update identity. |
-| **Fiber** | React's record for a component or host node. Fibers form a tree and contain props, state, update queues, dependencies, pending lanes, and effect flags. Updated Fibers normally have a `current` record and a work-in-progress `alternate`. |
-| **Commit** | The non-interruptible publication of a finished root. React applies mutation effects, swaps `root.current` to the finished Fiber tree, runs layout work, and schedules passive work. Different roots commit independently. |
+| Term       | Mental model                                                                                                                                                                                                                                                     |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Batch**  | A causally related group of updates: for example, updates from one click, transition, or async action. Public React also "batches" several setters into fewer renders. This repo gives the group a stable identity because stock React does not expose one.      |
+| **Lane**   | A bit in React's priority/work set. Sync, input, default, transition, retry, and idle work occupy different lanes. The scheduler selects the highest-priority unblocked lanes. A lane bit can later be reused, so it is not by itself a durable update identity. |
+| **Fiber**  | React's record for a component or host node. Fibers form a tree and contain props, state, update queues, dependencies, pending lanes, and effect flags. Updated Fibers normally have a `current` record and a work-in-progress `alternate`.                      |
+| **Commit** | The non-interruptible publication of a finished root. React applies mutation effects, swaps `root.current` to the finished Fiber tree, runs layout work, and schedules passive work. Different roots commit independently.                                       |
 
 A simplified update looks like this:
 
@@ -193,10 +193,10 @@ first slice, even one render can contain two generations. Both are **tearing**.
 
 There are two honest integration levels:
 
-| Integration | What it guarantees | Trade-off |
-| --- | --- | --- |
-| `useSyncExternalStore` | React reads a cached immutable snapshot, checks it again before a concurrent commit, and forces a synchronous re-render when a subscription changes. This is the correct general adapter for an ordinary external store. | Store updates are synchronous from React's point of view. A store mutation inside `startTransition` cannot remain a non-blocking transition. |
-| Concurrent-native store | The store can answer reads for a particular render attempt, knows when that attempt commits or is discarded, and schedules notifications at their causal priority. | Public React does not expose enough lifecycle information. The experiments use a small React seam plus a branchable signals engine. |
+| Integration             | What it guarantees                                                                                                                                                                                                       | Trade-off                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useSyncExternalStore`  | React reads a cached immutable snapshot, checks it again before a concurrent commit, and forces a synchronous re-render when a subscription changes. This is the correct general adapter for an ordinary external store. | Store updates are synchronous from React's point of view. A store mutation inside `startTransition` cannot remain a non-blocking transition. |
+| Concurrent-native store | The store can answer reads for a particular render attempt, knows when that attempt commits or is discarded, and schedules notifications at their causal priority.                                                       | Public React does not expose enough lifecycle information. The experiments use a small React seam plus a branchable signals engine.          |
 
 The standard adapter is not “wrong”; it chooses consistency over background
 external-store rendering. The rest of this repo studies what is required when
@@ -210,12 +210,12 @@ following is the practical checklist.
 
 1. **Classify every piece of state by lifetime.** The useful four-way split is:
 
-   | Lifetime | Examples | When it ends |
-   | --- | --- | --- |
-   | committed application state | durable atom values | never because a render was discarded |
-   | pending-batch state | transition operations and batch membership | when that batch retires |
-   | render-attempt state | a speculative dependency set, hook instance, or frozen view | when that attempt commits or is discarded |
-   | resource state | a keyed pending/settled request | according to the resource cache, not a render lane |
+   | Lifetime                    | Examples                                                    | When it ends                                       |
+   | --------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+   | committed application state | durable atom values                                         | never because a render was discarded               |
+   | pending-batch state         | transition operations and batch membership                  | when that batch retires                            |
+   | render-attempt state        | a speculative dependency set, hook instance, or frozen view | when that attempt commits or is discarded          |
+   | resource state              | a keyed pending/settled request                             | according to the resource cache, not a render lane |
 
    Putting attempt state in a durable write log leaks discarded renders into
    reality. Putting resources in positional render slots aliases requests from

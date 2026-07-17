@@ -1,30 +1,30 @@
 {
-	"name": "react-seam-bench",
-	"version": "0.0.0",
-	"private": true,
-	"description": "Benchmark of signal libraries as consumed by React: single-cell write-to-commit latency under fan-out, urgent-update latency during a large transition, and wide-tree mount cost. One contender per node process, interleaved rounds, medians.",
-	"license": "MIT",
-	"type": "module",
-	"scripts": {
-		"build": "esbuild src/child.ts src/isolated.ts --bundle --platform=node --format=esm --outdir=dist --external:jsdom",
-		"bench": "node dist/isolated.js",
-		"chart": "node src/chart.mjs",
-		"check": "tsc --noEmit -p tsconfig.json",
-		"typecheck": "tsc --noEmit -p tsconfig.json"
-	},
-	"dependencies": {
-		"alien-signals": "link:../../upstream-alien-signals",
-		"cosignals": "workspace:*",
-		"dalien-signals": "link:../dalien-signals",
-		"jsdom": "^26.1.0",
-		"react": "^19.2.7",
-		"react-dom": "^19.2.7"
-	},
-	"devDependencies": {
-		"@types/node": "24.13.2",
-		"@types/react": "^19.1.8",
-		"@types/react-dom": "^19.1.6",
-		"esbuild": "0.28.1",
-		"typescript": "7.0.2"
-	}
+  "name": "react-seam-bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Benchmark of signal libraries as consumed by React: single-cell write-to-commit latency under fan-out, urgent-update latency during a large transition, and wide-tree mount cost. One contender per node process, interleaved rounds, medians.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/child.ts src/isolated.ts --bundle --platform=node --format=esm --outdir=dist --external:jsdom",
+    "bench": "node dist/isolated.js",
+    "chart": "node src/chart.mjs",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "alien-signals": "link:../../upstream-alien-signals",
+    "cosignals": "workspace:*",
+    "dalien-signals": "link:../dalien-signals",
+    "jsdom": "^26.1.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
+  }
 }

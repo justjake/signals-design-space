@@ -40,16 +40,16 @@ Verification stance, per standing orders:
 
 What fx2 already has, what alien has, and the deltas this rebuild closes.
 
-| Concern | alien (`system.ts`) | fx2 (`graph.ts`) | Delta |
-| --- | --- | --- | --- |
-| Node record | `ReactiveNode` lines 1-7: four list heads + flags | lines 73-109: same heads + `observerCount`, `validAtGraphChange` (then on the shared record), value `version`, the React snapshot counters, `worldMemos`, `causeEvent` | none (fx2 is a superset) |
-| Link record | lines 9-17: both lists doubly linked; `version` is a tracking-pass marker | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `evalPass`, `version` | naming collision + threading decision, section 2 |
-| link() protocol | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, pass-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349) | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge |
-| Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because the lifetime-effect machinery keys on the count |
-| Propagate | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174) | recursive `mark()` (402-422): Check-only marking, causeEvent, snapshot-counter bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432) | recursion → stack bound on deep chains; traversal-bit decision, section 3 |
-| Pull validation | iterative `checkDirty` (176-237) resolving Pending via `update()` + `shallowPropagate` (239-250) | recursive `ensureFresh` (760-783): version comparison per edge; no shallowPropagate | deliberate divergence, section 5 |
-| Watched/unwatched boundary | single-tier: every edge always in both lists | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validAtGraphChange` vs the global `GraphChangeClock` (764) | promote does not validate — two verified defects, section 6 |
-| Async, worlds, tracer, clocks | absent | threaded through the same nodes | must survive unchanged, section 8 |
+| Concern                       | alien (`system.ts`)                                                                                                                                 | fx2 (`graph.ts`)                                                                                                                                                       | Delta                                                                                                                                       |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node record                   | `ReactiveNode` lines 1-7: four list heads + flags                                                                                                   | lines 73-109: same heads + `observerCount`, `validAtGraphChange` (then on the shared record), value `version`, the React snapshot counters, `worldMemos`, `causeEvent` | none (fx2 is a superset)                                                                                                                    |
+| Link record                   | lines 9-17: both lists doubly linked; `version` is a tracking-pass marker                                                                           | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `evalPass`, `version`                                                                  | naming collision + threading decision, section 2                                                                                            |
+| link() protocol               | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, pass-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349)                                             | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge                                                                   |
+| Trim after eval               | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114)                                                                 | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge                                                                           | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because the lifetime-effect machinery keys on the count |
+| Propagate                     | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174)                                                  | recursive `mark()` (402-422): Check-only marking, causeEvent, snapshot-counter bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432)                   | recursion → stack bound on deep chains; traversal-bit decision, section 3                                                                   |
+| Pull validation               | iterative `checkDirty` (176-237) resolving Pending via `update()` + `shallowPropagate` (239-250)                                                    | recursive `ensureFresh` (760-783): version comparison per edge; no shallowPropagate                                                                                    | deliberate divergence, section 5                                                                                                            |
+| Watched/unwatched boundary    | single-tier: every edge always in both lists                                                                                                        | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validAtGraphChange` vs the global `GraphChangeClock` (764)                    | promote does not validate — two verified defects, section 6                                                                                 |
+| Async, worlds, tracer, clocks | absent                                                                                                                                              | threaded through the same nodes                                                                                                                                        | must survive unchanged, section 8                                                                                                           |
 
 The name collision to keep straight: alien's `Link.version` is a
 tracking-pass marker and corresponds to fx2's `Link.evalPass`. fx2's
@@ -103,14 +103,14 @@ Decision: **no new fields; deps stay singly linked**. The record remains
 
 ```ts
 interface Link {
-  dep: ReactiveNode;
-  sub: ReactiveNode;
-  version: NodeVersion;      // dep.version at last read through this edge
-  nextDep: Link | undefined; // deps list: singly linked, first-read order
-  prevSub: Link | undefined; // subs list: doubly linked
-  nextSub: Link | undefined;
-  inSubs: boolean;           // present in dep's subs list (watched edges only)
-  evalPass: number;          // eval-pass reading (alien's Link.version role)
+  dep: ReactiveNode
+  sub: ReactiveNode
+  version: NodeVersion // dep.version at last read through this edge
+  nextDep: Link | undefined // deps list: singly linked, first-read order
+  prevSub: Link | undefined // subs list: doubly linked
+  nextSub: Link | undefined
+  inSubs: boolean // present in dep's subs list (watched edges only)
+  evalPass: number // eval-pass reading (alien's Link.version role)
 }
 ```
 
@@ -141,8 +141,8 @@ needs mid-list dep unlink, adding `prevDep` is mechanical at three sites
 link, probe `dep.subsTail`:
 
 ```ts
-const ps = dep.subsTail;
-if (ps !== undefined && ps.sub === sub && ps.evalPass === evalPass) return ps;
+const ps = dep.subsTail
+if (ps !== undefined && ps.sub === sub && ps.evalPass === evalPass) return ps
 ```
 
 This works for the same reason alien's does: cases 1/2 re-mark on reuse
@@ -183,18 +183,18 @@ Exact constants, extending the documented layout at lines 30-57:
 
 ```ts
 export const enum Flag {
-  Cell             = 0b0000_0001, // node type: writable source
-  Derived          = 0b0000_0010, // node type: cached computed
-  Watcher          = 0b0000_0100, // node type: effect or leaf observer
-  Check            = 0b0000_1000, // staleness: possibly stale; confirm dep versions
-  Dirty            = 0b0001_0000, // staleness: must recompute on next pull
-  Watched          = 0b0010_0000, // tier: back-edges installed, push marks trustworthy
-  DerivedError     = 0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
+  Cell = 0b0000_0001, // node type: writable source
+  Derived = 0b0000_0010, // node type: cached computed
+  Watcher = 0b0000_0100, // node type: effect or leaf observer
+  Check = 0b0000_1000, // staleness: possibly stale; confirm dep versions
+  Dirty = 0b0001_0000, // staleness: must recompute on next pull
+  Watched = 0b0010_0000, // tier: back-edges installed, push marks trustworthy
+  DerivedError = 0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
   DerivedSuspended = 0b1000_0000, // async: latest eval parked; Suspension in node.throwable
   StaleMask = Check | Dirty,
   AsyncMask = DerivedError | DerivedSuspended,
 }
-export type Flags = Brand<number, 'Flags'>; // the stored word (see graph.ts)
+export type Flags = Brand<number, "Flags"> // the stored word (see graph.ts)
 ```
 
 (The rebuild landed these as an erasable const object; the later hygiene
@@ -258,7 +258,7 @@ happen exactly once per wave per derived (the Clean→Check transition), same
 as today — uSES snapshots are contract.
 
 **Stale-cover invariant** (named, load-bearing): for every watched edge,
-*dep stale ⇒ sub is stale or scheduled*. Visit rule 1's early-return is sound
+_dep stale ⇒ sub is stale or scheduled_. Visit rule 1's early-return is sound
 only under it. Today it holds for edges created by evaluation — `readCell`/
 `readDerived` freshen the dep before `trackRead` links — and is violated by
 pull-less linking (`observeNode` 995-1023, promote's cascade). The rule:
@@ -334,13 +334,13 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
 3. If Derived, walk `node.deps` in list order; for each link `l`:
    a. `linkIntoSubs(l)` — install the back-edge (266-275 unchanged);
    b. `promote(l.dep)` — depth-first over the reachable dep closure. Cycles
-      are impossible: dep edges exist only after an evaluation, and cyclic
-      evaluation throws (721);
+   are impossible: dep edges exist only after an evaluation, and cyclic
+   evaluation throws (721);
    c. version-validate the edge once:
-      `edgeFresh := l.version === l.dep.version && (dep is a Cell || dep is Clean after its promote)`.
-      The version match alone is insufficient — a stale-unwatched dep has not
-      recomputed, so its version cannot have moved even if its own inputs did;
-      the dep's post-promote flags carry that information up.
+   `edgeFresh := l.version === l.dep.version && (dep is a Cell || dep is Clean after its promote)`.
+   The version match alone is insufficient — a stale-unwatched dep has not
+   recomputed, so its version cannot have moved even if its own inputs did;
+   the dep's post-promote flags carry that information up.
 4. Seed staleness: if node was Clean and any edge failed validation →
    `flags |= Check`. Dirty stays Dirty; `asyncState` untouched (value-plane).
    Where every edge validated, Clean stands — push marks are trustworthy from
@@ -364,6 +364,7 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
    incremental build; `useIsPending` over a cold computed) pays a spurious
    wake. React tolerated it (version-unchanged snapshot compare), but the wake
    was semantically wrong, and T11 caught it double-counting.
+
 6. `noteLifetimeTransition(node)` — lifetime setup coalescing unchanged.
    (This step read `hooks.observation(node, true)` when the rebuild landed;
    the lifetime machinery has since been folded into graph.ts and the hook
@@ -398,7 +399,7 @@ Rewrites `removeObserver` (303-318).
    trust Clean without `validAtGraphChange`. (It was also insufficient: probe A's
    node was never previously watched, so demote seeding never covered it.)
 6. `noteLifetimeTransition(node)` (originally `hooks.observation(node,
-   false)`; same folding note as promote step 6).
+false)`; same folding note as promote step 6).
 
 Edge versions need no demote writes: `l.version` is maintained by
 `recompute`/`readCell` in both tiers and is exactly the reading promote
@@ -588,9 +589,9 @@ directly:
 
 ```ts
 interface ResolvedState {
-  flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
-  value: unknown;    // UNINITIALIZED sentinel when no settled value exists
-  throwable?: ErrorBox | Suspension | null; // present on async memo states
+  flags: Flags // read via Flag.AsyncMask bits ONLY (node views carry more)
+  value: unknown // UNINITIALIZED sentinel when no settled value exists
+  throwable?: ErrorBox | Suspension | null // present on async memo states
 }
 ```
 

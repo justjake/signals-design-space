@@ -4,25 +4,25 @@
 
 ## Gates (claimed vs observed)
 
-| Gate | Claimed | Observed (my run) |
-|---|---|---|
-| Engine typecheck | PASS | PASS — `tsc --noEmit` clean |
-| React typecheck | PASS | PASS — `tsc --noEmit` clean |
-| Conformance | 179/179 | PASS — 179 passed (179), 210ms; wiring matches prescribed shape, `untracked` implemented |
-| Oracle default | 300×90 | PASS — 300 seeds × 90 steps, 63ms; env-tunable, prefix-shrink prints seed+schedule |
-| Oracle deep | 1200×90 | PASS — ORACLE_SEEDS=1200, 218ms |
-| Full engine suite | 190/190 | PASS — 4 files, 190 passed |
-| Leak audit | 3/3 | PASS — 3/3; genuine: WeakRef + forced gc, pool forks + --expose-gc, throws if gc missing |
-| Fork protocol + adjacent | 47 passed / 1 skipped | PASS — 5 suites, 47 passed, 1 skipped, 1.6s |
-| Pristine fork build | PASS | PASS — worktree at base e71a6393e6 + `git am` 3 patches + rollup NODE_DEV/PROD; "Built pristine React patch series at a25c16920d" |
-| Real-React entrant suite | 17/17 | PASS — 17/17, re-verified AGAIN on the pristine patch-built artifacts |
-| Shared battery typecheck | PASS | PASS |
-| Shared battery | 25/25 | PASS — 25/25 (609ms), re-verified on pristine patch-built fork (25/25) |
-| milomg adapter sanity | 8/8 | PASS — 8 passed incl. pull counts |
-| milomg table | 3.58x slower than Alien (sBench+Kairo); cellx/dynamic NOT MEASURED (hang) | Not re-run in full (shared machine); my unfiltered 1-round attempt emitted nothing before I killed it, corroborating the reported cellx hang. Claim is self-damaging; fabrication risk low |
-| react-bench | fanout 0.307 vs 0.378; transition p95 2.600 vs 2.049; mount 71.1 vs 38.0 | Reproduced: fanout,sx1,0.327 vs uSES 0.358; transition p95 sx1 0.998 vs uSES 1.216 (sx1 FASTER in my run — they disclosed noise and claimed their worse run); mount sx1 46.5 vs 36.8 |
-| Fork LOC | 476 | 476 confirmed (`git diff --numstat` base..HEAD, __tests__ excluded); diff purely additive, all inside packages/, nothing outside packages/, 126 test lines correctly excluded |
-| Lib LOC | 1295 | 1295 confirmed via canonical count-loc.mjs (runtime.ts 1053 + react index.ts 241 + index.ts 1) |
+| Gate                     | Claimed                                                                   | Observed (my run)                                                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Engine typecheck         | PASS                                                                      | PASS — `tsc --noEmit` clean                                                                                                                                                                |
+| React typecheck          | PASS                                                                      | PASS — `tsc --noEmit` clean                                                                                                                                                                |
+| Conformance              | 179/179                                                                   | PASS — 179 passed (179), 210ms; wiring matches prescribed shape, `untracked` implemented                                                                                                   |
+| Oracle default           | 300×90                                                                    | PASS — 300 seeds × 90 steps, 63ms; env-tunable, prefix-shrink prints seed+schedule                                                                                                         |
+| Oracle deep              | 1200×90                                                                   | PASS — ORACLE_SEEDS=1200, 218ms                                                                                                                                                            |
+| Full engine suite        | 190/190                                                                   | PASS — 4 files, 190 passed                                                                                                                                                                 |
+| Leak audit               | 3/3                                                                       | PASS — 3/3; genuine: WeakRef + forced gc, pool forks + --expose-gc, throws if gc missing                                                                                                   |
+| Fork protocol + adjacent | 47 passed / 1 skipped                                                     | PASS — 5 suites, 47 passed, 1 skipped, 1.6s                                                                                                                                                |
+| Pristine fork build      | PASS                                                                      | PASS — worktree at base e71a6393e6 + `git am` 3 patches + rollup NODE_DEV/PROD; "Built pristine React patch series at a25c16920d"                                                          |
+| Real-React entrant suite | 17/17                                                                     | PASS — 17/17, re-verified AGAIN on the pristine patch-built artifacts                                                                                                                      |
+| Shared battery typecheck | PASS                                                                      | PASS                                                                                                                                                                                       |
+| Shared battery           | 25/25                                                                     | PASS — 25/25 (609ms), re-verified on pristine patch-built fork (25/25)                                                                                                                     |
+| milomg adapter sanity    | 8/8                                                                       | PASS — 8 passed incl. pull counts                                                                                                                                                          |
+| milomg table             | 3.58x slower than Alien (sBench+Kairo); cellx/dynamic NOT MEASURED (hang) | Not re-run in full (shared machine); my unfiltered 1-round attempt emitted nothing before I killed it, corroborating the reported cellx hang. Claim is self-damaging; fabrication risk low |
+| react-bench              | fanout 0.307 vs 0.378; transition p95 2.600 vs 2.049; mount 71.1 vs 38.0  | Reproduced: fanout,sx1,0.327 vs uSES 0.358; transition p95 sx1 0.998 vs uSES 1.216 (sx1 FASTER in my run — they disclosed noise and claimed their worse run); mount sx1 46.5 vs 36.8       |
+| Fork LOC                 | 476                                                                       | 476 confirmed (`git diff --numstat` base..HEAD, **tests** excluded); diff purely additive, all inside packages/, nothing outside packages/, 126 test lines correctly excluded              |
+| Lib LOC                  | 1295                                                                      | 1295 confirmed via canonical count-loc.mjs (runtime.ts 1053 + react index.ts 241 + index.ts 1)                                                                                             |
 
 ## Shared battery
 

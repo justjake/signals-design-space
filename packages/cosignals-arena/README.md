@@ -24,22 +24,23 @@ TypeScript declarations compiled from this repository's TypeScript source.
 ## Core API
 
 ```ts
-import { createAtom, createComputed, effect, batch, untracked } from 'cosignals-arena';
+import { createAtom, createComputed, effect, batch, untracked } from "cosignals-arena"
 
-const count = createAtom(1);
-const double = createComputed(() => count.get() * 2);
+const count = createAtom(1)
+const double = createComputed(() => count.get() * 2)
 const stop = effect(
-  () => double.get(),              // compute: tracked, pure
-  (value) => console.log(value),   // handler: untracked side effect
-); // the handler runs now, then when the settled value changes
+  () => double.get(), // compute: tracked, pure
+  (value) => console.log(value), // handler: untracked side effect
+) // the handler runs now, then when the settled value changes
 
-count.set(2);                 // handler logs 4
-count.update((x) => x + 1);   // functional update
-batch(() => {                 // one flush for the whole callback
-  count.set(10);
-  count.set(3);               // net revert: the handler never runs
-});
-stop();
+count.set(2) // handler logs 4
+count.update((x) => x + 1) // functional update
+batch(() => {
+  // one flush for the whole callback
+  count.set(10)
+  count.set(3) // net revert: the handler never runs
+})
+stop()
 ```
 
 - **Equality:** writes that compare equal are dropped. Pass
@@ -74,6 +75,7 @@ stop();
   settled value differs. A compute error rethrows from the drain site without
   calling the handler. `effectScope(fn)` collects every effect created inside
   and returns one disposer.
+
 - **Schedules:** `effect(compute, handler, { schedule })` picks when
   signal-triggered re-runs drain: `'sync'` (default — inside the flush
   when the write settles), `'useLayoutEffect'`, or `'useEffect'` — named
@@ -99,10 +101,10 @@ order, exactly the intents the reader may see. That single rule produces
 React's updater-queue behavior:
 
 ```ts
-const n = createAtom(1);
+const n = createAtom(1)
 // transition records: update(x => x + 2)     (draft D)
 // urgent write:       update(x => x * 2)
-n.get()      // 2      — urgent skipped the draft: 1 * 2
+n.get() // 2      — urgent skipped the draft: 1 * 2
 // inside the transition: (1 + 2) * 2 = 6 — replay in dispatch order, never reorder
 ```
 
@@ -117,9 +119,9 @@ nothing extra.
 ## The read family
 
 ```ts
-count.get()        // committed state plus applied urgent writes; drafts hidden
-latest(count)      // newest intent, drafts included; never suspends
-isPending(count)   // true while newer data exists behind the shown value
+count.get() // committed state plus applied urgent writes; drafts hidden
+latest(count) // newest intent, drafts included; never suspends
+isPending(count) // true while newer data exists behind the shown value
 ```
 
 There is deliberately no `committed()` query: the committed view is
@@ -141,7 +143,7 @@ an evaluation.
 Pending and error are graph STATE, not control flow:
 
 ```ts
-const user = createComputed((use) => use(fetchUser(id.get())));
+const user = createComputed((use) => use(fetchUser(id.get())))
 ```
 
 - `use(thenable)` returns the settled value, or parks the evaluation. A
@@ -165,10 +167,10 @@ dedicated refetch API because a version bump is an ordinary write, and
 ordinary writes already do everything a refetch needs.
 
 ```ts
-const userVersion = createAtom(0);
-const user = createComputed((use) => use(fetchUser(id.get(), userVersion.get())));
+const userVersion = createAtom(0)
+const user = createComputed((use) => use(fetchUser(id.get(), userVersion.get())))
 
-userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
+userVersion.update((v) => v + 1) // refetch now; user keeps serving stale
 ```
 
 - While the new fetch is pending the computed serves its last value and
@@ -184,10 +186,10 @@ userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
 ```ts
 const price = createAtom(0, {
   onObserved: ({ get, set }) => {
-    const socket = subscribePrices(set);
-    return () => socket.close();
+    const socket = subscribePrices(set)
+    return () => socket.close()
   },
-});
+})
 ```
 
 The callback runs when the atom gains its FIRST subscriber of any kind
@@ -198,11 +200,11 @@ within a tick coalesce, so a StrictMode double-mount nets one activation.
 ## Server rendering
 
 ```ts
-import { initializeAtomState, installState, serializeAtomState } from 'cosignals-arena/ssr';
+import { initializeAtomState, installState, serializeAtomState } from "cosignals-arena/ssr"
 
-serializeAtomState([a, b]);            // or { name: atom } records
-initializeAtomState(json, [a2, b2]);   // fresh client atoms
-installState(atom, value);             // one atom
+serializeAtomState([a, b]) // or { name: atom } records
+initializeAtomState(json, [a2, b2]) // fresh client atoms
+installState(atom, value) // one atom
 ```
 
 Installing is not a write: no propagation, no equality check, and lazy
@@ -211,11 +213,11 @@ initializers do not run — the installed value satisfies the first read.
 ## Causality tracing
 
 ```ts
-const t = attachTracer({ capacity: 4096 });
+const t = attachTracer({ capacity: 4096 })
 // ... run your app ...
-t.whyLastDelivery(node); // ["#42 deliver", "#41 write \"count\"", ...]
-t.events();              // ring contents; t.dropped counts evictions
-t.stop();
+t.whyLastDelivery(node) // ["#42 deliver", "#41 write \"count\"", ...]
+t.events() // ring contents; t.dropped counts evictions
+t.stop()
 ```
 
 Every event carries a causal parent: a re-render chains to the write that
@@ -352,27 +354,38 @@ does not offer a DOM mutation window.
 ## React API
 
 ```tsx
-import { createRoot } from 'react-dom/client';
+import { createRoot } from "react-dom/client"
 import {
-  registerReactSignals, wrapCreateRoot,
-  useValue, useComputed, useSignalEffect, useSignalLayoutEffect,
-  useIsPending, useAtom,
-  startSignalTransition, useSignalTransition,
-} from 'cosignals-arena/react';
-import { createAtom } from 'cosignals-arena';
+  registerReactSignals,
+  wrapCreateRoot,
+  useValue,
+  useComputed,
+  useSignalEffect,
+  useSignalLayoutEffect,
+  useIsPending,
+  useAtom,
+  startSignalTransition,
+  useSignalTransition,
+} from "cosignals-arena/react"
+import { createAtom } from "cosignals-arena"
 
-registerReactSignals(); // stock React; idempotent
+registerReactSignals() // stock React; idempotent
 
-const root = wrapCreateRoot(createRoot)(container);
-const count = createAtom(0);
+const root = wrapCreateRoot(createRoot)(container)
+const count = createAtom(0)
 
 function Counter() {
-  const n = useValue(count);            // what this render pass sees
-  const pending = useIsPending(count);  // newer data behind the screen?
-  return <button onClick={() => count.set(n + 1)}>{n}{pending ? '…' : ''}</button>;
+  const n = useValue(count) // what this render pass sees
+  const pending = useIsPending(count) // newer data behind the screen?
+  return (
+    <button onClick={() => count.set(n + 1)}>
+      {n}
+      {pending ? "…" : ""}
+    </button>
+  )
 }
 
-startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
+startSignalTransition(() => count.update((x) => x * 2)) // draft until commit
 ```
 
 - `useValue(x)` — subscribing read; resolves what the current render pass
@@ -400,6 +413,7 @@ startSignalTransition(() => count.update((x) => x * 2)); // draft until commit
 
   Cleanup honored; StrictMode nets one; base state only — a transition
   reaches it once, at retirement.
+
 - `useIsPending(x)` — the pending probe, delivered urgently (an indicator
   must not be held hostage by the transition it indicates).
 - `useAtom(initial, opts?)` — component-owned atom, reclaimed after

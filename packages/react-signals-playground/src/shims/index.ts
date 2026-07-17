@@ -18,18 +18,18 @@
  * Every module importing this specifier waits on the top-level await, so by
  * the time any app code runs, the page's implementation is bound.
  */
-import type { ConcurrentSignalsShim } from './interface'
-import { implementations } from './implementations'
+import type { ConcurrentSignalsShim } from "./interface"
+import { implementations } from "./implementations"
 
 // First non-empty segment: '/alt-a/' and '/alt-a/index.html' → 'alt-a'. The
 // bare root never reaches this module — it serves only the redirect stub.
 // Assumes the app is served at base '/', like vite dev and vite preview here.
-const segment = window.location.pathname.split('/').find((part) => part !== '') ?? ''
+const segment = window.location.pathname.split("/").find((part) => part !== "") ?? ""
 const entry = implementations.find((impl) => impl.segment === segment)
 if (entry === undefined) {
-	throw new Error(
-		`react-signals-playground: no implementation mapped for path segment "/${segment}"`,
-	)
+  throw new Error(
+    `react-signals-playground: no implementation mapped for path segment "/${segment}"`,
+  )
 }
 
 const impl: ConcurrentSignalsShim = await entry.load()
@@ -51,11 +51,11 @@ export const createSuspending = impl.createSuspending
 // here keeps components on the single '#concurrent-signals-shim' specifier.
 // Re-exporting the table triggers no implementation loads — rows hold
 // dynamic-import thunks, and only the selected one was invoked above.
-export { implementationHref, implementations } from './implementations'
-export type { Implementation } from './implementations'
+export { implementationHref, implementations } from "./implementations"
+export type { Implementation } from "./implementations"
 export type {
-	ConcurrentSignalsShim,
-	ReadableSignal,
-	TransitionHoldStyle,
-	WritableSignal,
-} from './interface'
+  ConcurrentSignalsShim,
+  ReadableSignal,
+  TransitionHoldStyle,
+  WritableSignal,
+} from "./interface"

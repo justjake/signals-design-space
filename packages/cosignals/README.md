@@ -22,35 +22,35 @@ What sets `cosignals` apart is how writes interact with React:
   value while `isPending` reports that newer data is loading.
 
 ```tsx
-import { createRoot } from "react-dom/client";
-import { createAtom, createComputed } from "cosignals";
-import { useSignal, useSignalEffect, wrapCreateRoot } from "cosignals/react";
+import { createRoot } from "react-dom/client"
+import { createAtom, createComputed } from "cosignals"
+import { useSignal, useSignalEffect, wrapCreateRoot } from "cosignals/react"
 
 // Signals live outside the tree; share them across components freely.
-const count = createAtom(0);
-const doubled = createComputed(() => count.get() * 2);
+const count = createAtom(0)
+const doubled = createComputed(() => count.get() * 2)
 
 function Counter() {
-  const n = useSignal(count); // read and subscribe: re-renders on change
-  const d = useSignal(doubled);
+  const n = useSignal(count) // read and subscribe: re-renders on change
+  const d = useSignal(doubled)
   useSignalEffect(
     () => ({
       watch: doubled,
       run: (value) => {
-        document.title = `doubled is ${value}`;
+        document.title = `doubled is ${value}`
       },
     }),
     [],
-  );
+  )
   return (
     <button onClick={() => count.update((c) => c + 1)}>
       {n} doubled is {d}
     </button>
-  );
+  )
 }
 
-const root = wrapCreateRoot(createRoot)(document.getElementById("root")!);
-root.render(<Counter />);
+const root = wrapCreateRoot(createRoot)(document.getElementById("root")!)
+root.render(<Counter />)
 ```
 
 `wrapCreateRoot` returns a `createRoot` whose `render` wraps the tree in
@@ -107,13 +107,13 @@ An **atom** stores a value you can change over time. It is like
 `useState`, but it lives outside any component:
 
 ```ts
-import { createAtom } from "cosignals";
+import { createAtom } from "cosignals"
 
-const count = createAtom(1);
-count.get(); // 1
-count.set(2); // replace the value
-count.update((n) => n + 1); // write as a function of the previous value
-count.get(); // 3
+const count = createAtom(1)
+count.get() // 1
+count.set(2) // replace the value
+count.update((n) => n + 1) // write as a function of the previous value
+count.get() // 3
 ```
 
 In React, `useSignal` reads an atom and subscribes — the component
@@ -122,12 +122,12 @@ creates a component-owned atom, made once on mount and
 garbage-collected after unmount:
 
 ```tsx
-import { useAtom, useSignal } from "cosignals/react";
+import { useAtom, useSignal } from "cosignals/react"
 
 function SearchBox() {
-  const query = useAtom(""); // this component's own atom
-  const q = useSignal(query); // subscribe to it (or to any shared atom)
-  return <input value={q} onChange={(e) => query.set(e.target.value)} />;
+  const query = useAtom("") // this component's own atom
+  const q = useSignal(query) // subscribe to it (or to any shared atom)
+  return <input value={q} onChange={(e) => query.set(e.target.value)} />
 }
 ```
 
@@ -144,7 +144,7 @@ Passing a function creates a lazy atom. The initializer runs once,
 untracked, at the first read, write, or subscription:
 
 ```ts
-const config = createAtom(() => loadConfig());
+const config = createAtom(() => loadConfig())
 ```
 
 `onObserved` runs when the atom gains its first subscriber of any kind —
@@ -156,10 +156,10 @@ double-mount nets one activation:
 ```ts
 const price = createAtom(0, {
   onObserved: ({ get, set }) => {
-    const socket = subscribePrices(set);
-    return () => socket.close();
+    const socket = subscribePrices(set)
+    return () => socket.close()
   },
-});
+})
 ```
 
 ### Reducer atoms
@@ -170,13 +170,13 @@ const price = createAtom(0, {
 and dispatch from event handlers or effects:
 
 ```ts
-import { createReducerAtom } from "cosignals";
+import { createReducerAtom } from "cosignals"
 
 const todos = createReducerAtom(
   (state: Todo[], action: TodoAction) => applyTodoAction(state, action),
   [],
-);
-todos.dispatch({ type: "add", text: "write docs" });
+)
+todos.dispatch({ type: "add", text: "write docs" })
 ```
 
 A dispatch inside a transition is recorded and replayed like a
@@ -190,13 +190,13 @@ dependencies automatically, and it recomputes only when read after a
 dependency changed:
 
 ```ts
-import { createComputed } from "cosignals";
+import { createComputed } from "cosignals"
 
-const doubled = createComputed(() => count.get() * 2);
-doubled.get(); // 6
-count.set(10);
-doubled.get(); // 20 — recomputed because count changed
-doubled.get(); // 20 — cached, the function does not run again
+const doubled = createComputed(() => count.get() * 2)
+doubled.get() // 6
+count.set(10)
+doubled.get() // 20 — recomputed because count changed
+doubled.get() // 20 — cached, the function does not run again
 ```
 
 Dependencies are dynamic: a branch not taken during an evaluation is
@@ -214,11 +214,11 @@ In React, `useComputed(fn, deps)` creates a component-owned computed.
 recreated when `deps` change:
 
 ```tsx
-import { useComputed, useSignal } from "cosignals/react";
+import { useComputed, useSignal } from "cosignals/react"
 
 function Total({ taxRate }: { taxRate: number }) {
-  const total = useComputed(() => subtotal.get() * (1 + taxRate), [taxRate]);
-  return <span>{useSignal(total)}</span>;
+  const total = useComputed(() => subtotal.get() * (1 + taxRate), [taxRate])
+  return <span>{useSignal(total)}</span>
 }
 ```
 
@@ -272,7 +272,7 @@ useSignalEffect(
     run: (q) => analytics.search(q),
   }),
   [],
-);
+)
 ```
 
 Watch a tuple or record of signals — `run` receives a container of
@@ -285,7 +285,7 @@ useSignalEffect(
     run: ([u, t]) => paintHeader(u, t),
   }),
   [],
-);
+)
 
 useSignalEffect(
   () => ({
@@ -293,7 +293,7 @@ useSignalEffect(
     run: ({ user, theme }) => paintHeader(user, theme),
   }),
   [],
-);
+)
 ```
 
 Watch a compute function — tracked while it runs, so the signals it
@@ -307,7 +307,7 @@ useSignalEffect(
     run: (route) => announcePageChange(route.title),
   }),
   [],
-);
+)
 ```
 
 Because one closure carries every capture, `react-hooks/exhaustive-deps`
@@ -333,24 +333,24 @@ non-React code. The watch source and handler are direct arguments (the
 same three watch shapes), and it returns a disposer:
 
 ```ts
-import { createEffect } from "cosignals";
+import { createEffect } from "cosignals"
 
 // one signal
-const stop = createEffect(query, (q) => syncUrl(q));
+const stop = createEffect(query, (q) => syncUrl(q))
 
 // a tuple or record of signals
-createEffect([user, theme], ([u, t]) => paintHeader(u, t));
-createEffect({ user, theme }, ({ user, theme }) => paintHeader(user, theme));
+createEffect([user, theme], ([u, t]) => paintHeader(u, t))
+createEffect({ user, theme }, ({ user, theme }) => paintHeader(user, theme))
 
 // a compute function
 createEffect(
   () => doubled.get(),
   (value, previous) => {
-    document.title = `doubled is ${value}`;
+    document.title = `doubled is ${value}`
   },
-);
+)
 
-stop(); // dispose: run the last cleanup, drop the graph edges
+stop() // dispose: run the last cleanup, drop the graph edges
 ```
 
 The tuple and record shorthands rebuild their container on every run,
@@ -385,13 +385,13 @@ work to a deterministic moment.
 one disposer for the group:
 
 ```ts
-import { effectScope } from "cosignals";
+import { effectScope } from "cosignals"
 
 const stopAll = effectScope(() => {
-  createEffect(query, (q) => syncUrl(q));
-  createEffect(theme, (t) => applyTheme(t));
-});
-stopAll();
+  createEffect(query, (q) => syncUrl(q))
+  createEffect(theme, (t) => applyTheme(t))
+})
+stopAll()
 ```
 
 Effects and scopes hold graph edges until their disposer is called;
@@ -430,10 +430,10 @@ land in the meantime, in the order they were dispatched — the same rule
 React applies to queued `useState` updaters. For a counter at 1:
 
 ```ts
-const n = createAtom(1);
+const n = createAtom(1)
 // inside a transition:  n.update((x) => x + 2)   — recorded in a draft
 // then an urgent write: n.update((x) => x * 2)   — applies immediately
-n.get(); // 2 — the screen shows 1 * 2; the draft is hidden
+n.get() // 2 — the screen shows 1 * 2; the draft is hidden
 // the transition's render sees (1 + 2) * 2 = 6, and 6 is what commits
 ```
 
@@ -443,13 +443,13 @@ pure: they can replay.
 ### useSignalTransition and startSignalTransition
 
 ```tsx
-import { useSignalTransition } from "cosignals/react";
+import { useSignalTransition } from "cosignals/react"
 
-const filter = createAtom("all");
+const filter = createAtom("all")
 
 function FilterTabs() {
-  const [pending, startTransition] = useSignalTransition();
-  const current = useSignal(filter);
+  const [pending, startTransition] = useSignalTransition()
+  const current = useSignal(filter)
   return (
     <div style={{ opacity: pending ? 0.6 : 1 }}>
       {["all", "open", "done"].map((f) => (
@@ -458,7 +458,7 @@ function FilterTabs() {
         </button>
       ))}
     </div>
-  );
+  )
 }
 ```
 
@@ -484,8 +484,8 @@ returns the settled value or parks the evaluation until the promise
 settles:
 
 ```ts
-const userId = createAtom(1);
-const user = createComputed((use) => use(fetchUser(userId.get())));
+const userId = createAtom(1)
+const user = createComputed((use) => use(fetchUser(userId.get())))
 ```
 
 What a read of an async computed returns depends on the promise:
@@ -518,12 +518,10 @@ a transition, the refetch happens inside that transition and the
 current screen holds:
 
 ```ts
-const userVersion = createAtom(0);
-const user = createComputed((use) =>
-  use(fetchUser(userId.get(), userVersion.get())),
-);
+const userVersion = createAtom(0)
+const user = createComputed((use) => use(fetchUser(userId.get(), userVersion.get())))
 
-userVersion.update((v) => v + 1); // refetch; user serves stale data while loading
+userVersion.update((v) => v + 1) // refetch; user serves stale data while loading
 ```
 
 ### isPending and useIsPending
@@ -580,16 +578,16 @@ outermost batch closes — so intermediate states never leak out, and a
 value that changes and reverts within one batch runs no effects:
 
 ```ts
-import { batch } from "cosignals";
+import { batch } from "cosignals"
 
-const firstName = createAtom("Grace");
-const lastName = createAtom("Hopper");
-const fullName = createComputed(() => `${firstName.get()} ${lastName.get()}`);
+const firstName = createAtom("Grace")
+const lastName = createAtom("Hopper")
+const fullName = createComputed(() => `${firstName.get()} ${lastName.get()}`)
 
 batch(() => {
-  firstName.set("Ada");
-  lastName.set("Lovelace");
-});
+  firstName.set("Ada")
+  lastName.set("Lovelace")
+})
 // fullName recomputed once; effects over it ran once
 ```
 
@@ -604,13 +602,13 @@ dependency list. Use it inside a watch or computed for values the
 computation uses but should not react to:
 
 ```ts
-import { untrack } from "cosignals";
+import { untrack } from "cosignals"
 
 const results = createComputed(() => {
-  const q = query.get(); // dependency
-  const limit = untrack(() => pageSize.get()); // not a dependency
-  return search(q, limit);
-});
+  const q = query.get() // dependency
+  const limit = untrack(() => pageSize.get()) // not a dependency
+  return search(q, limit)
+})
 ```
 
 `x.peek()` reads the signal's value without it becoming a dependency,
@@ -627,20 +625,16 @@ library, useful for APIs that accept either signals or plain values.
 `cosignals/ssr` moves atom state across the server/client boundary:
 
 ```ts
-import {
-  initializeAtomState,
-  installState,
-  serializeAtomState,
-} from "cosignals/ssr";
+import { initializeAtomState, installState, serializeAtomState } from "cosignals/ssr"
 
 // server, after rendering:
-const json = serializeAtomState({ count, query }); // or an array of atoms
+const json = serializeAtomState({ count, query }) // or an array of atoms
 
 // client, before hydrating:
-initializeAtomState(json, { count, query });
+initializeAtomState(json, { count, query })
 
 // or one atom at a time:
-installState(count, 42);
+installState(count, 42)
 ```
 
 Installing bypasses the write path: the value lands directly and
@@ -654,11 +648,11 @@ effects, tracers), so tests that use transitions or effects should
 reset between cases:
 
 ```ts
-import { resetEngineForTest } from "cosignals/testing";
+import { resetEngineForTest } from "cosignals/testing"
 
 beforeEach(() => {
-  resetEngineForTest();
-});
+  resetEngineForTest()
+})
 ```
 
 Existing atoms stay valid across a reset.

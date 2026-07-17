@@ -1,35 +1,35 @@
 {
-	"name": "cosignals-arena",
-	"version": "0.1.0",
-	"description": "Concurrent signals for React backed by typed-array graph storage",
-	"private": true,
-	"type": "module",
-	"exports": {
-		".": "./src/index.ts",
-		"./ssr": "./src/ssr.ts",
-		"./react": "./src/react/index.ts",
-		"./debug": "./src/debug/index.ts"
-	},
-	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.build.json",
-		"typecheck": "tsc --noEmit",
-		"test": "vitest run",
-		"fuzz": "vitest run tests/oracle-fuzz.spec.ts",
-		"bench": "node bench/react-bench.mjs"
-	},
-	"devDependencies": {
-		"@types/react": "^19.1.0",
-		"@types/react-dom": "^19.1.0",
-		"jsdom": "^26.0.0",
-		"react": "19.2.7",
-		"react-dom": "19.2.7",
-		"reactive-framework-test-suite": "0.0.2",
-		"scheduler": "0.27.0",
-		"typescript": "7.0.2",
-		"vitest": "^3.0.0"
-	},
-	"peerDependencies": {
-		"react": ">=19.0.0",
-		"react-dom": ">=19.0.0"
-	}
+  "name": "cosignals-arena",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Concurrent signals for React backed by typed-array graph storage",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ssr": "./src/ssr.ts",
+    "./react": "./src/react/index.ts",
+    "./debug": "./src/debug/index.ts"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fuzz": "vitest run tests/oracle-fuzz.spec.ts",
+    "bench": "node bench/react-bench.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "jsdom": "^26.0.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "reactive-framework-test-suite": "0.0.2",
+    "scheduler": "0.27.0",
+    "typescript": "7.0.2",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  }
 }

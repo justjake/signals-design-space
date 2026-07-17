@@ -9,6 +9,7 @@ bindings per spec §4.** All seven §4.1 facts implemented and pinned; all
 ## Per item
 
 **1. `React.unstable_runInBatch(token, fn)` — spec fact 4, bit `1<<6`.**
+
 - **Live deferred token**: fn runs inside a transition pinned to the
   batch's own lane via a dedicated `requestTransitionLane` override in
   `ReactFiberRootScheduler` (`currentEventTransitionLane` and all its
@@ -34,7 +35,7 @@ bindings per spec §4.** All seven §4.1 facts implemented and pinned; all
   run.
 
 **Seam finding fixed under this item:** a mid-render delivery on the
-rendering lane lets React commit the completed tree *without* the
+rendering lane lets React commit the completed tree _without_ the
 delivered update (interleaved-update semantics — no pre-commit restart;
 empirically confirmed), and the S3-era finish edge reported that commit
 with an **empty delta** while the DOM visibly gained the batch's writes —
@@ -92,14 +93,14 @@ rule documented.
 
 ## Gate table
 
-| Gate | Result |
-|---|---|
-| Fork suite default (experimental) | **47/47** (16 BatchRegistry + 14 Pass + 7 Commit + 10 RunInBatch), stable ×3; supervisor re-verified |
-| Fork suite www-modern / www-classic / stable | **47/47 each** |
-| Upstream suites (15-suite set) | **145 passed, 1 pre-existing skip** |
-| `yarn linc` / `yarn prettier-check` / `yarn flow dom-node` | pass |
-| `yarn extract-errors` | code **605** assigned |
-| `fork/build-react.sh` | **`Built: 19.3.0 (56178d8c13)`** — artifact smoke: `capabilities === 511` both sides; `unstable_runInBatch` exercised through the built pair |
+| Gate                                                       | Result                                                                                                                                       |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fork suite default (experimental)                          | **47/47** (16 BatchRegistry + 14 Pass + 7 Commit + 10 RunInBatch), stable ×3; supervisor re-verified                                         |
+| Fork suite www-modern / www-classic / stable               | **47/47 each**                                                                                                                               |
+| Upstream suites (15-suite set)                             | **145 passed, 1 pre-existing skip**                                                                                                          |
+| `yarn linc` / `yarn prettier-check` / `yarn flow dom-node` | pass                                                                                                                                         |
+| `yarn extract-errors`                                      | code **605** assigned                                                                                                                        |
+| `fork/build-react.sh`                                      | **`Built: 19.3.0 (56178d8c13)`** — artifact smoke: `capabilities === 511` both sides; `unstable_runInBatch` exercised through the built pair |
 
 ## Commits (b6da053b10 → 56178d8c13)
 
@@ -125,7 +126,7 @@ polish.
    `unstable_getCurrentWriteBatch(): number` (0 = none, bit 0 = deferred);
    `unstable_isCurrentWriteDeferred()`; `unstable_getRenderContext()`;
    `unstable_externalRuntimeProtocol` (`{version: 1, capabilities: 511,
-   providerProtocols}` — assert 511 or the specific bits needed).
+providerProtocols}` — assert 511 or the specific bits needed).
 2. **Deliver at the yield edge directly**: the `onRenderPassYield`
    listener runs outside RenderContext — the binding may call
    `runInBatch` synchronously inside it (pinned). `onRootCommitted`/

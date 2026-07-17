@@ -66,6 +66,7 @@ pnpm -C harness typecheck
 ```
 
 Tips:
+
 - During development, run single suites (`--suites kairo`) — a full
   `bench` for one framework takes several minutes; `sbench` and `dynamic`
   are the slow ones.
@@ -80,7 +81,7 @@ Tips:
 - **Conformance**: `FRAMEWORK=<you> pnpm -C harness conformance` exits 0 with
   **179 passed** (the suite has 179 cases; alien-v3 passes all 179 — verified
   at harness creation). If your library does not export `untracked`, the 7
-  "Untracked / Unsampled Reads" cases still *pass* (they self-skip via
+  "Untracked / Unsampled Reads" cases still _pass_ (they self-skip via
   `SkipTest`) — implementing `untracked` makes them real. The
   "Behavior Differences" section is part of the run and alien-v3 passes it;
   match alien's behavior.

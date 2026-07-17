@@ -6,14 +6,14 @@ One React app, six concurrent-signals implementations. Every component imports i
 
 Every implementation lives at its own named path; the bare `/` only redirects to the default (`/royale-fx2/`) — a 301 from the dev/preview servers, and the root `index.html` stub on static hosts.
 
-| path | implementation |
-| --- | --- |
-| `/royale-fx2/` | `signals-royale-fx2` (the default; `/` redirects here) |
-| `/royale-fx2-dalien/` | `signals-royale-fx2-dalien` (the typed-array arena fork) |
-| `/cosignals-first-draft/` | `cosignals-first-draft` + `cosignals-react` |
-| `/alt-a/` | `cosignals-alt-a` (`cosignals-alt-a/react` bindings) |
-| `/alt-b/` | `cosignals-alt-b` (`cosignals-alt-b/react` bindings) |
-| `/solid-react/` | `concurrent-solid-react` (Solid 2.0 core hosted in React) |
+| path                      | implementation                                            |
+| ------------------------- | --------------------------------------------------------- |
+| `/royale-fx2/`            | `signals-royale-fx2` (the default; `/` redirects here)    |
+| `/royale-fx2-dalien/`     | `signals-royale-fx2-dalien` (the typed-array arena fork)  |
+| `/cosignals-first-draft/` | `cosignals-first-draft` + `cosignals-react`               |
+| `/alt-a/`                 | `cosignals-alt-a` (`cosignals-alt-a/react` bindings)      |
+| `/alt-b/`                 | `cosignals-alt-b` (`cosignals-alt-b/react` bindings)      |
+| `/solid-react/`           | `concurrent-solid-react` (Solid 2.0 core hosted in React) |
 
 ## How the shim resolves
 

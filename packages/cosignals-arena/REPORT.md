@@ -40,11 +40,11 @@ lines.
 → **11** insertions, 0 deletions, one file (`react-reconciler/src/ReactFiberWorkLoop.js`),
 plus one jest test file (excluded by the metric). Ledger:
 
-| Lines | What | Why it cannot be userland |
-|---|---|---|
-| 5 (comment x3 + hook read + start call) at `flushMutationEffects` entry | emit window-start per commit | Stock React exposes no signal at mutation-phase entry: `getSnapshotBeforeUpdate` fires only on class fibers with pending updates (a commit caused by unrelated state bypasses any fixed component); insertion/layout effects run per-fiber inside/after the phase with no phase-entry ordering guarantee; a `MutationObserver` reports asynchronously after the fact — too late to disconnect; patching DOM prototypes observes mutations but cannot attribute them to React vs third parties, which is the entire contract. Bracketing requires standing inside the commit. |
-| 2 (blank + stop call) after the mutation loop | emit window-stop before layout effects | Same argument, exit edge: the contract is an exact bracket (user/layout/passive effects outside the window), so the stop must fire after the last host mutation and before the layout phase — a point only the reconciler reaches. |
-| 4 (blank + comment x2 + assignment) at EOF | `__FX2_REACT_PROTOCOL__ = 1` handshake | RULES requires registration to fail loudly on a stock build. Userland cannot decide whether a build will call the hook except by triggering a real commit and waiting — that is not failing loudly at registration time. One marker line makes the capability detectable (see §8 for the markerless alternative and why the marker stays). |
+| Lines                                                                   | What                                   | Why it cannot be userland                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5 (comment x3 + hook read + start call) at `flushMutationEffects` entry | emit window-start per commit           | Stock React exposes no signal at mutation-phase entry: `getSnapshotBeforeUpdate` fires only on class fibers with pending updates (a commit caused by unrelated state bypasses any fixed component); insertion/layout effects run per-fiber inside/after the phase with no phase-entry ordering guarantee; a `MutationObserver` reports asynchronously after the fact — too late to disconnect; patching DOM prototypes observes mutations but cannot attribute them to React vs third parties, which is the entire contract. Bracketing requires standing inside the commit. |
+| 2 (blank + stop call) after the mutation loop                           | emit window-stop before layout effects | Same argument, exit edge: the contract is an exact bracket (user/layout/passive effects outside the window), so the stop must fire after the last host mutation and before the layout phase — a point only the reconciler reaches.                                                                                                                                                                                                                                                                                                                                           |
+| 4 (blank + comment x2 + assignment) at EOF                              | `__FX2_REACT_PROTOCOL__ = 1` handshake | RULES requires registration to fail loudly on a stock build. Userland cannot decide whether a build will call the hook except by triggering a real commit and waiting — that is not failing loudly at registration time. One marker line makes the capability detectable (see §8 for the markerless alternative and why the marker stays).                                                                                                                                                                                                                                   |
 
 The window dispatch reads `globalThis.__FX2_MUTATION_WINDOW__` per commit —
 uninstalled cost is one null check; stock behavior is unchanged (pinned by a
@@ -52,20 +52,20 @@ fork test).
 
 ## 3. Gates (all run fresh in this session)
 
-| Gate | Command | Result |
-|---|---|---|
-| Typecheck engine | `pnpm typecheck` (packages/signals-royale-fx2-dalien) | pass (tsc --noEmit, strict) |
-| Typecheck react | `pnpm typecheck` (packages/react-signals-royale-fx2-dalien) | pass |
-| Conformance | `pnpm exec vitest run tests/conformance.spec.ts` | **179 passed (179)** |
-| Engine suite | `pnpm test` (engine) | **224 passed (224)** — includes oracle default + leak audit |
-| Oracle default | in suite | `oracle fuzz (300 seeds x 90 steps)` + 2 sabotage canaries, pass |
-| Oracle deep sweep | `ROYALE_FX2_SEEDS=1200 pnpm exec vitest run tests/oracle-fuzz.spec.ts` | `oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed` pass |
-| Leak audit | `vitest run tests/gc-leaks.spec.ts` (forks pool, --expose-gc) | 6 passed (6) |
-| Real-React gate | `pnpm test` (react pkg; raw createRoot + act, jsdom, own fork build) | **31 passed (31)** — scenarios 1–18 + host guarantees |
-| Fork protocol | `cd vendor/react && yarn test --no-watchman ReactDOMFx2MutationWindow` | `Tests: 6 passed, 6 total` |
-| Adjacent upstream | `yarn test --no-watchman ReactDOMRoot ReactFlushSync ReactTransition` | `70 passed, 1 skipped` (skip is upstream's) |
-| Pristine patches | `git am patches/*` onto `e71a6393e6` in a fresh worktree | patched tree `6d72a7a9…` == fork branch tree (bit-identical); `./build.sh` builds (`Built: 19.3.0`); gate re-run green on the fresh build |
-| Shared battery | `pnpm test` in `royale/verify-kit/battery` (ADAPTER → my `royale/adapter.ts`, links → my fork build) | **25 passed (25)** |
+| Gate              | Command                                                                                              | Result                                                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Typecheck engine  | `pnpm typecheck` (packages/signals-royale-fx2-dalien)                                                | pass (tsc --noEmit, strict)                                                                                                               |
+| Typecheck react   | `pnpm typecheck` (packages/react-signals-royale-fx2-dalien)                                          | pass                                                                                                                                      |
+| Conformance       | `pnpm exec vitest run tests/conformance.spec.ts`                                                     | **179 passed (179)**                                                                                                                      |
+| Engine suite      | `pnpm test` (engine)                                                                                 | **224 passed (224)** — includes oracle default + leak audit                                                                               |
+| Oracle default    | in suite                                                                                             | `oracle fuzz (300 seeds x 90 steps)` + 2 sabotage canaries, pass                                                                          |
+| Oracle deep sweep | `ROYALE_FX2_SEEDS=1200 pnpm exec vitest run tests/oracle-fuzz.spec.ts`                               | `oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed` pass                                                 |
+| Leak audit        | `vitest run tests/gc-leaks.spec.ts` (forks pool, --expose-gc)                                        | 6 passed (6)                                                                                                                              |
+| Real-React gate   | `pnpm test` (react pkg; raw createRoot + act, jsdom, own fork build)                                 | **31 passed (31)** — scenarios 1–18 + host guarantees                                                                                     |
+| Fork protocol     | `cd vendor/react && yarn test --no-watchman ReactDOMFx2MutationWindow`                               | `Tests: 6 passed, 6 total`                                                                                                                |
+| Adjacent upstream | `yarn test --no-watchman ReactDOMRoot ReactFlushSync ReactTransition`                                | `70 passed, 1 skipped` (skip is upstream's)                                                                                               |
+| Pristine patches  | `git am patches/*` onto `e71a6393e6` in a fresh worktree                                             | patched tree `6d72a7a9…` == fork branch tree (bit-identical); `./build.sh` builds (`Built: 19.3.0`); gate re-run green on the fresh build |
+| Shared battery    | `pnpm test` in `royale/verify-kit/battery` (ADAPTER → my `royale/adapter.ts`, links → my fork build) | **25 passed (25)**                                                                                                                        |
 
 Verbatim tails:
 
@@ -102,27 +102,27 @@ libLoc: 2239
 `node dist/isolated.js --rounds 3 "Royale FX2" "Alien Signals"` after
 registering per ROUND2 (adapter sanity: 4/4 including exact pull counts).
 
-| test | Royale FX2 | Alien Signals | ratio |
-|---|---|---|---|
-| createSignals | 1.30 | 1.43 | 0.91 |
-| createComputations | 58.60 | 90.57 | 0.65 |
-| updateSignals | 310.23 | 260.19 | 1.19 |
-| avoidablePropagation | 147.37 | 95.04 | 1.55 |
-| broadPropagation | 98.24 | 77.45 | 1.27 |
-| deepPropagation | 40.90 | 30.42 | 1.34 |
-| diamond | 113.53 | 79.21 | 1.43 |
-| mux | 91.51 | 74.03 | 1.24 |
-| repeatedObservers | 18.74 | 18.28 | 1.03 |
-| triangle | 33.97 | 22.34 | 1.52 |
-| unstable | 53.93 | 18.22 | 2.96 |
-| molBench | 14.89 | 14.35 | 1.04 |
-| cellx1000 / cellx2500 | 5.24 / 14.31 | 3.28 / 9.42 | 1.60 / 1.52 |
-| 2-10x5 lazy80% | 216.97 | 144.88 | 1.50 |
-| 6-10x10 dyn25% lazy80% | 115.22 | 99.99 | 1.15 |
-| 4-1000x12 dyn5% | 320.75 | 265.45 | 1.21 |
-| 25-1000x5 | 382.33 | 335.19 | 1.14 |
-| 3-5x500 | 94.87 | 73.58 | 1.29 |
-| 6-100x15 dyn50% | 172.90 | 150.36 | 1.15 |
+| test                   | Royale FX2   | Alien Signals | ratio       |
+| ---------------------- | ------------ | ------------- | ----------- |
+| createSignals          | 1.30         | 1.43          | 0.91        |
+| createComputations     | 58.60        | 90.57         | 0.65        |
+| updateSignals          | 310.23       | 260.19        | 1.19        |
+| avoidablePropagation   | 147.37       | 95.04         | 1.55        |
+| broadPropagation       | 98.24        | 77.45         | 1.27        |
+| deepPropagation        | 40.90        | 30.42         | 1.34        |
+| diamond                | 113.53       | 79.21         | 1.43        |
+| mux                    | 91.51        | 74.03         | 1.24        |
+| repeatedObservers      | 18.74        | 18.28         | 1.03        |
+| triangle               | 33.97        | 22.34         | 1.52        |
+| unstable               | 53.93        | 18.22         | 2.96        |
+| molBench               | 14.89        | 14.35         | 1.04        |
+| cellx1000 / cellx2500  | 5.24 / 14.31 | 3.28 / 9.42   | 1.60 / 1.52 |
+| 2-10x5 lazy80%         | 216.97       | 144.88        | 1.50        |
+| 6-10x10 dyn25% lazy80% | 115.22       | 99.99         | 1.15        |
+| 4-1000x12 dyn5%        | 320.75       | 265.45        | 1.21        |
+| 25-1000x5              | 382.33       | 335.19        | 1.14        |
+| 3-5x500                | 94.87        | 73.58         | 1.29        |
+| 6-100x15 dyn50%        | 172.90       | 150.36        | 1.15        |
 
 **Geomean ratio 1.278** (total-time ratio 1.237) vs Alien Signals. Zero
 benchmark assertion failures (`node dist/index.js "Royale FX2" | grep -c
@@ -142,13 +142,13 @@ Contenders: these bindings vs a ~35-line stock `useSyncExternalStore` store,
 same component shapes. Urgent input is delivered as real click events
 (discrete priority — what a keystroke gets).
 
-| scenario | stat | royale-fx2 | uses-baseline |
-|---|---|---|---|
-| fanout (5000 cells, 200 writes) | median write→commit | 3.12 ms | 2.64 ms |
-| transition (2000-cell rewrite + 60 urgent ticks) | p95 urgent | 10.11 ms | 2.72 ms |
-| transition | **max urgent** | **10.28 ms** | **329.05 ms** |
-| transition | transition completed after | 1781 ms | 1427 ms |
-| mount (5000-cell tree, 5 roots) | median | 57.04 ms | 48.77 ms |
+| scenario                                         | stat                       | royale-fx2   | uses-baseline |
+| ------------------------------------------------ | -------------------------- | ------------ | ------------- |
+| fanout (5000 cells, 200 writes)                  | median write→commit        | 3.12 ms      | 2.64 ms       |
+| transition (2000-cell rewrite + 60 urgent ticks) | p95 urgent                 | 10.11 ms     | 2.72 ms       |
+| transition                                       | **max urgent**             | **10.28 ms** | **329.05 ms** |
+| transition                                       | transition completed after | 1781 ms      | 1427 ms       |
+| mount (5000-cell tree, 5 roots)                  | median                     | 57.04 ms     | 48.77 ms      |
 
 The story is the max column: the stock store degrades the bulk rewrite to a
 synchronous blocking render — one 329 ms input freeze — while these bindings
@@ -187,13 +187,13 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
 ## 7. Round 2: what changed this session and why
 
 1. **The latest() context rule (the adjudicated pitfall) — two real bugs
-   fixed.** (a) `latest()` inside a *canonical computed evaluation* fell
+   fixed.** (a) `latest()` inside a _canonical computed evaluation_ fell
    through to newest-intent, so a held draft leaked into canonical caches,
    and the read was untracked, so the computed went permanently stale after
    the draft folded. Fix: an active canonical consumer resolves CANONICAL
    and the read registers a tracked dependency. (b) The render-pass world
    was a sticky engine global set by `useValue` and never cleared, so
-   *ambient* `latest()` after any render resolved that render's world (a
+   _ambient_ `latest()` after any render resolved that render's world (a
    canonical last pass hid live drafts). Fix: the seam is now a provider —
    the host answers "what world is rendering right now", gated on React's
    live hook dispatcher, noted by the SignalsFrameworkProvider render (top of every
@@ -213,7 +213,7 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
    rule — an effect created inside a scope/effect lives and dies with its
    owner; only ownerless effects arm the reclamation registry. Regression
    test (gc-leaks: `a scope-owned effect survives GC of its unused
-   per-effect disposer`) failed pre-fix, passes now; the ownerless-drop
+per-effect disposer`) failed pre-fix, passes now; the ownerless-drop
    reclamation tests still pass. Benchmark asserts went from thousands to 0
    — earlier timings were invalid and were re-measured after the fix.
 3. **patches/ actually generated** (the directory was empty despite the
@@ -452,13 +452,13 @@ the shared scope queue, stock updater rules).
 
 react-bench deltas (same harness as §5, stock React, medians of 3 runs):
 
-| scenario | stat | royale-fx2 | uses-baseline | prior round (fx2/base) |
-|---|---|---|---|---|
-| fanout | median write→commit | 3.62 ms | 3.15 ms | 3.12 / 2.64 |
-| transition | p95 urgent | 10.06 ms | 3.61 ms | 10.11 / 2.72 |
-| transition | **max urgent** | **10.12 ms** | **330.48 ms** | 10.28 / 329.05 |
-| transition | completed after | 1759 ms | 1423 ms | 1781 / 1427 |
-| mount | median 5000-cell | 52.8 ms | 50.3 ms | 57.04 / 48.77 |
+| scenario   | stat                | royale-fx2   | uses-baseline | prior round (fx2/base) |
+| ---------- | ------------------- | ------------ | ------------- | ---------------------- |
+| fanout     | median write→commit | 3.62 ms      | 3.15 ms       | 3.12 / 2.64            |
+| transition | p95 urgent          | 10.06 ms     | 3.61 ms       | 10.11 / 2.72           |
+| transition | **max urgent**      | **10.12 ms** | **330.48 ms** | 10.28 / 329.05         |
+| transition | completed after     | 1759 ms      | 1423 ms       | 1781 / 1427            |
+| mount      | median 5000-cell    | 52.8 ms      | 50.3 ms       | 57.04 / 48.77          |
 
 Mount overhead dropped from ~17% to ~5% (context-value churn gone; the
 scope never re-renders its subtree). Fanout stays ~17%: it is a pure
@@ -548,13 +548,13 @@ green, as do all prior suites.
 
 react-bench (medians of 3 runs per side, same harness as §5):
 
-| scenario | stat | before | after |
-|---|---|---|---|
-| transition | p95 urgent | 9.99 ms | 9.88 ms |
-| transition | max urgent | 10.68 ms | 10.38 ms |
-| transition | completed after | 1745 ms | 1755 ms |
-| fanout | median write→commit | 2.85 ms | 2.47 ms |
-| mount | median 5000-cell | 51.8 ms | 53.9 ms |
+| scenario   | stat                | before   | after    |
+| ---------- | ------------------- | -------- | -------- |
+| transition | p95 urgent          | 9.99 ms  | 9.88 ms  |
+| transition | max urgent          | 10.68 ms | 10.38 ms |
+| transition | completed after     | 1745 ms  | 1755 ms  |
+| fanout     | median write→commit | 2.85 ms  | 2.47 ms  |
+| mount      | median 5000-cell    | 51.8 ms  | 53.9 ms  |
 
 Neutral within noise, by design: the bench's transition scenario writes
 each cell once, so dedup never engages there and the fused walk saves one
@@ -564,9 +564,10 @@ Dev-build advisory (probed via `bench/advisory-probe.mjs`): the "large
 number of updates inside startTransition" warning counts DISTINCT fibers
 (`_updatedFibers` is a Set), not dispatches — so dedup cannot change it. A
 same-cell burst over ≤10 subscribers stays silent (before and after); over
->10 subscribers it still fires (11+ fibers genuinely update once each), as
-does the 2000-cell rewrite. Dev-only heuristic, absent in production
-builds.
+
+> 10 subscribers it still fires (11+ fibers genuinely update once each), as
+> does the 2000-cell rewrite. Dev-only heuristic, absent in production
+> builds.
 
 Gates fresh this session: engine `tsc` clean + 224 passed; oracle fuzz 1200
 seeds × 90 steps green; react `tsc` clean + 41 passed (38 + the burst
@@ -911,7 +912,7 @@ second, separately revertable).
   stamp against a monotonic per-walk serial (zero allocation, no clearing —
   the EvalStamp discipline). Falsify-first: the drafted twin of T11 (150k
   watched chain) blew the JS stack (`RangeError: Maximum call stack size
-  exceeded` in the recursive walk). The dead marking split is gone: pokes
+exceeded` in the recursive walk). The dead marking split is gone: pokes
   now mark `StaleCheck` like the wave — the choice is arbitrary and
   documented (render-notify watchers are never validated; flush clears
   staleness unconditionally pre-delivery). `causeEvent` threads through the

@@ -10,36 +10,36 @@
  * mechanism that is unreachable on that implementation. variant rows tell
  * the spec which ruled behavior to assert.
  */
-import type { test as batteryTest } from './fixtures'
-import type { BatteryEntry } from './entries'
+import type { test as batteryTest } from "./fixtures"
+import type { BatteryEntry } from "./entries"
 
 export type Expectation =
-	| { kind: 'pass' }
-	| { kind: 'finding'; note: string }
-	| { kind: 'variant'; variant: string }
-	| { kind: 'skip'; reason: string }
+  | { kind: "pass" }
+  | { kind: "finding"; note: string }
+  | { kind: "variant"; variant: string }
+  | { kind: "skip"; reason: string }
 
-const PASS: Expectation = { kind: 'pass' }
+const PASS: Expectation = { kind: "pass" }
 
 type PerImpl = Partial<Record<string, Expectation>>
 
 const TABLE: Record<string, PerImpl> = {
-	'RCC-RT1.scope-read': {
-		cosignals: { kind: 'variant', variant: 'scope-drafts-hidden' },
-		'cosignals-arena': { kind: 'variant', variant: 'scope-drafts-hidden' },
-	},
-	'RCC-RT4-newest': {
-		cosignals: { kind: 'skip', reason: 'drafts are hidden from outside-render reads' },
-		'cosignals-arena': { kind: 'skip', reason: 'drafts are hidden from outside-render reads' },
-	},
-	'RCC-RT4-drafts-hidden': {
-		cosignals: { kind: 'variant', variant: 'drafts-hidden' },
-		'cosignals-arena': { kind: 'variant', variant: 'drafts-hidden' },
-	},
+  "RCC-RT1.scope-read": {
+    cosignals: { kind: "variant", variant: "scope-drafts-hidden" },
+    "cosignals-arena": { kind: "variant", variant: "scope-drafts-hidden" },
+  },
+  "RCC-RT4-newest": {
+    cosignals: { kind: "skip", reason: "drafts are hidden from outside-render reads" },
+    "cosignals-arena": { kind: "skip", reason: "drafts are hidden from outside-render reads" },
+  },
+  "RCC-RT4-drafts-hidden": {
+    cosignals: { kind: "variant", variant: "drafts-hidden" },
+    "cosignals-arena": { kind: "variant", variant: "drafts-hidden" },
+  },
 }
 
 export function expectationFor(rowId: string, entry: BatteryEntry): Expectation {
-	return TABLE[rowId]?.[entry.label] ?? PASS
+  return TABLE[rowId]?.[entry.label] ?? PASS
 }
 
 /**
@@ -49,15 +49,15 @@ export function expectationFor(rowId: string, entry: BatteryEntry): Expectation 
  * describe the CORRECT behavior, and the finding keeps the row red-as-expected.
  */
 export function applyExpectation(
-	t: typeof batteryTest,
-	rowId: string,
-	entry: BatteryEntry,
+  t: typeof batteryTest,
+  rowId: string,
+  entry: BatteryEntry,
 ): Expectation {
-	const expectation = expectationFor(rowId, entry)
-	if (expectation.kind === 'skip') {
-		t.skip(true, `${rowId}: ${expectation.reason}`)
-	} else if (expectation.kind === 'finding') {
-		t.fail(true, `FINDING ${rowId}: ${expectation.note}`)
-	}
-	return expectation
+  const expectation = expectationFor(rowId, entry)
+  if (expectation.kind === "skip") {
+    t.skip(true, `${rowId}: ${expectation.reason}`)
+  } else if (expectation.kind === "finding") {
+    t.fail(true, `FINDING ${rowId}: ${expectation.note}`)
+  }
+  return expectation
 }

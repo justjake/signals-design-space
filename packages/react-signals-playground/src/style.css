@@ -6,70 +6,70 @@
  * their neighbors. */
 
 :root {
-	color-scheme: dark;
+  color-scheme: dark;
 }
 * {
-	box-sizing: border-box;
+  box-sizing: border-box;
 }
 body {
-	margin: 0;
-	background: #0b0d12;
-	color: #e8eaf0;
-	font:
-		15px/1.5 ui-sans-serif,
-		system-ui,
-		sans-serif;
+  margin: 0;
+  background: #0b0d12;
+  color: #e8eaf0;
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    sans-serif;
 }
 main {
-	max-width: 1060px;
-	margin: 0 auto;
-	padding: 18px 20px 48px;
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 18px 20px 48px;
 }
 code {
-	color: #7fd4ff;
+  color: #7fd4ff;
 }
 h3 {
-	font-size: 14px;
-	margin: 18px 0 6px;
-	color: #c8cede;
+  font-size: 14px;
+  margin: 18px 0 6px;
+  color: #c8cede;
 }
 
 header h1 {
-	margin: 14px 0 4px;
-	font-size: 22px;
-	letter-spacing: 0.02em;
+  margin: 14px 0 4px;
+  font-size: 22px;
+  letter-spacing: 0.02em;
 }
 header p {
-	margin: 0 0 16px;
-	color: #9aa1b2;
-	max-width: 68ch;
+  margin: 0 0 16px;
+  color: #9aa1b2;
+  max-width: 68ch;
 }
 
 /* ---- implementation tab bar (full-page navigations) ---------------------------- */
 .tabbar {
-	display: inline-flex;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	overflow: hidden;
+  display: inline-flex;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  overflow: hidden;
 }
 .tabbar a {
-	background: #10131c;
-	color: #9aa1b2;
-	border-right: 1px solid #2a3040;
-	padding: 6px 14px;
-	font-size: 13px;
-	text-decoration: none;
+  background: #10131c;
+  color: #9aa1b2;
+  border-right: 1px solid #2a3040;
+  padding: 6px 14px;
+  font-size: 13px;
+  text-decoration: none;
 }
 .tabbar a:last-child {
-	border-right: 0;
+  border-right: 0;
 }
 .tabbar a:hover {
-	color: #e8eaf0;
+  color: #e8eaf0;
 }
 .tabbar a.on {
-	background: #7fd4ff;
-	color: #0b0d12;
-	font-weight: 600;
+  background: #7fd4ff;
+  color: #0b0d12;
+  font-weight: 600;
 }
 
 /* ---- HUD stat tiles --------------------------------------------------------------- */
@@ -77,506 +77,509 @@ header p {
  * digit cannot move its neighbors. tabular-nums keeps digits equal-width so
  * values don't wiggle inside their own tile either. */
 #hud {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-	gap: 14px 20px;
-	margin: 14px 0 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px 20px;
+  margin: 14px 0 10px;
 }
 .stat {
-	min-width: 0;
+  min-width: 0;
 }
 .stat > span {
-	display: block;
-	font-size: 20px;
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+  display: block;
+  font-size: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stat label {
-	color: #9aa1b2;
-	font-size: 12px;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
+  color: #9aa1b2;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .stat .avg {
-	font-size: 13px;
-	color: #9aa1b2;
+  font-size: 13px;
+  color: #9aa1b2;
 }
 /* Fixed slots per metric (ch is exact in monospace), sized to the widest
  * reading, so a value crossing a magnitude holds its position. */
 .stat .now {
-	display: inline-block;
+  display: inline-block;
 }
 #stat-view .now {
-	min-width: 9ch;
+  min-width: 9ch;
 }
 #stat-pending .now {
-	min-width: 3ch;
+  min-width: 3ch;
 }
 #stat-switch .now {
-	min-width: 8ch;
+  min-width: 8ch;
 }
 #stat-renders .now {
-	min-width: 6ch;
+  min-width: 6ch;
 }
 #stat-consistency .now {
-	min-width: 10ch;
+  min-width: 10ch;
 }
 #stat-clock > span {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 #stat-clock .clock-toggle {
-	background: #161a24;
-	color: #9aa1b2;
-	border: 1px solid #2a3040;
-	padding: 2px 7px;
-	border-radius: 4px;
-	font: 11px ui-sans-serif, system-ui, sans-serif;
-	cursor: pointer;
+  background: #161a24;
+  color: #9aa1b2;
+  border: 1px solid #2a3040;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font:
+    11px ui-sans-serif,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
 }
 #stat-clock .clock-toggle:hover {
-	color: #e8eaf0;
+  color: #e8eaf0;
 }
 .now.is-pending {
-	color: #ffd479;
+  color: #ffd479;
 }
 .now.is-ok {
-	color: #6fdc9c;
+  color: #6fdc9c;
 }
 .now.is-torn {
-	color: #ff8f8f;
-	font-weight: 600;
+  color: #ff8f8f;
+  font-weight: 600;
 }
 
 /* ---- urgent controls strip -------------------------------------------------------- */
 #controls {
-	display: flex;
-	gap: 10px;
-	align-items: stretch;
-	flex-wrap: wrap;
-	margin: 12px 0;
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin: 12px 0;
 }
 #controls button,
 .actions button {
-	background: #161a24;
-	color: #e8eaf0;
-	border: 1px solid #2a3040;
-	padding: 7px 14px;
-	border-radius: 6px;
-	font: inherit;
-	cursor: pointer;
+  background: #161a24;
+  color: #e8eaf0;
+  border: 1px solid #2a3040;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
 }
 #controls button.on {
-	border-color: #7fd4ff;
-	color: #7fd4ff;
+  border-color: #7fd4ff;
+  color: #7fd4ff;
 }
 #controls input {
-	background: #10131c;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	color: #7fd4ff;
-	font:
-		14px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
-	padding: 7px 10px;
-	width: 13ch;
-	outline: none;
+  background: #10131c;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  color: #7fd4ff;
+  font:
+    14px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  padding: 7px 10px;
+  width: 13ch;
+  outline: none;
 }
 #controls input:focus {
-	border-color: #7fd4ff;
+  border-color: #7fd4ff;
 }
 #controls .note {
-	color: #9aa1b2;
-	font-variant-numeric: tabular-nums;
-	align-self: center;
+  color: #9aa1b2;
+  font-variant-numeric: tabular-nums;
+  align-self: center;
 }
 
 /* Readout cells (the example's .counter .cell pattern). */
 .cell {
-	background: #10131c;
-	border: 1px solid #1c2130;
-	border-radius: 8px;
-	padding: 8px 16px;
-	min-width: 110px;
+  background: #10131c;
+  border: 1px solid #1c2130;
+  border-radius: 8px;
+  padding: 8px 16px;
+  min-width: 110px;
 }
 .cell label {
-	display: block;
-	color: #9aa1b2;
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
+  display: block;
+  color: #9aa1b2;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .cell output {
-	font-size: 22px;
-	font-variant-numeric: tabular-nums;
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .cells {
-	display: flex;
-	gap: 12px;
-	align-items: stretch;
-	flex-wrap: wrap;
-	margin: 14px 0;
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin: 14px 0;
 }
 
 /* ---- segmented pickers (libpick) --------------------------------------------------- */
 .libpick {
-	display: inline-flex;
-	gap: 0;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	overflow: hidden;
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  overflow: hidden;
 }
 .libpick button {
-	background: #10131c;
-	color: #9aa1b2;
-	border: 0;
-	border-right: 1px solid #2a3040;
-	padding: 7px 16px;
-	font:
-		13px ui-sans-serif,
-		system-ui;
-	cursor: pointer;
+  background: #10131c;
+  color: #9aa1b2;
+  border: 0;
+  border-right: 1px solid #2a3040;
+  padding: 7px 16px;
+  font:
+    13px ui-sans-serif,
+    system-ui;
+  cursor: pointer;
 }
 .libpick button:last-child {
-	border-right: 0;
+  border-right: 0;
 }
 .libpick button.on {
-	background: #7fd4ff;
-	color: #0b0d12;
-	font-weight: 600;
+  background: #7fd4ff;
+  color: #0b0d12;
+  font-weight: 600;
 }
 
 /* ---- transition lab ------------------------------------------------------------------ */
 .lab {
-	background: #10131c;
-	border: 1px solid #1c2130;
-	border-radius: 8px;
-	padding: 12px 16px;
-	margin: 12px 0;
-	display: flex;
-	gap: 24px;
-	align-items: flex-start;
-	flex-wrap: wrap;
+  background: #10131c;
+  border: 1px solid #1c2130;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 .lab .knob label {
-	display: block;
-	color: #9aa1b2;
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	margin-bottom: 6px;
+  display: block;
+  color: #9aa1b2;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
 }
 .lab .knob .libpick button {
-	padding: 6px 12px;
-	background: #0b0d12;
+  padding: 6px 12px;
+  background: #0b0d12;
 }
 .lab .knob .libpick button.on {
-	background: #7fd4ff;
+  background: #7fd4ff;
 }
 .lab .hint {
-	color: #9aa1b2;
-	font-size: 13px;
-	max-width: 46ch;
-	margin: 0;
-	flex: 1 1 300px;
+  color: #9aa1b2;
+  font-size: 13px;
+  max-width: 46ch;
+  margin: 0;
+  flex: 1 1 300px;
 }
 
 /* ---- the mini-browser ------------------------------------------------------------------ */
 .browser {
-	background: #10131c;
-	border: 1px solid #1c2130;
-	border-radius: 8px;
-	overflow: hidden;
-	margin: 12px 0;
+  background: #10131c;
+  border: 1px solid #1c2130;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 12px 0;
 }
 .browser-toolbar {
-	display: flex;
-	gap: 8px;
-	align-items: center;
-	padding: 8px 10px;
-	border-bottom: 1px solid #1c2130;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #1c2130;
 }
 .navbtn {
-	background: #161a24;
-	color: #e8eaf0;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	width: 32px;
-	height: 30px;
-	font:
-		12px ui-sans-serif,
-		system-ui;
-	cursor: pointer;
+  background: #161a24;
+  color: #e8eaf0;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  width: 32px;
+  height: 30px;
+  font:
+    12px ui-sans-serif,
+    system-ui;
+  cursor: pointer;
 }
 .navbtn:disabled {
-	color: #5b667e;
-	cursor: default;
+  color: #5b667e;
+  cursor: default;
 }
 .addr {
-	flex: 1;
-	position: relative;
-	overflow: hidden;
-	background: #05060a;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	padding: 6px 12px;
-	font:
-		14px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
-	color: #7fd4ff;
-	white-space: nowrap;
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #05060a;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font:
+    14px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: #7fd4ff;
+  white-space: nowrap;
 }
 /* The loading shimmer: a cyan sweep across the address bar while the
  * navigation transition is pending — the browser-chrome tell that we are
  * between pages even though the page area still shows the previous view. */
 .addr.loading {
-	color: #ffd479;
-	border-color: #4a3a12;
+  color: #ffd479;
+  border-color: #4a3a12;
 }
 .addr.loading::after {
-	content: '';
-	position: absolute;
-	inset: 0;
-	background: linear-gradient(
-		100deg,
-		transparent 25%,
-		rgba(127, 212, 255, 0.22) 50%,
-		transparent 75%
-	);
-	background-size: 250% 100%;
-	animation: addr-shimmer 1.1s linear infinite;
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 25%,
+    rgba(127, 212, 255, 0.22) 50%,
+    transparent 75%
+  );
+  background-size: 250% 100%;
+  animation: addr-shimmer 1.1s linear infinite;
 }
 @keyframes addr-shimmer {
-	from {
-		background-position: 125% 0;
-	}
-	to {
-		background-position: -125% 0;
-	}
+  from {
+    background-position: 125% 0;
+  }
+  to {
+    background-position: -125% 0;
+  }
 }
 .release {
-	background: #161a24;
-	color: #5b667e;
-	border: 1px solid #2a3040;
-	border-radius: 6px;
-	padding: 6px 12px;
-	font:
-		12px ui-sans-serif,
-		system-ui;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	cursor: pointer;
+  background: #161a24;
+  color: #5b667e;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font:
+    12px ui-sans-serif,
+    system-ui;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
 }
 .release.lit {
-	color: #ffd479;
-	border-color: #ffd479;
-	animation: release-pulse 1.2s ease-in-out infinite;
-	cursor: pointer;
+  color: #ffd479;
+  border-color: #ffd479;
+  animation: release-pulse 1.2s ease-in-out infinite;
+  cursor: pointer;
 }
 @keyframes release-pulse {
-	0%,
-	100% {
-		box-shadow: 0 0 0 0 rgba(255, 212, 121, 0);
-	}
-	50% {
-		box-shadow: 0 0 10px 1px rgba(255, 212, 121, 0.45);
-	}
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 212, 121, 0);
+  }
+  50% {
+    box-shadow: 0 0 10px 1px rgba(255, 212, 121, 0.45);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-	.addr.loading::after {
-		animation: none;
-	}
-	.release.lit {
-		animation: none;
-	}
+  .addr.loading::after {
+    animation: none;
+  }
+  .release.lit {
+    animation: none;
+  }
 }
 /* Bookmarks strip: hairline segments inside the chrome, like the example's
  * stage footer. The committed page carries .on; a target still loading
  * carries .pending in amber. */
 .bookmarks {
-	display: flex;
-	border-bottom: 1px solid #1c2130;
+  display: flex;
+  border-bottom: 1px solid #1c2130;
 }
 .bookmarks button {
-	background: transparent;
-	color: #9aa1b2;
-	border: 0;
-	border-right: 1px solid #1c2130;
-	padding: 6px 16px;
-	font:
-		12px ui-sans-serif,
-		system-ui;
-	cursor: pointer;
+  background: transparent;
+  color: #9aa1b2;
+  border: 0;
+  border-right: 1px solid #1c2130;
+  padding: 6px 16px;
+  font:
+    12px ui-sans-serif,
+    system-ui;
+  cursor: pointer;
 }
 .bookmarks button.on {
-	background: #7fd4ff;
-	color: #0b0d12;
-	font-weight: 600;
+  background: #7fd4ff;
+  color: #0b0d12;
+  font-weight: 600;
 }
 .bookmarks button.pending {
-	color: #ffd479;
+  color: #ffd479;
 }
 /* The page area keeps the previous view while loading, dimmed like a real
  * browser mid-navigation. min-height keeps the timeline below from bouncing
  * between light and heavy pages. */
 .browser-page {
-	padding: 4px 18px 18px;
-	min-height: 380px;
-	transition: opacity 0.15s ease;
+  padding: 4px 18px 18px;
+  min-height: 380px;
+  transition: opacity 0.15s ease;
 }
 .browser-page.stale {
-	opacity: 0.55;
+  opacity: 0.55;
 }
 .pageload {
-	color: #9aa1b2;
-	padding: 24px 0;
+  color: #9aa1b2;
+  padding: 24px 0;
 }
 .pagemeta {
-	color: #5b667e;
-	font:
-		12px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
-	font-variant-numeric: tabular-nums;
-	margin: 12px 0 4px;
+  color: #5b667e;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  margin: 12px 0 4px;
 }
 .viewlede {
-	color: #9aa1b2;
-	max-width: 78ch;
-	font-variant-numeric: tabular-nums;
+  color: #9aa1b2;
+  max-width: 78ch;
+  font-variant-numeric: tabular-nums;
 }
 .actions {
-	display: flex;
-	gap: 8px;
-	flex-wrap: wrap;
-	margin: 10px 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
 }
 
 /* ---- transition timeline strip ---------------------------------------------------------- */
 .timeline {
-	margin: 14px 0;
+  margin: 14px 0;
 }
 .timeline h3 {
-	margin: 0 0 8px;
+  margin: 0 0 8px;
 }
 .hint-inline {
-	color: #5b667e;
-	font-size: 11px;
-	font-weight: 400;
-	text-transform: none;
-	letter-spacing: 0;
+  color: #5b667e;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
 }
 /* Fixed grid tracks: the bar column sizes from the container, so a growing
  * live bar or a longer route name cannot shift its neighbors. */
 .t-row {
-	display: grid;
-	grid-template-columns: 9ch minmax(0, 1fr) 22ch;
-	gap: 10px;
-	align-items: center;
-	margin: 4px 0;
+  display: grid;
+  grid-template-columns: 9ch minmax(0, 1fr) 22ch;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0;
 }
 .t-route {
-	color: #9aa1b2;
-	font:
-		12px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
+  color: #9aa1b2;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
 }
 .t-bar {
-	position: relative;
-	display: block;
-	height: 12px;
-	background: #05060a;
-	border: 1px solid #1c2130;
-	border-radius: 4px;
-	overflow: hidden;
+  position: relative;
+  display: block;
+  height: 12px;
+  background: #05060a;
+  border: 1px solid #1c2130;
+  border-radius: 4px;
+  overflow: hidden;
 }
 .t-fill {
-	position: absolute;
-	inset: 0 auto 0 0;
-	background: #b48bff;
-	opacity: 0.75;
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #b48bff;
+  opacity: 0.75;
 }
 .t-fill.live {
-	background: #7fd4ff;
+  background: #7fd4ff;
 }
 .t-fill.superseded {
-	background: #3a4358;
+  background: #3a4358;
 }
 .t-tick {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 2px;
-	background: #ffd479;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffd479;
 }
 .t-meta {
-	color: #9aa1b2;
-	font:
-		12px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+  color: #9aa1b2;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- row chips ----------------------------------------------------------------------- */
 /* Fixed track width: chips are all five digits, so the grid never reflows as
  * values change — only as rows are added, removed, or filtered. */
 .rowgrid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
-	gap: 3px;
-	list-style: none;
-	margin: 12px 0 0;
-	padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 3px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
 }
 .rowchip {
-	background: #0b0d12;
-	border: 1px solid #1c2130;
-	border-radius: 4px;
-	padding: 1px 0;
-	text-align: center;
-	font:
-		11px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		monospace;
-	font-variant-numeric: tabular-nums;
-	color: #9aa1b2;
+  background: #0b0d12;
+  border: 1px solid #1c2130;
+  border-radius: 4px;
+  padding: 1px 0;
+  text-align: center;
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  color: #9aa1b2;
 }
 .rowchip.sel {
-	border-color: #7fd4ff;
-	color: #7fd4ff;
+  border-color: #7fd4ff;
+  color: #7fd4ff;
 }
 .rowchip.alt {
-	color: #b48bff;
+  color: #b48bff;
 }
 .mark-evens .rowchip[data-even] {
-	border-color: #4a3a12;
-	color: #ffd479;
+  border-color: #4a3a12;
+  color: #ffd479;
 }
 
 /* ---- error strip ---------------------------------------------------------------------- */
 #errors {
-	margin: 10px 0 2px;
-	font:
-		12px/1.7 ui-monospace,
-		monospace;
-	font-variant-numeric: tabular-nums;
-	color: #ff8f8f;
+  margin: 10px 0 2px;
+  font:
+    12px/1.7 ui-monospace,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  color: #ff8f8f;
 }

@@ -4,9 +4,9 @@
  * contract; this module only supplies the cosignals surface.
  */
 
-import * as cosignalsDebug from 'cosignals/debug'
-import { NO_EVENT } from 'cosignals/debug'
-import { attachEngineDevtools, type EngineDebug, type EngineDevtools } from './engine.ts'
+import * as cosignalsDebug from "cosignals/debug"
+import { NO_EVENT } from "cosignals/debug"
+import { attachEngineDevtools, type EngineDebug, type EngineDevtools } from "./engine.ts"
 
 export type CosignalsDevtools = EngineDevtools
 
@@ -15,8 +15,11 @@ export type CosignalsDevtools = EngineDevtools
  * `globalThis.__SIGNALS_DEVTOOLS__`. Call the returned `detach()` to remove
  * the trace hook and stop observing.
  */
-export function attachCosignalsDevtools(opts?: { capacity?: number; now?: () => number }): CosignalsDevtools {
-	return attachEngineDevtools(cosignalsDebug as EngineDebug, opts)
+export function attachCosignalsDevtools(opts?: {
+  capacity?: number
+  now?: () => number
+}): CosignalsDevtools {
+  return attachEngineDevtools(cosignalsDebug as EngineDebug, opts)
 }
 
 // Re-export so callers can reference the root sentinel if they build cause

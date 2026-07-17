@@ -189,6 +189,7 @@ machinery.
   was deleted with the move to deps-driven re-creation: its safety
   argument had to be re-proven under every concurrent feature, while
   deps-only freshness has nothing to prove.
+
 - No provider is required: the hooks observe base state, which needs no
   root channel. StrictMode's double mount nets one live effect.
 

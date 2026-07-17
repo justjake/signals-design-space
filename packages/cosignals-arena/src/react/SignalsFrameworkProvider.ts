@@ -26,23 +26,23 @@
  * passes against the completed batch, or a pass could commit half a
  * batch.
  */
-import * as React from 'react'
-import { drainUseLayoutEffectLane, drainDeferredEffects, trace, NO_EVENT } from '../graph.ts'
-import { isLiveDraft, type DraftId } from '../worlds.ts'
+import * as React from "react"
+import { drainUseLayoutEffectLane, drainDeferredEffects, trace, NO_EVENT } from "../graph.ts"
+import { isLiveDraft, type DraftId } from "../worlds.ts"
 import {
-	confirmRootCommit,
-	noteRenderWorld,
-	registerEffectHost,
-	registerRootConnection,
-	type ReactRootConnection,
-} from './host.ts'
+  confirmRootCommit,
+  noteRenderWorld,
+  registerEffectHost,
+  registerRootConnection,
+  type ReactRootConnection,
+} from "./host.ts"
 
 /**
  * Reducer state for a connection or hook: the live draft ids delivered to
  * it so far, i.e. which transitions its render passes include.
  */
 export interface WorldState {
-	ids: readonly DraftId[]
+  ids: readonly DraftId[]
 }
 
 export const EMPTY_WORLD: WorldState = { ids: [] }
@@ -56,32 +56,32 @@ export const EMPTY_WORLD: WorldState = { ids: [] }
  * header).
  */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-	let live: DraftId[] | undefined
-	let add = isLiveDraft(id)
-	for (let i = 0; i < prev.ids.length; i++) {
-		const draft = prev.ids[i]!
-		if (isLiveDraft(draft)) {
-			if (live !== undefined) {
-				live.push(draft)
-			}
-			add = add && draft !== id
-		} else if (live === undefined) {
-			live = []
-			for (let j = 0; j < i; j++) {
-				live.push(prev.ids[j]!)
-			}
-		}
-	}
-	if (add) {
-		if (live === undefined) {
-			live = []
-			for (const draft of prev.ids) {
-				live.push(draft)
-			}
-		}
-		live.push(id)
-	}
-	return { ids: live ?? prev.ids }
+  let live: DraftId[] | undefined
+  let add = isLiveDraft(id)
+  for (let i = 0; i < prev.ids.length; i++) {
+    const draft = prev.ids[i]!
+    if (isLiveDraft(draft)) {
+      if (live !== undefined) {
+        live.push(draft)
+      }
+      add = add && draft !== id
+    } else if (live === undefined) {
+      live = []
+      for (let j = 0; j < i; j++) {
+        live.push(prev.ids[j]!)
+      }
+    }
+  }
+  if (add) {
+    if (live === undefined) {
+      live = []
+      for (const draft of prev.ids) {
+        live.push(draft)
+      }
+    }
+    live.push(id)
+  }
+  return { ids: live ?? prev.ids }
 }
 
 /**
@@ -91,7 +91,7 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 export const ReactRootConnectionContext = React.createContext<ReactRootConnection | null>(null)
 
 export interface SignalsFrameworkProviderProps {
-	children?: React.ReactNode
+  children?: React.ReactNode
 }
 
 /**
@@ -101,22 +101,22 @@ export interface SignalsFrameworkProviderProps {
  * and is unregistered when the provider unmounts.
  */
 function ReactRootCommit({
-	connection,
-	world,
+  connection,
+  world,
 }: {
-	connection: ReactRootConnection
-	world: WorldState
+  connection: ReactRootConnection
+  world: WorldState
 }): null {
-	React.useLayoutEffect(() => registerRootConnection(connection), [connection])
-	React.useLayoutEffect(() => {
-		confirmRootCommit(connection, world.ids)
-	}, [connection, world])
-	return null
+  React.useLayoutEffect(() => registerRootConnection(connection), [connection])
+  React.useLayoutEffect(() => {
+    confirmRootCommit(connection, world.ids)
+  }, [connection, world])
+  return null
 }
 
 /** Any dispatch re-renders the sentinel; the counter itself is never read. */
 function bumpWake(n: number): number {
-	return (n + 1) | 0
+  return (n + 1) | 0
 }
 
 /**
@@ -133,11 +133,11 @@ function bumpWake(n: number): number {
  * empty drain calls.
  */
 function DeferredEffectHost(): null {
-	const [, wake] = React.useReducer(bumpWake, 0)
-	React.useLayoutEffect(() => registerEffectHost(wake), [wake])
-	React.useLayoutEffect(drainUseLayoutEffectLane)
-	React.useEffect(drainDeferredEffects)
-	return null
+  const [, wake] = React.useReducer(bumpWake, 0)
+  React.useLayoutEffect(() => registerEffectHost(wake), [wake])
+  React.useLayoutEffect(drainUseLayoutEffectLane)
+  React.useEffect(drainDeferredEffects)
+  return null
 }
 
 /**
@@ -145,35 +145,35 @@ function DeferredEffectHost(): null {
  * would replace this connection for part of the subtree, so nesting throws.
  */
 export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
-	if (React.useContext(ReactRootConnectionContext) !== null) {
-		const error = new Error(
-			'SignalsFrameworkProvider cannot be nested inside another ' +
-				'SignalsFrameworkProvider. Mount it outside the other provider, ' +
-				'or use wrapCreateRoot(createRoot).',
-		)
-		trace?.emitEvent('policy-error', null, NO_EVENT, {
-			error,
-			phase: 'nested-provider',
-		})
-		throw error
-	}
-	const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
-	const connection = React.useMemo<ReactRootConnection>(
-		() => ({ dispatch, committing: false }),
-		[dispatch],
-	)
-	// Note this pass's world in the host. Every pass that carries drafts
-	// re-renders this provider (the drafts live in its reducer state), so
-	// the note lands at the top of the pass, in tree order, before any
-	// component can read.
-	noteRenderWorld(connection, world.ids)
-	return React.createElement(
-		ReactRootConnectionContext.Provider,
-		{ value: connection },
-		React.createElement(ReactRootCommit, { connection, world }),
-		props.children,
-		React.createElement(DeferredEffectHost, null),
-	)
+  if (React.useContext(ReactRootConnectionContext) !== null) {
+    const error = new Error(
+      "SignalsFrameworkProvider cannot be nested inside another " +
+        "SignalsFrameworkProvider. Mount it outside the other provider, " +
+        "or use wrapCreateRoot(createRoot).",
+    )
+    trace?.emitEvent("policy-error", null, NO_EVENT, {
+      error,
+      phase: "nested-provider",
+    })
+    throw error
+  }
+  const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD)
+  const connection = React.useMemo<ReactRootConnection>(
+    () => ({ dispatch, committing: false }),
+    [dispatch],
+  )
+  // Note this pass's world in the host. Every pass that carries drafts
+  // re-renders this provider (the drafts live in its reducer state), so
+  // the note lands at the top of the pass, in tree order, before any
+  // component can read.
+  noteRenderWorld(connection, world.ids)
+  return React.createElement(
+    ReactRootConnectionContext.Provider,
+    { value: connection },
+    React.createElement(ReactRootCommit, { connection, world }),
+    props.children,
+    React.createElement(DeferredEffectHost, null),
+  )
 }
 
 /**
@@ -181,8 +181,8 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
  * SignalsFrameworkProvider.
  */
 export interface WrappedRoot {
-	render(node: React.ReactNode): void
-	unmount(): void
+  render(node: React.ReactNode): void
+  unmount(): void
 }
 
 /**
@@ -191,20 +191,20 @@ export interface WrappedRoot {
  * composing anything.
  */
 export function wrapCreateRoot(
-	createRoot: (
-		el: Element,
-		opts?: unknown,
-	) => { render(node: React.ReactNode): void; unmount(): void },
+  createRoot: (
+    el: Element,
+    opts?: unknown,
+  ) => { render(node: React.ReactNode): void; unmount(): void },
 ): (el: Element, opts?: unknown) => WrappedRoot {
-	return (el, opts) => {
-		const root = createRoot(el, opts)
-		return {
-			render(node: React.ReactNode) {
-				root.render(React.createElement(SignalsFrameworkProvider, null, node))
-			},
-			unmount() {
-				root.unmount()
-			},
-		}
-	}
+  return (el, opts) => {
+    const root = createRoot(el, opts)
+    return {
+      render(node: React.ReactNode) {
+        root.render(React.createElement(SignalsFrameworkProvider, null, node))
+      },
+      unmount() {
+        root.unmount()
+      },
+    }
+  }
 }

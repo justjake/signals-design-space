@@ -13,568 +13,568 @@
  * reasons: pending uncommitted updates, cascades). Render counts on every
  * subscriber are the proof.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { createRoot } from 'react-dom/client'
-import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx'
-import { createAtom, createComputed, latest } from 'cosignals'
-import { attachTracer, type TraceEvent } from 'cosignals/debug'
-import { startSignalTransition, useSignal } from 'cosignals/react'
-import { openDraft, runWithDraftWrites, type Draft } from '../src/worlds.ts'
-import { broadcastDraft } from '../src/react/host.ts'
+import { afterEach, beforeEach, describe, expect, test } from "vitest"
+import { createRoot } from "react-dom/client"
+import { act, deferred, makeHarness, text, tick, React, type Harness } from "./helpers.tsx"
+import { createAtom, createComputed, latest } from "cosignals"
+import { attachTracer, type TraceEvent } from "cosignals/debug"
+import { startSignalTransition, useSignal } from "cosignals/react"
+import { openDraft, runWithDraftWrites, type Draft } from "../src/worlds.ts"
+import { broadcastDraft } from "../src/react/host.ts"
 
 let h: Harness
 beforeEach(() => {
-	h = makeHarness()
+  h = makeHarness()
 })
 afterEach(async () => {
-	await h.cleanup()
+  await h.cleanup()
 })
 
 /** A held transition over `a`: drafts a.set(2), suspends until gate. */
 function makeHeld() {
-	const a = createAtom(1)
-	const hold = createAtom(false)
-	const gate = deferred<void>()
-	function Holder() {
-		const v = useSignal(a)
-		const held = useSignal(hold)
-		if (held && !gate.settled) {
-			throw gate.promise
-		}
-		return <b>h:{v};</b>
-	}
-	const start = () =>
-		act(() => {
-			startSignalTransition(() => {
-				a.set(2)
-				hold.set(true)
-			})
-		})
-	const release = () =>
-		act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-	return { a, Holder, start, release }
+  const a = createAtom(1)
+  const hold = createAtom(false)
+  const gate = deferred<void>()
+  function Holder() {
+    const v = useSignal(a)
+    const held = useSignal(hold)
+    if (held && !gate.settled) {
+      throw gate.promise
+    }
+    return <b>h:{v};</b>
+  }
+  const start = () =>
+    act(() => {
+      startSignalTransition(() => {
+        a.set(2)
+        hold.set(true)
+      })
+    })
+  const release = () =>
+    act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+  return { a, Holder, start, release }
 }
 
-describe('tear: the render-world note is validity-gated', () => {
-	test('an urgent pass over an unrelated subtree (same root) resolves base state', async () => {
-		const { a, Holder, start, release } = makeHeld()
-		const probed: number[] = []
-		let bump!: () => void
-		function NoHookProbe() {
-			const [n, setN] = React.useState(0)
-			bump = () => setN((x) => x + 1)
-			if (n > 0) {
-				probed.push(latest(a))
-			} // sample only the urgent re-renders
-			return <i>p:{n};</i>
-		}
-		const { container } = await h.mount(
-			<>
-				<React.Suspense fallback={null}>
-					<Holder />
-				</React.Suspense>
-				<NoHookProbe />
-			</>,
-		)
-		await start() // held: the transition pass noted its world and suspended
-		// The urgent pass dirties only the probe; the provider (and every hook)
-		// bails out, so nothing refreshed the note for this pass.
-		await act(() => bump())
-		expect(text(container)).toContain('p:1;')
-		expect(a.get()).toBe(1)
-		expect(probed).toEqual([1]) // base state, never the held draft
-		await release()
-		expect(text(container)).toBe('h:2;p:1;')
-	})
+describe("tear: the render-world note is validity-gated", () => {
+  test("an urgent pass over an unrelated subtree (same root) resolves base state", async () => {
+    const { a, Holder, start, release } = makeHeld()
+    const probed: number[] = []
+    let bump!: () => void
+    function NoHookProbe() {
+      const [n, setN] = React.useState(0)
+      bump = () => setN((x) => x + 1)
+      if (n > 0) {
+        probed.push(latest(a))
+      } // sample only the urgent re-renders
+      return <i>p:{n};</i>
+    }
+    const { container } = await h.mount(
+      <>
+        <React.Suspense fallback={null}>
+          <Holder />
+        </React.Suspense>
+        <NoHookProbe />
+      </>,
+    )
+    await start() // held: the transition pass noted its world and suspended
+    // The urgent pass dirties only the probe; the provider (and every hook)
+    // bails out, so nothing refreshed the note for this pass.
+    await act(() => bump())
+    expect(text(container)).toContain("p:1;")
+    expect(a.get()).toBe(1)
+    expect(probed).toEqual([1]) // base state, never the held draft
+    await release()
+    expect(text(container)).toBe("h:2;p:1;")
+  })
 
-	test('two roots back-to-back: a hook-free second root resolves base state', async () => {
-		const { Holder, a, start, release } = makeHeld()
-		await h.mount(
-			<React.Suspense fallback={null}>
-				<Holder />
-			</React.Suspense>,
-		)
-		await start()
-		// A plain root (no CosignalsProvider, zero hooks — plain latest()
-		// calls are legal anywhere) rendered right after the transition pass:
-		// no pass of this root ever refreshed any note.
-		const sampled: number[] = []
-		function Plain() {
-			sampled.push(latest(a))
-			return <i>plain</i>
-		}
-		const div = document.body.appendChild(document.createElement('div'))
-		const plainRoot = createRoot(div)
-		await act(() => {
-			plainRoot.render(<Plain />)
-		})
-		expect(sampled).toEqual([1]) // base-state fallback, not the held draft
-		await release()
-		await act(() => plainRoot.unmount())
-		div.remove()
-	})
+  test("two roots back-to-back: a hook-free second root resolves base state", async () => {
+    const { Holder, a, start, release } = makeHeld()
+    await h.mount(
+      <React.Suspense fallback={null}>
+        <Holder />
+      </React.Suspense>,
+    )
+    await start()
+    // A plain root (no CosignalsProvider, zero hooks — plain latest()
+    // calls are legal anywhere) rendered right after the transition pass:
+    // no pass of this root ever refreshed any note.
+    const sampled: number[] = []
+    function Plain() {
+      sampled.push(latest(a))
+      return <i>plain</i>
+    }
+    const div = document.body.appendChild(document.createElement("div"))
+    const plainRoot = createRoot(div)
+    await act(() => {
+      plainRoot.render(<Plain />)
+    })
+    expect(sampled).toEqual([1]) // base-state fallback, not the held draft
+    await release()
+    await act(() => plainRoot.unmount())
+    div.remove()
+  })
 
-	test('interleaved passes: flushSync render while a transition pass is mid-flight', async () => {
-		const { flushSync } = await import('react-dom')
-		const a = createAtom(1)
-		const items = createAtom(0)
-		let itemRenders = 0
-		function SlowItem({ k }: { k: number }) {
-			itemRenders++
-			const end = performance.now() + 4
-			while (performance.now() < end) {
-				/* burn a slice */
-			}
-			return <i>{k},</i>
-		}
-		function List() {
-			const n = useSignal(items)
-			const kids = []
-			for (let k = 0; k < n; k++) {
-				kids.push(<SlowItem key={k} k={k} />)
-			}
-			return (
-				<div>
-					n:{n};{kids}
-				</div>
-			)
-		}
-		const { container } = await h.mount(<List />)
-		// Root B: no provider, none of our hooks; re-rendered by flushSync
-		// mid-slice.
-		const sampled: number[] = []
-		let bump!: () => void
-		function Probe() {
-			const [n, setN] = React.useState(0)
-			bump = () => setN((x) => x + 1)
-			if (n > 0) {
-				sampled.push(latest(a))
-			}
-			return <i>q:{n}</i>
-		}
-		const div = document.body.appendChild(document.createElement('div'))
-		const probeRoot = createRoot(div)
-		await act(() => {
-			probeRoot.render(<Probe />)
-		})
-		;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
-		try {
-			startSignalTransition(() => {
-				items.set(24)
-				a.set(2)
-			})
-			const deadline = Date.now() + 5000
-			while (itemRenders < 3 && Date.now() < deadline) {
-				await tick(5)
-			}
-			expect(itemRenders).toBeGreaterThanOrEqual(3)
-			expect(itemRenders).toBeLessThan(24) // the transition pass is mid-flight
-			flushSync(() => bump())
-			expect(sampled).toEqual([1]) // urgent interleave: base state, not the draft
-			const done = Date.now() + 15000
-			while (!text(container).includes('n:24;') && Date.now() < done) {
-				await tick(10)
-			}
-			expect(text(container)).toContain('n:24;')
-		} finally {
-			;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-		}
-		await act(() => probeRoot.unmount())
-		div.remove()
-	}, 30000)
+  test("interleaved passes: flushSync render while a transition pass is mid-flight", async () => {
+    const { flushSync } = await import("react-dom")
+    const a = createAtom(1)
+    const items = createAtom(0)
+    let itemRenders = 0
+    function SlowItem({ k }: { k: number }) {
+      itemRenders++
+      const end = performance.now() + 4
+      while (performance.now() < end) {
+        /* burn a slice */
+      }
+      return <i>{k},</i>
+    }
+    function List() {
+      const n = useSignal(items)
+      const kids = []
+      for (let k = 0; k < n; k++) {
+        kids.push(<SlowItem key={k} k={k} />)
+      }
+      return (
+        <div>
+          n:{n};{kids}
+        </div>
+      )
+    }
+    const { container } = await h.mount(<List />)
+    // Root B: no provider, none of our hooks; re-rendered by flushSync
+    // mid-slice.
+    const sampled: number[] = []
+    let bump!: () => void
+    function Probe() {
+      const [n, setN] = React.useState(0)
+      bump = () => setN((x) => x + 1)
+      if (n > 0) {
+        sampled.push(latest(a))
+      }
+      return <i>q:{n}</i>
+    }
+    const div = document.body.appendChild(document.createElement("div"))
+    const probeRoot = createRoot(div)
+    await act(() => {
+      probeRoot.render(<Probe />)
+    })
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
+    try {
+      startSignalTransition(() => {
+        items.set(24)
+        a.set(2)
+      })
+      const deadline = Date.now() + 5000
+      while (itemRenders < 3 && Date.now() < deadline) {
+        await tick(5)
+      }
+      expect(itemRenders).toBeGreaterThanOrEqual(3)
+      expect(itemRenders).toBeLessThan(24) // the transition pass is mid-flight
+      flushSync(() => bump())
+      expect(sampled).toEqual([1]) // urgent interleave: base state, not the draft
+      const done = Date.now() + 15000
+      while (!text(container).includes("n:24;") && Date.now() < done) {
+        await tick(10)
+      }
+      expect(text(container)).toContain("n:24;")
+    } finally {
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    }
+    await act(() => probeRoot.unmount())
+    div.remove()
+  }, 30000)
 
-	test('StrictMode double render: both invocations of an urgent pass resolve base state', async () => {
-		const { a, Holder, start, release } = makeHeld()
-		const probed: number[] = []
-		let bump!: () => void
-		function NoHookProbe() {
-			const [n, setN] = React.useState(0)
-			bump = () => setN((x) => x + 1)
-			if (n > 0) {
-				probed.push(latest(a))
-			}
-			return <i>p:{n};</i>
-		}
-		const { container } = await h.mount(
-			<React.StrictMode>
-				<React.Suspense fallback={null}>
-					<Holder />
-				</React.Suspense>
-				<NoHookProbe />
-			</React.StrictMode>,
-		)
-		await start()
-		await act(() => bump())
-		expect(probed.length).toBeGreaterThanOrEqual(1) // double-invoked in dev
-		expect(probed.every((v) => v === 1)).toBe(true) // base state in every invocation
-		await release()
-		expect(text(container)).toBe('h:2;p:1;')
-	})
+  test("StrictMode double render: both invocations of an urgent pass resolve base state", async () => {
+    const { a, Holder, start, release } = makeHeld()
+    const probed: number[] = []
+    let bump!: () => void
+    function NoHookProbe() {
+      const [n, setN] = React.useState(0)
+      bump = () => setN((x) => x + 1)
+      if (n > 0) {
+        probed.push(latest(a))
+      }
+      return <i>p:{n};</i>
+    }
+    const { container } = await h.mount(
+      <React.StrictMode>
+        <React.Suspense fallback={null}>
+          <Holder />
+        </React.Suspense>
+        <NoHookProbe />
+      </React.StrictMode>,
+    )
+    await start()
+    await act(() => bump())
+    expect(probed.length).toBeGreaterThanOrEqual(1) // double-invoked in dev
+    expect(probed.every((v) => v === 1)).toBe(true) // base state in every invocation
+    await release()
+    expect(text(container)).toBe("h:2;p:1;")
+  })
 })
 
-describe('wake: transition passes re-render only drafted-cell subscribers', () => {
-	const N = 8
+describe("wake: transition passes re-render only drafted-cell subscribers", () => {
+  const N = 8
 
-	function makeGrid() {
-		const cells = Array.from({ length: N }, () => createAtom(0))
-		const renders = new Array<number>(N).fill(0)
-		function Item({ i }: { i: number }) {
-			renders[i]++
-			return <i>{useSignal(cells[i])};</i>
-		}
-		const grid = (
-			<>
-				{Array.from({ length: N }, (_, i) => (
-					<Item key={i} i={i} />
-				))}
-			</>
-		)
-		return { cells, renders, grid }
-	}
+  function makeGrid() {
+    const cells = Array.from({ length: N }, () => createAtom(0))
+    const renders = new Array<number>(N).fill(0)
+    function Item({ i }: { i: number }) {
+      renders[i]++
+      return <i>{useSignal(cells[i])};</i>
+    }
+    const grid = (
+      <>
+        {Array.from({ length: N }, (_, i) => (
+          <Item key={i} i={i} />
+        ))}
+      </>
+    )
+    return { cells, renders, grid }
+  }
 
-	test('N subscribers, one drafted cell: exactly that subscriber renders in the transition pass', async () => {
-		const { cells, renders, grid } = makeGrid()
-		const { container } = await h.mount(grid)
-		expect(renders).toEqual(new Array(N).fill(1))
-		await act(() => {
-			startSignalTransition(() => cells[3].set(7))
-		})
-		await act(async () => {})
-		expect(text(container)).toBe('0;0;0;7;0;0;0;0;')
-		// One transition pass rendered subscriber 3 once; nobody else moved —
-		// and retirement stayed a silent fold (no post-commit repair render).
-		const expected = new Array(N).fill(1)
-		expected[3] = 2
-		expect(renders).toEqual(expected)
-	})
+  test("N subscribers, one drafted cell: exactly that subscriber renders in the transition pass", async () => {
+    const { cells, renders, grid } = makeGrid()
+    const { container } = await h.mount(grid)
+    expect(renders).toEqual(new Array(N).fill(1))
+    await act(() => {
+      startSignalTransition(() => cells[3].set(7))
+    })
+    await act(async () => {})
+    expect(text(container)).toBe("0;0;0;7;0;0;0;0;")
+    // One transition pass rendered subscriber 3 once; nobody else moved —
+    // and retirement stayed a silent fold (no post-commit repair render).
+    const expected = new Array(N).fill(1)
+    expected[3] = 2
+    expect(renders).toEqual(expected)
+  })
 
-	test('late append to a live rendered draft re-dispatches only to affected subscribers, in the owning transition', async () => {
-		const { cells, renders, grid } = makeGrid()
-		const hold = createAtom(false)
-		const gate = deferred<void>()
-		function Suspender() {
-			const held = useSignal(hold)
-			if (held && !gate.settled) {
-				throw gate.promise
-			}
-			return <b>s;</b>
-		}
-		const { container } = await h.mount(
-			<>
-				{grid}
-				<React.Suspense fallback={null}>
-					<Suspender />
-				</React.Suspense>
-			</>,
-		)
-		const mounted = [...renders]
-		let draft!: Draft
-		await act(() => {
-			React.startTransition(() => {
-				draft = openDraft()
-				broadcastDraft(draft)
-				runWithDraftWrites(draft, () => {
-					cells[0].set(1)
-					hold.set(true)
-				})
-				// The draft remains live: the batch continues below.
-			})
-		})
-		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held, invisible
-		// Late append from a plain event context (no ambient transition):
-		// the wake must join the owning transition's updates, so the
-		// committed DOM stays untouched and untouched subscribers stay
-		// asleep.
-		await act(() => {
-			runWithDraftWrites(draft, () => cells[1].set(2))
-		})
-		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
-		for (let i = 2; i < N; i++) {
-			expect(renders[i]).toBe(mounted[i])
-		} // never woken
-		await act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-		expect(text(container)).toBe('1;2;0;0;0;0;0;0;s;') // the whole batch lands together
-		for (let i = 2; i < N; i++) {
-			expect(renders[i]).toBe(mounted[i])
-		} // silent fold
-	})
+  test("late append to a live rendered draft re-dispatches only to affected subscribers, in the owning transition", async () => {
+    const { cells, renders, grid } = makeGrid()
+    const hold = createAtom(false)
+    const gate = deferred<void>()
+    function Suspender() {
+      const held = useSignal(hold)
+      if (held && !gate.settled) {
+        throw gate.promise
+      }
+      return <b>s;</b>
+    }
+    const { container } = await h.mount(
+      <>
+        {grid}
+        <React.Suspense fallback={null}>
+          <Suspender />
+        </React.Suspense>
+      </>,
+    )
+    const mounted = [...renders]
+    let draft!: Draft
+    await act(() => {
+      React.startTransition(() => {
+        draft = openDraft()
+        broadcastDraft(draft)
+        runWithDraftWrites(draft, () => {
+          cells[0].set(1)
+          hold.set(true)
+        })
+        // The draft remains live: the batch continues below.
+      })
+    })
+    expect(text(container)).toBe("0;0;0;0;0;0;0;0;s;") // held, invisible
+    // Late append from a plain event context (no ambient transition):
+    // the wake must join the owning transition's updates, so the
+    // committed DOM stays untouched and untouched subscribers stay
+    // asleep.
+    await act(() => {
+      runWithDraftWrites(draft, () => cells[1].set(2))
+    })
+    expect(text(container)).toBe("0;0;0;0;0;0;0;0;s;") // still held, still invisible
+    for (let i = 2; i < N; i++) {
+      expect(renders[i]).toBe(mounted[i])
+    } // never woken
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(text(container)).toBe("1;2;0;0;0;0;0;0;s;") // the whole batch lands together
+    for (let i = 2; i < N; i++) {
+      expect(renders[i]).toBe(mounted[i])
+    } // silent fold
+  })
 
-	test('two interleaved transitions keep distinct audiences', async () => {
-		const a = createAtom(0)
-		const b = createAtom(0)
-		const hold = createAtom(false)
-		const gate = deferred<void>()
-		let bRenders = 0
-		function AReader() {
-			const v = useSignal(a)
-			const held = useSignal(hold)
-			if (held && !gate.settled) {
-				throw gate.promise
-			}
-			return <b>a:{v};</b>
-		}
-		function BReader() {
-			bRenders++
-			return <i>b:{useSignal(b)};</i>
-		}
-		const { container } = await h.mount(
-			<>
-				<React.Suspense fallback={null}>
-					<AReader />
-				</React.Suspense>
-				<BReader />
-			</>,
-		)
-		await act(() => {
-			startSignalTransition(() => {
-				a.set(1)
-				hold.set(true)
-			})
-		})
-		expect(text(container)).toBe('a:0;b:0;') // T1 held
-		expect(bRenders).toBe(1) // T1's wakes never reached b's subscriber
-		await act(() => {
-			startSignalTransition(() => b.set(2))
-		})
-		await act(async () => {})
-		// T2 woke exactly b's subscriber; its commit rides behind T1's hold
-		// because both drafts flow through the connection's one reducer queue and
-		// React entangles same-queue transition updates (stock updater rules).
-		expect(bRenders).toBeGreaterThan(1)
-		expect(text(container)).toBe('a:0;b:0;')
-		await act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-		expect(text(container)).toBe('a:1;b:2;') // both worlds land, each its own values
-	})
+  test("two interleaved transitions keep distinct audiences", async () => {
+    const a = createAtom(0)
+    const b = createAtom(0)
+    const hold = createAtom(false)
+    const gate = deferred<void>()
+    let bRenders = 0
+    function AReader() {
+      const v = useSignal(a)
+      const held = useSignal(hold)
+      if (held && !gate.settled) {
+        throw gate.promise
+      }
+      return <b>a:{v};</b>
+    }
+    function BReader() {
+      bRenders++
+      return <i>b:{useSignal(b)};</i>
+    }
+    const { container } = await h.mount(
+      <>
+        <React.Suspense fallback={null}>
+          <AReader />
+        </React.Suspense>
+        <BReader />
+      </>,
+    )
+    await act(() => {
+      startSignalTransition(() => {
+        a.set(1)
+        hold.set(true)
+      })
+    })
+    expect(text(container)).toBe("a:0;b:0;") // T1 held
+    expect(bRenders).toBe(1) // T1's wakes never reached b's subscriber
+    await act(() => {
+      startSignalTransition(() => b.set(2))
+    })
+    await act(async () => {})
+    // T2 woke exactly b's subscriber; its commit rides behind T1's hold
+    // because both drafts flow through the connection's one reducer queue and
+    // React entangles same-queue transition updates (stock updater rules).
+    expect(bRenders).toBeGreaterThan(1)
+    expect(text(container)).toBe("a:0;b:0;")
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(text(container)).toBe("a:1;b:2;") // both worlds land, each its own values
+  })
 
-	test('a same-cell write burst dispatches one draft-lane wake per subscriber, not one per write', async () => {
-		const SUBS = 4
-		const cell = createAtom(0, { label: 'burst' })
-		const computed = createComputed(() => cell.get(), { label: 'burst-computed' })
-		const renders = new Array<number>(SUBS).fill(0)
-		function Sub({ i }: { i: number }) {
-			renders[i]++
-			return <i>{useSignal(computed)};</i>
-		}
-		const { container } = await h.mount(
-			<>
-				{Array.from({ length: SUBS }, (_, i) => (
-					<Sub key={i} i={i} />
-				))}
-			</>,
-		)
-		const tracer = attachTracer()
-		const wakesBeforeRender: TraceEvent[] = []
-		try {
-			await act(() => {
-				startSignalTransition(() => {
-					for (let k = 1; k <= 100; k++) {
-						cell.set(k)
-					}
-				})
-				// Sampled synchronously after the writes, before React renders the
-				// transition pass: what the burst itself cost in reducer dispatches.
-				for (const event of tracer.events()) {
-					if (event.kind === 'transition-notify') {
-						wakesBeforeRender.push(event)
-					}
-				}
-			})
-		} finally {
-			tracer.stop()
-		}
-		expect(wakesBeforeRender).toHaveLength(SUBS) // one per subscribing hook
-		const draftId = wakesBeforeRender[0]!.draftId
-		const rootId = wakesBeforeRender[0]!.rootId
-		expect(draftId).toBeDefined()
-		expect(rootId).toBeDefined()
-		for (const wake of wakesBeforeRender) {
-			// The wake is recorded against the subscribing watcher, not the watched
-			// computed — and these watchers mounted before the tracer, so unlabeled.
-			expect(wake).toMatchObject({ draftId, rootId })
-			expect(tracer.find(wake.cause)).toMatchObject({
-				kind: 'set',
-				label: 'burst',
-				draftId,
-			})
-		}
-		await act(async () => {})
-		expect(text(container)).toBe('100;'.repeat(SUBS))
-		expect(renders).toEqual(new Array(SUBS).fill(2)) // mount + one transition pass
-	})
+  test("a same-cell write burst dispatches one draft-lane wake per subscriber, not one per write", async () => {
+    const SUBS = 4
+    const cell = createAtom(0, { label: "burst" })
+    const computed = createComputed(() => cell.get(), { label: "burst-computed" })
+    const renders = new Array<number>(SUBS).fill(0)
+    function Sub({ i }: { i: number }) {
+      renders[i]++
+      return <i>{useSignal(computed)};</i>
+    }
+    const { container } = await h.mount(
+      <>
+        {Array.from({ length: SUBS }, (_, i) => (
+          <Sub key={i} i={i} />
+        ))}
+      </>,
+    )
+    const tracer = attachTracer()
+    const wakesBeforeRender: TraceEvent[] = []
+    try {
+      await act(() => {
+        startSignalTransition(() => {
+          for (let k = 1; k <= 100; k++) {
+            cell.set(k)
+          }
+        })
+        // Sampled synchronously after the writes, before React renders the
+        // transition pass: what the burst itself cost in reducer dispatches.
+        for (const event of tracer.events()) {
+          if (event.kind === "transition-notify") {
+            wakesBeforeRender.push(event)
+          }
+        }
+      })
+    } finally {
+      tracer.stop()
+    }
+    expect(wakesBeforeRender).toHaveLength(SUBS) // one per subscribing hook
+    const draftId = wakesBeforeRender[0]!.draftId
+    const rootId = wakesBeforeRender[0]!.rootId
+    expect(draftId).toBeDefined()
+    expect(rootId).toBeDefined()
+    for (const wake of wakesBeforeRender) {
+      // The wake is recorded against the subscribing watcher, not the watched
+      // computed — and these watchers mounted before the tracer, so unlabeled.
+      expect(wake).toMatchObject({ draftId, rootId })
+      expect(tracer.find(wake.cause)).toMatchObject({
+        kind: "set",
+        label: "burst",
+        draftId,
+      })
+    }
+    await act(async () => {})
+    expect(text(container)).toBe("100;".repeat(SUBS))
+    expect(renders).toEqual(new Array(SUBS).fill(2)) // mount + one transition pass
+  })
 
-	test('a computed mounted after a draft write traces its late-subscription wake to that write', async () => {
-		const source = createAtom(0, { label: 'late-source' })
-		const computed = createComputed(() => source.get(), { label: 'late-computed' })
-		const gate = deferred<void>()
-		function Suspender() {
-			const value = useSignal(source)
-			if (value > 0 && !gate.settled) {
-				throw gate.promise
-			}
-			return <b>s:{value};</b>
-		}
-		function LateReader() {
-			return <i>r:{useSignal(computed)};</i>
-		}
-		function App({ late }: { late: boolean }) {
-			return (
-				<>
-					<React.Suspense fallback={null}>
-						<Suspender />
-					</React.Suspense>
-					{late ? <LateReader /> : null}
-				</>
-			)
-		}
-		const { root, container } = await h.mount(<App late={false} />)
-		const tracer = attachTracer()
-		let beforeLateMount = 0
-		try {
-			await act(() => {
-				startSignalTransition(() => source.set(1))
-			})
-			beforeLateMount = tracer.events().at(-1)?.id ?? 0
-			await act(() => {
-				root.render(<App late={true} />)
-			})
-		} finally {
-			tracer.stop()
-		}
-		expect(text(container)).toBe('s:0;r:0;')
-		// The late subscription emits a new wake after the transition's initial
-		// delivery. React owns component names, so identify it by this operation
-		// boundary rather than by engine-owned component labeling.
-		const wakes: TraceEvent[] = []
-		for (const event of tracer.events()) {
-			if (event.kind === 'transition-notify' && event.id > beforeLateMount) {
-				wakes.push(event)
-			}
-		}
-		expect(wakes).toHaveLength(1)
-		expect(tracer.find(wakes[0]!.cause)).toMatchObject({
-			kind: 'set',
-			label: 'late-source',
-			draftId: wakes[0]!.draftId,
-		})
-		await act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-		expect(text(container)).toBe('s:1;r:1;')
-	})
+  test("a computed mounted after a draft write traces its late-subscription wake to that write", async () => {
+    const source = createAtom(0, { label: "late-source" })
+    const computed = createComputed(() => source.get(), { label: "late-computed" })
+    const gate = deferred<void>()
+    function Suspender() {
+      const value = useSignal(source)
+      if (value > 0 && !gate.settled) {
+        throw gate.promise
+      }
+      return <b>s:{value};</b>
+    }
+    function LateReader() {
+      return <i>r:{useSignal(computed)};</i>
+    }
+    function App({ late }: { late: boolean }) {
+      return (
+        <>
+          <React.Suspense fallback={null}>
+            <Suspender />
+          </React.Suspense>
+          {late ? <LateReader /> : null}
+        </>
+      )
+    }
+    const { root, container } = await h.mount(<App late={false} />)
+    const tracer = attachTracer()
+    let beforeLateMount = 0
+    try {
+      await act(() => {
+        startSignalTransition(() => source.set(1))
+      })
+      beforeLateMount = tracer.events().at(-1)?.id ?? 0
+      await act(() => {
+        root.render(<App late={true} />)
+      })
+    } finally {
+      tracer.stop()
+    }
+    expect(text(container)).toBe("s:0;r:0;")
+    // The late subscription emits a new wake after the transition's initial
+    // delivery. React owns component names, so identify it by this operation
+    // boundary rather than by engine-owned component labeling.
+    const wakes: TraceEvent[] = []
+    for (const event of tracer.events()) {
+      if (event.kind === "transition-notify" && event.id > beforeLateMount) {
+        wakes.push(event)
+      }
+    }
+    expect(wakes).toHaveLength(1)
+    expect(tracer.find(wakes[0]!.cause)).toMatchObject({
+      kind: "set",
+      label: "late-source",
+      draftId: wakes[0]!.draftId,
+    })
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(text(container)).toBe("s:1;r:1;")
+  })
 
-	test('late append to a cell the transition pass already rendered re-dispatches and lands', async () => {
-		// Guards the dedup's clear-on-render contract: after a pass consumed
-		// the draft, a new intent on the same cell must re-dispatch — a
-		// swallowed wake would let React bail out and commit a stale frame.
-		const { cells, renders, grid } = makeGrid()
-		const hold = createAtom(false)
-		const gate = deferred<void>()
-		function Suspender() {
-			const held = useSignal(hold)
-			if (held && !gate.settled) {
-				throw gate.promise
-			}
-			return <b>s;</b>
-		}
-		const { container } = await h.mount(
-			<>
-				{grid}
-				<React.Suspense fallback={null}>
-					<Suspender />
-				</React.Suspense>
-			</>,
-		)
-		let draft!: Draft
-		await act(() => {
-			React.startTransition(() => {
-				draft = openDraft()
-				broadcastDraft(draft)
-				runWithDraftWrites(draft, () => {
-					cells[0].set(1)
-					hold.set(true)
-				})
-			})
-		})
-		// The held transition pass rendered subscriber 0 with the draft value.
-		const afterHeldPass = renders[0]
-		expect(afterHeldPass).toBe(2)
-		await act(() => {
-			runWithDraftWrites(draft, () => cells[0].set(2))
-		})
-		expect(renders[0]).toBe(afterHeldPass + 1) // exactly one more transition render
-		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // still held, still invisible
-		await act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-		expect(text(container)).toBe('2;0;0;0;0;0;0;0;s;') // the appended value committed
-	})
+  test("late append to a cell the transition pass already rendered re-dispatches and lands", async () => {
+    // Guards the dedup's clear-on-render contract: after a pass consumed
+    // the draft, a new intent on the same cell must re-dispatch — a
+    // swallowed wake would let React bail out and commit a stale frame.
+    const { cells, renders, grid } = makeGrid()
+    const hold = createAtom(false)
+    const gate = deferred<void>()
+    function Suspender() {
+      const held = useSignal(hold)
+      if (held && !gate.settled) {
+        throw gate.promise
+      }
+      return <b>s;</b>
+    }
+    const { container } = await h.mount(
+      <>
+        {grid}
+        <React.Suspense fallback={null}>
+          <Suspender />
+        </React.Suspense>
+      </>,
+    )
+    let draft!: Draft
+    await act(() => {
+      React.startTransition(() => {
+        draft = openDraft()
+        broadcastDraft(draft)
+        runWithDraftWrites(draft, () => {
+          cells[0].set(1)
+          hold.set(true)
+        })
+      })
+    })
+    // The held transition pass rendered subscriber 0 with the draft value.
+    const afterHeldPass = renders[0]
+    expect(afterHeldPass).toBe(2)
+    await act(() => {
+      runWithDraftWrites(draft, () => cells[0].set(2))
+    })
+    expect(renders[0]).toBe(afterHeldPass + 1) // exactly one more transition render
+    expect(text(container)).toBe("0;0;0;0;0;0;0;0;s;") // still held, still invisible
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(text(container)).toBe("2;0;0;0;0;0;0;0;s;") // the appended value committed
+  })
 
-	test('StrictMode: append after a double-rendered pass still lands', async () => {
-		const { cells, grid } = makeGrid()
-		const hold = createAtom(false)
-		const gate = deferred<void>()
-		function Suspender() {
-			const held = useSignal(hold)
-			if (held && !gate.settled) {
-				throw gate.promise
-			}
-			return <b>s;</b>
-		}
-		const { container } = await h.mount(
-			<React.StrictMode>
-				{grid}
-				<React.Suspense fallback={null}>
-					<Suspender />
-				</React.Suspense>
-			</React.StrictMode>,
-		)
-		let draft!: Draft
-		await act(() => {
-			React.startTransition(() => {
-				draft = openDraft()
-				broadcastDraft(draft)
-				runWithDraftWrites(draft, () => {
-					cells[0].set(1)
-					hold.set(true)
-				})
-			})
-		})
-		expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;') // held
-		await act(() => {
-			runWithDraftWrites(draft, () => cells[0].set(2))
-		})
-		await act(async () => {
-			gate.resolve()
-			await gate.promise
-		})
-		expect(text(container)).toBe('2;0;0;0;0;0;0;0;s;') // no swallowed re-render
-	})
+  test("StrictMode: append after a double-rendered pass still lands", async () => {
+    const { cells, grid } = makeGrid()
+    const hold = createAtom(false)
+    const gate = deferred<void>()
+    function Suspender() {
+      const held = useSignal(hold)
+      if (held && !gate.settled) {
+        throw gate.promise
+      }
+      return <b>s;</b>
+    }
+    const { container } = await h.mount(
+      <React.StrictMode>
+        {grid}
+        <React.Suspense fallback={null}>
+          <Suspender />
+        </React.Suspense>
+      </React.StrictMode>,
+    )
+    let draft!: Draft
+    await act(() => {
+      React.startTransition(() => {
+        draft = openDraft()
+        broadcastDraft(draft)
+        runWithDraftWrites(draft, () => {
+          cells[0].set(1)
+          hold.set(true)
+        })
+      })
+    })
+    expect(text(container)).toBe("0;0;0;0;0;0;0;0;s;") // held
+    await act(() => {
+      runWithDraftWrites(draft, () => cells[0].set(2))
+    })
+    await act(async () => {
+      gate.resolve()
+      await gate.promise
+    })
+    expect(text(container)).toBe("2;0;0;0;0;0;0;0;s;") // no swallowed re-render
+  })
 
-	test('StrictMode: double-dispatched wakes net to a consistent commit', async () => {
-		const { cells, renders, grid } = makeGrid()
-		const { container } = await h.mount(<React.StrictMode>{grid}</React.StrictMode>)
-		const mounted = [...renders]
-		await act(() => {
-			startSignalTransition(() => cells[2].set(5))
-		})
-		await act(async () => {})
-		expect(text(container)).toBe('0;0;5;0;0;0;0;0;')
-		for (let i = 0; i < N; i++) {
-			if (i !== 2) {
-				expect(renders[i]).toBe(mounted[i])
-			} // untouched subscribers stay asleep
-		}
-		expect(renders[2]).toBeGreaterThan(mounted[2])
-	})
+  test("StrictMode: double-dispatched wakes net to a consistent commit", async () => {
+    const { cells, renders, grid } = makeGrid()
+    const { container } = await h.mount(<React.StrictMode>{grid}</React.StrictMode>)
+    const mounted = [...renders]
+    await act(() => {
+      startSignalTransition(() => cells[2].set(5))
+    })
+    await act(async () => {})
+    expect(text(container)).toBe("0;0;5;0;0;0;0;0;")
+    for (let i = 0; i < N; i++) {
+      if (i !== 2) {
+        expect(renders[i]).toBe(mounted[i])
+      } // untouched subscribers stay asleep
+    }
+    expect(renders[2]).toBeGreaterThan(mounted[2])
+  })
 })

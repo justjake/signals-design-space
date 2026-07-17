@@ -12,47 +12,44 @@
 // tooling must never touch. Whole-repo format and lint passes operate only on
 // the remaining first-party source.
 const vendored = [
-	'vendor/**',
-	'upstream-alien-signals/**',
-	'milomg-reactivity-benchmark/**',
-	'daishi-concurrent-benchmark/**',
-	'packages/dalien-signals/**',
-	'design-loop/**',
-	'monitor-design/**',
-	'plans/**',
-	'research/**',
-	'reviews/**',
-	'spec/**',
-	'harness/results/**',
-	'**/src/debug/layout.debug.ts',
-	'**/dist/**',
-	'**/*.md',
+  "vendor/**",
+  "upstream-alien-signals/**",
+  "milomg-reactivity-benchmark/**",
+  "daishi-concurrent-benchmark/**",
+  "packages/dalien-signals/**",
+  "design-loop/**",
+  "monitor-design/**",
+  "plans/**",
+  "research/**",
+  "reviews/**",
+  "spec/**",
+  "harness/results/**",
+  "**/src/debug/layout.debug.ts",
+  "**/dist/**",
 ]
 
 export default {
-	test: {
-		// `vp test` at the repo root runs exactly these suites, each with its
-		// own existing vitest.config.ts (vitest 4 projects). Per-package
-		// `pnpm test` / `pnpm -C harness conformance` are unaffected.
-		projects: ['./harness', './packages/cosignals'],
-	},
-	fmt: {
-		// Tabs render at two columns; statements do not end in semicolons.
-		useTabs: true,
-		tabWidth: 2,
-		singleQuote: true,
-		semi: false,
-		ignorePatterns: vendored,
-	},
-	lint: {
-		ignorePatterns: vendored,
-		rules: {
-			curly: 'error',
-			'typescript/no-unnecessary-type-assertion': 'error',
-		},
-		options: {
-			typeAware: true,
-			typeCheck: true,
-		},
-	},
+  test: {
+    // `vp test` at the repo root runs exactly these suites, each with its
+    // own existing vitest.config.ts (vitest 4 projects). Per-package
+    // `pnpm test` / `pnpm -C harness conformance` are unaffected.
+    projects: ["./harness", "./packages/cosignals"],
+  },
+  fmt: {
+    tabWidth: 2,
+    singleQuote: false,
+    semi: false,
+    ignorePatterns: vendored,
+  },
+  lint: {
+    ignorePatterns: vendored,
+    rules: {
+      curly: "error",
+      "typescript/no-unnecessary-type-assertion": "error",
+    },
+    options: {
+      typeAware: true,
+      typeCheck: true,
+    },
+  },
 }

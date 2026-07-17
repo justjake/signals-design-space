@@ -56,7 +56,7 @@ suite gates.**
 
 **Real seam bug found and fixed:** www test runs have
 `enableParallelTransitions === true`, so sibling transitions render on
-single lanes and reach the tree via *entanglement* — and the S1 registry
+single lanes and reach the tree via _entanglement_ — and the S1 registry
 under-reported: included-batches missed the entangled batch, and the
 finish edge retired it `committed=false` while its write was visibly
 committed. Fixed by mirroring React's own bookkeeping:
@@ -82,14 +82,14 @@ channel and fails on www without the fix.
 
 ## Gate table
 
-| Gate | Result |
-|---|---|
-| Fork suite default (experimental) | **23/23** (10 BatchRegistry + 5 Commit + 8 Pass), stable ×3 runs; re-verified by supervisor |
-| Fork suite www-modern / www-classic / stable | **23/23 each** |
-| Upstream suites (S2's set + FlushSyncNoAggregateError, IncrementalUpdatesMinimalism, TransitionTracing, SuspenseyCommitPhase, SiblingPrerendering) | **15 suites, 145 passed, 1 pre-existing skip** |
-| `yarn linc` / `yarn flow dom-node` / `yarn prettier-check` | pass |
-| `yarn extract-errors` | code **604** assigned |
-| `fork/build-react.sh` | builds ~13s — `Built: 19.3.0 (b6da053b10)` |
+| Gate                                                                                                                                               | Result                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Fork suite default (experimental)                                                                                                                  | **23/23** (10 BatchRegistry + 5 Commit + 8 Pass), stable ×3 runs; re-verified by supervisor |
+| Fork suite www-modern / www-classic / stable                                                                                                       | **23/23 each**                                                                              |
+| Upstream suites (S2's set + FlushSyncNoAggregateError, IncrementalUpdatesMinimalism, TransitionTracing, SuspenseyCommitPhase, SiblingPrerendering) | **15 suites, 145 passed, 1 pre-existing skip**                                              |
+| `yarn linc` / `yarn flow dom-node` / `yarn prettier-check`                                                                                         | pass                                                                                        |
+| `yarn extract-errors`                                                                                                                              | code **604** assigned                                                                       |
+| `fork/build-react.sh`                                                                                                                              | builds ~13s — `Built: 19.3.0 (b6da053b10)`                                                  |
 
 ## Commits (65a8d89a97 → b6da053b10)
 

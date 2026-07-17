@@ -222,7 +222,7 @@ must be able to continue from it alone.
      hot walks) and three world column functions: growWorldArenaColumns
      (the grown-together loop), scrubWorldShadowColumnsOnEvict (vals +
      clocks), resetWorldArenaColumnsOnRelease (every column). The
-     hand-written Arena* enums are deleted; values identical.
+     hand-written Arena\* enums are deleted; values identical.
    - **Growth re-expression (the retired reload style)**: WorldArena
      buffers are now RESIZABLE ArrayBuffers (maxByteLength =
      ArenaGeom.MAX_BUFFER_BYTES = 2^28, virtual reservation) with
@@ -352,7 +352,7 @@ must be able to continue from it alone.
       lockstep; the fuzz caught its absence at seed 5/step 43): the model's
       eager boundary folds empty its log, re-arming its empty-log drop
       check; the engine's equivalent one-value state is `log.unretired ===
-      0 && log.maxRetiredSeq <= getMinLivePin()` (provably exactly the
+0 && log.maxRetiredSeq <= getMinLivePin()` (provably exactly the
       states where the model's log is empty — argued both directions in the
       arm's comment), comparing against kernel newest (untracked read; the
       one value every world folds to). Same acceptance counts as the
@@ -436,6 +436,7 @@ change counters, minimal + documented); cosignals-react useSignalEffect doc
 update.
 
 Leg-5 exactness design (argued in full; the corpora are the referee):
+
 - Engine per-(root, node) committed clock ≡ model per-(root, node)
   accepted-change counter over a committed fold cache {outcome, counter}.
 - The model's cache refreshes ONLY inside observer-machinery committed
@@ -486,16 +487,16 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
 
 12. **Schema v3 (commit A)**: extras general per-record object column
     (growArray, 1 slot, scrubOnFree node, ID_TO_EXTRAS_SHIFT); WatcherField
-    + SubscriptionField families (observer records = kernel node-allocator
-    records; slots 1/5/7 keep allocator meanings); NodeFlag K_WATCHER /
-    K_SUBSCRIPTION / OBSERVER_LIVE (outside KIND_MASK — kernel dispatch
-    never sees observer records); ALLOCATOR_FAMILIES introduced — kernel
-    scrub/grow functions now emit per ALLOCATOR (names unchanged), plus
-    generated growNodeSideColumns (allocNode's grown-together loop — the
-    hand-written while-push pair replaced) and generated
-    scrubWorldLinkColumnsOnFree (arenaFreeLink calls it; world links' clock
-    slots = subscription dep lastValidatedAt, no longer "reserved").
-    allocNode is unbudgeted; arenaFreeLink stayed within its 50 budget.
+    - SubscriptionField families (observer records = kernel node-allocator
+      records; slots 1/5/7 keep allocator meanings); NodeFlag K_WATCHER /
+      K_SUBSCRIPTION / OBSERVER_LIVE (outside KIND_MASK — kernel dispatch
+      never sees observer records); ALLOCATOR_FAMILIES introduced — kernel
+      scrub/grow functions now emit per ALLOCATOR (names unchanged), plus
+      generated growNodeSideColumns (allocNode's grown-together loop — the
+      hand-written while-push pair replaced) and generated
+      scrubWorldLinkColumnsOnFree (arenaFreeLink calls it; world links' clock
+      slots = subscription dep lastValidatedAt, no longer "reserved").
+      allocNode is unbudgeted; arenaFreeLink stayed within its 50 budget.
 
 13. **Watchers as arena records (commit B1 — storage only, semantics
     untouched)**: the Watcher class moved into CosignalEngine.ts's new
@@ -506,7 +507,7 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     POISON rows added). State storage: NODE/NODE_GEN/NODE_IX/DEDUP_BITS
     Int32 fields (WatcherField), OBSERVER_LIVE flag bit (the live setter
     shifts observation through a module slot RenderPass registers per
-    composition — __setWatcherObservationShift), lastRenderedValue in the
+    composition — \_\_setWatcherObservationShift), lastRenderedValue in the
     values column, name/root/flattened-snapshot in the extras object
     (snapshot setter rewrites 5 fields in place — no commit allocation).
     dropWatcher frees the record LAST (deferred to the boundary sweep;
@@ -623,10 +624,10 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
       re-evaluation (engine leg, evaluation-counted).
     - cosignals-react: useSignalEffect doc teaches the at-least-once
       contract (idempotent bodies, Strict-Mode analogy).
-    Suites: cosignals-first-draft 368/1skip (365 + 3 pins), oracle 82, react 72/72,
-    conformance 179×2, typecheck ×3 (one pre-existing worktree artifact:
-    an untracked user-draft src/Allocator.ts fails tsc locally — not mine,
-    not committed, left untouched).
+      Suites: cosignals-first-draft 368/1skip (365 + 3 pins), oracle 82, react 72/72,
+      conformance 179×2, typecheck ×3 (one pre-existing worktree artifact:
+      an untracked user-draft src/Allocator.ts fails tsc locally — not mine,
+      not committed, left untouched).
 
 ## Done (continued 8) — leg 5 fix round (lead A/B verdict)
 
@@ -657,14 +658,14 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     cold-render WT 394.0 vs main 416.7 (-5.4%, faster); logged watch1
     112-120 vs leg-end's 162-244 (dramatically better, variance
     collapsed; residual vs main +9%). Full suites re-green (cosignals-first-draft 368
-    + user draft, oracle 82, react 72/72, conformance 179×2).
-    RESIDUAL, stated per the verdict's demand: ~+13% on the no-gc write
-    loop exists at leg-5 START vs main (151 vs 134 ns) — a pre-leg-5
-    branch-level residue (episodes/cutover era), NOT consult-clock cost
-    (the consult machinery never runs in the storm's timed region; the
-    at-least-once mechanism's cost is confined to boundary consults and
-    gates fine). Left for the lead's branch-level ledger; not silently
-    accepted.
+    - user draft, oracle 82, react 72/72, conformance 179×2).
+      RESIDUAL, stated per the verdict's demand: ~+13% on the no-gc write
+      loop exists at leg-5 START vs main (151 vs 134 ns) — a pre-leg-5
+      branch-level residue (episodes/cutover era), NOT consult-clock cost
+      (the consult machinery never runs in the storm's timed region; the
+      at-least-once mechanism's cost is confined to boundary consults and
+      gates fine). Left for the lead's branch-level ledger; not silently
+      accepted.
 
 ## Owner ruling 3 (start of leg 6, plan amended as 6f40bee — cherry-picked bd656e0)
 
@@ -755,7 +756,7 @@ seam extraction + object implementation + dual gate.
       fanAtomsToArena/arenaDecay/settleObserverClock/collectArenaClosure/
       drains) or the named clock probe (committedNodeClock). The section
       header documents the confinement. NO seam built (per ruling).
-    - **__setWatcherObservationShift seam DELETED**: the factory is
+    - **\_\_setWatcherObservationShift seam DELETED**: the factory is
       same-file now and assigns the `observerShift` module slot directly
       (the slot itself survives — the Watcher class still needs no captured
       composition state).
@@ -771,8 +772,8 @@ seam extraction + object implementation + dual gate.
       rewritten in NotificationQueue.ts, index.ts (module list), World.ts
       (3 sites), concurrent.ts (8 sites), CosignalEngine.ts observer
       section. tests/trace-off.spec.ts: RenderPass.ts left ENGINE_MODULES
-      + the trace-slot scan list (the CosignalEngine.ts entries cover the
-      section; documented in the list comment).
+      - the trace-slot scan list (the CosignalEngine.ts entries cover the
+        section; documented in the list comment).
     - **Worktree hazard survived (successor caution)**: the owner's editor
       tooling ran a prettier-style reformat over CosignalEngine.ts +
       package.json (tabs→spaces, line-width reflow — ~500 lines of noise,
@@ -816,8 +817,8 @@ seam extraction + object implementation + dual gate.
       `a.nodeToShadow` read outside the engine — the guard's world-state
       reads are now fully narrow, matching its suspended row);
       freeWatcherRecord unexported (same-file-only since the fold-in).
-      No other dead machinery found: __setReclaimGuardHook /
-      __setRecordFreeHook stay (the hook reads machinery-module state —
+      No other dead machinery found: **setReclaimGuardHook /
+      **setRecordFreeHook stay (the hook reads machinery-module state —
       they die when that state reaches the engine or the seam leg
       formalizes the contract).
     - **The reclamation section MOVE to file end is DEFERRED** (the unit's
@@ -834,9 +835,9 @@ seam extraction + object implementation + dual gate.
         tests/oracle-adapter.ts — moves if/when Batch.ts folds.
       - implementation-coupled specs to watch at the storage-seam leg:
         arena-checker.ts + arena-sa/sa2/sa3/sb/sc/sd (arenaCheckerLayout +
-        __checkerInternals + bridge __arenaForTest/__arenaPoolForTest/
-        __arenaStats/__arenaLinkIdForTest/__arenaLinkNextDepForTest/
-        __bumpNodeGenForTest), leak-audit.spec.ts (shell.memory.length,
+        **checkerInternals + bridge **arenaForTest/**arenaPoolForTest/
+        **arenaStats/**arenaLinkIdForTest/**arenaLinkNextDepForTest/
+        \_\_bumpNodeGenForTest), leak-audit.spec.ts (shell.memory.length,
         pool internals), bytecode.spec.ts (budgets NAME arena functions —
         re-pin at the seam leg + priority 10), trace-off.spec.ts
         (ENGINE_MODULES file list).
@@ -884,7 +885,7 @@ writing. Full-suite tallies may drift by their test count while untracked.
   packages/dalien-signals, packages/cosignals-alt-a, packages/cosignals-alt-b,
   milomg-reactivity-benchmark, pnpm-lock.yaml, spec/, harness/results,
   vendor/react, plans/, research/.
-- Docs-gate bans (shipped sources): "mint*", the word "plane" (say arena),
+- Docs-gate bans (shipped sources): "mint\*", the word "plane" (say arena),
   the word "token" (say batch), § references, plans// research/ paths,
   research-stage shorthand in comments. The generator's output must stay
   clean too (it lands in src/CosignalEngine.ts, which is scanned).

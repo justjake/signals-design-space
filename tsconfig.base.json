@@ -1,13 +1,13 @@
 {
-	"compilerOptions": {
-		"target": "ES2022",
-		"module": "ESNext",
-		"moduleResolution": "bundler",
-		"lib": ["ESNext"],
-		"strict": true,
-		"isolatedModules": true,
-		"skipLibCheck": true,
-		"noEmit": true,
-		"forceConsistentCasingInFileNames": true
-	}
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true
+  }
 }

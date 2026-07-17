@@ -59,61 +59,61 @@
  */
 
 import {
-	type Brand,
-	type CellNode,
-	type DerivedNode,
-	type ReactiveNode,
-	type TraceEventId,
-	type GraphChangeClock,
-	Flag,
-	NO_EVENT,
-	assertSignalReadAllowed,
-	currentBaseChange,
-	currentCause,
-	currentGraphChange,
-	dependencyOf,
-	ensureFresh,
-	ensureNodeRecord,
-	isUninitialized,
-	nextDependency,
-	peekCell,
-	pokeDraftWatchers,
-	runUpdater,
-	setActiveEvaluation,
-	setCurrentCause,
-	setHasLiveDrafts,
-	startBatch,
-	endBatch,
-	tickGraphChange,
-	trace,
-	untracked,
-	writeCell,
-} from './graph.ts'
+  type Brand,
+  type CellNode,
+  type DerivedNode,
+  type ReactiveNode,
+  type TraceEventId,
+  type GraphChangeClock,
+  Flag,
+  NO_EVENT,
+  assertSignalReadAllowed,
+  currentBaseChange,
+  currentCause,
+  currentGraphChange,
+  dependencyOf,
+  ensureFresh,
+  ensureNodeRecord,
+  isUninitialized,
+  nextDependency,
+  peekCell,
+  pokeDraftWatchers,
+  runUpdater,
+  setActiveEvaluation,
+  setCurrentCause,
+  setHasLiveDrafts,
+  startBatch,
+  endBatch,
+  tickGraphChange,
+  trace,
+  untracked,
+  writeCell,
+} from "./graph.ts"
 import {
-	type ResolvedState,
-	ErrorBox,
-	type Suspension,
-	makeSuspension,
-	trackThenable,
-} from './asyncs.ts'
+  type ResolvedState,
+  ErrorBox,
+  type Suspension,
+  makeSuspension,
+  trackThenable,
+} from "./asyncs.ts"
 
 /**
  * Numeric identity of a draft. Ids start at 1 and are never reused, so
  * long-lived React state can hold an id without retaining the Draft
  * record behind it.
  */
-export type DraftId = Brand<number, 'DraftId'>
+export type DraftId = Brand<number, "DraftId">
 /**
  * A draft is open until it is retired (committed into base state) or
  * discarded (rolled back).
  */
-export type DraftState = 'open' | 'retired' | 'discarded'
+export type DraftState = "open" | "retired" | "discarded"
 
 /**
  * How an intent writes: 'set' replaces the cell's value, 'update'
  * applies an updater function to the previous value.
  */
-export type OpKind = 'set' | 'update'
+export type OpKind = "set" | "update"
 
 /**
  * Which drafts one read, render pass, or committed root can see. A
@@ -121,32 +121,32 @@ export type OpKind = 'set' | 'update'
  * React lane.
  */
 export interface World {
-	/** Live drafts, in creation order. */
-	drafts: readonly Draft[]
-	/**
-	 * Canonical key for this draft set (comma-joined ids in creation
-	 * order); memos are stored per (node, sig).
-	 */
-	sig: string
+  /** Live drafts, in creation order. */
+  drafts: readonly Draft[]
+  /**
+   * Canonical key for this draft set (comma-joined ids in creation
+   * order); memos are stored per (node, sig).
+   */
+  sig: string
 }
 
 /** The empty world: no drafts, so every cell resolves to base state. */
-export const BASE_WORLD: World = { drafts: [], sig: '' }
+export const BASE_WORLD: World = { drafts: [], sig: "" }
 
 /** One recorded write: a set-value or an updater function. */
 export interface Intent {
-	kind: OpKind
-	payload: unknown
-	/** The draft that issued this intent; null for urgent intents. */
-	draft: Draft | null
+  kind: OpKind
+  payload: unknown
+  /** The draft that issued this intent; null for urgent intents. */
+  draft: Draft | null
 }
 
 /** A cell's pending-write history (see the header). */
 export interface RebaseLog {
-	/** The cell's value when the first draft intent arrived. */
-	valueBeforeDrafts: unknown
-	/** All intents since, in dispatch order. */
-	intents: Intent[]
+  /** The cell's value when the first draft intent arrived. */
+  valueBeforeDrafts: unknown
+  /** All intents since, in dispatch order. */
+  intents: Intent[]
 }
 
 /**
@@ -154,26 +154,26 @@ export interface RebaseLog {
  * wrote (see the header).
  */
 export interface Draft {
-	id: DraftId
-	state: DraftState
-	/**
-	 * The graph clock reading when this draft opened, if it opened as the
-	 * only live draft; zero otherwise. Used by the write-time value cutoff,
-	 * which is only sound for a lone draft — overlap zeroes this on every
-	 * live draft, permanently disabling the cutoff for them.
-	 */
-	cutoffAtGraphChange: GraphChangeClock
-	/**
-	 * A stable world containing just this draft, shared by the
-	 * notification cutoff and by ambient latest() reads when this is the
-	 * only live draft.
-	 */
-	world: World
-	/**
-	 * Cells this draft wrote; used by retirement, discard, and log
-	 * teardown.
-	 */
-	cells: Set<CellNode<unknown>>
+  id: DraftId
+  state: DraftState
+  /**
+   * The graph clock reading when this draft opened, if it opened as the
+   * only live draft; zero otherwise. Used by the write-time value cutoff,
+   * which is only sound for a lone draft — overlap zeroes this on every
+   * live draft, permanently disabling the cutoff for them.
+   */
+  cutoffAtGraphChange: GraphChangeClock
+  /**
+   * A stable world containing just this draft, shared by the
+   * notification cutoff and by ambient latest() reads when this is the
+   * only live draft.
+   */
+  world: World
+  /**
+   * Cells this draft wrote; used by retirement, discard, and log
+   * teardown.
+   */
+  cells: Set<CellNode<unknown>>
 }
 
 let nextDraftId: DraftId = 1
@@ -202,40 +202,37 @@ const memoNodes = new Set<ReactiveNode>()
 let cutoffWorld: World | null = null
 
 export function liveDraftCount(): number {
-	return liveDrafts.size
+  return liveDrafts.size
 }
 
 export function openDraft(): Draft {
-	const id = nextDraftId++
-	const drafts: Draft[] = []
-	const alone = liveDrafts.size === 0
-	if (!alone) {
-		for (const live of liveDrafts.values()) {
-			live.cutoffAtGraphChange = 0
-		}
-	}
-	const draft: Draft = {
-		id,
-		state: 'open',
-		cutoffAtGraphChange: alone ? currentGraphChange() : 0,
-		world: { drafts, sig: String(id) },
-		cells: new Set(),
-	}
-	const sink = trace
-	if (sink !== null) {
-		// The transition roots at the operation in flight — the DOM-event
-		// origin a devtools adapter attributed, or the write/effect whose
-		// first drafted write opened it — so the whole causal subtree of the
-		// transition chains back to what the user did.
-		sink.setCause(
-			draft,
-			sink.emitEvent('transition-open', null, currentCause, { draftId: id }),
-		)
-	}
-	drafts.push(draft)
-	liveDrafts.set(draft.id, draft)
-	tickGraphChange()
-	return draft
+  const id = nextDraftId++
+  const drafts: Draft[] = []
+  const alone = liveDrafts.size === 0
+  if (!alone) {
+    for (const live of liveDrafts.values()) {
+      live.cutoffAtGraphChange = 0
+    }
+  }
+  const draft: Draft = {
+    id,
+    state: "open",
+    cutoffAtGraphChange: alone ? currentGraphChange() : 0,
+    world: { drafts, sig: String(id) },
+    cells: new Set(),
+  }
+  const sink = trace
+  if (sink !== null) {
+    // The transition roots at the operation in flight — the DOM-event
+    // origin a devtools adapter attributed, or the write/effect whose
+    // first drafted write opened it — so the whole causal subtree of the
+    // transition chains back to what the user did.
+    sink.setCause(draft, sink.emitEvent("transition-open", null, currentCause, { draftId: id }))
+  }
+  drafts.push(draft)
+  liveDrafts.set(draft.id, draft)
+  tickGraphChange()
+  return draft
 }
 
 /**
@@ -246,45 +243,45 @@ export function openDraft(): Draft {
  * components join the transition's render passes.
  */
 export function appendDraftIntent(
-	draft: Draft,
-	cell: CellNode<unknown>,
-	kind: OpKind,
-	payload: unknown,
+  draft: Draft,
+  cell: CellNode<unknown>,
+  kind: OpKind,
+  payload: unknown,
 ): void {
-	if (draft.state !== 'open') {
-		throw new Error('cannot write into a batch that already ended')
-	}
-	let log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		// Capture the value before any drafted intent. peekCell runs a lazy
-		// cell's initializer, which replay needs for its starting value.
-		log = { valueBeforeDrafts: peekCell(cell), intents: [] }
-		rebaseLogs.set(cell, log)
-	}
-	// Array order is dispatch order; retirement flips visibility, never
-	// position.
-	log.intents.push({ kind, payload, draft })
-	draft.cells.add(cell)
-	draftRevisionByCell.set(cell, tickGraphChange())
-	let cause: TraceEventId = NO_EVENT
-	const sink = trace
-	if (sink !== null) {
-		cause = sink.emitEvent(kind, cell, sink.getCause(draft), {
-			draftId: draft.id,
-		})
-		sink.setDraftWrite(draft, cause)
-		sink.setCause(cell, cause)
-	}
-	if (draft.cutoffAtGraphChange !== 0 && draft.cutoffAtGraphChange >= currentBaseChange()) {
-		cutoffWorld = draft.world
-		try {
-			pokeDraftWatchers(cell, cause, draft.id, changedInCutoffWorld)
-		} finally {
-			cutoffWorld = null
-		}
-	} else {
-		pokeDraftWatchers(cell, cause, draft.id)
-	}
+  if (draft.state !== "open") {
+    throw new Error("cannot write into a batch that already ended")
+  }
+  let log = rebaseLogs.get(cell)
+  if (log === undefined) {
+    // Capture the value before any drafted intent. peekCell runs a lazy
+    // cell's initializer, which replay needs for its starting value.
+    log = { valueBeforeDrafts: peekCell(cell), intents: [] }
+    rebaseLogs.set(cell, log)
+  }
+  // Array order is dispatch order; retirement flips visibility, never
+  // position.
+  log.intents.push({ kind, payload, draft })
+  draft.cells.add(cell)
+  draftRevisionByCell.set(cell, tickGraphChange())
+  let cause: TraceEventId = NO_EVENT
+  const sink = trace
+  if (sink !== null) {
+    cause = sink.emitEvent(kind, cell, sink.getCause(draft), {
+      draftId: draft.id,
+    })
+    sink.setDraftWrite(draft, cause)
+    sink.setCause(cell, cause)
+  }
+  if (draft.cutoffAtGraphChange !== 0 && draft.cutoffAtGraphChange >= currentBaseChange()) {
+    cutoffWorld = draft.world
+    try {
+      pokeDraftWatchers(cell, cause, draft.id, changedInCutoffWorld)
+    } finally {
+      cutoffWorld = null
+    }
+  } else {
+    pokeDraftWatchers(cell, cause, draft.id)
+  }
 }
 
 /**
@@ -293,19 +290,19 @@ export function appendDraftIntent(
  * is performed by the caller. Returns false when the cell has no log.
  */
 export function appendUrgentIntent(
-	cell: CellNode<unknown>,
-	kind: OpKind,
-	payload: unknown,
+  cell: CellNode<unknown>,
+  kind: OpKind,
+  payload: unknown,
 ): boolean {
-	const log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		return false
-	}
-	// Array order is dispatch order; retirement flips visibility, never
-	// position.
-	log.intents.push({ kind, payload, draft: null })
-	draftRevisionByCell.set(cell, tickGraphChange())
-	return true
+  const log = rebaseLogs.get(cell)
+  if (log === undefined) {
+    return false
+  }
+  // Array order is dispatch order; retirement flips visibility, never
+  // position.
+  log.intents.push({ kind, payload, draft: null })
+  draftRevisionByCell.set(cell, tickGraphChange())
+  return true
 }
 
 /**
@@ -321,24 +318,24 @@ export function appendUrgentIntent(
  * worlds fresh.
  */
 export function pokeRebasedCell(cell: CellNode<unknown>): void {
-	const log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		return
-	}
-	let woken: Set<Draft> | null = null
-	for (const intent of log.intents) {
-		const d = intent.draft
-		if (d === null || d.state !== 'open') {
-			continue
-		}
-		if (woken === null) {
-			woken = new Set()
-		} else if (woken.has(d)) {
-			continue
-		}
-		woken.add(d)
-		pokeDraftWatchers(cell, NO_EVENT, d.id)
-	}
+  const log = rebaseLogs.get(cell)
+  if (log === undefined) {
+    return
+  }
+  let woken: Set<Draft> | null = null
+  for (const intent of log.intents) {
+    const d = intent.draft
+    if (d === null || d.state !== "open") {
+      continue
+    }
+    if (woken === null) {
+      woken = new Set()
+    } else if (woken.has(d)) {
+      continue
+    }
+    woken.add(d)
+    pokeDraftWatchers(cell, NO_EVENT, d.id)
+  }
 }
 
 /**
@@ -347,21 +344,21 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
  * only when the world includes their draft.
  */
 function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
-	const log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		return peekCell(cell)
-	}
-	let value = log.valueBeforeDrafts
-	for (const intent of log.intents) {
-		const d = intent.draft
-		const included =
-			d === null || d.state === 'retired' || (world !== null && world.drafts.includes(d))
-		if (!included) {
-			continue
-		}
-		value = applyIntent(cell, value, intent)
-	}
-	return value
+  const log = rebaseLogs.get(cell)
+  if (log === undefined) {
+    return peekCell(cell)
+  }
+  let value = log.valueBeforeDrafts
+  for (const intent of log.intents) {
+    const d = intent.draft
+    const included =
+      d === null || d.state === "retired" || (world !== null && world.drafts.includes(d))
+    if (!included) {
+      continue
+    }
+    value = applyIntent(cell, value, intent)
+  }
+  return value
 }
 
 /**
@@ -369,21 +366,21 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
  * dead-prefix folding in releaseDraft.
  */
 function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): unknown {
-	let next = intent.payload
-	if (intent.kind === 'update') {
-		try {
-			next = runUpdater(intent.payload as (p: unknown) => unknown, value)
-		} catch (error) {
-			// A single-draft cutoff is advisory and swallows this replay below.
-			// Ordinary reads and retirement propagate it, so only those observed
-			// callback failures enter the trace.
-			if (cutoffWorld === null && trace !== null) {
-				trace.emitEvent('callback-error', cell, currentCause, { error, phase: 'updater' })
-			}
-			throw error
-		}
-	}
-	return cell.equals(value, next) ? value : next
+  let next = intent.payload
+  if (intent.kind === "update") {
+    try {
+      next = runUpdater(intent.payload as (p: unknown) => unknown, value)
+    } catch (error) {
+      // A single-draft cutoff is advisory and swallows this replay below.
+      // Ordinary reads and retirement propagate it, so only those observed
+      // callback failures enter the trace.
+      if (cutoffWorld === null && trace !== null) {
+        trace.emitEvent("callback-error", cell, currentCause, { error, phase: "updater" })
+      }
+      throw error
+    }
+  }
+  return cell.equals(value, next) ? value : next
 }
 
 /**
@@ -398,48 +395,48 @@ function applyIntent(cell: CellNode<unknown>, value: unknown, intent: Intent): u
  * the draft sees the folded values as new and re-renders.
  */
 export function retireDraft(id: DraftId): void {
-	const draft = liveDrafts.get(id)
-	if (draft === undefined) {
-		return
-	}
-	liveDrafts.delete(id)
-	draft.state = 'retired'
-	tickGraphChange()
-	const sink = trace
-	const lastWrite = sink?.getDraftWrite(draft) ?? NO_EVENT
-	const evt =
-		sink !== null
-			? sink.emitEvent(
-					'transition-retire',
-					null,
-					lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft),
-					{ draftId: id },
-				)
-			: NO_EVENT
-	// Attribute the base-state fold to the drafted write it applies — the intent
-	// — rather than the retirement bookkeeping, so the trace reads "set X ← your
-	// write" instead of "set X ← transition-retire". The retire event still
-	// drives the watcher pokes below.
-	const foldCause = lastWrite !== NO_EVENT ? lastWrite : evt
-	const prevCause = setCurrentCause(foldCause)
-	try {
-		startBatch()
-		try {
-			for (const cell of draft.cells) {
-				draftRevisionByCell.set(cell, currentGraphChange())
-				// The draft is already marked retired, so this base-state
-				// replay includes its intents, interleaved with urgent ones in
-				// dispatch order.
-				writeCell(cell, replayLog(cell, null))
-				pokeDraftWatchers(cell, evt)
-			}
-		} finally {
-			endBatch()
-		}
-	} finally {
-		setCurrentCause(prevCause)
-	}
-	releaseDraft(draft)
+  const draft = liveDrafts.get(id)
+  if (draft === undefined) {
+    return
+  }
+  liveDrafts.delete(id)
+  draft.state = "retired"
+  tickGraphChange()
+  const sink = trace
+  const lastWrite = sink?.getDraftWrite(draft) ?? NO_EVENT
+  const evt =
+    sink !== null
+      ? sink.emitEvent(
+          "transition-retire",
+          null,
+          lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft),
+          { draftId: id },
+        )
+      : NO_EVENT
+  // Attribute the base-state fold to the drafted write it applies — the intent
+  // — rather than the retirement bookkeeping, so the trace reads "set X ← your
+  // write" instead of "set X ← transition-retire". The retire event still
+  // drives the watcher pokes below.
+  const foldCause = lastWrite !== NO_EVENT ? lastWrite : evt
+  const prevCause = setCurrentCause(foldCause)
+  try {
+    startBatch()
+    try {
+      for (const cell of draft.cells) {
+        draftRevisionByCell.set(cell, currentGraphChange())
+        // The draft is already marked retired, so this base-state
+        // replay includes its intents, interleaved with urgent ones in
+        // dispatch order.
+        writeCell(cell, replayLog(cell, null))
+        pokeDraftWatchers(cell, evt)
+      }
+    } finally {
+      endBatch()
+    }
+  } finally {
+    setCurrentCause(prevCause)
+  }
+  releaseDraft(draft)
 }
 
 /**
@@ -448,23 +445,23 @@ export function retireDraft(id: DraftId): void {
  * base values, compare different, and re-render without them.
  */
 export function discardDraft(id: DraftId): void {
-	const draft = liveDrafts.get(id)
-	if (draft === undefined) {
-		return
-	}
-	liveDrafts.delete(id)
-	draft.state = 'discarded'
-	tickGraphChange()
-	const sink = trace
-	const evt =
-		sink !== null
-			? sink.emitEvent('transition-discard', null, sink.getCause(draft), { draftId: id })
-			: NO_EVENT
-	for (const cell of draft.cells) {
-		draftRevisionByCell.set(cell, currentGraphChange())
-		pokeDraftWatchers(cell, evt)
-	}
-	releaseDraft(draft)
+  const draft = liveDrafts.get(id)
+  if (draft === undefined) {
+    return
+  }
+  liveDrafts.delete(id)
+  draft.state = "discarded"
+  tickGraphChange()
+  const sink = trace
+  const evt =
+    sink !== null
+      ? sink.emitEvent("transition-discard", null, sink.getCause(draft), { draftId: id })
+      : NO_EVENT
+  for (const cell of draft.cells) {
+    draftRevisionByCell.set(cell, currentGraphChange())
+    pokeDraftWatchers(cell, evt)
+  }
+  releaseDraft(draft)
 }
 
 /**
@@ -476,45 +473,45 @@ export function discardDraft(id: DraftId): void {
  * depend on that intent's world-specific value.
  */
 function releaseDraft(dead: Draft): void {
-	for (const cell of dead.cells) {
-		const log = rebaseLogs.get(cell)
-		if (log === undefined) {
-			continue
-		}
-		const intents = log.intents
-		let value = log.valueBeforeDrafts
-		let prefix = 0
-		for (; prefix < intents.length; prefix++) {
-			const intent = intents[prefix]
-			const draft = intent.draft
-			if (draft !== null && draft.state !== 'retired' && draft.state !== 'discarded') {
-				break
-			}
-			if (draft === null || draft.state === 'retired') {
-				value = applyIntent(cell, value, intent)
-			}
-		}
-		if (prefix === intents.length) {
-			rebaseLogs.delete(cell)
-		} else if (prefix !== 0) {
-			log.valueBeforeDrafts = value
-			intents.copyWithin(0, prefix)
-			intents.length -= prefix
-		}
-	}
-	if (liveDrafts.size > 0) {
-		return
-	}
-	rebaseLogs.clear()
-	for (const node of memoNodes) {
-		node.worldMemos = null
-	}
-	memoNodes.clear()
+  for (const cell of dead.cells) {
+    const log = rebaseLogs.get(cell)
+    if (log === undefined) {
+      continue
+    }
+    const intents = log.intents
+    let value = log.valueBeforeDrafts
+    let prefix = 0
+    for (; prefix < intents.length; prefix++) {
+      const intent = intents[prefix]
+      const draft = intent.draft
+      if (draft !== null && draft.state !== "retired" && draft.state !== "discarded") {
+        break
+      }
+      if (draft === null || draft.state === "retired") {
+        value = applyIntent(cell, value, intent)
+      }
+    }
+    if (prefix === intents.length) {
+      rebaseLogs.delete(cell)
+    } else if (prefix !== 0) {
+      log.valueBeforeDrafts = value
+      intents.copyWithin(0, prefix)
+      intents.length -= prefix
+    }
+  }
+  if (liveDrafts.size > 0) {
+    return
+  }
+  rebaseLogs.clear()
+  for (const node of memoNodes) {
+    node.worldMemos = null
+  }
+  memoNodes.clear()
 }
 
 /** @internal Test seam for the bounded-history invariant. */
 export function rebaseLogIntentCount<T>(cell: CellNode<T>): number {
-	return rebaseLogs.get(cell as CellNode<unknown>)?.intents.length ?? 0
+  return rebaseLogs.get(cell as CellNode<unknown>)?.intents.length ?? 0
 }
 
 /**
@@ -522,7 +519,7 @@ export function rebaseLogIntentCount<T>(cell: CellNode<T>): number {
  * effects are already folded into base state or rolled back.
  */
 export function isLiveDraft(id: DraftId): boolean {
-	return liveDrafts.has(id)
+  return liveDrafts.has(id)
 }
 
 const NO_IDS: readonly DraftId[] = []
@@ -534,53 +531,53 @@ const NO_IDS: readonly DraftId[] = []
  * write-time wakes asks which transitions it missed.
  */
 export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
-	if (liveDrafts.size === 0) {
-		return NO_IDS
-	}
-	// Set iteration observes in-loop adds, so this is an iterative closure
-	// walk with the set itself as the visited test.
-	const sources = new Set<ReactiveNode>()
-	sources.add(node)
-	for (const source of sources) {
-		if ((source.flags & Flag.KindCell) !== 0) {
-			continue
-		}
-		for (let l = source.deps; l !== undefined; l = nextDependency(l)) {
-			sources.add(dependencyOf(l))
-		}
-	}
-	const out: DraftId[] = []
-	for (const [id, draft] of liveDrafts) {
-		for (const cell of draft.cells) {
-			if (sources.has(cell)) {
-				out.push(id)
-				break
-			}
-		}
-	}
-	return out
+  if (liveDrafts.size === 0) {
+    return NO_IDS
+  }
+  // Set iteration observes in-loop adds, so this is an iterative closure
+  // walk with the set itself as the visited test.
+  const sources = new Set<ReactiveNode>()
+  sources.add(node)
+  for (const source of sources) {
+    if ((source.flags & Flag.KindCell) !== 0) {
+      continue
+    }
+    for (let l = source.deps; l !== undefined; l = nextDependency(l)) {
+      sources.add(dependencyOf(l))
+    }
+  }
+  const out: DraftId[] = []
+  for (const [id, draft] of liveDrafts) {
+    for (const cell of draft.cells) {
+      if (sources.has(cell)) {
+        out.push(id)
+        break
+      }
+    }
+  }
+  return out
 }
 
 /** True while some live draft holds intents against this cell. */
 export function cellHasDraftIntents(cell: CellNode<unknown>): boolean {
-	const log = rebaseLogs.get(cell)
-	if (log === undefined) {
-		return false
-	}
-	for (const intent of log.intents) {
-		const d = intent.draft
-		if (d !== null && d.state !== 'retired' && d.state !== 'discarded') {
-			return true
-		}
-	}
-	return false
+  const log = rebaseLogs.get(cell)
+  if (log === undefined) {
+    return false
+  }
+  for (const intent of log.intents) {
+    const d = intent.draft
+    if (d !== null && d.state !== "retired" && d.state !== "discarded") {
+      return true
+    }
+  }
+  return false
 }
 
 /** Test/reset seam: discard every live draft and clear per-suspension state. */
 export function discardAllDrafts(): void {
-	for (const id of [...liveDrafts.keys()]) {
-		discardDraft(id)
-	}
+  for (const id of [...liveDrafts.keys()]) {
+    discardDraft(id)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,27 +598,27 @@ let currentDraftWriteTarget: Draft | null = null
 let ambientClassifier: (() => Draft | null) | null = null
 
 export function setAmbientClassifier(fn: (() => Draft | null) | null): void {
-	ambientClassifier = fn
+  ambientClassifier = fn
 }
 
 export function runWithDraftWrites<T>(draft: Draft, fn: () => T): T {
-	const prev = currentDraftWriteTarget
-	currentDraftWriteTarget = draft
-	try {
-		return fn()
-	} finally {
-		currentDraftWriteTarget = prev
-	}
+  const prev = currentDraftWriteTarget
+  currentDraftWriteTarget = draft
+  try {
+    return fn()
+  } finally {
+    currentDraftWriteTarget = prev
+  }
 }
 
 export function classifyWrite(): Draft | null {
-	if (currentDraftWriteTarget !== null) {
-		return currentDraftWriteTarget
-	}
-	if (ambientClassifier !== null) {
-		return ambientClassifier()
-	}
-	return null
+  if (currentDraftWriteTarget !== null) {
+    return currentDraftWriteTarget
+  }
+  if (ambientClassifier !== null) {
+    return ambientClassifier()
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -632,17 +629,17 @@ export function classifyWrite(): Draft | null {
 let currentWorld: World | null = null
 
 export function getCurrentWorld(): World | null {
-	return currentWorld
+  return currentWorld
 }
 
 export function withWorld<T>(world: World | null, fn: () => T): T {
-	const prev = currentWorld
-	currentWorld = world
-	try {
-		return fn()
-	} finally {
-		currentWorld = prev
-	}
+  const prev = currentWorld
+  currentWorld = world
+  try {
+    return fn()
+  } finally {
+    currentWorld = prev
+  }
 }
 
 /**
@@ -651,45 +648,45 @@ export function withWorld<T>(world: World | null, fn: () => T): T {
  * cache and allocate nothing.
  */
 const worldCache = new WeakMap<
-	readonly DraftId[],
-	{ validAtGraphChange: GraphChangeClock; world: World }
+  readonly DraftId[],
+  { validAtGraphChange: GraphChangeClock; world: World }
 >()
 
 export function worldOf(ids: readonly DraftId[]): World {
-	if (ids.length === 0) {
-		return BASE_WORLD
-	}
-	const hit = worldCache.get(ids)
-	if (hit !== undefined) {
-		if (hit.validAtGraphChange === currentGraphChange()) {
-			return hit.world
-		}
-		let live = true
-		for (const draft of hit.world.drafts) {
-			if (!liveDrafts.has(draft.id)) {
-				live = false
-				break
-			}
-		}
-		if (live) {
-			hit.validAtGraphChange = currentGraphChange()
-			return hit.world
-		}
-	}
-	// Normalize the id set React handed us: dead drafts drop out, and Map
-	// iteration restores creation order regardless of dispatch arrival
-	// order.
-	const drafts: Draft[] = []
-	let sig = ''
-	for (const [id, draft] of liveDrafts) {
-		if (ids.includes(id)) {
-			drafts.push(draft)
-			sig = sig === '' ? String(id) : `${sig},${id}`
-		}
-	}
-	const world = drafts.length === 0 ? BASE_WORLD : { drafts, sig }
-	worldCache.set(ids, { validAtGraphChange: currentGraphChange(), world })
-	return world
+  if (ids.length === 0) {
+    return BASE_WORLD
+  }
+  const hit = worldCache.get(ids)
+  if (hit !== undefined) {
+    if (hit.validAtGraphChange === currentGraphChange()) {
+      return hit.world
+    }
+    let live = true
+    for (const draft of hit.world.drafts) {
+      if (!liveDrafts.has(draft.id)) {
+        live = false
+        break
+      }
+    }
+    if (live) {
+      hit.validAtGraphChange = currentGraphChange()
+      return hit.world
+    }
+  }
+  // Normalize the id set React handed us: dead drafts drop out, and Map
+  // iteration restores creation order regardless of dispatch arrival
+  // order.
+  const drafts: Draft[] = []
+  let sig = ""
+  for (const [id, draft] of liveDrafts) {
+    if (ids.includes(id)) {
+      drafts.push(draft)
+      sig = sig === "" ? String(id) : `${sig},${id}`
+    }
+  }
+  const world = drafts.length === 0 ? BASE_WORLD : { drafts, sig }
+  worldCache.set(ids, { validAtGraphChange: currentGraphChange(), world })
+  return world
 }
 
 // Draft-world evaluations run outside the graph's normal dependency
@@ -699,32 +696,32 @@ export function worldOf(ids: readonly DraftId[]): World {
 // later if every certified source still carries the same readings.
 
 interface CertificateEntry {
-	node: ReactiveNode | null
-	changedAtGraphChange: GraphChangeClock
-	draftRevision: GraphChangeClock
+  node: ReactiveNode | null
+  changedAtGraphChange: GraphChangeClock
+  draftRevision: GraphChangeClock
 }
 
 interface Certificate {
-	entries: CertificateEntry[]
-	count: number
+  entries: CertificateEntry[]
+  count: number
 }
 
 /** One memoized resolution of a node under one world signature. */
 interface WorldMemo {
-	/**
-	 * The clock reading at the last validation; while it still matches the
-	 * current clock, the memo is fresh with no further checking. Draft
-	 * activity and settlement tick the same clock as base writes, so one
-	 * comparison covers every invalidation source.
-	 */
-	validAtGraphChange: GraphChangeClock
-	/**
-	 * The node's own changedAt reading when the memo was made; a base-state
-	 * change to the node invalidates the memo outright.
-	 */
-	nodeChangedAtGraphChange: GraphChangeClock
-	certificate: Certificate
-	state: ResolvedState
+  /**
+   * The clock reading at the last validation; while it still matches the
+   * current clock, the memo is fresh with no further checking. Draft
+   * activity and settlement tick the same clock as base writes, so one
+   * comparison covers every invalidation source.
+   */
+  validAtGraphChange: GraphChangeClock
+  /**
+   * The node's own changedAt reading when the memo was made; a base-state
+   * change to the node invalidates the memo outright.
+   */
+  nodeChangedAtGraphChange: GraphChangeClock
+  certificate: Certificate
+  state: ResolvedState
 }
 
 /**
@@ -734,90 +731,90 @@ interface WorldMemo {
 let activeCertificate: Certificate | null = null
 
 function appendCertificate(
-	node: ReactiveNode,
-	changedAtGraphChange: GraphChangeClock,
-	draftRevision: GraphChangeClock,
+  node: ReactiveNode,
+  changedAtGraphChange: GraphChangeClock,
+  draftRevision: GraphChangeClock,
 ): void {
-	const certificate = activeCertificate
-	if (certificate === null) {
-		return
-	}
-	const count = certificate.count
-	if (count !== 0 && certificate.entries[count - 1]?.node === node) {
-		return
-	}
-	let entry = certificate.entries[count]
-	if (entry === undefined) {
-		entry = { node, changedAtGraphChange, draftRevision }
-		certificate.entries[count] = entry
-	} else {
-		entry.node = node
-		entry.changedAtGraphChange = changedAtGraphChange
-		entry.draftRevision = draftRevision
-	}
-	certificate.count = count + 1
+  const certificate = activeCertificate
+  if (certificate === null) {
+    return
+  }
+  const count = certificate.count
+  if (count !== 0 && certificate.entries[count - 1]?.node === node) {
+    return
+  }
+  let entry = certificate.entries[count]
+  if (entry === undefined) {
+    entry = { node, changedAtGraphChange, draftRevision }
+    certificate.entries[count] = entry
+  } else {
+    entry.node = node
+    entry.changedAtGraphChange = changedAtGraphChange
+    entry.draftRevision = draftRevision
+  }
+  certificate.count = count + 1
 }
 
 function recordSource(node: ReactiveNode): void {
-	const draftRevision =
-		(node.flags & Flag.KindCell) !== 0
-			? (draftRevisionByCell.get(node as CellNode<unknown>) ?? 0)
-			: 0
-	appendCertificate(node, node.changedAtGraphChange, draftRevision)
+  const draftRevision =
+    (node.flags & Flag.KindCell) !== 0
+      ? (draftRevisionByCell.get(node as CellNode<unknown>) ?? 0)
+      : 0
+  appendCertificate(node, node.changedAtGraphChange, draftRevision)
 }
 
 function inheritCertificate(certificate: Certificate): void {
-	for (let i = 0; i < certificate.count; i++) {
-		const entry = certificate.entries[i]
-		appendCertificate(entry.node as ReactiveNode, entry.changedAtGraphChange, entry.draftRevision)
-	}
+  for (let i = 0; i < certificate.count; i++) {
+    const entry = certificate.entries[i]
+    appendCertificate(entry.node as ReactiveNode, entry.changedAtGraphChange, entry.draftRevision)
+  }
 }
 
 function clearInactiveCertificateEntries(certificate: Certificate, previousCount: number): void {
-	for (let i = certificate.count; i < previousCount; i++) {
-		const entry = certificate.entries[i]
-		entry.node = null
-	}
+  for (let i = certificate.count; i < previousCount; i++) {
+    const entry = certificate.entries[i]
+    entry.node = null
+  }
 }
 
 function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
-	return node.worldMemos?.get(sig) as WorldMemo | undefined
+  return node.worldMemos?.get(sig) as WorldMemo | undefined
 }
 
 /** Passive view of a world memo's state: no evaluation, no validation. */
 export function peekWorldMemo(node: ReactiveNode, sig: string): ResolvedState | undefined {
-	return memoFor(node, sig)?.state
+  return memoFor(node, sig)?.state
 }
 
 function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
-	const graphChange = currentGraphChange()
-	if (memo.validAtGraphChange === graphChange) {
-		return true
-	}
-	if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) {
-		return false
-	}
-	if (
-		(memo.state.flags & Flag.AsyncSuspended) !== 0 &&
-		(memo.state.throwable as Suspension).resolve === null
-	) {
-		return false
-	}
-	for (let i = 0; i < memo.certificate.count; i++) {
-		const entry = memo.certificate.entries[i]
-		const source = entry.node as ReactiveNode
-		if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
-			return false
-		}
-		if (
-			(source.flags & Flag.KindCell) !== 0 &&
-			(draftRevisionByCell.get(source as CellNode<unknown>) ?? 0) !== entry.draftRevision
-		) {
-			return false
-		}
-	}
-	memo.validAtGraphChange = graphChange
-	return true
+  const graphChange = currentGraphChange()
+  if (memo.validAtGraphChange === graphChange) {
+    return true
+  }
+  if (memo.nodeChangedAtGraphChange !== node.changedAtGraphChange) {
+    return false
+  }
+  if (
+    (memo.state.flags & Flag.AsyncSuspended) !== 0 &&
+    (memo.state.throwable as Suspension).resolve === null
+  ) {
+    return false
+  }
+  for (let i = 0; i < memo.certificate.count; i++) {
+    const entry = memo.certificate.entries[i]
+    const source = entry.node as ReactiveNode
+    if (source.changedAtGraphChange !== entry.changedAtGraphChange) {
+      return false
+    }
+    if (
+      (source.flags & Flag.KindCell) !== 0 &&
+      (draftRevisionByCell.get(source as CellNode<unknown>) ?? 0) !== entry.draftRevision
+    ) {
+      return false
+    }
+  }
+  memo.validAtGraphChange = graphChange
+  return true
 }
 
 /**
@@ -825,18 +822,18 @@ function memoValid(node: ReactiveNode, memo: WorldMemo): boolean {
  * state, and equal values under the node's own equality function.
  */
 function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedState): boolean {
-	const asyncBits = right.flags & Flag.AsyncMask
-	if ((left.flags & Flag.AsyncMask) !== asyncBits) {
-		return false
-	}
-	if (asyncBits === 0) {
-		const equals = (node as DerivedNode<unknown>).equals ?? Object.is
-		return equals(left.value, right.value)
-	}
-	if (asyncBits === Flag.AsyncSuspended) {
-		return left.throwable === right.throwable && left.value === right.value
-	}
-	return (left.throwable as ErrorBox).error === (right.throwable as ErrorBox).error
+  const asyncBits = right.flags & Flag.AsyncMask
+  if ((left.flags & Flag.AsyncMask) !== asyncBits) {
+    return false
+  }
+  if (asyncBits === 0) {
+    const equals = (node as DerivedNode<unknown>).equals ?? Object.is
+    return equals(left.value, right.value)
+  }
+  if (asyncBits === Flag.AsyncSuspended) {
+    return left.throwable === right.throwable && left.value === right.value
+  }
+  return (left.throwable as ErrorBox).error === (right.throwable as ErrorBox).error
 }
 
 /**
@@ -847,17 +844,17 @@ function statesEqual(node: ReactiveNode, left: ResolvedState, right: ResolvedSta
  * the node, its world resolution is identical to base state.
  */
 function changedInCutoffWorld(node: ReactiveNode): boolean {
-	const world = cutoffWorld!
-	try {
-		const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD)
-		const next = resolveState(node, world)
-		return !statesEqual(node, previous, next)
-	} catch {
-		// The cutoff is advisory only. An updater that throws when replayed
-		// should surface that error at an ordinary read site, not inside the
-		// write that appended it — so treat it as changed and move on.
-		return true
-	}
+  const world = cutoffWorld!
+  try {
+    const previous = memoFor(node, world.sig)?.state ?? resolveState(node, BASE_WORLD)
+    const next = resolveState(node, world)
+    return !statesEqual(node, previous, next)
+  } catch {
+    // The cutoff is advisory only. An updater that throws when replayed
+    // should surface that error at an ordinary read site, not inside the
+    // write that appended it — so treat it as changed and move on.
+    return true
+  }
 }
 
 /**
@@ -868,107 +865,107 @@ function changedInCutoffWorld(node: ReactiveNode): boolean {
  * the world, with results memoized per (node, world signature).
  */
 export function resolveState(node: ReactiveNode, world: World): ResolvedState {
-	assertSignalReadAllowed()
-	if ((node.flags & Flag.ComputingMask) !== 0) {
-		throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`)
-	}
-	if (world.drafts.length === 0) {
-		if ((node.flags & Flag.KindCell) !== 0) {
-			peekCell(node as CellNode<unknown>)
-		} else {
-			untracked(() => ensureFresh(node as DerivedNode<unknown>))
-		}
-		recordSource(node)
-		return node as CellNode<unknown> | DerivedNode<unknown>
-	}
-	let memo = memoFor(node, world.sig)
-	if (memo !== undefined && memoValid(node, memo)) {
-		recordSource(node)
-		inheritCertificate(memo.certificate)
-		return memo.state
-	}
-	const certificate = memo?.certificate ?? { entries: [], count: 0 }
-	let fresh: ResolvedState
-	if ((node.flags & Flag.KindCell) !== 0) {
-		const cell = node as CellNode<unknown>
-		const previousCount = certificate.count
-		let entry = certificate.entries[0]
-		if (entry === undefined) {
-			entry = {
-				node: cell,
-				changedAtGraphChange: cell.changedAtGraphChange,
-				draftRevision: draftRevisionByCell.get(cell) ?? 0,
-			}
-			certificate.entries[0] = entry
-		} else {
-			entry.node = cell
-			entry.changedAtGraphChange = cell.changedAtGraphChange
-			entry.draftRevision = draftRevisionByCell.get(cell) ?? 0
-		}
-		certificate.count = 1
-		clearInactiveCertificateEntries(certificate, previousCount)
-		fresh = { flags: 0, value: replayLog(cell, world) }
-	} else if (trace === null) {
-		fresh = draftEvaluate(node as DerivedNode<unknown>, world, memo?.state, certificate)
-	} else {
-		const sink = trace
-		const previousState = memo?.state
-		const computeWorld: DraftId[] = []
-		for (const draft of world.drafts) {
-			computeWorld.push(draft.id)
-		}
-		const compute = sink.startSpan('compute', node, sink.getCause(node), { world: computeWorld })
-		const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
-		try {
-			fresh = draftEvaluate(node as DerivedNode<unknown>, world, previousState, certificate)
-		} finally {
-			if (compute !== NO_EVENT) {
-				setCurrentCause(prevCause)
-			}
-		}
-		if (trace !== null) {
-			if ((fresh.flags & Flag.AsyncSuspended) !== 0) {
-				trace.emitEvent('compute-suspend', node, compute, {
-					suspension: fresh.throwable as Suspension,
-					world: computeWorld,
-				})
-			} else if ((fresh.flags & Flag.AsyncError) !== 0 && fresh !== previousState) {
-				trace.emitEvent('compute-error', node, compute, {
-					error: (fresh.throwable as ErrorBox).error,
-					world: computeWorld,
-				})
-			}
-		}
-		if (compute !== NO_EVENT && sink.endSpan !== undefined) {
-			sink.endSpan(compute)
-		}
-	}
-	// Keep the previous state record when the fresh resolution is
-	// indistinguishable from it, so subscribers that compare by identity do
-	// not re-render.
-	const previousState = memo?.state
-	const state =
-		previousState !== undefined && statesEqual(node, previousState, fresh) ? previousState : fresh
-	if (memo === undefined) {
-		memo = {
-			validAtGraphChange: currentGraphChange(),
-			nodeChangedAtGraphChange: node.changedAtGraphChange,
-			certificate,
-			state,
-		}
-		if (node.worldMemos === null) {
-			node.worldMemos = new Map()
-			memoNodes.add(node)
-		}
-		node.worldMemos.set(world.sig, memo)
-	} else {
-		memo.validAtGraphChange = currentGraphChange()
-		memo.nodeChangedAtGraphChange = node.changedAtGraphChange
-		memo.state = state
-	}
-	recordSource(node)
-	inheritCertificate(certificate)
-	return state
+  assertSignalReadAllowed()
+  if ((node.flags & Flag.ComputingMask) !== 0) {
+    throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ""}`)
+  }
+  if (world.drafts.length === 0) {
+    if ((node.flags & Flag.KindCell) !== 0) {
+      peekCell(node as CellNode<unknown>)
+    } else {
+      untracked(() => ensureFresh(node as DerivedNode<unknown>))
+    }
+    recordSource(node)
+    return node as CellNode<unknown> | DerivedNode<unknown>
+  }
+  let memo = memoFor(node, world.sig)
+  if (memo !== undefined && memoValid(node, memo)) {
+    recordSource(node)
+    inheritCertificate(memo.certificate)
+    return memo.state
+  }
+  const certificate = memo?.certificate ?? { entries: [], count: 0 }
+  let fresh: ResolvedState
+  if ((node.flags & Flag.KindCell) !== 0) {
+    const cell = node as CellNode<unknown>
+    const previousCount = certificate.count
+    let entry = certificate.entries[0]
+    if (entry === undefined) {
+      entry = {
+        node: cell,
+        changedAtGraphChange: cell.changedAtGraphChange,
+        draftRevision: draftRevisionByCell.get(cell) ?? 0,
+      }
+      certificate.entries[0] = entry
+    } else {
+      entry.node = cell
+      entry.changedAtGraphChange = cell.changedAtGraphChange
+      entry.draftRevision = draftRevisionByCell.get(cell) ?? 0
+    }
+    certificate.count = 1
+    clearInactiveCertificateEntries(certificate, previousCount)
+    fresh = { flags: 0, value: replayLog(cell, world) }
+  } else if (trace === null) {
+    fresh = draftEvaluate(node as DerivedNode<unknown>, world, memo?.state, certificate)
+  } else {
+    const sink = trace
+    const previousState = memo?.state
+    const computeWorld: DraftId[] = []
+    for (const draft of world.drafts) {
+      computeWorld.push(draft.id)
+    }
+    const compute = sink.startSpan("compute", node, sink.getCause(node), { world: computeWorld })
+    const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
+    try {
+      fresh = draftEvaluate(node as DerivedNode<unknown>, world, previousState, certificate)
+    } finally {
+      if (compute !== NO_EVENT) {
+        setCurrentCause(prevCause)
+      }
+    }
+    if (trace !== null) {
+      if ((fresh.flags & Flag.AsyncSuspended) !== 0) {
+        trace.emitEvent("compute-suspend", node, compute, {
+          suspension: fresh.throwable as Suspension,
+          world: computeWorld,
+        })
+      } else if ((fresh.flags & Flag.AsyncError) !== 0 && fresh !== previousState) {
+        trace.emitEvent("compute-error", node, compute, {
+          error: (fresh.throwable as ErrorBox).error,
+          world: computeWorld,
+        })
+      }
+    }
+    if (compute !== NO_EVENT && sink.endSpan !== undefined) {
+      sink.endSpan(compute)
+    }
+  }
+  // Keep the previous state record when the fresh resolution is
+  // indistinguishable from it, so subscribers that compare by identity do
+  // not re-render.
+  const previousState = memo?.state
+  const state =
+    previousState !== undefined && statesEqual(node, previousState, fresh) ? previousState : fresh
+  if (memo === undefined) {
+    memo = {
+      validAtGraphChange: currentGraphChange(),
+      nodeChangedAtGraphChange: node.changedAtGraphChange,
+      certificate,
+      state,
+    }
+    if (node.worldMemos === null) {
+      node.worldMemos = new Map()
+      memoNodes.add(node)
+    }
+    node.worldMemos.set(world.sig, memo)
+  } else {
+    memo.validAtGraphChange = currentGraphChange()
+    memo.nodeChangedAtGraphChange = node.changedAtGraphChange
+    memo.state = state
+  }
+  recordSource(node)
+  inheritCertificate(certificate)
+  return state
 }
 
 /**
@@ -978,13 +975,13 @@ export function resolveState(node: ReactiveNode, world: World): ResolvedState {
  * suppressed.
  */
 export function resolveStateUntracked(node: ReactiveNode, world: World): ResolvedState {
-	const previous = activeCertificate
-	activeCertificate = null
-	try {
-		return resolveState(node, world)
-	} finally {
-		activeCertificate = previous
-	}
+  const previous = activeCertificate
+  activeCertificate = null
+  try {
+    return resolveState(node, world)
+  } finally {
+    activeCertificate = previous
+  }
 }
 
 /**
@@ -993,70 +990,70 @@ export function resolveStateUntracked(node: ReactiveNode, world: World): Resolve
  * same world (via withWorld) and record into the certificate.
  */
 function draftEvaluate(
-	node: DerivedNode<unknown>,
-	world: World,
-	prev: ResolvedState | undefined,
-	certificate: Certificate,
+  node: DerivedNode<unknown>,
+  world: World,
+  prev: ResolvedState | undefined,
+  certificate: Certificate,
 ): ResolvedState {
-	// Reuse the previous pending span's suspension: Suspense retries must
-	// observe one stable thenable per span.
-	let suspension =
-		prev !== undefined &&
-		(prev.flags & Flag.AsyncSuspended) !== 0 &&
-		(prev.throwable as Suspension).resolve !== null
-			? (prev.throwable as Suspension)
-			: null
-	const worldUse = (t: PromiseLike<unknown>): unknown => {
-		const box = trackThenable(t)
-		if (box.status === 'fulfilled') {
-			return box.result
-		}
-		if (box.status === 'rejected') {
-			throw box.result
-		}
-		suspension ??= makeSuspension()
-		box.parkedSuspensions!.add(suspension)
-		throw WORLD_PARKED
-	}
-	const prevPark = currentPark
-	const prevCertificate = activeCertificate
-	const previousCertificateCount = certificate.count
-	currentPark = worldUse
-	activeCertificate = certificate
-	certificate.count = 0
-	// A draft evaluation runs untracked, so it can reach a derived that never
-	// evaluated in base state; the flag write below needs a real record.
-	ensureNodeRecord(node)
-	node.flags |= Flag.DraftComputing
-	const prevEvaluation = setActiveEvaluation(node)
-	try {
-		const previous = isUninitialized(node.value) ? undefined : node.value
-		const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
-		return { flags: 0, value }
-	} catch (e) {
-		if (e === WORLD_PARKED) {
-			// The node's base value doubles as the stale value to serve; the
-			// uninitialized sentinel means there is none yet.
-			return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension! }
-		}
-		if (
-			prev !== undefined &&
-			(prev.flags & Flag.AsyncError) !== 0 &&
-			(prev.throwable as ErrorBox).error === e
-		) {
-			return prev
-		}
-		return { flags: Flag.AsyncError, value: node.value, throwable: new ErrorBox(e) }
-	} finally {
-		clearInactiveCertificateEntries(certificate, previousCertificateCount)
-		activeCertificate = prevCertificate
-		currentPark = prevPark
-		setActiveEvaluation(prevEvaluation)
-		node.flags &= ~Flag.DraftComputing
-	}
+  // Reuse the previous pending span's suspension: Suspense retries must
+  // observe one stable thenable per span.
+  let suspension =
+    prev !== undefined &&
+    (prev.flags & Flag.AsyncSuspended) !== 0 &&
+    (prev.throwable as Suspension).resolve !== null
+      ? (prev.throwable as Suspension)
+      : null
+  const worldUse = (t: PromiseLike<unknown>): unknown => {
+    const box = trackThenable(t)
+    if (box.status === "fulfilled") {
+      return box.result
+    }
+    if (box.status === "rejected") {
+      throw box.result
+    }
+    suspension ??= makeSuspension()
+    box.parkedSuspensions!.add(suspension)
+    throw WORLD_PARKED
+  }
+  const prevPark = currentPark
+  const prevCertificate = activeCertificate
+  const previousCertificateCount = certificate.count
+  currentPark = worldUse
+  activeCertificate = certificate
+  certificate.count = 0
+  // A draft evaluation runs untracked, so it can reach a derived that never
+  // evaluated in base state; the flag write below needs a real record.
+  ensureNodeRecord(node)
+  node.flags |= Flag.DraftComputing
+  const prevEvaluation = setActiveEvaluation(node)
+  try {
+    const previous = isUninitialized(node.value) ? undefined : node.value
+    const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
+    return { flags: 0, value }
+  } catch (e) {
+    if (e === WORLD_PARKED) {
+      // The node's base value doubles as the stale value to serve; the
+      // uninitialized sentinel means there is none yet.
+      return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension! }
+    }
+    if (
+      prev !== undefined &&
+      (prev.flags & Flag.AsyncError) !== 0 &&
+      (prev.throwable as ErrorBox).error === e
+    ) {
+      return prev
+    }
+    return { flags: Flag.AsyncError, value: node.value, throwable: new ErrorBox(e) }
+  } finally {
+    clearInactiveCertificateEntries(certificate, previousCertificateCount)
+    activeCertificate = prevCertificate
+    currentPark = prevPark
+    setActiveEvaluation(prevEvaluation)
+    node.flags &= ~Flag.DraftComputing
+  }
 }
 
-const WORLD_PARKED = Symbol('world-parked')
+const WORLD_PARKED = Symbol("world-parked")
 
 /**
  * The park function of the draft evaluation in progress, if any. Reads
@@ -1073,19 +1070,19 @@ export let currentPark: ((t: PromiseLike<unknown>) => unknown) | null = null
  * possible view of the data.
  */
 export function latestWorld(): World {
-	if (liveDrafts.size === 0) {
-		return BASE_WORLD
-	}
-	if (liveDrafts.size === 1) {
-		return liveDrafts.values().next().value!.world
-	}
-	const drafts = new Array<Draft>(liveDrafts.size)
-	const ids = new Array<DraftId>(liveDrafts.size)
-	let index = 0
-	for (const draft of liveDrafts.values()) {
-		drafts[index] = draft
-		ids[index] = draft.id
-		index++
-	}
-	return { drafts, sig: ids.join(',') }
+  if (liveDrafts.size === 0) {
+    return BASE_WORLD
+  }
+  if (liveDrafts.size === 1) {
+    return liveDrafts.values().next().value!.world
+  }
+  const drafts = new Array<Draft>(liveDrafts.size)
+  const ids = new Array<DraftId>(liveDrafts.size)
+  let index = 0
+  for (const draft of liveDrafts.values()) {
+    drafts[index] = draft
+    ids[index] = draft.id
+    index++
+  }
+  return { drafts, sig: ids.join(",") }
 }

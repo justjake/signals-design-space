@@ -1,25 +1,25 @@
 {
-	"name": "alien-signals-opt",
-	"private": true,
-	"type": "module",
-	"scripts": {
-		"conformance": "pnpm -C harness conformance",
-		"inlining": "pnpm -C harness inlining",
-		"bench": "pnpm -C harness bench",
-		"memory": "pnpm -C harness memory",
-		"typecheck": "pnpm -C harness typecheck",
-		"play": "pnpm --filter react-signals-playground dev --open",
-		"release:plan:test": "node --test scripts/release-plan.test.mjs",
-		"release:pack": "node scripts/pack-release.mjs"
-	},
-	"devDependencies": {
-		"mitata": "^1.0.34"
-	},
-	"devEngines": {
-		"packageManager": {
-			"name": "pnpm",
-			"version": "10.33.0",
-			"onFail": "download"
-		}
-	}
+  "name": "alien-signals-opt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "conformance": "pnpm -C harness conformance",
+    "inlining": "pnpm -C harness inlining",
+    "bench": "pnpm -C harness bench",
+    "memory": "pnpm -C harness memory",
+    "typecheck": "pnpm -C harness typecheck",
+    "play": "pnpm --filter react-signals-playground dev --open",
+    "release:plan:test": "node --test scripts/release-plan.test.mjs",
+    "release:pack": "node scripts/pack-release.mjs"
+  },
+  "devDependencies": {
+    "mitata": "^1.0.34"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "10.33.0",
+      "onFail": "download"
+    }
+  }
 }

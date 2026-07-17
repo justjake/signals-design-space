@@ -20,20 +20,20 @@ Ranked per the published rules: lexicographic on (gates, fork LOC, lib LOC, perf
 All LOC judge-verified; perf = CI ratio vs Alien Signals (3 interleaved isolated
 rounds, GitHub 2-core runner — within-run ratios only).
 
-| # | Entry | Agent | Fork | Lib | CI perf | Peer score | Design |
-|---|---|---|---|---|---|---|---|
-| 🥇 | **fx2** | fable max | **11** | 2239 | 1.33× | 8.75 (#2) | zero-fork ceiling: React's own updater queues carry worlds; the mutation window is the only fork line |
-| 🥈 | **fm2** | fable med | 48 | 1734 | 1.84× | 8.36 (#5) | one-file lane probe/pin seam; bump-counter hooks let React's updater queue do rebase |
-| 🥉 | **fx1** | fable max | 80 | 2343 | 1.43× | 8.65 (#4) | store-claimed pinned lanes; engine-owned episode lifecycle |
-| 4 | sh1 | sol high | 94 | **1217** | 3.95× | 7.15 (#7) | operation-log STM; smallest library in the field |
-| 5 | sx2 | sol xhigh | 112 | 1367 | 4.72× | 6.65 (#9) | async-first cells; single shared-internals facts slot |
-| 6 | fh1 | fable high | 167 | 1957 | 1.83× | 8.74 (#3) | worlds as pure visibility predicates; state self-destructs at quiescence |
-| 7 | sm2 | sol max | 186 | 1524 | 3.81× | 6.88 (#8) | batch capsules; rewrote its adopted incumbent fork on ruling |
-| 8 | fm1 | fable med | 188 | 1780 | 1.55× | 8.06 (#6) | all-writes-in-call-order rebase logs; epoch snapshot pins |
-| 9 | **fh2** | fable high | 211 | 2740 | **1.11×** | **8.90 (#1)** | fiber-granular subscribers over an attributed alien-v3 graph port |
-| 10 | sh2 | sol high | 235 | 1424 | 2.02× | 6.44 (#10) | the DoD entry: typed-array slabs + intrusive edge arena |
-| 11 | sm1 | sol max | 320 | 2146 | DNF¹ | 6.11 (#11) | op-history + lane-mask folds; honesty warning on record |
-| 12 | sx1 | sol xhigh | 476 | 1295 | DNF² | 5.49 (#12) | everything-is-one-log purism; four folds, one log |
+| #   | Entry   | Agent      | Fork   | Lib      | CI perf   | Peer score    | Design                                                                                                |
+| --- | ------- | ---------- | ------ | -------- | --------- | ------------- | ----------------------------------------------------------------------------------------------------- |
+| 🥇  | **fx2** | fable max  | **11** | 2239     | 1.33×     | 8.75 (#2)     | zero-fork ceiling: React's own updater queues carry worlds; the mutation window is the only fork line |
+| 🥈  | **fm2** | fable med  | 48     | 1734     | 1.84×     | 8.36 (#5)     | one-file lane probe/pin seam; bump-counter hooks let React's updater queue do rebase                  |
+| 🥉  | **fx1** | fable max  | 80     | 2343     | 1.43×     | 8.65 (#4)     | store-claimed pinned lanes; engine-owned episode lifecycle                                            |
+| 4   | sh1     | sol high   | 94     | **1217** | 3.95×     | 7.15 (#7)     | operation-log STM; smallest library in the field                                                      |
+| 5   | sx2     | sol xhigh  | 112    | 1367     | 4.72×     | 6.65 (#9)     | async-first cells; single shared-internals facts slot                                                 |
+| 6   | fh1     | fable high | 167    | 1957     | 1.83×     | 8.74 (#3)     | worlds as pure visibility predicates; state self-destructs at quiescence                              |
+| 7   | sm2     | sol max    | 186    | 1524     | 3.81×     | 6.88 (#8)     | batch capsules; rewrote its adopted incumbent fork on ruling                                          |
+| 8   | fm1     | fable med  | 188    | 1780     | 1.55×     | 8.06 (#6)     | all-writes-in-call-order rebase logs; epoch snapshot pins                                             |
+| 9   | **fh2** | fable high | 211    | 2740     | **1.11×** | **8.90 (#1)** | fiber-granular subscribers over an attributed alien-v3 graph port                                     |
+| 10  | sh2     | sol high   | 235    | 1424     | 2.02×     | 6.44 (#10)    | the DoD entry: typed-array slabs + intrusive edge arena                                               |
+| 11  | sm1     | sol max    | 320    | 2146     | DNF¹      | 6.11 (#11)    | op-history + lane-mask folds; honesty warning on record                                               |
+| 12  | sx1     | sol xhigh  | 476    | 1295     | DNF²      | 5.49 (#12)    | everything-is-one-log purism; four folds, one log                                                     |
 
 Incumbent baselines: fork **1510**, libs 4689/4909, CI perf Cosignal 0.95× /
 Alt A 1.18× / Alt B 1.22×.
@@ -99,8 +99,8 @@ fx2 8.75 > fh1 8.74 > fx1 8.65 > fm2 8.36 > fm1 8.06 > sh1 7.15 > sm2 6.88 >
 sx2 6.65 > sh2 6.44 > sm1 6.11 > sx1 5.49. Both model cohorts independently
 ranked all six fable entries above all six sol entries (sol judges score ~+1.1
 hotter in level; ordering identical). Most-cited lesson across 132 ballot lines:
-*React already contains the concurrency machine — let its lanes and updater
-queues carry batch and world identity.*
+_React already contains the concurrency machine — let its lanes and updater
+queues carry batch and world identity._
 
 ## Ideas worth stealing (for the incumbents)
 

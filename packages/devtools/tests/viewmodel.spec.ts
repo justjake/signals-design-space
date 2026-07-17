@@ -1,81 +1,81 @@
-import { describe, expect, it } from 'vitest'
-import { createAtom, createComputed, createEffect } from 'cosignals'
-import { attachCosignalsDevtools } from '../src/cosignals.ts'
-import { inspectorModel, logRows, nodeRows } from '../src/panel/viewmodel.ts'
+import { describe, expect, it } from "vitest"
+import { createAtom, createComputed, createEffect } from "cosignals"
+import { attachCosignalsDevtools } from "../src/cosignals.ts"
+import { inspectorModel, logRows, nodeRows } from "../src/panel/viewmodel.ts"
 
 function clock() {
-	let t = 0
-	return () => (t += 1000)
+  let t = 0
+  return () => (t += 1000)
 }
 
-describe('panel view-model', () => {
-	it('derives log rows, node rows, and an inspector model from live data', () => {
-		const dt = attachCosignalsDevtools({ now: clock() })
-		const { collector } = dt
-		try {
-			const count = createAtom(1, { label: 'count' })
-			const doubled = createComputed(() => count.get() * 2, { label: 'doubled' })
-			// parity recomputes to the same value on 1 → 5, feeding sameResults.
-			const parity = createComputed(() => count.get() % 2, { label: 'parity' })
-			createEffect(
-				() => doubled.get(),
-				() => {},
-			)
-			createEffect(
-				() => parity.get(),
-				() => {},
-			)
-			count.set(5)
+describe("panel view-model", () => {
+  it("derives log rows, node rows, and an inspector model from live data", () => {
+    const dt = attachCosignalsDevtools({ now: clock() })
+    const { collector } = dt
+    try {
+      const count = createAtom(1, { label: "count" })
+      const doubled = createComputed(() => count.get() * 2, { label: "doubled" })
+      // parity recomputes to the same value on 1 → 5, feeding sameResults.
+      const parity = createComputed(() => count.get() % 2, { label: "parity" })
+      createEffect(
+        () => doubled.get(),
+        () => {},
+      )
+      createEffect(
+        () => parity.get(),
+        () => {},
+      )
+      count.set(5)
 
-			// Log rows carry the verbatim kind, a color class, and the node name.
-			const rows = logRows(collector, {}, 50)
-			expect(rows.length).toBeGreaterThan(0)
-			const write = rows.find((r) => r.kind === 'set')!
-			expect(write.cls).toBe('write')
-			expect(write.name).toBe('count')
-			const compute = rows.find((r) => r.kind === 'compute' && r.name === 'doubled')!
-			expect(compute).toBeDefined()
-			expect(compute.cls).toBe('compute')
-			// A compute is a span: it closes with a duration the collector timed.
-			expect(compute.took).not.toBeUndefined()
-			expect(compute.took!).toBeGreaterThanOrEqual(0)
-			// A write is instantaneous — no span, no duration.
-			expect(write.took).toBeUndefined()
-			// Compute shows the actual new result, not just "new result".
-			expect(compute.summary.startsWith('new result · ')).toBe(true)
-			// Rows carry a real wall-clock time and inter-entry deltas.
-			expect(rows[0].time).toMatch(/^\d\d:\d\d:\d\d\.\d\d\d$/)
-			expect(rows.some((r) => r.delta !== undefined)).toBe(true)
+      // Log rows carry the verbatim kind, a color class, and the node name.
+      const rows = logRows(collector, {}, 50)
+      expect(rows.length).toBeGreaterThan(0)
+      const write = rows.find((r) => r.kind === "set")!
+      expect(write.cls).toBe("write")
+      expect(write.name).toBe("count")
+      const compute = rows.find((r) => r.kind === "compute" && r.name === "doubled")!
+      expect(compute).toBeDefined()
+      expect(compute.cls).toBe("compute")
+      // A compute is a span: it closes with a duration the collector timed.
+      expect(compute.took).not.toBeUndefined()
+      expect(compute.took!).toBeGreaterThanOrEqual(0)
+      // A write is instantaneous — no span, no duration.
+      expect(write.took).toBeUndefined()
+      // Compute shows the actual new result, not just "new result".
+      expect(compute.summary.startsWith("new result · ")).toBe(true)
+      // Rows carry a real wall-clock time and inter-entry deltas.
+      expect(rows[0].time).toMatch(/^\d\d:\d\d:\d\d\.\d\d\d$/)
+      expect(rows.some((r) => r.delta !== undefined)).toBe(true)
 
-			// Node rows for the graph view.
-			const nrows = nodeRows(collector, '', 50)
-			const dRow = nrows.find((n) => n.name === 'doubled')!
-			expect(dRow.kind).toBe('computed')
-			expect(dRow.value).toBe('10')
-			expect(dRow.recomputes).toBeGreaterThanOrEqual(1)
-			// The "+ metrics" columns read retained per-node stats off the row.
-			expect(dRow.selfUs).toBeGreaterThanOrEqual(0)
-			expect(dRow.newResults).toBeGreaterThanOrEqual(1)
-			expect(dRow.sameResults).toBe(0) // 2 → 10: every recompute changed
-			const pRow = nrows.find((n) => n.name === 'parity')!
-			expect(pRow.sameResults).toBeGreaterThanOrEqual(1) // 1 → 1: unchanged
+      // Node rows for the graph view.
+      const nrows = nodeRows(collector, "", 50)
+      const dRow = nrows.find((n) => n.name === "doubled")!
+      expect(dRow.kind).toBe("computed")
+      expect(dRow.value).toBe("10")
+      expect(dRow.recomputes).toBeGreaterThanOrEqual(1)
+      // The "+ metrics" columns read retained per-node stats off the row.
+      expect(dRow.selfUs).toBeGreaterThanOrEqual(0)
+      expect(dRow.newResults).toBeGreaterThanOrEqual(1)
+      expect(dRow.sameResults).toBe(0) // 2 → 10: every recompute changed
+      const pRow = nrows.find((n) => n.name === "parity")!
+      expect(pRow.sameResults).toBeGreaterThanOrEqual(1) // 1 → 1: unchanged
 
-			// Inspector model: value, deps by name, and a why-chain rooted at 0.
-			const details = inspectorModel(collector, dRow.id)!
-			expect(details.name).toBe('doubled')
-			expect(details.node.valuePreview).toBe('10')
-			expect(details.deps.map((d) => d.name)).toContain('count')
-			expect(details.why.length).toBeGreaterThan(0)
-			expect(details.why[0].cause).toBe(0)
+      // Inspector model: value, deps by name, and a why-chain rooted at 0.
+      const details = inspectorModel(collector, dRow.id)!
+      expect(details.name).toBe("doubled")
+      expect(details.node.valuePreview).toBe("10")
+      expect(details.deps.map((d) => d.name)).toContain("count")
+      expect(details.why.length).toBeGreaterThan(0)
+      expect(details.why[0].cause).toBe(0)
 
-			// A second write shows a real prev → next value diff: the adapter peeks
-			// the atom's value inertly and diffs against the last it recorded.
-			count.set(9)
-			const after = logRows(collector, {}, 50)
-			const lastWrite = [...after].reverse().find((r) => r.kind === 'set' && r.name === 'count')!
-			expect(lastWrite.summary).toBe('5 → 9')
-		} finally {
-			dt.detach()
-		}
-	})
+      // A second write shows a real prev → next value diff: the adapter peeks
+      // the atom's value inertly and diffs against the last it recorded.
+      count.set(9)
+      const after = logRows(collector, {}, 50)
+      const lastWrite = [...after].reverse().find((r) => r.kind === "set" && r.name === "count")!
+      expect(lastWrite.summary).toBe("5 → 9")
+    } finally {
+      dt.detach()
+    }
+  })
 })

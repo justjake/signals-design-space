@@ -4,24 +4,24 @@
 
 ## Gates (claimed vs observed)
 
-| Gate | Claimed | Observed (run by judge) |
-| --- | --- | --- |
-| Engine typecheck (`packages/signals-royale-sh2`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
-| React pkg typecheck (`packages/react-signals-royale-sh2`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
-| Conformance (`vitest run tests/conformance.spec.ts`) | 179/179 | PASS — `Tests 179 passed (179)`, 226ms |
-| Oracle default (`vitest run tests/oracle.spec.ts`) | PASS 300x90 | PASS — `randomized world-fold oracle (300 seeds x 90 steps) 865ms` |
-| Oracle deep (`ORACLE_SEEDS=1200 ...`) | PASS 1200x90 | PASS — `(1200 seeds x 90 steps) 3249ms` |
-| Leak audit (`vitest run tests/gc-leaks.spec.ts`) | PASS 2/2 | PASS — 2/2 (`dropped atom handles release their slab slots`, `a committed transition leaves no per-episode state`) |
-| Full engine suite (`pnpm test`) | 191/191 | PASS — `Test Files 5 passed (5)`, `Tests 191 passed (191)` |
-| Fork protocol + adjacent (`yarn test --no-watchman ReactFiberSignalRuntime ReactFlushSync ReactTransition`) | 5 suites, 47 pass 1 skip | PASS — `Test Suites: 5 passed`, `1 skipped, 47 passed, 48 total`, 0.898s |
-| Real-React gate (react pkg `pnpm test`) | 18/18 | PASS — `Tests 18 passed (18)` (includes real time-slicing test with act disabled) |
-| Fork build (`./fork/build-react.sh`) | PASS | PASS — `Built: 19.3.0 (2e0029da3b)`, NODE_DEV+NODE_PROD react/react-dom/scheduler |
-| Shared battery typecheck (`royale/verify-kit/battery`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
-| Shared battery (`pnpm test`) | 25/25 | PASS — `Tests 25 passed (25)` |
-| Fork LOC | 235 | 235 (raw numstat cmd AND canonical count-loc.mjs agree) |
-| Lib LOC | 1424 | 1424 (core.ts 1073, async.ts 71, trace.ts 67, index.ts 3, react index.ts 210) |
-| milomg adapter sanity (`vitest run -t "Royale SH2"`) | 4 pass / 76 skip | PASS — `4 passed | 76 skipped (80)` |
-| milomg benchmark medians / react-seam numbers | 2.189x slower vs alien-signals (self-reported loss) | Not re-run (heavy, not pass/fail); adapter commit audited clean |
+| Gate                                                                                                        | Claimed                                             | Observed (run by judge)                                                                                            |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| Engine typecheck (`packages/signals-royale-sh2`, `pnpm typecheck`)                                          | PASS                                                | PASS, tsc exit 0                                                                                                   |
+| React pkg typecheck (`packages/react-signals-royale-sh2`, `pnpm typecheck`)                                 | PASS                                                | PASS, tsc exit 0                                                                                                   |
+| Conformance (`vitest run tests/conformance.spec.ts`)                                                        | 179/179                                             | PASS — `Tests 179 passed (179)`, 226ms                                                                             |
+| Oracle default (`vitest run tests/oracle.spec.ts`)                                                          | PASS 300x90                                         | PASS — `randomized world-fold oracle (300 seeds x 90 steps) 865ms`                                                 |
+| Oracle deep (`ORACLE_SEEDS=1200 ...`)                                                                       | PASS 1200x90                                        | PASS — `(1200 seeds x 90 steps) 3249ms`                                                                            |
+| Leak audit (`vitest run tests/gc-leaks.spec.ts`)                                                            | PASS 2/2                                            | PASS — 2/2 (`dropped atom handles release their slab slots`, `a committed transition leaves no per-episode state`) |
+| Full engine suite (`pnpm test`)                                                                             | 191/191                                             | PASS — `Test Files 5 passed (5)`, `Tests 191 passed (191)`                                                         |
+| Fork protocol + adjacent (`yarn test --no-watchman ReactFiberSignalRuntime ReactFlushSync ReactTransition`) | 5 suites, 47 pass 1 skip                            | PASS — `Test Suites: 5 passed`, `1 skipped, 47 passed, 48 total`, 0.898s                                           |
+| Real-React gate (react pkg `pnpm test`)                                                                     | 18/18                                               | PASS — `Tests 18 passed (18)` (includes real time-slicing test with act disabled)                                  |
+| Fork build (`./fork/build-react.sh`)                                                                        | PASS                                                | PASS — `Built: 19.3.0 (2e0029da3b)`, NODE_DEV+NODE_PROD react/react-dom/scheduler                                  |
+| Shared battery typecheck (`royale/verify-kit/battery`, `pnpm typecheck`)                                    | PASS                                                | PASS, tsc exit 0                                                                                                   |
+| Shared battery (`pnpm test`)                                                                                | 25/25                                               | PASS — `Tests 25 passed (25)`                                                                                      |
+| Fork LOC                                                                                                    | 235                                                 | 235 (raw numstat cmd AND canonical count-loc.mjs agree)                                                            |
+| Lib LOC                                                                                                     | 1424                                                | 1424 (core.ts 1073, async.ts 71, trace.ts 67, index.ts 3, react index.ts 210)                                      |
+| milomg adapter sanity (`vitest run -t "Royale SH2"`)                                                        | 4 pass / 76 skip                                    | PASS — `4 passed                                                                                                   | 76 skipped (80)` |
+| milomg benchmark medians / react-seam numbers                                                               | 2.189x slower vs alien-signals (self-reported loss) | Not re-run (heavy, not pass/fail); adapter commit audited clean                                                    |
 
 ## Shared battery
 

@@ -6,15 +6,15 @@ current-generation React — no spec escalation needed. Branch
 
 ## Per fact (spec §4.4 numbering)
 
-| Test | File › test name | Verdict |
-|---|---|---|
-| 15 per-root commit reported w/ generation, token live | `ReactFiberExternalRuntimeCommit-test.js` › "reports a spanning batch per root, with generations, while the token stays live" | **PROVEN** |
-| 16 both roots in one flush; retire after last report; independent generations | same › "reports each root separately when a spanning batch commits on both in one flush" | **PROVEN** |
-| 17 pruned root never reports the batch; retire once, committed=true | same › "never reports a batch on a root where its work was pruned by deletion" | **PROVEN** |
-| 25 write-set closure at commit | same › "a commit exposes exactly the write set the committing pass rendered" (invariant replayed over all 7 commits) | **PROVEN** |
-| 22 urgent commit discards older yielded pass before any committed-view advance | `ReactFiberExternalRuntimePass-test.js` › "an urgent commit discards an older yielded pass before any committed-view advance" | **PROVEN** |
-| 24 insertion after completed-but-uncommitted ⇒ pre-commit restart | same › "an update inserted after a completed-but-uncommitted pass forces a pre-commit restart" | **PROVEN** |
-| 28 no same-root committed-view advance while pass frame open (per-root scoped, cross-root control included) | same › "never advances a committed view while the same root has an open pass frame" | **PROVEN** |
+| Test                                                                                                        | File › test name                                                                                                              | Verdict    |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 15 per-root commit reported w/ generation, token live                                                       | `ReactFiberExternalRuntimeCommit-test.js` › "reports a spanning batch per root, with generations, while the token stays live" | **PROVEN** |
+| 16 both roots in one flush; retire after last report; independent generations                               | same › "reports each root separately when a spanning batch commits on both in one flush"                                      | **PROVEN** |
+| 17 pruned root never reports the batch; retire once, committed=true                                         | same › "never reports a batch on a root where its work was pruned by deletion"                                                | **PROVEN** |
+| 25 write-set closure at commit                                                                              | same › "a commit exposes exactly the write set the committing pass rendered" (invariant replayed over all 7 commits)          | **PROVEN** |
+| 22 urgent commit discards older yielded pass before any committed-view advance                              | `ReactFiberExternalRuntimePass-test.js` › "an urgent commit discards an older yielded pass before any committed-view advance" | **PROVEN** |
+| 24 insertion after completed-but-uncommitted ⇒ pre-commit restart                                           | same › "an update inserted after a completed-but-uncommitted pass forces a pre-commit restart"                                | **PROVEN** |
+| 28 no same-root committed-view advance while pass frame open (per-root scoped, cross-root control included) | same › "never advances a committed view while the same root has an open pass frame"                                           | **PROVEN** |
 
 Notable observed details:
 
@@ -48,13 +48,13 @@ Notable observed details:
 
 ## Gates
 
-| Gate | Result |
-|---|---|
-| Fork suite (default channel) | **17/17** (10 S1 + 7 new), stable ×3 runs; also 17/17 on `--release-channel=stable` |
+| Gate                                          | Result                                                                                                                                                                      |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fork suite (default channel)                  | **17/17** (10 S1 + 7 new), stable ×3 runs; also 17/17 on `--release-channel=stable`                                                                                         |
 | Upstream suites (S1's ten + suspensey extras) | **15 suites, 145 passed, 1 pre-existing skip** (S1's named set is a strict subset, all green); `ReactSuspenseyCommitPhase` also green on www-modern variant=true and =false |
-| `yarn linc` | pass |
-| `yarn flow dom-node` | pass (also `prettier-check` pass) |
-| `fork/build-react.sh` | builds (~13s) — build label reads `(fcd2bf8f82)` because it was built pre-commit; content includes all S2 changes |
+| `yarn linc`                                   | pass                                                                                                                                                                        |
+| `yarn flow dom-node`                          | pass (also `prettier-check` pass)                                                                                                                                           |
+| `fork/build-react.sh`                         | builds (~13s) — build label reads `(fcd2bf8f82)` because it was built pre-commit; content includes all S2 changes                                                           |
 
 ## Commits (fcd2bf8f82 → 65a8d89a97)
 

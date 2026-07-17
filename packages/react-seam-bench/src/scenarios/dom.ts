@@ -10,22 +10,22 @@
  * react-dom/client evaluates. Each scenario then calls freshDom() so nodes
  * leaked by one scenario cannot skew the next.
  */
-import { JSDOM } from 'jsdom'
+import { JSDOM } from "jsdom"
 
 let current: JSDOM | undefined
 
 function define(name: string, value: unknown): void {
-	// Plain assignment would throw on Node's own getter-defined globals
-	// (navigator); defineProperty replaces them cleanly.
-	Object.defineProperty(globalThis, name, { value, configurable: true, writable: true })
+  // Plain assignment would throw on Node's own getter-defined globals
+  // (navigator); defineProperty replaces them cleanly.
+  Object.defineProperty(globalThis, name, { value, configurable: true, writable: true })
 }
 
 export function freshDom(): void {
-	current?.window.close()
-	current = new JSDOM('<!doctype html><html><body></body></html>')
-	define('window', current.window)
-	define('document', current.window.document)
-	define('navigator', current.window.navigator)
+  current?.window.close()
+  current = new JSDOM("<!doctype html><html><body></body></html>")
+  define("window", current.window)
+  define("document", current.window.document)
+  define("navigator", current.window.navigator)
 }
 
 freshDom()

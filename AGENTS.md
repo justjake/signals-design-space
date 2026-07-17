@@ -10,7 +10,7 @@
 - Avoid inventing new terms of art if an existing concept already exists in React or existing public signals frameworks like Solid. Avoid jargon or abbreviations, a few normal words will do.
 - Note any unusual code structures or performance critical code structures; for performance stuff it's nice to cite some evidence or exact numbers
 - do not document lore.
-  - Do not reference unrelated packages 
+  - Do not reference unrelated packages
   - Do not reference sections in design docs or research markdowns
 - if each item in a list gets its own explanation, write a bulleted list — one `- item: explanation` per line — never an inline comma chain. Inline lists are fine only for bare enumerations with nothing to say per item.
 - write every comment for a reader who has seen only this file: never use a name or phrase defined elsewhere ("effect()'s source union") as shorthand for an explanation. A valid TSDoc {@link} cross-reference may follow a self-contained explanation, never substitute for one.

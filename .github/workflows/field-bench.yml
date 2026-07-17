@@ -33,17 +33,17 @@ on:
   workflow_dispatch:
     inputs:
       react_seam:
-        description: 'Also run react-seam-bench'
+        description: "Also run react-seam-bench"
         type: boolean
         required: false
         default: false
       shapes_reps:
-        description: 'Reps per shape for the tier-0 shapes bench'
+        description: "Reps per shape for the tier-0 shapes bench"
         required: false
-        default: '5'
+        default: "5"
   schedule:
     # Weekly, Monday 06:17 UTC (off the top of the hour to dodge cron rushes).
-    - cron: '17 6 * * 1'
+    - cron: "17 6 * * 1"
 
 concurrency:
   group: field-bench-${{ github.ref }}

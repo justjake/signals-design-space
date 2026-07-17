@@ -4,11 +4,11 @@
  * without loading any contender code. Order is the round-robin order.
  */
 export const contenderNames = [
-	'cosignals',
-	'alien-uses',
-	'dalien-uses',
-	'baseline-context',
-	'baseline-local',
+  "cosignals",
+  "alien-uses",
+  "dalien-uses",
+  "baseline-context",
+  "baseline-local",
 ] as const
 
 export type ContenderName = (typeof contenderNames)[number]

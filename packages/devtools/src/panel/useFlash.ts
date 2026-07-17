@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from "react"
 
 /**
  * Tracks which ids should be flashing and returns a per-id flash counter that
@@ -14,29 +14,29 @@ import { useEffect, useRef, useState } from 'react'
  * doesn't flash it.
  */
 export function useFlashOnChange(versions: Array<[number, number]>): ReadonlyMap<number, number> {
-	const seen = useRef(new Map<number, number>())
-	const [gen, setGen] = useState<ReadonlyMap<number, number>>(() => new Map())
-	// Runs after every commit; compares versions against the last committed ones.
-	useEffect(() => {
-		const bumped: number[] = []
-		for (const [id, v] of versions) {
-			const prev = seen.current.get(id)
-			if (prev !== undefined && v > prev) bumped.push(id)
-			seen.current.set(id, v)
-		}
-		if (bumped.length === 0) return
-		setGen((g) => {
-			const next = new Map(g)
-			for (const id of bumped) next.set(id, (next.get(id) ?? 0) + 1)
-			return next
-		})
-	})
-	return gen
+  const seen = useRef(new Map<number, number>())
+  const [gen, setGen] = useState<ReadonlyMap<number, number>>(() => new Map())
+  // Runs after every commit; compares versions against the last committed ones.
+  useEffect(() => {
+    const bumped: number[] = []
+    for (const [id, v] of versions) {
+      const prev = seen.current.get(id)
+      if (prev !== undefined && v > prev) bumped.push(id)
+      seen.current.set(id, v)
+    }
+    if (bumped.length === 0) return
+    setGen((g) => {
+      const next = new Map(g)
+      for (const id of bumped) next.set(id, (next.get(id) ?? 0) + 1)
+      return next
+    })
+  })
+  return gen
 }
 
 /** The flash class for an id given its counter (from useFlashOnChange): two
  * alternating names so the animation restarts each bump; empty when never bumped. */
 export function flashClass(gen: ReadonlyMap<number, number>, id: number): string {
-	const c = gen.get(id)
-	return c === undefined ? '' : c % 2 === 1 ? 'flash-a' : 'flash-b'
+  const c = gen.get(id)
+  return c === undefined ? "" : c % 2 === 1 ? "flash-a" : "flash-b"
 }

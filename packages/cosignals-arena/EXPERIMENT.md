@@ -8,20 +8,20 @@ This package ports the `signals-royale-fx2` node/link graph to numeric records w
 
 The port is correct but slower than the object graph on V8. On 2026-07-11, three isolated rounds of `milomg-reactivity-benchmark` produced a 1.405x geometric-mean ratio and a 1.403x aggregate-time ratio (Dalien fork divided by current FX2).
 
-| Benchmark | FX2 ms | fork ms | ratio |
-| --- | ---: | ---: | ---: |
-| create signals | 4.42 | 5.68 | 1.29x |
-| create computations | 77.10 | 146.61 | 1.90x |
-| update signals | 324.06 | 528.88 | 1.63x |
-| avoidable propagation | 137.63 | 182.08 | 1.32x |
-| broad propagation | 96.87 | 170.26 | 1.76x |
-| deep propagation | 42.74 | 70.55 | 1.65x |
-| diamond | 100.70 | 147.24 | 1.46x |
-| mux | 86.66 | 125.48 | 1.45x |
-| repeated observers | 22.08 | 25.62 | 1.16x |
-| molBench | 15.30 | 14.80 | 0.97x |
-| 4-1000x12, dynamic 5% | 270.38 | 326.26 | 1.21x |
-| 25-1000x5 | 324.26 | 362.25 | 1.12x |
+| Benchmark             | FX2 ms | fork ms | ratio |
+| --------------------- | -----: | ------: | ----: |
+| create signals        |   4.42 |    5.68 | 1.29x |
+| create computations   |  77.10 |  146.61 | 1.90x |
+| update signals        | 324.06 |  528.88 | 1.63x |
+| avoidable propagation | 137.63 |  182.08 | 1.32x |
+| broad propagation     |  96.87 |  170.26 | 1.76x |
+| deep propagation      |  42.74 |   70.55 | 1.65x |
+| diamond               | 100.70 |  147.24 | 1.46x |
+| mux                   |  86.66 |  125.48 | 1.45x |
+| repeated observers    |  22.08 |   25.62 | 1.16x |
+| molBench              |  15.30 |   14.80 | 0.97x |
+| 4-1000x12, dynamic 5% | 270.38 |  326.26 | 1.21x |
+| 25-1000x5             | 324.26 |  362.25 | 1.12x |
 
 Command:
 
@@ -210,12 +210,12 @@ The React seam benchmark also runs under the fork now (its child processes
 need Node's transform-types mode for the arena's `const enum`). One adjacent
 source/fork sample measured:
 
-| scenario | source fx2 | arena fork |
-| --- | ---: | ---: |
-| fanout median write-to-commit | 4.095 ms | 4.626 ms |
-| transition p95 urgent latency | 10.434 ms | 10.270 ms |
-| transition completion | 1664.513 ms | 1752.093 ms |
-| 5000-cell median mount | 60.032 ms | 65.303 ms |
+| scenario                      |  source fx2 |  arena fork |
+| ----------------------------- | ----------: | ----------: |
+| fanout median write-to-commit |    4.095 ms |    4.626 ms |
+| transition p95 urgent latency |   10.434 ms |   10.270 ms |
+| transition completion         | 1664.513 ms | 1752.093 ms |
+| 5000-cell median mount        |   60.032 ms |   65.303 ms |
 
 These single React samples are direction checks, not stable estimates; the
 isolated graph comparison is the repeatable performance gate. Typecheck and
@@ -282,28 +282,28 @@ own effect-tax and propagation work in the same window). Machine load was
 elevated (~15) but shared by the alternating protocol; ratios are the
 signal, absolute times are inflated.
 
-| Benchmark | source ms | fork ms | ratio |
-| --- | ---: | ---: | ---: |
-| createSignals | 1.32 | 1.04 | 0.79 |
-| createComputations | 58.82 | 108.06 | 1.84 |
-| updateSignals | 486.68 | 844.54 | 1.74 |
-| avoidablePropagation | 124.13 | 140.44 | 1.13 |
-| broadPropagation | 142.44 | 173.23 | 1.22 |
-| deepPropagation | 46.31 | 50.72 | 1.10 |
-| diamond | 104.74 | 123.63 | 1.18 |
-| mux | 94.16 | 104.64 | 1.11 |
-| repeatedObservers | 20.52 | 22.53 | 1.10 |
-| triangle | 30.72 | 38.06 | 1.24 |
-| unstable | 22.30 | 24.61 | 1.10 |
-| molBench | 15.26 | 15.34 | 1.01 |
-| cellx1000 | 6.34 | 8.03 | 1.27 |
-| cellx2500 | 18.95 | 25.62 | 1.35 |
-| 2-10x5 lazy80% | 186.00 | 210.33 | 1.13 |
-| 6-10x10 dyn25% lazy80% | 109.20 | 119.08 | 1.09 |
-| 4-1000x12 dyn5% | 267.55 | 270.80 | 1.01 |
-| 25-1000x5 | 308.13 | 263.57 | 0.86 |
-| 3-5x500 | 83.67 | 80.30 | 0.96 |
-| 6-100x15 dyn50% | 160.51 | 143.21 | 0.89 |
+| Benchmark              | source ms | fork ms | ratio |
+| ---------------------- | --------: | ------: | ----: |
+| createSignals          |      1.32 |    1.04 |  0.79 |
+| createComputations     |     58.82 |  108.06 |  1.84 |
+| updateSignals          |    486.68 |  844.54 |  1.74 |
+| avoidablePropagation   |    124.13 |  140.44 |  1.13 |
+| broadPropagation       |    142.44 |  173.23 |  1.22 |
+| deepPropagation        |     46.31 |   50.72 |  1.10 |
+| diamond                |    104.74 |  123.63 |  1.18 |
+| mux                    |     94.16 |  104.64 |  1.11 |
+| repeatedObservers      |     20.52 |   22.53 |  1.10 |
+| triangle               |     30.72 |   38.06 |  1.24 |
+| unstable               |     22.30 |   24.61 |  1.10 |
+| molBench               |     15.26 |   15.34 |  1.01 |
+| cellx1000              |      6.34 |    8.03 |  1.27 |
+| cellx2500              |     18.95 |   25.62 |  1.35 |
+| 2-10x5 lazy80%         |    186.00 |  210.33 |  1.13 |
+| 6-10x10 dyn25% lazy80% |    109.20 |  119.08 |  1.09 |
+| 4-1000x12 dyn5%        |    267.55 |  270.80 |  1.01 |
+| 25-1000x5              |    308.13 |  263.57 |  0.86 |
+| 3-5x500                |     83.67 |   80.30 |  0.96 |
+| 6-100x15 dyn50%        |    160.51 |  143.21 |  0.89 |
 
 Geometric mean 1.1310; aggregate 1.2098. The big-graph structure holds
 (signal creation and every large dynamic-graph row still win), but the

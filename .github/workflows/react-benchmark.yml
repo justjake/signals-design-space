@@ -15,22 +15,22 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/cosignals/**'
-      - 'packages/react-seam-bench/**'
-      - 'packages/cosignals-arena/**'
-      - 'packages/dalien-signals'
-      - 'daishi-concurrent-benchmark'
-      - '.github/workflows/react-benchmark.yml'
+      - "packages/cosignals/**"
+      - "packages/react-seam-bench/**"
+      - "packages/cosignals-arena/**"
+      - "packages/dalien-signals"
+      - "daishi-concurrent-benchmark"
+      - ".github/workflows/react-benchmark.yml"
   workflow_dispatch:
     inputs:
       contenders:
-        description: 'Contender names (quoted, space-separated)'
+        description: "Contender names (quoted, space-separated)"
         required: false
         default: '"cosignals" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
       rounds:
-        description: 'Interleaved rounds per contender'
+        description: "Interleaved rounds per contender"
         required: false
-        default: '3'
+        default: "3"
 
 concurrency:
   group: react-benchmark-${{ github.ref }}

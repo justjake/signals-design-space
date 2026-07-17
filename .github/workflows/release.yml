@@ -4,28 +4,28 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/cosignals/**'
-      - 'packages/cosignals-arena/**'
-      - 'packages/devtools/**'
-      - 'packages/react-signals-playground/**'
-      - 'scripts/pack-release.mjs'
-      - 'scripts/release-plan.mjs'
-      - 'scripts/release-plan.test.mjs'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/release.yml'
+      - "packages/cosignals/**"
+      - "packages/cosignals-arena/**"
+      - "packages/devtools/**"
+      - "packages/react-signals-playground/**"
+      - "scripts/pack-release.mjs"
+      - "scripts/release-plan.mjs"
+      - "scripts/release-plan.test.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release.yml"
   pull_request:
     paths:
-      - 'packages/cosignals/**'
-      - 'packages/cosignals-arena/**'
-      - 'packages/devtools/**'
-      - 'packages/react-signals-playground/**'
-      - 'scripts/pack-release.mjs'
-      - 'scripts/release-plan.mjs'
-      - 'scripts/release-plan.test.mjs'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/release.yml'
+      - "packages/cosignals/**"
+      - "packages/cosignals-arena/**"
+      - "packages/devtools/**"
+      - "packages/react-signals-playground/**"
+      - "scripts/pack-release.mjs"
+      - "scripts/release-plan.mjs"
+      - "scripts/release-plan.test.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: read
@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI: 'true'
+  CI: "true"
 
 jobs:
   verify-and-pack:
@@ -168,7 +168,7 @@ jobs:
 
       - name: Run production-build devtools tests on tarballs
         env:
-          DEVTOOLS_E2E_PRODUCTION: '1'
+          DEVTOOLS_E2E_PRODUCTION: "1"
           RELEASE_BROWSER_DIR: ${{ runner.temp }}/release-consumer/packages/react-signals-playground
         run: |
           cd "$RELEASE_BROWSER_DIR"

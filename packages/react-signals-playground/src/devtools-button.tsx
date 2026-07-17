@@ -10,20 +10,26 @@
  * entry imports that engine's module, and a page's non-selected engine must
  * never initialize (the shim selector's isolation rule).
  */
-import { createRoot } from 'react-dom/client'
-import { DevtoolsPanelButton } from 'cosignals-devtools/button'
+import { createRoot } from "react-dom/client"
+import { DevtoolsPanelButton } from "cosignals-devtools/button"
 
 export async function mountDevtoolsButton(
-	defaultOpen: boolean,
-	engine: 'cosignals' | 'cosignals-arena',
+  defaultOpen: boolean,
+  engine: "cosignals" | "cosignals-arena",
 ): Promise<void> {
-	if (document.getElementById('cosignals-devtools-launcher') !== null) return
-	const { collector } =
-		engine === 'cosignals-arena'
-			? (await import('cosignals-devtools/cosignals-arena')).attachCosignalsArenaDevtools()
-			: (await import('cosignals-devtools/cosignals')).attachCosignalsDevtools()
-	const host = document.createElement('div')
-	host.id = 'cosignals-devtools-launcher'
-	document.body.appendChild(host)
-	createRoot(host).render(<DevtoolsPanelButton backend={collector} defaultCorner="bottom-right" defaultOpen={defaultOpen} />)
+  if (document.getElementById("cosignals-devtools-launcher") !== null) return
+  const { collector } =
+    engine === "cosignals-arena"
+      ? (await import("cosignals-devtools/cosignals-arena")).attachCosignalsArenaDevtools()
+      : (await import("cosignals-devtools/cosignals")).attachCosignalsDevtools()
+  const host = document.createElement("div")
+  host.id = "cosignals-devtools-launcher"
+  document.body.appendChild(host)
+  createRoot(host).render(
+    <DevtoolsPanelButton
+      backend={collector}
+      defaultCorner="bottom-right"
+      defaultOpen={defaultOpen}
+    />,
+  )
 }

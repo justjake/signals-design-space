@@ -1,14 +1,14 @@
 {
-	"extends": "./tsconfig.json",
-	"compilerOptions": {
-		"allowImportingTsExtensions": false,
-		"declaration": true,
-		"declarationMap": true,
-		"noEmit": false,
-		"outDir": "dist",
-		"rewriteRelativeImportExtensions": true,
-		"rootDir": "src",
-		"sourceMap": true
-	},
-	"include": ["src"]
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "src",
+    "sourceMap": true
+  },
+  "include": ["src"]
 }

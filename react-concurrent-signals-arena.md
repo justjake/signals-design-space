@@ -72,15 +72,15 @@ cosignal-arena is a signals library with two unusual commitments:
    alien-signals (the fastest conformant object-based library) on every tier-0
    benchmark shape.
 
-2. **Log-overlay concurrency.** Concurrent React needs to show *two or more
-   versions of your state at once* (section 2 explains why). Most designs pay
+2. **Log-overlay concurrency.** Concurrent React needs to show _two or more
+   versions of your state at once_ (section 2 explains why). Most designs pay
    for this by versioning every value or maintaining parallel copies of the
    graph. In this design, the canonical engine knows nothing about versions:
    it is a plain, fast, single-world signal engine. Concurrency is an
    **overlay**: each atom that has in-flight concurrent writes gets a small
    **write log** — a receipt tape of recent writes, packed into its own arena
    plane — and reads that care about a specific version resolve their answer
-   *through the log*. When React commits, the log is absorbed into the
+   _through the log_. When React commits, the log is absorbed into the
    canonical world in bulk. When nothing concurrent is happening — which is
    almost always — the canonical fast path pays exactly one "is the log
    empty?" branch, and pure non-React users never pay even that.
@@ -101,7 +101,7 @@ design as any data structure:
   hand-picked examples.** The subtle machinery — visibility clauses, rebasing,
   sweeping, coalescing — must agree with a deliberately dumb reference
   implementation across randomized schedules before it is trusted. Section 17
-  sequences that oracle *before* the machinery it checks.
+  sequences that oracle _before_ the machinery it checks.
 
 ---
 
@@ -114,10 +114,10 @@ Three primitives:
 - An **atom** holds a plain value you can read and write (`count.state`,
   `count.set(5)`).
 - A **computed** holds a function over other signals (`new Computed({fn: () =>
-  a.state + b.state})`). Reading it returns the function's result. The library
+a.state + b.state})`). Reading it returns the function's result. The library
   records which signals the function actually read — its **dependencies** —
   and caches the result until one of them changes. Dependencies are discovered
-  *by running the function*, so they can change from run to run (read a
+  _by running the function_, so they can change from run to run (read a
   different branch, get different dependencies).
 - An **effect** is a function the library re-runs for you whenever any signal
   it read last time changes. In this library, React components are a special
@@ -132,7 +132,7 @@ Two disciplines make this fast:
   its dependencies to check whether anything truly changed (pull), recomputing
   the minimum necessary. Unread computeds cost nothing.
 - **Equality cutoff.** If a computed re-runs and produces an equal value, the
-  things that depend on *it* are not re-run. Change stops propagating at the
+  things that depend on _it_ are not re-run. Change stops propagating at the
   first place it stops mattering.
 
 This algorithm family (alien-signals' push-pull with exact re-verification) is
@@ -146,9 +146,9 @@ Modern React does not always render your update immediately and synchronously.
 Two features matter here:
 
 - **Transitions** (`startTransition`, `useTransition`): updates marked as
-  transitions render *in the background*. React builds a new tree for the
+  transitions render _in the background_. React builds a new tree for the
   future state while the screen keeps showing the current state. Urgent
-  updates (typing, clicking) can happen *during* that background render; React
+  updates (typing, clicking) can happen _during_ that background render; React
   will render the urgent update first — **without** the transition's changes —
   and finish the transition later. So at one moment there are two live
   "versions of the world": the committed one on screen (possibly updated
@@ -156,8 +156,8 @@ Two features matter here:
 - **Yielding and replay.** A background render is time-sliced: React pauses it
   to keep the page responsive and resumes later. It can also throw a partially
   built tree away and restart. Therefore any code that runs during rendering
-  must be pure (no side effects), and any data it reads must return *the same
-  answer for the whole pass*, even if the outside world moved on while the
+  must be pure (no side effects), and any data it reads must return _the same
+  answer for the whole pass_, even if the outside world moved on while the
   render was paused. A render that reads value A at the start and value B
   after resuming produces a torn, internally inconsistent frame — this is
   called **tearing**.
@@ -175,7 +175,7 @@ write log in section 9 is.
 
 State living outside React (any signals library) has a single current value.
 React's escape hatch, `useSyncExternalStore`, forces consistency by brute
-force: every store change schedules *synchronous* re-rendering, and any store
+force: every store change schedules _synchronous_ re-rendering, and any store
 write that lands during a concurrent render makes React throw away the work
 and re-render synchronously. External state can never ride in a transition.
 That is the de-opt this project exists to eliminate.
@@ -189,7 +189,7 @@ The userspace strategy (validated by the React team's own
   Batching, priorities, async-action entanglement, and infinite-loop
   protection are all inherited from React for free.
 - The store keeps enough recent history (the write log) that a render can be
-  answered *for the specific version of the world it is rendering*.
+  answered _for the specific version of the world it is rendering_.
 
 Six facts are impossible to observe from userspace, and are exactly what our
 React fork exposes (section 6):
@@ -204,16 +204,16 @@ React fork exposes (section 6):
 3. **When does a batch retire** (commit or get pruned) — so pending log
    entries can be folded into canonical state at the right moment, exactly
    once.
-4. **How to schedule an update *into* a specific existing batch** — so a
+4. **How to schedule an update _into_ a specific existing batch** — so a
    component that subscribed a moment too late can issue a corrective
-   re-render that commits *with* the pending batch it missed, not after it
+   re-render that commits _with_ the pending batch it missed, not after it
    (the batch-entanglement API, section 6.5; used by sections 9.8 and 13.2).
-5. **Whether React is executing render code *right now*** — a time-sliced
+5. **Whether React is executing render code _right now_** — a time-sliced
    render stays open across yields to the event loop, and the handlers and
    timers that run in those gaps must read current state and write legally;
    only the work loop knows where its yield edges are (sections 6.3, 10.1).
 6. **A stable name for one piece of render work, and where it committed** —
-   Suspense retries and restarts arrive as new passes of the *same* work
+   Suspense retries and restarts arrive as new passes of the _same_ work
    (the render lineage, for per-world caches), and a batch spanning roots
    commits on each root separately (per-root committed views). Sections
    6.3, 12.3, 13.4.
@@ -228,48 +228,48 @@ mutations. Section 6.6.
 
 Terms defined once, used everywhere. Plain-English first.
 
-| Term | Meaning |
-| --- | --- |
-| **arena** | A large, pre-allocated `Int32Array` treated as an array of fixed-size records. Allocating a record = advancing a bump pointer or popping a free list. |
-| **plane** | One arena serving one record family. The engine has three: the **main plane** `M` (graph nodes and links, stride 8), the **log plane** `G` (write-log entries, stride 4), and the **world-memo plane** `W` (overlay memo records and their certificates, stride 8); the tracing module owns a fourth (the trace plane `T`, section 16.2). |
-| **record** | A fixed-size run of 32-bit slots inside a plane. Referenced by an **id**. |
-| **id** | An integer naming a record. Ids are *pre-multiplied byte-offsets-in-elements*: id = recordIndex × stride, so field access is `M[id + FIELD]` with no multiply. Id 0 is burned as "none" (the null id). |
-| **node** | A graph participant: atom, computed, effect, scope, or watcher. One main-plane record each. |
-| **link** | One dependency edge ("this consumer read that producer"), member of two intrusive doubly-linked lists at once (the consumer's dependency list and the producer's subscriber list). One main-plane record each. |
-| **atom** | A writable signal (`Atom`, `ReducerAtom`, and the hook-owned variants). |
-| **computed** | A derived, cached, lazily-evaluated signal. |
-| **watcher** | A node representing one mounted React hook subscription. Like an effect, but its notification runs synchronously in the writer's stack (to inherit React's lane) instead of queuing for the effect flush. |
-| **kernel** | The mechanism layer: pure integer/graph algorithms over the planes plus one packed value column. It never interprets user values beyond identity comparison and never chooses policy (section 11). |
-| **policy layer** | Everything above the kernel: Atom/ReducerAtom/Computed semantics, custom equality, reducers, promise handling, React bindings, tracing. |
-| **batch** | A set of updates React renders and retires as a unit — everything scheduled in one event, or one transition. Named across the fork boundary by a **batch token**. |
-| **batch token** | A nonzero 31-bit integer minted by the fork's batch registry, stable for the batch's life, never reused while live. Bit 0 encodes "deferred". Section 6.2. |
-| **deferred batch** | A transition-like batch: its render does not block paint and it commits later. Writes in deferred batches are the ones that *must* be logged. |
-| **batch slot** | The engine's own small index (0–31) interned for a live batch token, so log records can store a 5-bit slot instead of a full token, and a render pass's included batches become one 32-bit mask. |
-| **write log / log / tape** | Per-atom singly-linked chain of log records in the log plane: the atom's recent writes, each tagged with operation, batch slot, and sequence tickets. Empty for almost every atom almost all the time. |
-| **base record** | The first record of every log: a synthetic entry holding the atom's value from the moment the log was created. Replays start from it. |
-| **seq / ticket** | A number from one global take-a-number counter, stamped on every log record at append time. Gives every logged write a position on one shared timeline. |
-| **retirement** | The moment a batch leaves React's books — its commit, or the close of a batch that never produced React work. Delivered exactly once per token by the fork. |
-| **absorption** | Folding a retired batch's log entries into canonical kernel state: replay visible entries in seq order, write the result through the kernel (which propagates staleness and queues effects). |
-| **truncation** | Discarding log entries without absorbing them (speculation abort, optimistic rollback, devtools). |
-| **canonical world (W0)** | The world the kernel's values describe: all committed state, plus urgent writes that were applied directly (section 9.4). The only world the kernel knows. |
-| **pass world (Wp)** | The world one render pass must see: determined by its **pin** and **include mask**. |
-| **newest world (Wn)** | Every write visible, pending or not. What reads outside render see. |
-| **writer's world** | For a given write: the world containing all committed state, all retired entries, and the writing batch's own entries. The world used to decide whether a watcher must be told about the write (section 10.6). |
-| **pin** | The seq-counter value captured when a render pass starts. The pass may not see anything that happened after its pin, even if it yields and resumes. |
-| **include mask** | The 32-bit batch-slot mask of the batches a render pass includes (from the fork's `includedBatches`). |
-| **overlay mark** | A per-node stamp meaning "some atom below me currently has a log". Nodes without the mark can answer any world from the kernel cache. Written by the notify walk. |
-| **notify walk** | The overlay's downstream walk from a written atom: stamps overlay marks and collects watchers for broadcast. Runs on every deferred write (once per drain for batched writes), not just the first — this is what guarantees watchers hear about *every* deferred write, including a second write from a different batch into an already-marked region (section 9.8). |
-| **walk ticket** | The id of a notify walk, from a monotonic counter. A node's overlay mark stores the last walk ticket that visited it; "marked" means the stored ticket is newer than the **era floor**. |
-| **era floor** | A scalar holding the walk-ticket value at the last quiescence. Bumping it to the current ticket counter un-marks every node in O(1), with no walk. |
-| **world memo** | A per-computed, per-world cache of an overlay evaluation, stored as a packed record in plane `W` and validated by its **certificate** (section 10.5). The mechanism that keeps long-lived transitions from degenerating marked regions into recompute-per-read. |
-| **certificate** | The packed list of `(atom, seq-or-zero)` pairs a world memo carries: *every* atom its evaluation read, with the atom's tape-tail seq at read time (0 if the atom had no tape then). A memo is valid only while every pair still holds (section 10.5). |
-| **slot memo chain** | Per batch slot, the chain of that slot's writer's-world memo records, threaded through the memo records themselves. The drain walks it to find nodes whose pending-world values a new write may have changed — including nodes reached only through world-divergent dependencies (section 9.8). |
-| **render lineage** | A stable integer the fork assigns to one logical piece of render work on a root (one lane set's work-in-progress), redelivered across that work's restarts and Suspense retries. The key for per-world suspense caches (sections 6.3, 12.3). |
-| **committed view (per root)** | What "committed" means for one root: entries retired at or below that root's last-commit ticket, plus entries of batches the root has committed while they remain pending elsewhere (sections 10.2, 13.4). |
-| **quiescence** | The state of having no live logs, no live batches, and no open render pass — and, from the fork's perspective, no open or pending React work at all. The overlay resets itself to zero cost at quiescence, and the write gate returns to DIRECT there (section 9.1). |
-| **handle** | The user-facing object (`Atom`, `Computed`, …) wrapping a node id. Handles are ordinary objects; the arena records behind them are reclaimed when handles are garbage-collected or deterministically disposed. |
-| **oracle** | The deliberately naive reference implementation of the overlay (plain per-atom arrays, replay-everything reads, memo-free computeds) that the real engine must agree with on every read across randomized schedules (section 17.2). |
-| **frozen kernel artifact** | The donor arena engine, built without any overlay support, kept as a reference build. The contract suite (section 17.5) proves the shipping kernel is behaviorally identical to it whenever the overlay is empty. |
+| Term                          | Meaning                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **arena**                     | A large, pre-allocated `Int32Array` treated as an array of fixed-size records. Allocating a record = advancing a bump pointer or popping a free list.                                                                                                                                                                                                                |
+| **plane**                     | One arena serving one record family. The engine has three: the **main plane** `M` (graph nodes and links, stride 8), the **log plane** `G` (write-log entries, stride 4), and the **world-memo plane** `W` (overlay memo records and their certificates, stride 8); the tracing module owns a fourth (the trace plane `T`, section 16.2).                            |
+| **record**                    | A fixed-size run of 32-bit slots inside a plane. Referenced by an **id**.                                                                                                                                                                                                                                                                                            |
+| **id**                        | An integer naming a record. Ids are _pre-multiplied byte-offsets-in-elements_: id = recordIndex × stride, so field access is `M[id + FIELD]` with no multiply. Id 0 is burned as "none" (the null id).                                                                                                                                                               |
+| **node**                      | A graph participant: atom, computed, effect, scope, or watcher. One main-plane record each.                                                                                                                                                                                                                                                                          |
+| **link**                      | One dependency edge ("this consumer read that producer"), member of two intrusive doubly-linked lists at once (the consumer's dependency list and the producer's subscriber list). One main-plane record each.                                                                                                                                                       |
+| **atom**                      | A writable signal (`Atom`, `ReducerAtom`, and the hook-owned variants).                                                                                                                                                                                                                                                                                              |
+| **computed**                  | A derived, cached, lazily-evaluated signal.                                                                                                                                                                                                                                                                                                                          |
+| **watcher**                   | A node representing one mounted React hook subscription. Like an effect, but its notification runs synchronously in the writer's stack (to inherit React's lane) instead of queuing for the effect flush.                                                                                                                                                            |
+| **kernel**                    | The mechanism layer: pure integer/graph algorithms over the planes plus one packed value column. It never interprets user values beyond identity comparison and never chooses policy (section 11).                                                                                                                                                                   |
+| **policy layer**              | Everything above the kernel: Atom/ReducerAtom/Computed semantics, custom equality, reducers, promise handling, React bindings, tracing.                                                                                                                                                                                                                              |
+| **batch**                     | A set of updates React renders and retires as a unit — everything scheduled in one event, or one transition. Named across the fork boundary by a **batch token**.                                                                                                                                                                                                    |
+| **batch token**               | A nonzero 31-bit integer minted by the fork's batch registry, stable for the batch's life, never reused while live. Bit 0 encodes "deferred". Section 6.2.                                                                                                                                                                                                           |
+| **deferred batch**            | A transition-like batch: its render does not block paint and it commits later. Writes in deferred batches are the ones that _must_ be logged.                                                                                                                                                                                                                        |
+| **batch slot**                | The engine's own small index (0–31) interned for a live batch token, so log records can store a 5-bit slot instead of a full token, and a render pass's included batches become one 32-bit mask.                                                                                                                                                                     |
+| **write log / log / tape**    | Per-atom singly-linked chain of log records in the log plane: the atom's recent writes, each tagged with operation, batch slot, and sequence tickets. Empty for almost every atom almost all the time.                                                                                                                                                               |
+| **base record**               | The first record of every log: a synthetic entry holding the atom's value from the moment the log was created. Replays start from it.                                                                                                                                                                                                                                |
+| **seq / ticket**              | A number from one global take-a-number counter, stamped on every log record at append time. Gives every logged write a position on one shared timeline.                                                                                                                                                                                                              |
+| **retirement**                | The moment a batch leaves React's books — its commit, or the close of a batch that never produced React work. Delivered exactly once per token by the fork.                                                                                                                                                                                                          |
+| **absorption**                | Folding a retired batch's log entries into canonical kernel state: replay visible entries in seq order, write the result through the kernel (which propagates staleness and queues effects).                                                                                                                                                                         |
+| **truncation**                | Discarding log entries without absorbing them (speculation abort, optimistic rollback, devtools).                                                                                                                                                                                                                                                                    |
+| **canonical world (W0)**      | The world the kernel's values describe: all committed state, plus urgent writes that were applied directly (section 9.4). The only world the kernel knows.                                                                                                                                                                                                           |
+| **pass world (Wp)**           | The world one render pass must see: determined by its **pin** and **include mask**.                                                                                                                                                                                                                                                                                  |
+| **newest world (Wn)**         | Every write visible, pending or not. What reads outside render see.                                                                                                                                                                                                                                                                                                  |
+| **writer's world**            | For a given write: the world containing all committed state, all retired entries, and the writing batch's own entries. The world used to decide whether a watcher must be told about the write (section 10.6).                                                                                                                                                       |
+| **pin**                       | The seq-counter value captured when a render pass starts. The pass may not see anything that happened after its pin, even if it yields and resumes.                                                                                                                                                                                                                  |
+| **include mask**              | The 32-bit batch-slot mask of the batches a render pass includes (from the fork's `includedBatches`).                                                                                                                                                                                                                                                                |
+| **overlay mark**              | A per-node stamp meaning "some atom below me currently has a log". Nodes without the mark can answer any world from the kernel cache. Written by the notify walk.                                                                                                                                                                                                    |
+| **notify walk**               | The overlay's downstream walk from a written atom: stamps overlay marks and collects watchers for broadcast. Runs on every deferred write (once per drain for batched writes), not just the first — this is what guarantees watchers hear about _every_ deferred write, including a second write from a different batch into an already-marked region (section 9.8). |
+| **walk ticket**               | The id of a notify walk, from a monotonic counter. A node's overlay mark stores the last walk ticket that visited it; "marked" means the stored ticket is newer than the **era floor**.                                                                                                                                                                              |
+| **era floor**                 | A scalar holding the walk-ticket value at the last quiescence. Bumping it to the current ticket counter un-marks every node in O(1), with no walk.                                                                                                                                                                                                                   |
+| **world memo**                | A per-computed, per-world cache of an overlay evaluation, stored as a packed record in plane `W` and validated by its **certificate** (section 10.5). The mechanism that keeps long-lived transitions from degenerating marked regions into recompute-per-read.                                                                                                      |
+| **certificate**               | The packed list of `(atom, seq-or-zero)` pairs a world memo carries: _every_ atom its evaluation read, with the atom's tape-tail seq at read time (0 if the atom had no tape then). A memo is valid only while every pair still holds (section 10.5).                                                                                                                |
+| **slot memo chain**           | Per batch slot, the chain of that slot's writer's-world memo records, threaded through the memo records themselves. The drain walks it to find nodes whose pending-world values a new write may have changed — including nodes reached only through world-divergent dependencies (section 9.8).                                                                      |
+| **render lineage**            | A stable integer the fork assigns to one logical piece of render work on a root (one lane set's work-in-progress), redelivered across that work's restarts and Suspense retries. The key for per-world suspense caches (sections 6.3, 12.3).                                                                                                                         |
+| **committed view (per root)** | What "committed" means for one root: entries retired at or below that root's last-commit ticket, plus entries of batches the root has committed while they remain pending elsewhere (sections 10.2, 13.4).                                                                                                                                                           |
+| **quiescence**                | The state of having no live logs, no live batches, and no open render pass — and, from the fork's perspective, no open or pending React work at all. The overlay resets itself to zero cost at quiescence, and the write gate returns to DIRECT there (section 9.1).                                                                                                 |
+| **handle**                    | The user-facing object (`Atom`, `Computed`, …) wrapping a node id. Handles are ordinary objects; the arena records behind them are reclaimed when handles are garbage-collected or deterministically disposed.                                                                                                                                                       |
+| **oracle**                    | The deliberately naive reference implementation of the overlay (plain per-atom arrays, replay-everything reads, memo-free computeds) that the real engine must agree with on every read across randomized schedules (section 17.2).                                                                                                                                  |
+| **frozen kernel artifact**    | The donor arena engine, built without any overlay support, kept as a reference build. The contract suite (section 17.5) proves the shipping kernel is behaviorally identical to it whenever the overlay is empty.                                                                                                                                                    |
 
 ---
 
@@ -310,10 +310,10 @@ class Atom<T> {
   constructor(options: AtomOptions<T>)
   /** Read. Auto-tracks inside computeds/effects; resolves per read context. */
   get state(): T
-  set(next: T): void                       // like setState(value)
-  update(fn: (current: T) => T): void      // like setState(fn) — fn is stored
-                                           // and replayed per world, so it
-                                           // must be pure
+  set(next: T): void // like setState(value)
+  update(fn: (current: T) => T): void // like setState(fn) — fn is stored
+  // and replayed per world, so it
+  // must be pure
 }
 ```
 
@@ -322,7 +322,7 @@ class Atom<T> {
 ```ts
 type ReducerAtomOptions<S, A> = {
   state: S
-  reducer: (state: S, action: A) => S      // pure; replayed per world
+  reducer: (state: S, action: A) => S // pure; replayed per world
   isEqual?: (a: S, b: S) => boolean
   label?: string
 }
@@ -334,7 +334,7 @@ class ReducerAtom<S, A> {
 }
 ```
 
-`dispatch` stores the *action* in the write log, not a computed value, and
+`dispatch` stores the _action_ in the write log, not a computed value, and
 replays it through the reducer once per world that includes it — exactly what
 React does with `useReducer` updates. A conformance test dispatches identical
 action streams through a `ReducerAtom` and a real `useReducer` across a
@@ -366,11 +366,11 @@ type ComputedOptions<T> = {
 
 class Computed<T> {
   constructor(options: ComputedOptions<T>)
-  get state(): T    // may throw (cached error) or suspend (React read sites)
+  get state(): T // may throw (cached error) or suspend (React read sites)
 }
 ```
 
-Evaluation never throws *through the graph*: a throwing `fn` or a pending
+Evaluation never throws _through the graph_: a throwing `fn` or a pending
 `ctx.use` becomes a cached error/suspended state on the node; read sites
 rethrow or suspend. This fixes the class of bugs where an exception mid-walk
 corrupts staleness flags.
@@ -461,7 +461,7 @@ the GC pressure they claim to observe), in two recording modes: a
 flight-recorder ring (devtools default) and a lossless chunked session mode
 for whole-boot captures; human-readable events are a lazy decoder view.
 `cosignal/graphviz` renders DOT source for the live dependency graph and for
-causal trace timelines, and imports only *types* from tracing.
+causal trace timelines, and imports only _types_ from tracing.
 
 ### 4.7 Explicitly supported situations
 
@@ -518,7 +518,7 @@ The two gates that keep the fast path fast:
   word the read loads anyway (`FLAG_LOGGED`); for computeds it is
   `loggedAtomCount !== 0 && M[c + OVERLAY_STAMP] > eraFloor` — when the
   overlay is quiescent, the first scalar comparison short-circuits. This is
-  the "log empty?" branch of the design brief, and it is the *only* overlay
+  the "log empty?" branch of the design brief, and it is the _only_ overlay
   cost the canonical engine ever pays while quiescent.
 
 Life of a write, end to end, in LOGGED mode:
@@ -532,7 +532,7 @@ Life of a write, end to end, in LOGGED mode:
 3. Append a log record to the atom's log (creating the log, with its base
    record, if empty — and, on creation, mark the atom's downstream cone,
    whatever the write's classification, section 9.3): operation, batch slot,
-   payload, seq ticket. If the write is urgent (not deferred), *also* apply
+   payload, seq ticket. If the write is urgent (not deferred), _also_ apply
    it through the kernel immediately and mark the record APPLIED (section
    9.4).
 4. Notify downstream. For an **urgent** write, the kernel's own propagation
@@ -541,7 +541,7 @@ Life of a write, end to end, in LOGGED mode:
    touch kernel propagation — the overlay runs a **notify walk** from the
    atom: a pure integer walk over subscriber edges that stamps overlay marks
    ("a log exists below me") and collects watchers onto the same broadcast
-   list. The notify walk runs for *every* deferred write (shared once across
+   list. The notify walk runs for _every_ deferred write (shared once across
    a batched group of writes), not just the first write into a region — this
    is what guarantees a second deferred write, even from a different batch
    into an already-marked region, still reaches watchers (section 9.8).
@@ -555,7 +555,7 @@ Life of a write, end to end, in LOGGED mode:
    10.5–10.6) and call the watcher's `setState` only if the value changed.
    The drain also re-validates the writer's world's registered memos (the
    slot memo chain), which is how nodes that depend on the written atom
-   *only in that pending world* — through a branch the canonical graph never
+   _only in that pending world_ — through a branch the canonical graph never
    took — still reach their watchers (section 9.8).
 6. React renders whatever it decides to render. Each render pass tells us its
    root, pin, and included batches; reads during the pass resolve through the
@@ -588,13 +588,13 @@ Design constraints, in order:
 
 1. **React-concurrency-safe.** The protocol must describe batches and passes
    truthfully across lane recycling, yielding, restarts, multi-root commits,
-   and async actions. Everything here is *edge-triggered from the places the
-   reconciler already mutates its own bookkeeping* — never sampled — so it
+   and async actions. Everything here is _edge-triggered from the places the
+   reconciler already mutates its own bookkeeping_ — never sampled — so it
    cannot drift from reality.
 2. **Minimal and encapsulating.** No Fiber objects, no lane bitmasks, no
    reconciler types cross the boundary. Tokens are serially-numbered
    integers, uncorrelated with lane bit positions. Roots are identified by
-   their *container* (for react-dom, the DOM element you rendered into) — an
+   their _container_ (for react-dom, the DOM element you rendered into) — an
    identity that is meaningful to userspace anyway.
 3. **Inert when unused.** Every hook site is one null/flag check when nothing
    has subscribed. The additions carry no feature flag; they simply do
@@ -603,14 +603,18 @@ Design constraints, in order:
 ### 6.1 The isomorphic API (exports from `react`)
 
 ```ts
-type Container = unknown  // e.g. the DOM element passed to createRoot
+type Container = unknown // e.g. the DOM element passed to createRoot
 
 type ExternalRuntimeListener = {
   /** A render pass began on `container`. `includedBatches` are the tokens of
    * every live batch this pass renders. `lineage` is a stable integer naming
    * this piece of render work across its restarts and Suspense retries (6.3).
    * A pass spans yields; it ends by completing or being discarded/restarted. */
-  onRenderPassStart?: (container: Container, includedBatches: readonly number[], lineage: number) => void
+  onRenderPassStart?: (
+    container: Container,
+    includedBatches: readonly number[],
+    lineage: number,
+  ) => void
   /** The pass on `container` completed or was discarded. Exactly one end per
    * start, even across restarts. */
   onRenderPassEnd?: (container: Container) => void
@@ -668,7 +672,7 @@ renderer processes an event at a time in practice).
 ### 6.2 Batch tokens: integer protocol
 
 A **batch token** names "a set of updates React renders and retires as a
-unit". Why not expose React's lane bits directly? Lane bits are *recycled*
+unit". Why not expose React's lane bits directly? Lane bits are _recycled_
 (the transition lane cursor wraps after a handful of claims), so a bit cannot
 name a batch across time; and lane bits are exactly the reconciler internal
 we refuse to leak. Tokens are identities.
@@ -681,8 +685,8 @@ Encoding:
   this transition-like?" without a lookup.
 - `0` means "no token" everywhere.
 - Serials are never reused while any token is live. At the 2^30 wrap
-  (unreachable in practice: one serial per *event or transition that touches
-  external state*), the registry skips serials still held by its ≤31 live
+  (unreachable in practice: one serial per _event or transition that touches
+  external state_), the registry skips serials still held by its ≤31 live
   slots.
 
 **Liveness invariant: at most 31 tokens are live at once** — one per lane
@@ -700,11 +704,11 @@ Registry edges (each wired into a place the reconciler already touches):
   creates the token. Writes that never ask cost nothing.
 - **pending** — `markRootUpdated`: the batch has scheduled work on a root;
   the slot records the root. A repair pass (**backfill**) runs in the root
-  scheduler's microtask to catch updates scheduled *before* the batch's first
+  scheduler's microtask to catch updates scheduled _before_ the batch's first
   store write (ordinary `startTransition(() => { setState(x); atom.set(y) })`
   line order).
 - **finish** — after `markRootFinished` in commit: a batch is done on a root
-  when its lane is no longer pending there. The token retires when its *last*
+  when its lane is no longer pending there. The token retires when its _last_
   pending root finishes. If a root commits the batch while other roots are
   still pending, that root is recorded in the slot's committed set: later
   renders on it must keep including the batch (its committed tree already
@@ -736,7 +740,7 @@ pass start (reads must not move for the pass's whole life). A restart
 `includedBatches` — the new pass may legitimately see newer state.
 
 **Yield edges are protocol, not detail.** A time-sliced pass returns to the
-event loop *while remaining open*; user code — click handlers, timers,
+event loop _while remaining open_; user code — click handlers, timers,
 resolved promises — runs in those gaps. That is the whole point of
 concurrent rendering, and it means "a pass is open" and "we are executing
 render code right now" are different facts. The engine keeps a read-context
@@ -751,7 +755,7 @@ inside a yield gap would look like a render-phase write (which must throw,
 render, would crash on first exercise.
 
 **Lineage names the work, not the pass.** React can restart a pass, and
-Suspense re-renders arrive as *new* passes when a promise settles. Anything
+Suspense re-renders arrive as _new_ passes when a promise settles. Anything
 cached "for this render" under a per-pass key would be discarded and
 re-created on every retry — for suspense caches that means re-fetching
 forever, never converging. And a single batch token under-identifies the
@@ -767,7 +771,7 @@ the committed-elsewhere lock-ins from 6.2. Tokens whose batches carry no
 external writes are simply unknown to the engine and ignored.
 
 React renders one pass at a time on a thread; passes on different roots never
-interleave *execution* (switching roots restarts). The engine may therefore
+interleave _execution_ (switching roots restarts). The engine may therefore
 keep a single "current pass" scalar set.
 
 ### 6.4 Write classification
@@ -775,19 +779,19 @@ keep a single "current pass" scalar set.
 `unstable_isCurrentWriteDeferred()` answers "if setState were called right
 now, would it be a transition-like update?" — it is the same decision
 `requestUpdateLane` makes, exposed as a boolean. The engine calls it on every
-logged write *before* deciding whether to also apply the write directly
+logged write _before_ deciding whether to also apply the write directly
 (section 9.4); it must therefore be pure and allocation-free, and it is: a
 couple of comparisons against the reconciler's current-transition state.
 
 ### 6.5 Batch entanglement (`unstable_runInBatch`)
 
-The problem this solves: a component can subscribe to a signal *after* a
+The problem this solves: a component can subscribe to a signal _after_ a
 pending deferred batch already wrote to it (the component mounted, or first
 read the signal, in the gap between that batch's write and this component's
-commit). The component must now be re-rendered *as part of that batch* — its
+commit). The component must now be re-rendered _as part of that batch_ — its
 corrective update has to render with the batch's other updates and commit in
 the same frame. Wrapping the corrective `setState` in a fresh
-`startTransition` is **not** enough: `startTransition` starts a *new*
+`startTransition` is **not** enough: `startTransition` starts a _new_
 transition, which may be assigned a different lane, render separately, and
 commit at a different time. A frame could commit where the batch's other
 components show the new world and this component shows the old one — a tear
@@ -845,7 +849,7 @@ mutation-effects flush, not in `commitRoot`, because with View Transitions
 the mutation phase runs later, inside the browser's `startViewTransition`
 update callback; the bracket fires only when mutations will actually occur,
 and covers every commit path including `flushSync`. Scope is React's
-*reconciliation* mutations. Documented exclusions callers must filter
+_reconciliation_ mutations. Documented exclusions callers must filter
 themselves: the layout-phase `<img src>` re-assignment, suspensey-CSS
 `<link>` insertion, imperative Float APIs (`preload`/`preinit`), View
 Transition name attributes, and DOM writes from user effect code.
@@ -897,7 +901,7 @@ alone.
 
 - **Record interleaving, not parallel columns.** A record's fields live
   contiguously (one cache line, one bounds-check domain). Naive
-  one-array-per-field layouts measured 1.8× *worse* than objects on deep
+  one-array-per-field layouts measured 1.8× _worse_ than objects on deep
   chains; interleaved records beat objects everywhere.
 - **Nodes and links share one plane.** A single base register and bump
   pointer for both record families measured −2% deep / −8% diamond versus
@@ -930,55 +934,55 @@ Two record families interleave freely: **nodes** and **links**.
 
 **Node record.** Fields +0..+5 are universal; +6/+7 are kind-specific.
 
-| offset | name | meaning |
-| --- | --- | --- |
-| +0 | `FLAGS` | state machine + kind bits (table below) |
-| +1 | `DEPS` | first link of my dependency list; free-list next when freed |
-| +2 | `DEPS_TAIL` | last *confirmed* dependency link (re-run cursor) |
-| +3 | `SUBS` | first link of my subscriber list |
-| +4 | `SUBS_TAIL` | last subscriber link |
-| +5 | `GEN` | generation counter, bumped on free; stale disposers no-op |
-| +6 | atoms: `LOG_HEAD` — first log record id in plane G, 0 = no log. computeds / effects / watchers: `OVERLAY_STAMP` — the walk ticket of the last notify walk that visited me; overlay-marked iff greater than the global `eraFloor` |
-| +7 | atoms: `LOG_TAIL` — last log record id. computeds: `MEMO_KEY` — the world key of the first record on my memo chain in plane W (fast hit check; section 10.5). effects/watchers: reserved (0) |
+| offset | name                                                                                                                                                                                                                             | meaning                                                     |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| +0     | `FLAGS`                                                                                                                                                                                                                          | state machine + kind bits (table below)                     |
+| +1     | `DEPS`                                                                                                                                                                                                                           | first link of my dependency list; free-list next when freed |
+| +2     | `DEPS_TAIL`                                                                                                                                                                                                                      | last _confirmed_ dependency link (re-run cursor)            |
+| +3     | `SUBS`                                                                                                                                                                                                                           | first link of my subscriber list                            |
+| +4     | `SUBS_TAIL`                                                                                                                                                                                                                      | last subscriber link                                        |
+| +5     | `GEN`                                                                                                                                                                                                                            | generation counter, bumped on free; stale disposers no-op   |
+| +6     | atoms: `LOG_HEAD` — first log record id in plane G, 0 = no log. computeds / effects / watchers: `OVERLAY_STAMP` — the walk ticket of the last notify walk that visited me; overlay-marked iff greater than the global `eraFloor` |
+| +7     | atoms: `LOG_TAIL` — last log record id. computeds: `MEMO_KEY` — the world key of the first record on my memo chain in plane W (fast hit check; section 10.5). effects/watchers: reserved (0)                                     |
 
 **Link record** (one dependency edge, member of two doubly-linked lists):
 
-| offset | name | meaning |
-| --- | --- | --- |
-| +0 | `VERSION` | evaluation-cycle stamp: intra-run duplicate-read dedup |
-| +1 | `DEP` | producer node id |
-| +2 | `SUB` | consumer node id |
-| +3 | `PREV_SUB` / +4 `NEXT_SUB` | position in the producer's subscriber list |
-| +5 | `PREV_DEP` / +6 `NEXT_DEP` | position in the consumer's dependency list; `NEXT_DEP` doubles as free-list next when freed |
-| +7 | reserved (0) | |
+| offset | name                       | meaning                                                                                     |
+| ------ | -------------------------- | ------------------------------------------------------------------------------------------- |
+| +0     | `VERSION`                  | evaluation-cycle stamp: intra-run duplicate-read dedup                                      |
+| +1     | `DEP`                      | producer node id                                                                            |
+| +2     | `SUB`                      | consumer node id                                                                            |
+| +3     | `PREV_SUB` / +4 `NEXT_SUB` | position in the producer's subscriber list                                                  |
+| +5     | `PREV_DEP` / +6 `NEXT_DEP` | position in the consumer's dependency list; `NEXT_DEP` doubles as free-list next when freed |
+| +7     | reserved (0)               |                                                                                             |
 
 **Flags word** (all in `M[id + FLAGS]`, so kind dispatch and state checks are
 one 4-byte load):
 
-| bit | name | meaning |
-| --- | --- | --- |
-| 1 | `MUTABLE` | can produce new values (atoms, computeds) |
-| 2 | `WATCHING` | wants notification when possibly stale (effects, watchers) |
-| 4 | `RECURSED_CHECK` | currently evaluating (re-entrancy guard) |
-| 8 | `RECURSED` | re-entrant write reached me during my own run |
-| 16 | `DIRTY` | definitely stale |
-| 32 | `PENDING` | possibly stale — verify by pulling before recomputing |
-| 64 | `HAS_CHILD_EFFECT` | my dep list contains child effects/scopes (slow-path cleanup) |
-| 128 | `LOGGED` | atoms only: `LOG_HEAD !== 0`. The read gate. |
-| 256 | `IMMEDIATE` | watchers only: notify synchronously via the broadcast list instead of the effect queue |
-| 512 | `LIVE` | transitively watched by some effect/watcher (liveness split; drives the atom observed-lifecycle and lets policy skip dead regions) |
-| 1024 | `K_ATOM`, 2048 `K_COMPUTED`, 4096 `K_EFFECT`, 8192 `K_SCOPE`, 16384 `K_WATCHER` | kind bits; `KIND_MASK` = their union. A freed record has FLAGS 0. |
+| bit  | name                                                                            | meaning                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `MUTABLE`                                                                       | can produce new values (atoms, computeds)                                                                                          |
+| 2    | `WATCHING`                                                                      | wants notification when possibly stale (effects, watchers)                                                                         |
+| 4    | `RECURSED_CHECK`                                                                | currently evaluating (re-entrancy guard)                                                                                           |
+| 8    | `RECURSED`                                                                      | re-entrant write reached me during my own run                                                                                      |
+| 16   | `DIRTY`                                                                         | definitely stale                                                                                                                   |
+| 32   | `PENDING`                                                                       | possibly stale — verify by pulling before recomputing                                                                              |
+| 64   | `HAS_CHILD_EFFECT`                                                              | my dep list contains child effects/scopes (slow-path cleanup)                                                                      |
+| 128  | `LOGGED`                                                                        | atoms only: `LOG_HEAD !== 0`. The read gate.                                                                                       |
+| 256  | `IMMEDIATE`                                                                     | watchers only: notify synchronously via the broadcast list instead of the effect queue                                             |
+| 512  | `LIVE`                                                                          | transitively watched by some effect/watcher (liveness split; drives the atom observed-lifecycle and lets policy skip dead regions) |
+| 1024 | `K_ATOM`, 2048 `K_COMPUTED`, 4096 `K_EFFECT`, 8192 `K_SCOPE`, 16384 `K_WATCHER` | kind bits; `KIND_MASK` = their union. A freed record has FLAGS 0.                                                                  |
 
 ### 7.3 The log plane `G` (Int32Array, stride 4, 16 bytes/record)
 
 One record per logged write, plus one **base record** per live log.
 
-| offset | name | meaning |
-| --- | --- | --- |
-| +0 | `NEXT` | next entry in this atom's log (append order = seq order); 0 = tail; free-list next when freed |
-| +1 | `META` | packed: bits 0–1 `OP` (0 = BASE, 1 = SET, 2 = UPDATE, 3 = DISPATCH); bit 2 `APPLIED` (already written through the kernel — urgent writes, section 9.4); bit 3 `RETIRED`; bits 4–8 `BATCH_SLOT` (5 bits, 32 slots); bits 9–30 reserved |
-| +2 | `SEQ` | take-a-number ticket at append time |
-| +3 | `RETIRED_SEQ` | 0 while the batch is pending; a fresh ticket stamped at retirement |
+| offset | name          | meaning                                                                                                                                                                                                                               |
+| ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| +0     | `NEXT`        | next entry in this atom's log (append order = seq order); 0 = tail; free-list next when freed                                                                                                                                         |
+| +1     | `META`        | packed: bits 0–1 `OP` (0 = BASE, 1 = SET, 2 = UPDATE, 3 = DISPATCH); bit 2 `APPLIED` (already written through the kernel — urgent writes, section 9.4); bit 3 `RETIRED`; bits 4–8 `BATCH_SLOT` (5 bits, 32 slots); bits 9–30 reserved |
+| +2     | `SEQ`         | take-a-number ticket at append time                                                                                                                                                                                                   |
+| +3     | `RETIRED_SEQ` | 0 while the batch is pending; a fresh ticket stamped at retirement                                                                                                                                                                    |
 
 ### 7.4 The world-memo plane `W` (Int32Array, stride 8, 32 bytes/record)
 
@@ -993,16 +997,16 @@ zero residue at quiescence). Packing turns validation into one contiguous
 forward Int32 scan instead of dependent heap loads into scattered arrays,
 and makes overlay evaluation allocate no engine-side objects at all.
 
-| offset | name | meaning |
-| --- | --- | --- |
-| +0 | `KEY` | world key (encoding in 10.5) |
-| +1 | `EPOCH` | `overlayEpoch` at evaluation time; **0 is reserved as the tombstone value** (never a live epoch — `overlayEpoch` starts at 1) |
-| +2 | `NODE` | the owning computed's node id (needed by the drain re-validation, 9.8, and by the stale-head guard below) |
-| +3 | `VAL` | index into the `memoVals` side array holding the memoized value or box (GC-visible, so it stays on the heap) |
-| +4 | `NEXT_MEMO` | next memo record for the same node (the node's memo chain; head stored as an integer in the `memos` side slot, mirrored by `MEMO_KEY` at `M[+7]`) |
-| +5 | `SLOT_NEXT` | writer's-world records only: next record in the same batch slot's memo chain (heads in `slotMemoHead: Int32Array(32)`); 0 on other keys |
-| +6 | `NDEPS` | number of certificate pairs |
-| +7 | `CERT` | offset of this memo's certificate run in the certificate region |
+| offset | name        | meaning                                                                                                                                           |
+| ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| +0     | `KEY`       | world key (encoding in 10.5)                                                                                                                      |
+| +1     | `EPOCH`     | `overlayEpoch` at evaluation time; **0 is reserved as the tombstone value** (never a live epoch — `overlayEpoch` starts at 1)                     |
+| +2     | `NODE`      | the owning computed's node id (needed by the drain re-validation, 9.8, and by the stale-head guard below)                                         |
+| +3     | `VAL`       | index into the `memoVals` side array holding the memoized value or box (GC-visible, so it stays on the heap)                                      |
+| +4     | `NEXT_MEMO` | next memo record for the same node (the node's memo chain; head stored as an integer in the `memos` side slot, mirrored by `MEMO_KEY` at `M[+7]`) |
+| +5     | `SLOT_NEXT` | writer's-world records only: next record in the same batch slot's memo chain (heads in `slotMemoHead: Int32Array(32)`); 0 on other keys           |
+| +6     | `NDEPS`     | number of certificate pairs                                                                                                                       |
+| +7     | `CERT`      | offset of this memo's certificate run in the certificate region                                                                                   |
 
 Certificate pairs record **every atom the evaluation read** — logged or not
 — with the atom's tape-tail seq at read time, or 0 if the atom had no tape
@@ -1023,14 +1027,14 @@ defense the `GEN` counter provides for disposers, and a `verifyArena` check
 GC-visible state that cannot live in an Int32Array. All are packed arrays
 grown by pushing `undefined`; none is ever made holey.
 
-| column | index | slots/record | holds |
-| --- | --- | --- | --- |
-| `values` | `id >> 2` (+ 1) | 2 | slot 0: atom canonical value / computed cached value. slot 1: atom kernel pending value / effect cleanup fn |
-| `fns` | `id >> 3` | 1 | computed wrapper function / effect function / watcher broadcast function |
-| `memos` | `id >> 3` | 1 | computeds: integer id of the node's first memo record in plane W (0 = none); guarded against plane resets by the `NODE` check (7.4) |
-| `meta` | `id >> 3` | 1 | policy metadata object, only for nodes that need one: `{ label?, isEqual?, reducer?, observeEffect?, liveCount, lastBroadcast?, thenableCache?, finalizerToken? }`. `undefined` for plain nodes. |
-| `logVals` | `gid >> 2` | 1 | log-entry payload: SET value / UPDATE fn / DISPATCH action / BASE snapshot value |
-| `memoVals` | `wid`-allocated index | 1 | world-memo value or error/suspense box (referenced by the memo record's `VAL` field); `undefined` for tombstoned records |
+| column     | index                 | slots/record | holds                                                                                                                                                                                            |
+| ---------- | --------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `values`   | `id >> 2` (+ 1)       | 2            | slot 0: atom canonical value / computed cached value. slot 1: atom kernel pending value / effect cleanup fn                                                                                      |
+| `fns`      | `id >> 3`             | 1            | computed wrapper function / effect function / watcher broadcast function                                                                                                                         |
+| `memos`    | `id >> 3`             | 1            | computeds: integer id of the node's first memo record in plane W (0 = none); guarded against plane resets by the `NODE` check (7.4)                                                              |
+| `meta`     | `id >> 3`             | 1            | policy metadata object, only for nodes that need one: `{ label?, isEqual?, reducer?, observeEffect?, liveCount, lastBroadcast?, thenableCache?, finalizerToken? }`. `undefined` for plain nodes. |
+| `logVals`  | `gid >> 2`            | 1            | log-entry payload: SET value / UPDATE fn / DISPATCH action / BASE snapshot value                                                                                                                 |
+| `memoVals` | `wid`-allocated index | 1            | world-memo value or error/suspense box (referenced by the memo record's `VAL` field); `undefined` for tombstoned records                                                                         |
 
 The index arithmetic works because ids are pre-multiplied: main-plane
 `id = record*8`, so `id >> 2 = record*2` (two value slots) and
@@ -1041,7 +1045,7 @@ The index arithmetic works because ids are pre-multiplied: main-plane
 
 - `batchToken: Int32Array(32)` — slot → live token (0 = free slot).
 - `batchEntryCount: Int32Array(32)` — live (unswept) log entries per slot;
-  a slot recycles when its token retired *and* its count reaches 0.
+  a slot recycles when its token retired _and_ its count reaches 0.
 - `slotMemoHead: Int32Array(32)` — slot → head of that slot's writer's-world
   memo chain in plane W (the drain re-validation list, 9.8); 0 = empty.
   Cleared when the slot releases and at quiescence.
@@ -1051,7 +1055,7 @@ The index arithmetic works because ids are pre-multiplied: main-plane
   ticket counter), `eraFloor` (walk-ticket value at last quiescence; marks
   at or below it are stale), `overlayEpoch` (starts at 1; bumped on
   retirement, truncation, overlay-relevant promise settlement, and the
-  quiescence reset — the events that change world values *without* moving
+  quiescence reset — the events that change world values _without_ moving
   any tape tail; world memos carry it, section 10.5), `writeMode`
   (DIRECT/LOGGED per the quiescence gate, 9.1), and the pass set:
   `passOpen`, `passExecuting` (flipped by yield/resume, 10.1), `passSerial`,
@@ -1072,15 +1076,15 @@ The index arithmetic works because ids are pre-multiplied: main-plane
 
 Per-entity steady-state costs (V8 64-bit; object sizes measured on Node 24):
 
-| entity | cosignal-arena | alien-signals objects |
-| --- | --- | --- |
-| dependency edge | **32 B** arena, GC-invisible, zero write barriers | 80 B heap (24 B header + 7 tagged fields), 4–6 write barriers per splice |
-| atom | 32 B record + 2 value slots (~16 B) + handle object ~48 B ≈ **96 B** | ~120 B (node + bound function) |
-| computed | 32 B + 2 slots + wrapper closure + handle ≈ **~160 B** | ~246 B |
-| effect | 32 B + slots + closure ≈ **~120 B** + its links | ~331 B + links |
-| log entry | **16 B** record + 1 payload slot (~8 B); freed in bulk | n/a (no equivalent) |
-| watcher | 32 B + broadcast closure ≈ **~100 B** | n/a |
-| world memo | **32 B** record + 8 B per certificate pair + 1 `memoVals` slot (~8 B), written once per overlay *evaluation* (never per read); plane resets at quiescence | n/a |
+| entity          | cosignal-arena                                                                                                                                            | alien-signals objects                                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| dependency edge | **32 B** arena, GC-invisible, zero write barriers                                                                                                         | 80 B heap (24 B header + 7 tagged fields), 4–6 write barriers per splice |
+| atom            | 32 B record + 2 value slots (~16 B) + handle object ~48 B ≈ **96 B**                                                                                      | ~120 B (node + bound function)                                           |
+| computed        | 32 B + 2 slots + wrapper closure + handle ≈ **~160 B**                                                                                                    | ~246 B                                                                   |
+| effect          | 32 B + slots + closure ≈ **~120 B** + its links                                                                                                           | ~331 B + links                                                           |
+| log entry       | **16 B** record + 1 payload slot (~8 B); freed in bulk                                                                                                    | n/a (no equivalent)                                                      |
+| watcher         | 32 B + broadcast closure ≈ **~100 B**                                                                                                                     | n/a                                                                      |
+| world memo      | **32 B** record + 8 B per certificate pair + 1 `memoVals` slot (~8 B), written once per overlay _evaluation_ (never per read); plane resets at quiescence | n/a                                                                      |
 
 Plane sizing: default main plane 8192 records = **256 KiB** (an app with
 2,000 signals, 1,000 computeds, and 20,000 edges uses ~23,000 records =
@@ -1121,7 +1125,7 @@ kernel function carries a bytecode budget enforced in CI (section 18.3).
 `DIRTY` means definitely stale, `PENDING` means possibly stale. A write marks
 direct subscribers and their transitive consumers `PENDING` (cheap push,
 stops at already-marked nodes); the first subscriber level gets `DIRTY` via
-`shallowPropagate` when a value *confirmed* changed. A read of a `PENDING`
+`shallowPropagate` when a value _confirmed_ changed. A read of a `PENDING`
 computed runs `checkDirty`: an iterative walk down its dependency list **in
 recorded order** (the discipline that makes verification sound under dynamic
 dependencies), recomputing a dependency only when it is `MUTABLE|DIRTY`, and
@@ -1132,7 +1136,7 @@ changed the value. Nothing changed → clear `PENDING` and skip the recompute
 `RECURSED_CHECK`/`RECURSED` implement re-entrancy: a write that reaches the
 currently-evaluating node, or a read of a node mid-evaluation, is either
 tolerated (re-run scheduled) or detected as a cycle and thrown — this is the
-machinery that lets us *allow* writes-inside-computeds per the requirements
+machinery that lets us _allow_ writes-inside-computeds per the requirements
 while still rejecting true cycles. Deleting it is a known false optimization
 (an upstream experiment removed it, passed alien-signals' own tests, and was
 caught by Vue's suite).
@@ -1171,7 +1175,7 @@ Effects queue into a flat array; `notify(effect)` walks the parent-effect
 chain and reverses the inserted segment so outer effects run before inner.
 `flush()` drains the queue with per-effect re-checking, error containment,
 and re-arm-on-abort. Writes outside an explicit `batch()` flush before
-returning. Growth and reclamation work runs only *before* the flush loop, at
+returning. Growth and reclamation work runs only _before_ the flush loop, at
 a true operation boundary ("boundary-lite" — audited: cascade re-runs
 allocate ~tens of records, far under the 1280-record watermark).
 
@@ -1201,7 +1205,7 @@ boundary actually moves — steady-state reads and writes never touch it.
    immediate watchers go to a separate `broadcastQueue` instead of the effect
    queue — as stride-2 `(watcherId, token)` pairs, `propagate` pushing token
    0 (urgent). The token column exists because the drain can legally run
-   *after* the writer's transition scope has closed (a grouped drain at
+   _after_ the writer's transition scope has closed (a grouped drain at
    `batch()` close); the token is what lets the drain re-enter the right
    batch's lane context via the entanglement API (9.8) instead of silently
    inheriting whatever context happens to be live at drain time. The public
@@ -1211,7 +1215,7 @@ boundary actually moves — steady-state reads and writes never touch it.
 2. **Notify walk.** `notifyWalk(atom, walkTicket, collect)`: walk every node
    reachable from the atom through subscriber edges, using `propStack`. At
    each node: if `M[node + OVERLAY_STAMP] === walkTicket`, stop (already
-   visited by *this* walk — the diamond dedup); otherwise store the ticket
+   visited by _this_ walk — the diamond dedup); otherwise store the ticket
    into `OVERLAY_STAMP` and continue into the node's subscribers. When
    `collect` is set, nodes carrying the `IMMEDIATE` flag (watchers) are
    additionally pushed onto `broadcastQueue` with the write's token. The
@@ -1222,14 +1226,14 @@ boundary actually moves — steady-state reads and writes never touch it.
    it with `collect` on every deferred write (shared across a batched
    drain — section 9.8), and **mark-only** (collect off) once per tape
    creation regardless of the write's classification (9.3); the repetition
-   is deliberate and is the mechanism by which *every* deferred write
+   is deliberate and is the mechanism by which _every_ deferred write
    reaches watchers.
 3. **Mark repair on new edges.** In `linkInsert` (the out-of-line slow path —
    zero cost on the cursor-hit fast path): if the overlay is live and the new
    producer is marked (or is a LOGGED atom), stamp the consumer and its
    transitive subscribers with the current `walkCounter` value. This
-   maintains the mark invariant — *every node reachable via subscriber edges
-   from a logged atom is marked* — when a canonical re-evaluation picks up a
+   maintains the mark invariant — _every node reachable via subscriber edges
+   from a logged atom is marked_ — when a canonical re-evaluation picks up a
    brand-new dependency mid-era.
 4. **`invalidate(id)`.** Set `DIRTY`, propagate to subscribers, queue
    notifications. Used by absorption (when a fold changes a value the kernel
@@ -1237,7 +1241,7 @@ boundary actually moves — steady-state reads and writes never touch it.
 5. **Log-plane allocation.** Bump pointer + free list over plane G, and the
    O(1) chain-splice free (a swept log chain is already linked; freeing it is
    `tail.NEXT = freeHead; freeHead = head`). The kernel owns log record
-   *memory*; it never interprets log *contents* beyond the integer fields.
+   _memory_; it never interprets log _contents_ beyond the integer fields.
 
 ### 8.8 Kernel invariants (checked by debug assertions)
 
@@ -1268,7 +1272,7 @@ boundary actually moves — steady-state reads and writes never touch it.
 
 The overlay gives every atom that needs one a **receipt tape**: an
 append-only (until swept) chain of log records describing recent writes, from
-which the value *as of any world* can be reconstructed. This section covers
+which the value _as of any world_ can be reconstructed. This section covers
 the tape's lifecycle; section 10 covers how reads use it.
 
 ### 9.1 When logging happens at all: the quiescence gate
@@ -1291,7 +1295,7 @@ update object; our log record is that update, externalized into an arena
 urgent writes when "nothing could tell the difference" — is unsound. The
 proof case: an event handler does an urgent `atom.set(x)` while a
 default-priority batch from earlier in the same event is still pending, and
-then calls `flushSync`. React renders the flushSync work *without* the
+then calls `flushSync`. React renders the flushSync work _without_ the
 default-priority batch — a legitimate render of a world in which the urgent
 write has happened but the earlier batch has not. If the urgent write had
 skipped the log and gone straight to the canonical value, nothing could
@@ -1301,7 +1305,7 @@ quiescence gate logs it. Two structurally cheaper gates were considered and
 rejected as unsound; their counterexamples are permanent tests (below).
 
 **The loose contract (the default, documented plainly).** A write made while
-React is *fully quiescent* commits immediately: it is applied to canonical
+React is _fully quiescent_ commits immediately: it is applied to canonical
 state with no receipt, and it is visible to every subsequent render pass —
 including a later `flushSync` — because by the time any pass exists, the
 write is simply part of committed history. What such a write does **not** do
@@ -1309,7 +1313,7 @@ is inherit the lane of the notification it triggers. Concretely, the case
 this gives up: a `setTimeout` fires while React is idle and writes an atom;
 the write commits (DIRECT); the watcher broadcast it triggers schedules
 default-priority React work; then, in the same task, something calls
-`flushSync` — and React renders the flushSync work *without* that
+`flushSync` — and React renders the flushSync work _without_ that
 default-priority batch. React's own `useState` in this schedule would hide
 the timer's value from the flushSync render (its update sits in the excluded
 lane's queue); our signal shows it (it is committed state, and there is no
@@ -1336,13 +1340,13 @@ above behaves exactly like `useState`. The same test family runs in both
 configurations, asserting the loose default's documented behavior in one and
 exact parity in the other.
 
-**The two rejected gates, kept as gatekeepers.** (a) *Watcher-count gating*
+**The two rejected gates, kept as gatekeepers.** (a) _Watcher-count gating_
 ("log only once a watcher is mounted") is unsound: the app's first
 `startTransition(() => { atom.set(1); setShow(true) })` writes before any
 watcher exists, goes DIRECT, and leaves no receipt — so the component that
-mounts *during* that transition's render (13.2's marquee case) has no older
+mounts _during_ that transition's render (13.2's marquee case) has no older
 world to read, and urgent renders leak the transition's value. (b)
-*Quiescence-only gating presented as exact parity* fails on the
+_Quiescence-only gating presented as exact parity_ fails on the
 setTimeout/flushSync schedule above — the write and the update it schedules
 are one causal event split across lanes, and "causally prior to all future
 work" does not hold for it. Both counterexamples are permanent tests: any
@@ -1367,7 +1371,7 @@ Log records need to name their batch in 5 bits. On each logged write:
    `liveSlotMask`, and in `liveDeferredMask` if `token & 1`).
 
 A slot is released (token zeroed, masks cleared) when its batch has retired
-*and* its `batchEntryCount` reaches zero (all entries swept). Because retired
+_and_ its `batchEntryCount` reaches zero (all entries swept). Because retired
 entries stop consulting their slot (their visibility runs on `RETIRED_SEQ`),
 slot recycling can never mis-attribute an old record.
 
@@ -1405,9 +1409,9 @@ absorption) without corrupting the history older passes still need.
 
 **Tape creation marks the cone, for every write classification.** The
 moment an atom grows a tape, downstream computeds may differ between worlds
-— even when the tape-creating write is *urgent*. An urgent, applied,
+— even when the tape-creating write is _urgent_. An urgent, applied,
 unretired entry is exactly what a same-event `flushSync` render (9.1) and
-every `COMMITTED` read must be able to *exclude*; if the atom's downstream
+every `COMMITTED` read must be able to _exclude_; if the atom's downstream
 cone were unmarked, `readComputed` would take the kernel path and hand those
 readers the canonical value, applied entry included — a torn frame one node
 downstream of a perfectly good tape. So tape creation runs a **mark-only**
@@ -1418,7 +1422,7 @@ tape-creating write measurably heavier than a steady logged write, which is
 why the write-tax gate splits the two (18.2).
 
 Beyond that mark walk, `appendLog` notifies nobody. Broadcast — telling
-watchers about the write — is a separate step that runs on *every* write,
+watchers about the write — is a separate step that runs on _every_ write,
 not just the tape-creating one; section 9.8 specifies it.
 
 **Equality and receipts.** Where does `isEqual` fit when history exists?
@@ -1427,16 +1431,16 @@ tape** (`LOG_HEAD === 0`): a dropped entry would have carried the lowest
 seq of any future tape on this atom, so every possible world's fold would
 have evaluated it against the same base snapshot — evaluate the SET value
 (or run the UPDATE fn / DISPATCH reducer once) against the current,
-base-to-be value, and if the result is equal, *no world could ever observe
-a difference*; dropping is sound, and the fast path stays O(1) for the
+base-to-be value, and if the result is equal, _no world could ever observe
+a difference_; dropping is sound, and the fast path stays O(1) for the
 overwhelming majority of writes (unlogged atoms). With a non-empty tape,
 **never drop**: equality is world-relative, and the value a write is equal
-*to* in the newest world may not be the value it lands on in another
+_to_ in the newest world may not be the value it lands on in another
 world's fold. The canonical counterexample: base 0, pending transition
 writes `SET 1`, then an urgent write `SET 1` arrives — equal to the newest
 world's 1, but the urgent-only world (which excludes the transition) still
-reads 0, and dropping the urgent receipt loses the write *from its own
-world*. So logged atoms append unconditionally, and equality does its work
+reads 0, and dropping the urgent receipt loses the write _from its own
+world_. So logged atoms append unconditionally, and equality does its work
 where worlds are known: in each world's replay fold
 (`next = apply(rec, acc); acc = isEqual(acc, next) ? acc : next`,
 preserving reference stability), in the broadcast cutoff (10.6, suppressing
@@ -1444,7 +1448,7 @@ setState — not history), and at absorption (11.2).
 
 **Same-batch coalescing** (bounds tape growth for hot atoms during long
 transitions): if the tail entry belongs to the same batch, is unretired, and
-*no render pass is currently open* (an open pass may be pinned between the
+_no render pass is currently open_ (an open pass may be pinned between the
 two writes), then a new SET replaces the tail record's payload and seq
 in place, and a new UPDATE/DISPATCH may compose onto a tail UPDATE/DISPATCH
 of the same batch (function composition is input-independent, so composing is
@@ -1456,11 +1460,11 @@ as an ordinary append (9.8).
 
 ### 9.4 Applied versus unapplied entries
 
-- A **deferred** write (transition-like, `token & 1`) is *log-only*: the
+- A **deferred** write (transition-like, `token & 1`) is _log-only_: the
   kernel's canonical value, staleness flags, and effects are untouched. Its
   existence is visible only through overlay marks and to readers whose world
   includes its batch.
-- An **urgent** write is logged *and applied*: the same call performs the
+- An **urgent** write is logged _and applied_: the same call performs the
   normal kernel write (pending value, propagate, queue effects, collect
   broadcasts) and sets `APPLIED` on the record. This keeps the canonical
   world "committed plus urgent-pending" (the definition of W0), which is what
@@ -1477,7 +1481,7 @@ When the fork reports `onBatchRetired(token, committed)`:
 
 1. Resolve the slot; bump `overlayEpoch` (world memos keyed on tape
    structure must re-validate — 10.5); stamp `RETIRED` + `RETIRED_SEQ =
-   ticket()` on every entry of that batch, by iterating `loggedAtoms` and
+ticket()` on every entry of that batch, by iterating `loggedAtoms` and
    walking each tape (tapes are short; this is O(total live log entries), at
    commit frequency). The same walk performs absorption:
 2. **Absorb**, per touched atom, inside one kernel `batch()`:
@@ -1525,7 +1529,7 @@ retirement, and operation boundaries):
   this is garbage hygiene, not correctness).
 
 **Truncation** is the abort primitive: `truncateBatch(slot)` unlinks every
-entry of a batch from every tape *without folding*, fixing up chains and
+entry of a batch from every tape _without folding_, fixing up chains and
 counts, and bumps `overlayEpoch` (a mid-tape unlink changes world values
 without moving any tail seq — memos must re-validate; 10.5). Nothing else is
 needed to abandon speculation, because speculative writes never touched
@@ -1548,8 +1552,8 @@ When `loggedAtomCount` reaches 0 with no open pass and no live slots:
   `eraFloor`, and no stored ticket exceeds the counter);
 - `overlayEpoch++` — one integer store that makes every surviving memo
   record structurally invalid. This bump is not optional hygiene: seq
-  tickets restart at quiescence (next bullet), so seq values *repeat across
-  eras*, and a memo whose certificate was recorded late in era 1 could
+  tickets restart at quiescence (next bullet), so seq values _repeat across
+  eras_, and a memo whose certificate was recorded late in era 1 could
   otherwise match, pair for pair, a coincidentally identical tape state in
   era 2 and serve an era-old value while passing every check. The epoch is
   the one counter that never repeats within a process, so it is the
@@ -1586,9 +1590,9 @@ walk but lets neither gate the other:
 1. **Readers must know the region may differ per world** (the overlay mark).
    This is a monotonic, era-scoped fact: once a node is marked, later writes
    below it change nothing about markedness until quiescence.
-2. **Watchers must be told about *this specific write*** so they can decide —
+2. **Watchers must be told about _this specific write_** so they can decide —
    per the writer's world — whether to schedule a re-render (10.6). This is
-   a per-write fact. A design that only walks on the *first* write into a
+   a per-write fact. A design that only walks on the _first_ write into a
    region has no path from a second write to the watchers below it: the
    region is already marked, the walk would stop immediately, and a deferred
    write triggers no kernel propagation. Concretely: transition T1 writes
@@ -1596,8 +1600,8 @@ walk but lets neither gate the other:
    transition T2 (a different batch) writes `a` again. Without a per-write
    walk, W never issues a setState in T2's lane, T2's render never includes
    W's component, and T2 commits a frame where W shows stale state — a
-   missed-update tear. The same failure hits a *second write from the same
-   batch* whose first write was suppressed by the broadcast cutoff (the
+   missed-update tear. The same failure hits a _second write from the same
+   batch_ whose first write was suppressed by the broadcast cutoff (the
    first write didn't change the watched value, the second one does).
 
 The rule, therefore: **every deferred write runs the notify walk (8.7.2)
@@ -1619,10 +1623,10 @@ every `setState` from every writer's lane.
 **Drains run in the writing batch's lane context, by construction.** The
 lane-inheritance story — "call `setState` in the writer's stack" — is
 automatic for the in-stack drain, but a grouped drain runs at `batch()`
-close, possibly *after* an inner `startTransition` scope has ended:
+close, possibly _after_ an inner `startTransition` scope has ended:
 `batch(() => { a.set(1); startTransition(() => b.set(2)) })` drains both
 cones after the transition scope closed. A bare `setState` there would be
-assigned the *urgent* lane — the transition's render would then have no
+assigned the _urgent_ lane — the transition's render would then have no
 update for its own watchers, skip those components, and commit a torn
 frame. This is why broadcast-queue entries carry their write's token
 (8.7.1): the drain sorts its entries into per-token groups and runs each
@@ -1637,7 +1641,7 @@ negligible next to the evaluations the drain already does.
 
 **The drain's second job: re-validating the pending world's memos.** The
 notify walk covers canonical topology. But a computed can depend on the
-written atom *only in the pending world* — `c = flag ? a : b` where only
+written atom _only in the pending world_ — `c = flag ? a : b` where only
 world k's `flag` is true reads `a` in no canonical evaluation, so `a` has no
 canonical subscribers and no walk from `a` reaches `c` or its watchers.
 Those relationships are recorded in exactly one place: the writer's-world
@@ -1650,7 +1654,7 @@ So, after the walk, the drain re-validates registered memos:
   A k-write can only change k's own writer's world: pass worlds are pinned,
   and the newest world self-checks at read time, so slot k's chain is the
   whole obligation.
-- **Urgent drain:** re-validate *every* live deferred slot's chain — an
+- **Urgent drain:** re-validate _every_ live deferred slot's chain — an
   APPLIED entry is visible in every writer's world ("RETIRED or APPLIED or
   batch = B", 10.2), so an urgent write changes pending worlds too.
 - For each memo the check invalidates: re-evaluate the node in that world
@@ -1658,15 +1662,15 @@ So, after the walk, the drain re-validates registered memos:
   node's subscriber list for IMMEDIATE watchers and apply the 10.6 cutoff
   per watcher — scheduling any resulting `setState` through
   `unstable_runInBatch` for that world's batch, exactly as above (detecting
-  that world k changed is not enough; the bump must be *scheduled into k*,
+  that world k changed is not enough; the bump must be _scheduled into k_,
   or k's render never restarts with it).
 
 **Why this is complete — the first-divergence argument.** A node that has
-*never* been evaluated in world k has no memo to re-validate; can it be
+_never_ been evaluated in world k has no memo to re-validate; can it be
 stale at k's commit? No. Its k-evaluation and its canonical evaluation run
 the same deterministic function, so they read identical inputs up to the
 first atom whose k-value differs from its canonical value — and that
-first-divergence atom *is* read canonically, i.e., it is a canonical
+first-divergence atom _is_ read canonically, i.e., it is a canonical
 dependency, so the write that made it diverge reaches the node through the
 ordinary canonical walk, notifies its watchers, and the k-evaluation that
 follows creates the memo whose certificate registers the node in slot k's
@@ -1690,8 +1694,8 @@ Cost containment, since this walk is the overlay's most-repeated act:
   which is memoized per (node, world) and shared across watchers of the same
   node (10.5–10.6).
 - **The re-validation is bounded by touched nodes, not watchers.** A slot's
-  chain holds one record per *distinct node actually evaluated in that
-  world* — memo sharing already collapsed fan-out — and transitions touch
+  chain holds one record per _distinct node actually evaluated in that
+  world_ — memo sharing already collapsed fan-out — and transitions touch
   few nodes. Same cost class as the walk itself; the fan-out benchmark
   gains a registered-node dimension so this is priced, not presumed (18.2).
 - **Priced, not presumed.** The full deferred-write cost — walk, broadcast
@@ -1703,7 +1707,7 @@ Cost containment, since this walk is the overlay's most-repeated act:
   React bail out" mode that skips the world evaluation and lets the
   watcher's render-time world read discover no-change (React's own bailout
   then prunes the render) — a slowness trade, never a correctness one. If
-  the *chain scan* is what breaks the ceiling, the pre-registered escalation
+  the _chain scan_ is what breaks the ceiling, the pre-registered escalation
   is an ephemeral (source-atom, world) → consumer edge plane with the same
   quiescence-reset lifecycle — displacing the chain design on measurement,
   never on taste.
@@ -1726,15 +1730,15 @@ scenarios in 17.3–17.4 and generated at random by the oracle fuzz in 17.2.
 Every read resolves in one of four contexts. The context is a module scalar,
 not a parameter — reads stay zero-argument bound calls.
 
-| context | active when | world |
-| --- | --- | --- |
-| `RENDER` | while React is *executing* render code: from `onRenderPassStart` to `onRenderPassEnd`, minus yield gaps (below) | Wp: pin + include mask |
-| `NEWEST` | default: event handlers, timers, core effects, benchmarks, computed evaluation outside render — including all code running in a pass's yield gaps | Wn: everything visible |
-| `COMMITTED` | inside `useSignalEffect` callbacks (and SSR) | the root's committed view (13.4); globally, retired entries only |
-| kernel-internal | inside `checkDirty`/`update` walks | W0 by construction (the kernel only ever sees applied state) |
+| context         | active when                                                                                                                                       | world                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `RENDER`        | while React is _executing_ render code: from `onRenderPassStart` to `onRenderPassEnd`, minus yield gaps (below)                                   | Wp: pin + include mask                                           |
+| `NEWEST`        | default: event handlers, timers, core effects, benchmarks, computed evaluation outside render — including all code running in a pass's yield gaps | Wn: everything visible                                           |
+| `COMMITTED`     | inside `useSignalEffect` callbacks (and SSR)                                                                                                      | the root's committed view (13.4); globally, retired entries only |
+| kernel-internal | inside `checkDirty`/`update` walks                                                                                                                | W0 by construction (the kernel only ever sees applied state)     |
 
 **The scalar is kept correct by edges, including yields.** A time-sliced
-pass stays *open* across yields to the event loop, but the code that runs in
+pass stays _open_ across yields to the event loop, but the code that runs in
 those gaps — click handlers, timers, settled promises — is not render code:
 its reads must resolve `NEWEST` (a handler deciding on a stale pinned world
 would misbehave) and its writes must be legal (10.8 makes render-context
@@ -1762,14 +1766,14 @@ Each clause mirrors a rule React applies to its own hook queues: clause 2 is
 the lane filter (a transition render applies transition updates and skips
 urgent ones, and vice versa); the `<= P` conditions mirror React's rule that
 updates arriving during a render are hidden from it and picked up by the
-next one. Clause 1 keying on *retire time* rather than write time is what
+next one. Clause 1 keying on _retire time_ rather than write time is what
 keeps a paused-and-resumed pass stable: if another root commits (and folds)
 while this pass is yielded, the fold's stamp exceeds this pass's pin, so this
 pass keeps reading what it started with.
 
 `NEWEST` visibility: every entry. `COMMITTED` visibility, in its global
 form: `RETIRED` entries only (regardless of stamps; APPLIED-but-pending
-entries are *excluded*, which is what makes `useSignalEffect` observe only
+entries are _excluded_, which is what makes `useSignalEffect` observe only
 committed worlds). Commits, however, are per root — a batch spanning two
 roots commits on one while still pending on the other — so the bindings
 refine `COMMITTED` into a **per-root committed view**: entries retired with
@@ -1808,7 +1812,7 @@ readAtom(a):
 
 If no entry beyond the base is visible (a pass pinned before the tape
 existed, after an absorption moved the canonical value), the answer is the
-base snapshot — *not* the kernel value. That is the tear-prevention case.
+base snapshot — _not_ the kernel value. That is the tear-prevention case.
 
 Tracking: in `NEWEST`/`COMMITTED` contexts, tracked reads link normally
 (`link(a, activeSub, cycle)`). In `RENDER` context, component-level reads run
@@ -1844,13 +1848,13 @@ the cost of a false positive is one overlay evaluation — and usually less,
 because of the world memos below — never a wrong answer.
 
 **The post-eval re-check closes a one-read window.** The mark-repair hook
-(8.7.3) fires when a canonical evaluation *links* a logged or marked
+(8.7.3) fires when a canonical evaluation _links_ a logged or marked
 producer — which is necessarily after `readComputed` already chose the
 kernel path on the strength of an unmarked stamp. Two reachable shapes hit
 that window: a freshly created computed (a `useComputed` mounting during a
 transition render — stamp 0, no walk ever visited it) whose first evaluation
 reads a deferred-written atom, and an old computed whose canonical
-re-evaluation takes a *new branch* into a logged atom mid-era. In both, the
+re-evaluation takes a _new branch_ into a logged atom mid-era. In both, the
 kernel evaluation is correct **canonical** maintenance (its cache and
 topology stand), but its answer is W0 — wrong for a world-sensitive reader.
 So, in world-sensitive contexts (`RENDER`, `COMMITTED`, writer's-world
@@ -1901,9 +1905,9 @@ Two properties of the certificate are load-bearing:
   invalidation from one world's topology while serving another world's cache
   (tested exhaustively in 17.4).
 - **It records unlogged reads too, as zeros.** Worlds diverge down branches
-  whose atoms may have *no tape yet* — in the flag/a/b shape, world k reads
+  whose atoms may have _no tape yet_ — in the flag/a/b shape, world k reads
   `a` while `a` is still unlogged, and `a`'s tape is created only by the
-  *later* write that must invalidate this very memo. A certificate that
+  _later_ write that must invalidate this very memo. A certificate that
   recorded only logged atoms would omit exactly the reads that make worlds
   diverge, and the "must have been invalidated" reasoning would be false at
   its most important test. With the zero convention, validity is uniform:
@@ -1917,7 +1921,7 @@ as the traversal stacks. Nested evaluation frames make flattening a
 base-index rule rather than a bookkeeping problem: an inner overlay
 evaluation's span simply remains appended beneath **every open frame's**
 base, so a parent's certificate automatically contains its child's reads;
-and when a nested read *hits* a child memo instead of evaluating, the child
+and when a nested read _hits_ a child memo instead of evaluating, the child
 record's certificate run is copied into the collector. This flattening is
 required, not optional: certificates validate one record at a time, so a
 parent whose certificate omitted grandchild sources would stay "valid" after
@@ -1927,11 +1931,11 @@ written once, at frame exit.
 
 **World keys** (disjoint integer encodings):
 
-| world | key |
-| --- | --- |
-| newest (Wn) | `0` |
-| a render pass's world (Wp) | `(passSerial << 2) | 1` |
-| a writer's world for batch token t | `(t << 2) | 2` |
+| world                              | key                |
+| ---------------------------------- | ------------------ | --- |
+| newest (Wn)                        | `0`                |
+| a render pass's world (Wp)         | `(passSerial << 2) | 1`  |
+| a writer's world for batch token t | `(t << 2)          | 2`  |
 
 Writer's-world records additionally link themselves onto their batch slot's
 memo chain (`SLOT_NEXT`, heads in `slotMemoHead`) as a side effect of memo
@@ -1956,13 +1960,13 @@ reader's world, its `EPOCH` equals the current `overlayEpoch`, and:
   seq), an absorption that swept the tape, an atom becoming logged —
   invalidates the record, and the read re-evaluates and re-memoizes. The
   scan is monomorphic integer loads with no pointer chasing; transitions
-  touch few atoms, so certificates are short, and this scan *is* the inner
+  touch few atoms, so certificates are short, and this scan _is_ the inner
   loop the held-open-transition gate prices (18.2).
 
 Why the epoch exists: appends move a tape's tail seq and tape creation flips
-a flag, but three events change world values *without* doing either —
+a flag, but three events change world values _without_ doing either —
 **retirement** (stamping RETIRED on batch entries makes them visible in
-*other* batches' writer's worlds and in the newest-world's committed
+_other_ batches' writer's worlds and in the newest-world's committed
 component), **truncation** (unlinking a mid-tape entry leaves the tail
 untouched), and **promise settlement** (a thenable settling moves no atom's
 tape, yet a writer's-world memo holding a suspended box for it is now
@@ -2028,14 +2032,14 @@ For unmarked nodes (no overlay anywhere below), the same rule runs without
 overlay evaluation: the "evaluation" is the plain kernel read (which
 pull-verifies through `checkDirty`), compared against `lastBroadcast` as
 usual. The comparison is not skippable even here, because the broadcast
-queue is filled at *possibly-stale* time — `propagate` enqueues watchers
+queue is filled at _possibly-stale_ time — `propagate` enqueues watchers
 before anyone knows whether the change survives the equality cutoff — and
 `setVersion` always changes hook state, so an unconditional broadcast would
 re-render on equal-value writes, the exact storm this section exists to
 prevent.
 
 A third broadcast source joins these two: the drain's slot-chain
-re-validation (9.8) broadcasts to watchers of nodes whose *pending-world*
+re-validation (9.8) broadcasts to watchers of nodes whose _pending-world_
 value changed — nodes the canonical walk cannot reach when the dependency
 exists only in that world. Those broadcasts run the same per-watcher cutoff,
 against the same node-level memo, scheduled into the pending batch's lanes
@@ -2048,11 +2052,11 @@ is pending, an urgent click writes `a.update(x => x * 2)`.
 
 Tape after both writes (base seq 10):
 
-| record | op | batch | seq | applied | retired |
-| --- | --- | --- | --- | --- | --- |
-| base | BASE `1` | — | 10 | — | yes (at 10) |
-| e1 | UPDATE `x+1` | T (deferred) | 11 | no | no |
-| e2 | UPDATE `x*2` | U (urgent) | 12 | yes | no |
+| record | op           | batch        | seq | applied | retired     |
+| ------ | ------------ | ------------ | --- | ------- | ----------- |
+| base   | BASE `1`     | —            | 10  | —       | yes (at 10) |
+| e1     | UPDATE `x+1` | T (deferred) | 11  | no      | no          |
+| e2     | UPDATE `x*2` | U (urgent)   | 12  | yes     | no          |
 
 Kernel value (W0) = base + applied = `1*2 = 2`.
 
@@ -2062,7 +2066,7 @@ Kernel value (W0) = base + applied = `1*2 = 2`.
   base + retired(e2) + applied() = `2` — unchanged, no-op.
 - **Transition render** (includes T; pin 15): visible = base,
   e1 (clause 2), e2 (clause 1, retired at 14 ≤ 15) → replay in seq order:
-  `(1 + 1) * 2 = 4`. The transition lands *on top of* the urgent change.
+  `(1 + 1) * 2 = 4`. The transition lands _on top of_ the urgent change.
 - T retires: fold = `(1+1)*2 = 4`; kernel value moves 2 → 4 via
   `invalidate`; effects observe committed 4. Sweep folds everything into the
   base; tape frees; quiescence resets the overlay.
@@ -2087,23 +2091,23 @@ canonical evaluation contexts only.
 ## 11. The kernel/policy cut
 
 The precise line between mechanism (kernel + overlay memory) and policy
-(everything users can configure). The test for every future feature: *if it
+(everything users can configure). The test for every future feature: _if it
 inspects a user value, a user option, or React, it is policy; if it is
-integer math over the planes, it is mechanism.*
+integer math over the planes, it is mechanism._
 
 ### 11.1 The cut, operation by operation
 
-| operation | mechanism (kernel/overlay) | policy (kinds/React layer) |
-| --- | --- | --- |
-| create | record allocation, flags init | handle construction, meta allocation, wrapper synthesis |
-| tracked read | `link` cursor/splice, flags checks | read-context selection, log replay payload application |
-| write | pending-value slot, `propagate`, broadcast/effect queues, notify walk | equality short-circuit, log append decision, deferred/urgent classification |
-| recompute | `checkDirty` walk, `update` call, `!==` compare, `shallowPropagate` | what "evaluate" means: ctx, isEqual, error/suspense capture (all inside the stored wrapper fn) |
-| notify | queue discipline, outer-before-inner order, IMMEDIATE routing | watcher broadcast rule (world evaluation + cutoff + setState) |
-| log lifecycle | record packing, chains, slots, seq tickets, visibility *mask* math, sweep/truncate splicing | replaying payloads (SET/UPDATE/DISPATCH semantics), absorption equality, when to absorb (retirement orchestration) |
-| world memos | plane-W records, certificate packing/scan, chain and slot-chain threading | what gets memoized (evaluation results, boxes); when the drain re-validates (9.8) |
-| liveness | LIVE bit maintenance | observed-lifecycle effect delivery, debouncing |
-| memory | bump/free/growth/reclaim, generation counters | FinalizationRegistry wiring for handles, configure() sizing |
+| operation     | mechanism (kernel/overlay)                                                                  | policy (kinds/React layer)                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| create        | record allocation, flags init                                                               | handle construction, meta allocation, wrapper synthesis                                                            |
+| tracked read  | `link` cursor/splice, flags checks                                                          | read-context selection, log replay payload application                                                             |
+| write         | pending-value slot, `propagate`, broadcast/effect queues, notify walk                       | equality short-circuit, log append decision, deferred/urgent classification                                        |
+| recompute     | `checkDirty` walk, `update` call, `!==` compare, `shallowPropagate`                         | what "evaluate" means: ctx, isEqual, error/suspense capture (all inside the stored wrapper fn)                     |
+| notify        | queue discipline, outer-before-inner order, IMMEDIATE routing                               | watcher broadcast rule (world evaluation + cutoff + setState)                                                      |
+| log lifecycle | record packing, chains, slots, seq tickets, visibility _mask_ math, sweep/truncate splicing | replaying payloads (SET/UPDATE/DISPATCH semantics), absorption equality, when to absorb (retirement orchestration) |
+| world memos   | plane-W records, certificate packing/scan, chain and slot-chain threading                   | what gets memoized (evaluation results, boxes); when the drain re-validates (9.8)                                  |
+| liveness      | LIVE bit maintenance                                                                        | observed-lifecycle effect delivery, debouncing                                                                     |
+| memory        | bump/free/growth/reclaim, generation counters                                               | FinalizationRegistry wiring for handles, configure() sizing                                                        |
 
 Two non-obvious choices make this cut clean and fast:
 
@@ -2115,7 +2119,7 @@ equality never touches the kernel: the computed's stored function is a
 the previous value and — when `isEqual(prev, next)` holds — **returns the
 previous reference**. The kernel's identity compare then correctly reports
 "unchanged". The same trick serves error and suspense states (11.3): the
-wrapper returns the *same* box object while the state is unchanged.
+wrapper returns the _same_ box object while the state is unchanged.
 
 Atoms: `isEqual` runs in `Atom.set`/`update`/`dispatch` before anything is
 logged or written (compare against the newest-world value), and again at
@@ -2136,8 +2140,8 @@ Computed evaluation outcomes are values, never control flow through the
 graph:
 
 ```ts
-type ErrorBox = { kind: 'error'; error: unknown }
-type SuspendedBox = { kind: 'suspended'; thenable: PromiseLike<unknown> }
+type ErrorBox = { kind: "error"; error: unknown }
+type SuspendedBox = { kind: "suspended"; thenable: PromiseLike<unknown> }
 ```
 
 The wrapper catches throws and pending `ctx.use` thenables and returns a box;
@@ -2157,29 +2161,29 @@ arrives, find its row (or its nearest neighbor) before writing code — a
 feature with no natural row is a design smell to resolve in review, not in
 the kernel.
 
-| concern | kernel | overlay | policy kinds | React bindings | fork | why there |
-| --- | :-: | :-: | :-: | :-: | :-: | --- |
-| Dependency tracking, staleness, exact recompute order | ● | | | | | The hot walks; must stay packed and monomorphic. The only pure-kernel row. |
-| Write logging, visibility, absorption, sweep | | ● | | | | Multi-versioning is tape math over plane G; the kernel gets memory mechanics only (8.7.5). |
-| Notify walk, marks, era floor | ● (walk) | ● (when) | | | | The walk is integer traversal (kernel mechanism); *when* to walk is overlay policy (9.8). |
-| World memos | | ● | | | | Validity is integer seq math; contents are opaque values. |
-| Atom/ReducerAtom/Computed classes, `set`/`update`/`dispatch` | | | ● | | | Value semantics are policy; kernel sees invalidate/update facts only. |
-| Equality (`isEqual`, cutoffs) | | | ● | | | User closures never enter kernel call sites (11.2). |
-| Promises / suspense (`ctx.use`) | | | ● | ● | | Thenable protocol is value policy (12.3); suspending a component is a binding concern (13.2). |
-| Atom observed-lifecycle `effect` | | | ● | | | Driven by kernel LIVE-bit facts (8.6, 12.4). |
-| Effect queue and flush timing | ● | | ● | ● | | Queue mechanics are kernel; "when reactions run" is policy; passive-effect timing rides React (13.4). |
-| Batch identity and lifecycle | | ● (slots) | | ● (orchestration) | ● (tokens) | Fork mints integer tokens (6.2); overlay interns slots (9.2); bindings orchestrate retirement (13). |
-| Batch entanglement | | | | ● (uses) | ● (provides) | Only the reconciler knows lanes (6.5); only the bindings know when a fixup needs it (13.2). |
-| Hooks (`useSignal` …) | | | | ● | | Hook protocol, watcher lifecycle, fixups (13). |
-| Transitions / `startTransition` parity | | ● (logs) | | ● (broadcast in writer's stack) | ● (classification) | Fork classifies writes (6.4); overlay logs/rebases; bindings inherit lanes (13.1). |
-| Infinite-loop rejection | | | ● | ● | | React's own guards via real setState; engine cycle checks for signal-only loops (4.7). |
-| Writes-in-computeds toleration + forbid switch | ● (detection) | | ● (choice) | | | Cycle detection is graph mechanism (RECURSED flags); forbidding is configuration (12.5). |
-| Multiple roots, SSR/hydration | | | | ● | ● | Containers from fork; recipes in bindings (13.7–13.8). |
-| Tracing and causality | ● (traced build) | ● (choke points) | ● | ● | | Tape append + overlay read are the two semantic choke points (16.2); kernel detail via the generated traced build (16.5). |
-| Graphviz renderers | | | ● | | | Read-only iteration over planes + labels (16.4). |
-| DOM mutation window | | | | | ● | Pure React-commit concern (6.6). |
-| Growth and reclamation | ● | ● | ● (Finalization) | | | Kernel: free lists, rebuild, generations. Policy: handle lifetime (14). |
-| Labels, devtools formatting | | | ● | | | Debug metadata; never on a hot path (16.3). |
+| concern                                                      |      kernel      |     overlay      |   policy kinds   |         React bindings          |        fork        | why there                                                                                                                 |
+| ------------------------------------------------------------ | :--------------: | :--------------: | :--------------: | :-----------------------------: | :----------------: | ------------------------------------------------------------------------------------------------------------------------- |
+| Dependency tracking, staleness, exact recompute order        |        ●         |                  |                  |                                 |                    | The hot walks; must stay packed and monomorphic. The only pure-kernel row.                                                |
+| Write logging, visibility, absorption, sweep                 |                  |        ●         |                  |                                 |                    | Multi-versioning is tape math over plane G; the kernel gets memory mechanics only (8.7.5).                                |
+| Notify walk, marks, era floor                                |     ● (walk)     |     ● (when)     |                  |                                 |                    | The walk is integer traversal (kernel mechanism); _when_ to walk is overlay policy (9.8).                                 |
+| World memos                                                  |                  |        ●         |                  |                                 |                    | Validity is integer seq math; contents are opaque values.                                                                 |
+| Atom/ReducerAtom/Computed classes, `set`/`update`/`dispatch` |                  |                  |        ●         |                                 |                    | Value semantics are policy; kernel sees invalidate/update facts only.                                                     |
+| Equality (`isEqual`, cutoffs)                                |                  |                  |        ●         |                                 |                    | User closures never enter kernel call sites (11.2).                                                                       |
+| Promises / suspense (`ctx.use`)                              |                  |                  |        ●         |                ●                |                    | Thenable protocol is value policy (12.3); suspending a component is a binding concern (13.2).                             |
+| Atom observed-lifecycle `effect`                             |                  |                  |        ●         |                                 |                    | Driven by kernel LIVE-bit facts (8.6, 12.4).                                                                              |
+| Effect queue and flush timing                                |        ●         |                  |        ●         |                ●                |                    | Queue mechanics are kernel; "when reactions run" is policy; passive-effect timing rides React (13.4).                     |
+| Batch identity and lifecycle                                 |                  |    ● (slots)     |                  |        ● (orchestration)        |     ● (tokens)     | Fork mints integer tokens (6.2); overlay interns slots (9.2); bindings orchestrate retirement (13).                       |
+| Batch entanglement                                           |                  |                  |                  |            ● (uses)             |    ● (provides)    | Only the reconciler knows lanes (6.5); only the bindings know when a fixup needs it (13.2).                               |
+| Hooks (`useSignal` …)                                        |                  |                  |                  |                ●                |                    | Hook protocol, watcher lifecycle, fixups (13).                                                                            |
+| Transitions / `startTransition` parity                       |                  |     ● (logs)     |                  | ● (broadcast in writer's stack) | ● (classification) | Fork classifies writes (6.4); overlay logs/rebases; bindings inherit lanes (13.1).                                        |
+| Infinite-loop rejection                                      |                  |                  |        ●         |                ●                |                    | React's own guards via real setState; engine cycle checks for signal-only loops (4.7).                                    |
+| Writes-in-computeds toleration + forbid switch               |  ● (detection)   |                  |    ● (choice)    |                                 |                    | Cycle detection is graph mechanism (RECURSED flags); forbidding is configuration (12.5).                                  |
+| Multiple roots, SSR/hydration                                |                  |                  |                  |                ●                |         ●          | Containers from fork; recipes in bindings (13.7–13.8).                                                                    |
+| Tracing and causality                                        | ● (traced build) | ● (choke points) |        ●         |                ●                |                    | Tape append + overlay read are the two semantic choke points (16.2); kernel detail via the generated traced build (16.5). |
+| Graphviz renderers                                           |                  |                  |        ●         |                                 |                    | Read-only iteration over planes + labels (16.4).                                                                          |
+| DOM mutation window                                          |                  |                  |                  |                                 |         ●          | Pure React-commit concern (6.6).                                                                                          |
+| Growth and reclamation                                       |        ●         |        ●         | ● (Finalization) |                                 |                    | Kernel: free lists, rebuild, generations. Policy: handle lifetime (14).                                                   |
+| Labels, devtools formatting                                  |                  |                  |        ●         |                                 |                    | Debug metadata; never on a hot path (16.3).                                                                               |
 
 The kernel column changes only if the graph algorithm itself changes — and
 that is exactly the code this project wants frozen, proven, and monomorphic.
@@ -2198,7 +2202,7 @@ sites (write, replay, recompute).
   gate only if the atom has no tape (the `LOG_HEAD === 0` rule of 9.3);
   otherwise append SET unconditionally (+ apply if urgent), then notify per
   9.8.
-- `update(fn)` → the *function* is the payload (never pre-evaluated in LOGGED
+- `update(fn)` → the _function_ is the payload (never pre-evaluated in LOGGED
   mode): worlds replay it against their own accumulator, which is how
   functional updates rebase (10.7). In DIRECT mode it evaluates immediately
   (no worlds exist to disagree).
@@ -2219,7 +2223,7 @@ contract is therefore strict and simple: **a pure function of its arguments
 and immutable captures.** Reading other signals from inside an updater or
 reducer is unsupported — the read would observe whatever world happens to be
 live at replay time, which is exactly the nondeterminism the tape exists to
-prevent. (Reading signals *before* the write and capturing the values is
+prevent. (Reading signals _before_ the write and capturing the values is
 fine; that pins them.) Impure updaters are user error, the same contract
 React documents for its own updater functions; the library adds no defensive
 machinery, but debug builds assert the contract by tripping on any tracked
@@ -2256,7 +2260,7 @@ encounter), then:
   suspend/replay converge instead of re-fetching forever. The key must
   satisfy two constraints that rule out the obvious candidates: it must be
   **stable across passes** (React's suspend-and-retry re-renders arrive as
-  *new* passes, so a per-pass key would re-fetch forever) and it must
+  _new_ passes, so a per-pass key would re-fetch forever) and it must
   **identify the whole world** (a pass legitimately renders several
   entangled batches — a single batch token under-identifies it, and two
   different mask-worlds keyed alike would alias each other's promises).
@@ -2268,7 +2272,7 @@ encounter), then:
   non-suspended value. Writer's-world broadcast evaluations (10.6) never
   call `ctx.use` speculatively — a suspended box in a writer's-world memo
   simply compares unequal-or-equal like any value.
-- **Settlement wake-up:** when a thenable that suspended the *canonical*
+- **Settlement wake-up:** when a thenable that suspended the _canonical_
   evaluation settles, the policy layer calls kernel `invalidate(c)` in a
   microtask (if the computed still caches that SuspendedBox): watchers
   re-render, effects re-run, the wrapper re-evaluates and now sees the
@@ -2307,8 +2311,8 @@ All bindings share one module-level singleton: the **bridge**. At first
 import it subscribes to the external runtime (6.1) and wires the callbacks:
 
 - `onRenderPassStart(container, tokens, lineage)` → `passOpen = 1;
-  passSerial++; passPin = seqCounter; passIncludeMask = internAll(tokens);
-  passContainer = container; passLineage = lineage` — and switch the read
+passSerial++; passPin = seqCounter; passIncludeMask = internAll(tokens);
+passContainer = container; passLineage = lineage` — and switch the read
   context to `RENDER`. Batch-open edges also flip `writeMode` to `LOGGED`
   if it was not already (9.1).
 - `onRenderPassYield(container)` / `onRenderPassResume(container)` → flip
@@ -2349,7 +2353,7 @@ like any setState.
 ### 13.2 `useSignal(signal)`
 
 Render phase (pure): read the signal in `RENDER` context (which resolves the
-pass's world Wp) and return it. A mount *during* a transition render
+pass's world Wp) and return it. A mount _during_ a transition render
 therefore reads the pending world directly — no double render, no guessing;
 this is the scenario stock-React userland provably cannot handle (the
 known-bug test we inherit and turn green, 17.6). If the value is a
@@ -2363,14 +2367,14 @@ the gap between render and subscription. The watcher remembers the world
 (pin + include mask) and value it rendered with; both checks are
 **world-aware** — they re-resolve the node and compare values, never
 compare world identities, because "the committed value moved past what we
-rendered" is *expected*, not a race, whenever the rendered world included a
+rendered" is _expected_, not a race, whenever the rendered world included a
 still-pending batch (this component just rendered inside transition k's
 pass; committed state excludes k by definition — a literal
 committed-vs-rendered comparison would fire a spurious correction on every
 such mount):
 
 - **Did this component's own world move?** Re-resolve the watched node in
-  the watcher's remembered rendered world, *now*, and compare with the
+  the watcher's remembered rendered world, _now_, and compare with the
   remembered value (by the node's equality). A difference means something
   raced into the gap that the rendered world would have shown — an urgent
   write, an absorption. Correct it with `setVersion` immediately, in the
@@ -2393,7 +2397,7 @@ such mount):
   path.
 
 Why `startTransition` around the corrective setState would be wrong, and why
-entanglement is required: a fresh `startTransition` mints a *new* batch with
+entanglement is required: a fresh `startTransition` mints a _new_ batch with
 its own lanes and its own commit. React would be free to commit the original
 batch first — without this component's correction — and paint a frame where
 sibling components show the transition's world and this component shows the
@@ -2446,7 +2450,7 @@ So the bridge keeps a small per-container table, updated on
 
 A `useSignalEffect` callback resolves reads against its own root's view, and
 the engine-pathway flush runs per root commit, filtered by that root's view
-— an effect re-runs when *its root's* committed world changed, not when any
+— an effect re-runs when _its root's_ committed world changed, not when any
 token anywhere retired. SSR and rootless committed reads (a devtools dump,
 say) use the global retired-only form (10.2). The table is a handful of
 integers per live root, owned by the bindings; node records know nothing of
@@ -2544,8 +2548,8 @@ The whole engine is one closure over `const M`, `const G`, and const aliases
 of the side columns. TurboFan embeds those bases like module constants — the
 only binding strategy measured at exact const parity (rejected with numbers:
 segment tables +35–40%/access, resizable ArrayBuffers +66–83% traversal,
-mutable `let` bindings +34–43%, per-function aliases +26–30%; growth *events*
-are near-free — only growth *support on the read path* costs).
+mutable `let` bindings +34–43%, per-function aliases +26–30%; growth _events_
+are near-free — only growth _support on the read path_ costs).
 
 Mechanics (inherited verbatim from the proven kernel):
 
@@ -2565,8 +2569,8 @@ Mechanics (inherited verbatim from the proven kernel):
   `.set`, and ids are indices, unchanged by doubling — everything a pass
   holds (pin, include mask, memo record ids, certificate offsets) is either
   a value or an index that survives the copy, so any true operation boundary
-  (`enterDepth === 0`) is a legal growth point, *including the yield gaps of
-  a time-sliced pass*. This matters because long transitions allocate log
+  (`enterDepth === 0`) is a legal growth point, _including the yield gaps of
+  a time-sliced pass_. This matters because long transitions allocate log
   and memo records precisely while a pass is held open; forbidding growth
   there would manufacture a spurious mid-transition exhaustion throw out of
   the watermark's own conservatism.
@@ -2603,7 +2607,7 @@ Mechanics (inherited verbatim from the proven kernel):
   and `overlayEpoch` bumped past the dead era (9.7).
 - Steady-state re-render traffic allocates nothing in the engine (log
   records in LOGGED mode come from plane G; world memos and their
-  certificates come from plane W, written only on overlay *evaluations*;
+  certificates come from plane W, written only on overlay _evaluations_;
   broadcast closures and version bumps allocate nothing).
 - Arena memory is off-JS-heap for GC purposes: retained-heap comparisons must
   report both `heapUsed` and plane byte totals (the harness's GC-attribution
@@ -2631,14 +2635,14 @@ layout.
 All layout constants live in one `const enum C { … }` in the kernel source
 file. Same-file `const enum` members are inlined as numeric literals by
 esbuild (both transform and bundle modes), tsx, vitest, and tsc alike, so
-the emitted code carries literals no matter how the *library* is built.
+the emitted code carries literals no matter how the _library_ is built.
 Cross-file `const enum` is packaging-dependent (esbuild transform mode and
 `tsc --isolatedModules` leave runtime property accesses) and is forbidden.
 The enum is never exported; nothing crosses the public `.d.ts` boundary.
 
 This choice deliberately overrides the project's general "assume
 stripping-only TypeScript transforms" guideline, and here is the honest
-accounting. The guideline exists so *consumers* never need a real TS
+accounting. The guideline exists so _consumers_ never need a real TS
 compiler — and they never do: the package **ships compiled JavaScript**
 (built with tsdown/esbuild) plus declaration files, so consumers' toolchains
 see plain JS with the enum already folded to literals. The constraint bites
@@ -2677,7 +2681,7 @@ by the generator, never imported by shipping code). It declares:
 - named constants (`REC_SLACK = 1280`, watermarks, `LAYOUT_VERSION`);
 - the bytecode-budget table for hot functions (consumed by CI, 18.3).
 
-Spare slots are *named* (`SPARE7`), so claiming one is a schema edit plus
+Spare slots are _named_ (`SPARE7`), so claiming one is a schema edit plus
 regenerate, and the invariant sweeper always knew spares must read 0 on live
 records — a cheap corruption tripwire until claimed. Any change to stride,
 field slots, flag bits, or side-column addressing bumps `LAYOUT_VERSION`;
@@ -2717,9 +2721,9 @@ debug snapshot formats are stamped with it and loaders refuse mismatches.
 ### 15.3 Branded ids
 
 ```ts
-type NodeId = number & { readonly __brand: 'NodeId' }
-type LinkId = number & { readonly __brand: 'LinkId' }
-type LogId  = number & { readonly __brand: 'LogId' }
+type NodeId = number & { readonly __brand: "NodeId" }
+type LinkId = number & { readonly __brand: "LinkId" }
+type LogId = number & { readonly __brand: "LogId" }
 ```
 
 Used throughout kernel and overlay signatures. They erase to nothing and
@@ -2770,7 +2774,7 @@ validity audits, and label propagation into error messages.
 
 The packed representation trades away every default affordance of JavaScript
 objects — `console.log`, heap-snapshot attribution, debugger hover — so
-visibility must be *built*, and cheaply. One economy runs through this whole
+visibility must be _built_, and cheaply. One economy runs through this whole
 section: all the tools share a single substrate, the generated debug twin's
 "decode record id → plain object" hydrators (15.2). The formatter, the
 verifier, the DOT dumper, the trace-event decoder, and the oracle comparator
@@ -2812,7 +2816,7 @@ than a preference:
   traced profile a lie. A zero-allocation recorder is the only way traces of
   a zero-allocation engine are trustworthy.
 - **Flight-recorder mode.** Because recording is allocation-free and
-  fixed-cost, the recorder can run *always-on* in development ("last 65k
+  fixed-cost, the recorder can run _always-on_ in development ("last 65k
   events before the bug"), overwriting oldest records — feasible only
   packed; an object stream with this policy would be a permanent allocation
   storm.
@@ -2827,7 +2831,7 @@ than a preference:
 
 **Trace modes.** The tracer runs in one of three modes. All three share the
 same record format and the same emit path — there is never a second
-recorder, and the mode distinction lives *only* in the end-of-chunk branch,
+recorder, and the mode distinction lives _only_ in the end-of-chunk branch,
 taken once per `chunkSize` (or `capacity`) events, so it adds no per-event
 cost:
 
@@ -2848,7 +2852,7 @@ cost:
   per `chunkSize` events, constant no matter how much history has
   accumulated. A filled chunk is **sealed** — immutable from that moment —
   so the decoder and the devtools extension can stream, serialize, or
-  transfer sealed chunks incrementally *while recording continues*, with no
+  transfer sealed chunks incrementally _while recording continues_, with no
   coordination against the writer.
 
   The guarantee, stated plainly for users: **a SESSION trace is lossless up
@@ -2861,14 +2865,14 @@ cost:
 
 **Record layout** (trace plane `T`, stride 8; generated from the schema):
 
-| offset | name | meaning |
-| --- | --- | --- |
-| +0 | `KIND` | event-kind tag (6 bits) + kind-specific flag bits (applied?, cutoff-suppressed?, memo-hit?, committed?, fallback-taken?, equality-dropped?) |
-| +1 | `CAUSE` | event id of the provoking event (the causality edge); 0 = root cause. A module-level `currentCause` scalar is set around each emitting operation, so a broadcast carries its write's event id and a render-read carries the broadcast that scheduled it |
-| +2 | `NODE` | primary subject: node id / log id / watcher id (per kind) |
-| +3 | `WORLD` | world key, batch token, or include mask (per kind) |
-| +4 | `TIME` | microseconds since the previous event (delta encoding; saturates at 2^31−1, and a saturated delta emits a `clock-sync` event carrying an absolute timestamp in its arg slots) |
-| +5..+7 | `ARG0..ARG2` | kind-specific integers: seq, walk ticket, duration in µs, counts, label ids |
+| offset | name         | meaning                                                                                                                                                                                                                                                 |
+| ------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| +0     | `KIND`       | event-kind tag (6 bits) + kind-specific flag bits (applied?, cutoff-suppressed?, memo-hit?, committed?, fallback-taken?, equality-dropped?)                                                                                                             |
+| +1     | `CAUSE`      | event id of the provoking event (the causality edge); 0 = root cause. A module-level `currentCause` scalar is set around each emitting operation, so a broadcast carries its write's event id and a render-read carries the broadcast that scheduled it |
+| +2     | `NODE`       | primary subject: node id / log id / watcher id (per kind)                                                                                                                                                                                               |
+| +3     | `WORLD`      | world key, batch token, or include mask (per kind)                                                                                                                                                                                                      |
+| +4     | `TIME`       | microseconds since the previous event (delta encoding; saturates at 2^31−1, and a saturated delta emits a `clock-sync` event carrying an absolute timestamp in its arg slots)                                                                           |
+| +5..+7 | `ARG0..ARG2` | kind-specific integers: seq, walk ticket, duration in µs, counts, label ids                                                                                                                                                                             |
 
 The event **id** is a monotonic counter that doubles as the event's
 sequence number and its address. In RING mode, a record's position is
@@ -2889,28 +2893,28 @@ thenable identity — go into a small side **ref-ring** (a plain array,
 default capacity 256, parallel-indexed by its own counter; the trace record
 stores the ref-ring index in an arg slot). Documented retention rule: the
 ref-ring retains those objects until overwritten — bounded by its capacity,
-but it *can* extend object lifetimes, so its capacity is configurable and 0
+but it _can_ extend object lifetimes, so its capacity is configurable and 0
 disables ref capture entirely (events still record, payload slots read as
 "dropped").
 
 **Event kinds and their payloads** (fields mapped onto the record slots
 above):
 
-| kind | payload |
-| --- | --- |
-| `atom-write` | atom id, op, batch token, seq; flags: applied?, equality-dropped? |
-| `log-append` / `log-coalesce` / `truncate` | atom id, log id, batch token |
-| `batch-retired` | token, entries stamped; flags: committed? |
-| `absorb` | atom id, old/new via ref-ring; flags: changed? |
-| `computed-eval` | node id, world key, duration µs, deps-read count; flags: memo-hit? |
-| `notify-walk` | atom id, walk ticket, nodes stamped, watchers collected |
-| `notify` / `broadcast` | node id, watcher id; flags: cutoff-suppressed? |
-| `entangle` | watcher id, batch token; flags: fallback-taken? |
-| `effect-run` | node id, duration µs |
-| `render-pass-start/end` | container label id, pin, include mask |
-| `render-read` | node id, world key; flags: resolved-via (kernel / replay / memo) |
-| `suspend` / `settle` | node id, thenable ref-ring index, world key |
-| `mark-repair` / `sweep` / `quiescence` / `clock-sync` / `truncation-marker` | counts / absolute time / drop-boundary event id |
+| kind                                                                        | payload                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `atom-write`                                                                | atom id, op, batch token, seq; flags: applied?, equality-dropped?  |
+| `log-append` / `log-coalesce` / `truncate`                                  | atom id, log id, batch token                                       |
+| `batch-retired`                                                             | token, entries stamped; flags: committed?                          |
+| `absorb`                                                                    | atom id, old/new via ref-ring; flags: changed?                     |
+| `computed-eval`                                                             | node id, world key, duration µs, deps-read count; flags: memo-hit? |
+| `notify-walk`                                                               | atom id, walk ticket, nodes stamped, watchers collected            |
+| `notify` / `broadcast`                                                      | node id, watcher id; flags: cutoff-suppressed?                     |
+| `entangle`                                                                  | watcher id, batch token; flags: fallback-taken?                    |
+| `effect-run`                                                                | node id, duration µs                                               |
+| `render-pass-start/end`                                                     | container label id, pin, include mask                              |
+| `render-read`                                                               | node id, world key; flags: resolved-via (kernel / replay / memo)   |
+| `suspend` / `settle`                                                        | node id, thenable ref-ring index, world key                        |
+| `mark-repair` / `sweep` / `quiescence` / `clock-sync` / `truncation-marker` | counts / absolute time / drop-boundary event id                    |
 
 **The decoder view.** The verbose "object event" (`{id, time, cause, type,
 …named fields}`) exists only as a **lazy decoder view over the packed
@@ -2921,16 +2925,16 @@ operation boundaries, and in SESSION mode may instead consume whole sealed
 chunks as they seal — the feed for the planned Chrome devtools timeline
 extension), the cause-chain helpers (`whyDidRerun(computedOrLabel)`,
 `whyDidRender(componentLabel)`, `effectRunCount(label)`, which walk `CAUSE`
-edges *inside the packed records* and only decode the events they return),
+edges _inside the packed records_ and only decode the events they return),
 and the DOT renderer (16.4).
 
 **The two use cases, documented as recipes:**
 
-- *Devtools-open ring:* opening the devtools extension (or calling
+- _Devtools-open ring:_ opening the devtools extension (or calling
   `startTracing({ mode: 'ring' })`) records the flight recorder; the
   timeline shows the ring's live tail and marks overwrite-loss with the drop
   counter.
-- *Whole-boot capture:* `startTracing({ mode: 'session', … })` must run
+- _Whole-boot capture:_ `startTracing({ mode: 'session', … })` must run
   **before the engine's first operation** to capture a truly complete boot.
   The ordering that makes this work is documented and asserted: import
   `cosignal/tracing` and start the session before any application module
@@ -2989,13 +2993,13 @@ crash lighter-weight renderers):
   (write → walk → broadcast → render → absorb chains).
 
 Layering is strict: `tracing` records without importing any visualizer;
-`graphviz` imports only *types* from tracing and reads the planes through
+`graphviz` imports only _types_ from tracing and reads the planes through
 the debug twin's accessors. Either loads without the other.
 
 ### 16.5 The traced kernel build
 
 Kernel-internal detail (flag transitions, link churn, scratch-stack depth)
-is deliberately *not* behind per-site tracer checks in the production
+is deliberately _not_ behind per-site tracer checks in the production
 kernel — the production kernel contains zero tracing instructions. When
 that detail is needed, the generated **traced kernel stamp** (15.2) — the
 same code with integer event emits spliced at its `/*TRACE*/` marks,
@@ -3012,7 +3016,7 @@ never touched.
 tape invariants (the W0 fold equals the kernel value after every
 absorption), memo validity audits, and `verifyArena()` — the generated
 sweeper that walks the planes and, like a database integrity check, reports
-*all* problems rather than stopping at the first: allocation partition
+_all_ problems rather than stopping at the first: allocation partition
 (every record on exactly one of live graph / free list / pendingFree;
 free-list chains acyclic, terminating at 0, below the bump pointer; record 0
 all-zero), field typing from the schema's `kind` strings (a `LinkId` field
@@ -3041,7 +3045,7 @@ Seven suites. CI runs them cheapest-signal-first (17.1, 17.5, 17.3, 17.4,
 reverse of nothing: the plan's one sequencing rule is that **the oracle
 (17.2) is built before the overlay machinery it checks** — the naive model
 is deliberately cheap to write (a snapshot-everything reference), and the
-sweep, coalescing, and mark-repair code must be developed *against* it, not
+sweep, coalescing, and mark-repair code must be developed _against_ it, not
 tested by it after the fact. Nothing ships on assertion of similarity to
 prior art; every inherited behavior is re-verified against this engine.
 
@@ -3087,7 +3091,7 @@ of reproducing them: a model that mirrored the engine's topology walks would
 agree with the engine about every watcher the walks miss. So the oracle's
 broadcast set is computed from first principles: at each drain, for each
 watcher and each world the drain could affect (the writing batch's writer's
-world for a deferred drain; every live deferred writer's world *plus* the
+world for a deferred drain; every live deferred writer's world _plus_ the
 newest world for an urgent drain), fully replay the watched node's value in
 that world and compare it — by the node's equality — with the last value the
 oracle recorded as broadcast or rendered for that world. The watchers whose
@@ -3124,7 +3128,7 @@ the oracle derives from world values as above. In debug builds,
 **Seed and shrinking discipline** (supplied here because it matters as much
 as the oracle): the suite runs on fast-check's model-based command runner.
 Every failure prints its seed and path; CI re-runs are reproducible from
-them. Shrinking is enabled so a failure arrives as the *minimal*
+them. Shrinking is enabled so a failure arrives as the _minimal_
 desynchronizing op sequence, and every shrunk failure is committed as a
 pinned deterministic regression case before the fix lands. The pinned list
 starts with the design's known danger cases: the rebase walkthrough (10.7),
@@ -3184,7 +3188,7 @@ a.state : b.state` reads `a` only where the pending world's `flag` is true.
 Any engine that derives invalidation from one world's topology while serving
 another world's cache tears on this family; this design is immune by
 construction — overlay evaluations re-walk dependencies per world, and memo
-validity keys on the *re-observed* source set (10.5) — and these tests keep
+validity keys on the _re-observed_ source set (10.5) — and these tests keep
 it that way. Common setup: atoms `flag=false, a=0, b=0`; computed `c` as
 above; a watcher on `c`; deferred batch k.
 
@@ -3194,7 +3198,7 @@ above; a watcher on `c`; deferred batch k.
   `(a, 0)`); **same batch**, write `a=1` in k. Assert three separate
   mechanisms fired: the k-world read of `c` returns 1 (the write created
   `a`'s tape, so the certificate's zero pair mismatches the new tail —
-  10.5); the watcher is notified *in k's lane* (the canonical walk from `a`
+  10.5); the watcher is notified _in k's lane_ (the canonical walk from `a`
   reaches nothing — `c` never read `a` canonically — so this notification
   can only come from the drain re-validating slot k's memo chain and
   scheduling the bump through the entanglement API — 9.8); and the
@@ -3288,7 +3292,7 @@ Plus, from this design's specifics:
   the schedule converges; nothing is lost); (ii) the same schedule under
   `strictLanes: true`: assert exact `useState` parity (the flushSync render
   excludes the idle write); (iii) the watcher-count counterexample: the
-  app's *first* transition writes a signal before any watcher exists, a
+  app's _first_ transition writes a signal before any watcher exists, a
   subscriber mounts mid-transition, and both the pending and committed
   worlds read correctly (the quiescence gate logged the write). Any future
   gate change must pass all three;
@@ -3297,7 +3301,7 @@ Plus, from this design's specifics:
   commit containing both the transition's updates and the corrective
   re-render — plus the fallback: retire the batch between subscription and
   fixup and assert the urgent-correction path repaints before paint; plus
-  the no-false-positive variant: mount a subscriber *inside* a transition
+  the no-false-positive variant: mount a subscriber _inside_ a transition
   pass with no gap writes and assert the fixup issues nothing (the
   world-aware comparison, 13.2);
 - **the two-batch re-notify test (9.8), full stack:** two overlapping
@@ -3376,30 +3380,30 @@ non-conformant build is not a result.
 
 ### 18.2 The gate table
 
-| # | mode / measurement | baseline | number | kind |
-| --- | --- | --- | --- | --- |
-| G-1 | core DIRECT, every tier-0 shape | alien-signals v3 | ≤1.0× each (donor reference points: deep 0.90, broad 0.84–0.88, diamond 0.89, reads 0.74–0.87, create 0.96) | gate, M1 |
-| G-2 | core DIRECT, steady parity | frozen kernel artifact | ≤1.03× each tier-0 shape (the dormant-overlay tax must be one branch) | gate, M1, re-run every later milestone |
-| G-3 | kairo suite, GC-inclusive, bundled child | alien-signals v3 | ≤1.4× every test (the measured current reality — an honest ceiling, not an aspiration); ratchet reviews at each milestone may only lower it; ≤1.25× is the M7 target via pre-registered ledger experiments, and if unmet, M7 exits with the ratcheted number adopted and published in its place | gate (1.4×) + ratchet |
-| G-4 | mounted-but-quiet (watchers exist, React idle), tier-0 — measured twice: loose default (gate at DIRECT) and `strictLanes` (LOGGED idle) | core DIRECT | loose: identical within noise (the quiescence gate's whole point); strictLanes: ≤2% regression | gate, M2 |
-| G-5 | LOGGED read of an unmarked node | DIRECT read | ≤1.1× | gate, M2 |
-| G-6a | **first** logged write to an atom (tape creation + mark-only cone walk, 9.3), measured across cone sizes 10/100/1000 | DIRECT write | ≤N×; N measured and pre-registered at M2 per cone size (once per atom per era — an amortized event, priced so its cone-proportional cost is a number, not a surprise) | gate, M2 |
-| G-6b | **steady** logged urgent write (append + apply + broadcast bookkeeping; tape already exists) | DIRECT write | ≤2× | gate, M2 (priced on day one of the tape milestone) |
-| G-7 | logged **deferred** write, drain-amortized (notify walk + writer's-world broadcast evaluations + slot-chain re-validation), fan-out shapes 1 atom → 10/100/1000 watchers **crossed with** registered-node counts 0/10/100 on the slot chain (9.8) | DIRECT write | ≤N×; N measured and pre-registered at M2 with provisional ceiling 3×; breaking the ceiling triggers the pre-registered fallbacks (always-broadcast mode for evaluations, the edge-plane escalation for chain scans, 9.8) | gate, M2 |
-| G-8 | held-open transition, hot NEWEST read loop over the marked cone (the world-memo gate; the inner loop is the packed certificate scan, 10.5, measured at certificate lengths 1/4/16) | DIRECT read of same cone | ≤1.5× while a batch is live | gate, M3 |
-| G-9 | quiescent-overlay read | DIRECT read | identical within noise | gate, M3 |
-| G-10 | absorption | — | a 1000-write transition absorbs in <1 ms; linear in touched atoms, ≤1 propagation per changed atom (counter-verified) | gate, M3 |
-| G-11 | React: signal-driven re-render, click → paint | `useState` equivalent | within 10% | gate, M7 |
-| G-12 | React: 10k `useSignal` mounts | 10k `useState` | within 15% | gate, M7 |
-| G-13 | React handler path, steady re-render traffic | — | zero engine allocations, verified by heap profiling | gate, M7 |
-| G-14 | tearing stress (writes sustained during time-sliced renders) | — | zero torn frames (DOM-snapshot verified) | gate, M5 |
-| G-15 | memory: effects-10k retained heap | alien-signals | ≥30% reduction (report `heapUsed` + plane bytes side by side) | gate, M7 |
-| G-16 | log-plane residue after quiescence | — | zero bytes, zero live slots | gate, M3 |
-| G-17 | speculation high-water marks (plane G bytes, memo counts) on transition benchmarks | — | published per run | report |
-| G-18 | tracing unloaded | no-tracing build | zero overhead within noise (one check per site) | gate, M6 |
-| G-19 | tracing enabled (RING, default capacity, ref-ring off), tier-0 shapes; SESSION measured alongside | untraced build | ≤1.15× (the packed-recorder budget, 16.2), SESSION within noise of RING (same emit path); the measured numbers become the pinned regression gates thereafter | gate, M6 |
-| G-20 | traced run, engine + recorder | — | RING: zero allocations per event; SESSION: zero per event with exactly one chunk allocation amortized per `chunkSize` events (heap-profile verified — the fidelity property of 16.2) | gate, M6 |
-| G-21 | SESSION losslessness under sustained engine load until `maxBytes` breach | — | decoder proves one gap-free event-id range up to the emitted `truncation-marker`; zero silent loss; sealed chunks streamed during recording decode identically to post-hoc | gate, M6 |
+| #    | mode / measurement                                                                                                                                                                                                                                | baseline                 | number                                                                                                                                                                                                                                                                                          | kind                                               |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| G-1  | core DIRECT, every tier-0 shape                                                                                                                                                                                                                   | alien-signals v3         | ≤1.0× each (donor reference points: deep 0.90, broad 0.84–0.88, diamond 0.89, reads 0.74–0.87, create 0.96)                                                                                                                                                                                     | gate, M1                                           |
+| G-2  | core DIRECT, steady parity                                                                                                                                                                                                                        | frozen kernel artifact   | ≤1.03× each tier-0 shape (the dormant-overlay tax must be one branch)                                                                                                                                                                                                                           | gate, M1, re-run every later milestone             |
+| G-3  | kairo suite, GC-inclusive, bundled child                                                                                                                                                                                                          | alien-signals v3         | ≤1.4× every test (the measured current reality — an honest ceiling, not an aspiration); ratchet reviews at each milestone may only lower it; ≤1.25× is the M7 target via pre-registered ledger experiments, and if unmet, M7 exits with the ratcheted number adopted and published in its place | gate (1.4×) + ratchet                              |
+| G-4  | mounted-but-quiet (watchers exist, React idle), tier-0 — measured twice: loose default (gate at DIRECT) and `strictLanes` (LOGGED idle)                                                                                                           | core DIRECT              | loose: identical within noise (the quiescence gate's whole point); strictLanes: ≤2% regression                                                                                                                                                                                                  | gate, M2                                           |
+| G-5  | LOGGED read of an unmarked node                                                                                                                                                                                                                   | DIRECT read              | ≤1.1×                                                                                                                                                                                                                                                                                           | gate, M2                                           |
+| G-6a | **first** logged write to an atom (tape creation + mark-only cone walk, 9.3), measured across cone sizes 10/100/1000                                                                                                                              | DIRECT write             | ≤N×; N measured and pre-registered at M2 per cone size (once per atom per era — an amortized event, priced so its cone-proportional cost is a number, not a surprise)                                                                                                                           | gate, M2                                           |
+| G-6b | **steady** logged urgent write (append + apply + broadcast bookkeeping; tape already exists)                                                                                                                                                      | DIRECT write             | ≤2×                                                                                                                                                                                                                                                                                             | gate, M2 (priced on day one of the tape milestone) |
+| G-7  | logged **deferred** write, drain-amortized (notify walk + writer's-world broadcast evaluations + slot-chain re-validation), fan-out shapes 1 atom → 10/100/1000 watchers **crossed with** registered-node counts 0/10/100 on the slot chain (9.8) | DIRECT write             | ≤N×; N measured and pre-registered at M2 with provisional ceiling 3×; breaking the ceiling triggers the pre-registered fallbacks (always-broadcast mode for evaluations, the edge-plane escalation for chain scans, 9.8)                                                                        | gate, M2                                           |
+| G-8  | held-open transition, hot NEWEST read loop over the marked cone (the world-memo gate; the inner loop is the packed certificate scan, 10.5, measured at certificate lengths 1/4/16)                                                                | DIRECT read of same cone | ≤1.5× while a batch is live                                                                                                                                                                                                                                                                     | gate, M3                                           |
+| G-9  | quiescent-overlay read                                                                                                                                                                                                                            | DIRECT read              | identical within noise                                                                                                                                                                                                                                                                          | gate, M3                                           |
+| G-10 | absorption                                                                                                                                                                                                                                        | —                        | a 1000-write transition absorbs in <1 ms; linear in touched atoms, ≤1 propagation per changed atom (counter-verified)                                                                                                                                                                           | gate, M3                                           |
+| G-11 | React: signal-driven re-render, click → paint                                                                                                                                                                                                     | `useState` equivalent    | within 10%                                                                                                                                                                                                                                                                                      | gate, M7                                           |
+| G-12 | React: 10k `useSignal` mounts                                                                                                                                                                                                                     | 10k `useState`           | within 15%                                                                                                                                                                                                                                                                                      | gate, M7                                           |
+| G-13 | React handler path, steady re-render traffic                                                                                                                                                                                                      | —                        | zero engine allocations, verified by heap profiling                                                                                                                                                                                                                                             | gate, M7                                           |
+| G-14 | tearing stress (writes sustained during time-sliced renders)                                                                                                                                                                                      | —                        | zero torn frames (DOM-snapshot verified)                                                                                                                                                                                                                                                        | gate, M5                                           |
+| G-15 | memory: effects-10k retained heap                                                                                                                                                                                                                 | alien-signals            | ≥30% reduction (report `heapUsed` + plane bytes side by side)                                                                                                                                                                                                                                   | gate, M7                                           |
+| G-16 | log-plane residue after quiescence                                                                                                                                                                                                                | —                        | zero bytes, zero live slots                                                                                                                                                                                                                                                                     | gate, M3                                           |
+| G-17 | speculation high-water marks (plane G bytes, memo counts) on transition benchmarks                                                                                                                                                                | —                        | published per run                                                                                                                                                                                                                                                                               | report                                             |
+| G-18 | tracing unloaded                                                                                                                                                                                                                                  | no-tracing build         | zero overhead within noise (one check per site)                                                                                                                                                                                                                                                 | gate, M6                                           |
+| G-19 | tracing enabled (RING, default capacity, ref-ring off), tier-0 shapes; SESSION measured alongside                                                                                                                                                 | untraced build           | ≤1.15× (the packed-recorder budget, 16.2), SESSION within noise of RING (same emit path); the measured numbers become the pinned regression gates thereafter                                                                                                                                    | gate, M6                                           |
+| G-20 | traced run, engine + recorder                                                                                                                                                                                                                     | —                        | RING: zero allocations per event; SESSION: zero per event with exactly one chunk allocation amortized per `chunkSize` events (heap-profile verified — the fidelity property of 16.2)                                                                                                            | gate, M6                                           |
+| G-21 | SESSION losslessness under sustained engine load until `maxBytes` breach                                                                                                                                                                          | —                        | decoder proves one gap-free event-id range up to the emitted `truncation-marker`; zero silent loss; sealed chunks streamed during recording decode identically to post-hoc                                                                                                                      | gate, M6                                           |
 
 Asymptotic claims (O(1) truncation splice, O(live entries) retirement,
 O(cone) notify walk) are verified by instrumented counters in debug builds,
@@ -3423,7 +3427,7 @@ so budgets are declared and enforced:
   comment declaring its measured bytecode size**, and the budget table in
   `tools/schema.ts` (15.2) mirrors it.
 - The perf harness dumps actual sizes via `node --print-bytecode
-  --print-bytecode-filter=<names>` over a warmup script; **CI fails if any
+--print-bytecode-filter=<names>` over a warmup script; **CI fails if any
   budgeted function exceeds its declared budget by more than 10%**.
 - Initial budget pins: `link` ≤ 200 (measured 168 — this one guards the
   inlining cliff and may not be raised without a ledger entry);
@@ -3446,7 +3450,7 @@ so budgets are declared and enforced:
 Registered before implementation so the results can't be argued with after:
 
 - **E1 — DIRECT/LOGGED write gate: scalar branch vs closure swap.** The
-  branch is the safe default: closure rebuild is proven for *monotonic*
+  branch is the safe default: closure rebuild is proven for _monotonic_
   swaps (growth — O(log n) events, feedback re-stabilizes), but the
   quiescence gate oscillates per interaction burst (LOGGED while React has
   work, DIRECT at every idle gap), and a call site that has seen two closure
@@ -3466,15 +3470,15 @@ Registered before implementation so the results can't be argued with after:
 
 ### 18.5 Benchmark matrix
 
-| mode | measures |
-| --- | --- |
-| core, DIRECT | kernel parity vs alien-signals v3 (the donor numbers are the floor) |
-| core, LOGGED, no batches live | the read-gate and write-gate overhead in the worst "engaged but idle" state |
-| synthetic transition (fake fork): N deferred writes → retire → absorb | log append throughput, notify-walk + broadcast cost (G-7), absorption cost per entry, sweep cost |
-| held-open transition + hot read loop | world-memo effectiveness (G-8) |
-| React app benches | click-to-paint vs `useState`; 10k-subscription mount; transition with M signal writes vs M setStates; suspense resolve-to-paint |
-| memory | retained heap + plane bytes on effects-10k and grid shapes; log-plane residue after quiescence (must be zero); speculation high-water marks |
-| growth stress | full suite at `initialRecords: 2` (correctness) and growth-event timing (must stay boundary-only) |
+| mode                                                                  | measures                                                                                                                                    |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| core, DIRECT                                                          | kernel parity vs alien-signals v3 (the donor numbers are the floor)                                                                         |
+| core, LOGGED, no batches live                                         | the read-gate and write-gate overhead in the worst "engaged but idle" state                                                                 |
+| synthetic transition (fake fork): N deferred writes → retire → absorb | log append throughput, notify-walk + broadcast cost (G-7), absorption cost per entry, sweep cost                                            |
+| held-open transition + hot read loop                                  | world-memo effectiveness (G-8)                                                                                                              |
+| React app benches                                                     | click-to-paint vs `useState`; 10k-subscription mount; transition with M signal writes vs M setStates; suspense resolve-to-paint             |
+| memory                                                                | retained heap + plane bytes on effects-10k and grid shapes; log-plane residue after quiescence (must be zero); speculation high-water marks |
+| growth stress                                                         | full suite at `initialRecords: 2` (correctness) and growth-event timing (must stay boundary-only)                                           |
 
 ---
 
@@ -3484,7 +3488,7 @@ Each milestone has falsifiable exit gates drawn from sections 17–18. Two
 standing rules apply to every milestone:
 
 - **Price on entry.** A milestone that introduces a hot-path mechanism
-  measures that mechanism's cost as its *first* deliverable, before anything
+  measures that mechanism's cost as its _first_ deliverable, before anything
   is built on top — unpriced costs do not accumulate.
 - **Nothing green goes stale.** Every milestone from M2 onward re-runs the
   steady-parity gate (G-2), the frozen-kernel contract suite (17.5), and the
@@ -3497,7 +3501,7 @@ yield/resume edges and render lineage** (6.3), write classification (6.4),
 batch entanglement (6.5), per-root commit notification (`onBatchCommitted`,
 6.1), mutation window (6.6). These are protocol-surface facts — the ones
 that are expensive to discover missing later, because every milestone above
-builds on section 6 as frozen. *Exit:* reconciler suite 17.7 green,
+builds on section 6 as frozen. _Exit:_ reconciler suite 17.7 green,
 including the entanglement tests (with the drain-shaped usage),
 yield/resume pairing, lineage stability, per-root commit delivery, and
 token-encoding edge cases.
@@ -3506,7 +3510,7 @@ token-encoding edge cases.
 (15.2); add the five overlay-support mechanisms (8.7), present but dormant
 — including the stride-2 broadcast queue and the notify walk's mark-only
 variant; stand up codegen (planes M, G, and W all schema'd from day one),
-the debug twin, budget CI, and the frozen-kernel contract suite. *Exit:*
+the debug twin, budget CI, and the frozen-kernel contract suite. _Exit:_
 179/179 conformance including growth stress and exact pull counts; contract
 suite green (behavioral identity with the frozen artifact, overlay empty);
 G-1 (≤1.0× alien-signals) and G-2 (≤1.03× frozen artifact) on every tier-0
@@ -3516,13 +3520,13 @@ shape; budgets green.
 (9.1), batch-slot interning (9.2), `appendLog` with mark-on-creation and
 the equality/receipt rule (9.3), applied/unapplied writes (9.4), the notify
 walk and token-grouped drain (9.8, without memo machinery yet), driven by
-the simulated fork. *First deliverable:* the measurements this
+the simulated fork. _First deliverable:_ the measurements this
 architecture's viability rests on — the tape-creation cost across cone
 sizes (G-6a), the steady logged write tax (G-6b, ≤2×), and the
 deferred-write drain cost (G-7, N registered, provisional ≤3×) — plus
 mounted-quiet in both gate configurations (G-4) and the unmarked-read gate
 (G-5, ≤1.1×). Run experiment E1 (18.4) and fix the write-gate mechanism.
-*Exit:* those gates green with numbers recorded; the write-gate boundary
+_Exit:_ those gates green with numbers recorded; the write-gate boundary
 matrix (17.3) green; standing rules.
 
 **M3 — Worlds, oracle-first.** Build the naive model and schedule generator
@@ -3533,7 +3537,7 @@ plane W with certificates, the collector, and the slot memo chains (10.5 —
 this milestone's data structures, not a later optimization), the drain
 re-validation (9.8), the post-eval re-check (10.4), retirement/absorption
 (9.5), sweep/truncation (9.6), coalescing, and quiescence including the
-epoch bump and plane-W reset (9.7). *Exit:* oracle suite and pinned
+epoch bump and plane-W reset (9.7). _Exit:_ oracle suite and pinned
 regressions green; overlay unit scenarios (17.3) and divergent-dep tests
 (17.4, including T1's three-mechanism assertion) green; invisibility tests
 (17.5) green; G-8 (marked-cone reads ≤1.5×, certificate-scan dimensions),
@@ -3544,13 +3548,13 @@ G-10, G-16 green; standing rules.
 11.3), the updater/reducer purity contract with its debug assertion (12.2),
 promise protocol with lineage-keyed caches and settlement epoch bumps
 (12.3), observed lifecycle (12.4), `configure` (including `strictLanes`),
-FinalizationRegistry (14.2). *Exit:* full core API tests; suspense unit
+FinalizationRegistry (14.2). _Exit:_ full core API tests; suspense unit
 tests; standing rules.
 
 **M5 — React bindings.** Bridge (with yield/resume context flips and
 per-root committed views), hooks, watcher broadcast, world-aware
 post-subscribe fixup with entanglement (13.2), transitions helpers, SSR
-(per-request engines, serialize/initialize helpers, 13.8). *Exit:* the
+(per-request engines, serialize/initialize helpers, 13.8). _Exit:_ the
 React integration suite 17.6 — the 14-scenario bar, the known-bug
 mount-mid-transition case, the yield-gap test, the grouped-drain lane test,
 the write-gate contract family (loose, strict, and the watcher-count
@@ -3563,7 +3567,7 @@ variant, tearing stress (G-14) — all green; standing rules.
 **M6 — Tracing, formatter, graphviz.** Tracer slot, the packed trace
 recorder in all three modes (OFF/RING/SESSION) and its decoder view (16.2),
 DevTools formatter and terminal twin (16.3), DOT renderers (16.4),
-traced-kernel stamp swap (16.5). *Exit:* G-18 (zero overhead unloaded);
+traced-kernel stamp swap (16.5). _Exit:_ G-18 (zero overhead unloaded);
 G-19 (tracing-enabled overhead measured against the ≤1.15× ceiling, SESSION
 within noise of RING, both pinned); G-20 (allocation discipline per mode,
 heap-profile verified); G-21 (SESSION losslessness: gap-free event-id proof,
@@ -3581,7 +3585,7 @@ memory regression suite (mount/unmount churn, transition churn back to
 baseline, FinalizationRegistry sweeps under `node --expose-gc`,
 growth-then-quiescence); kairo ratchet review (G-3: close to ≤1.25× via
 ledger experiments or adopt-and-publish the honest number); docs pass (every
-public symbol documented in plain English with its invariants). *Exit:* the
+public symbol documented in plain English with its invariants). _Exit:_ the
 full 18.2 gate table, every row.
 
 ---
@@ -3599,10 +3603,10 @@ one exists, its gate.
    drain-level walk sharing, chains bounded by touched nodes (9.8). Gate G-7
    with a pre-registered ceiling, the always-broadcast fallback (E2), and
    the edge-plane escalation for chain scans (9.8). Residual risk:
-   pathological shapes where many *distinct* marked nodes each carry
+   pathological shapes where many _distinct_ marked nodes each carry
    watchers, or a single world evaluates very many nodes.
 2. **World-memo invalidation is conservative.** A memo's certificate scan
-   invalidates when *any* recorded source's tape moves, even from an
+   invalidates when _any_ recorded source's tape moves, even from an
    unrelated batch that folds to the same value, and the epoch bump
    wholesale-invalidates every memo at each retirement, truncation, and
    overlay-relevant settlement — wasted re-evaluations, never wrong answers.
@@ -3611,7 +3615,7 @@ one exists, its gate.
    with `memo-hit?` makes the pathological case diagnosable.
 3. **Absorption spikes.** A transition holding very many logged writes
    absorbs at one commit. Coalescing (9.3) bounds tape length per atom; the
-   residual risk is many *distinct* atoms. Gate G-10 (<1 ms per 1000
+   residual risk is many _distinct_ atoms. Gate G-10 (<1 ms per 1000
    writes); if a real workload breaks it, absorption can incrementalize
    (absorb per-atom across microtasks) at the cost of a more complex W0
    invariant — flagged, not designed.
@@ -3627,7 +3631,7 @@ one exists, its gate.
 5. **The flushSync-excludes-default case is load-bearing for the always-log
    rule inside LOGGED mode (9.1).** If React's behavior around entangled
    default lanes shifts, the rule could relax; conversely any future "skip
-   logging" optimization must re-prove this case *and* pass the write-gate
+   logging" optimization must re-prove this case _and_ pass the write-gate
    contract family. The 17.6 tests pin it.
 6. **Batch entanglement (6.5) reaches deeper into the reconciler than any
    other fork API** — it overrides lane assignment, not just observes it —
@@ -3670,10 +3674,10 @@ document discusses roads not taken; everything above it is the road taken.
 1. **The log-overlay won a four-way adversarial review.** Four candidate
    architectures were specified in full and judged across four lenses
    (React correctness, performance, implementability, risk): this design;
-   a *versioned core* that threads world metadata through every node and
-   link of the hot graph; *forked worlds* that copy shadow values per
-   pending batch and serve reads from per-world planes; and a *minimal
-   kernel* that quarantines the proven engine behind a host protocol and
+   a _versioned core_ that threads world metadata through every node and
+   link of the hot graph; _forked worlds_ that copy shadow values per
+   pending batch and serve reads from per-world planes; and a _minimal
+   kernel_ that quarantines the proven engine behind a host protocol and
    maintains a second shadow topology for pending worlds. The log-overlay
    ranked first overall and was the only candidate whose worst findings
    were a specification gap and a bounded slowness rather than a wrongness
@@ -3683,7 +3687,7 @@ document discusses roads not taken; everything above it is the road taken.
    model is React's own.** The visibility rule (10.2) maps clause-for-clause
    onto React's hook-queue lane filtering; the rebase walkthrough (10.7)
    reproduces React's updater-queue result exactly; and this is the only
-   design of the four that can even *represent* the same-event
+   design of the four that can even _represent_ the same-event
    flushSync-excludes-default-batch case (9.1) — the case that forces
    always-logging and that no "skip the log when nothing looks concurrent"
    scheme survives.
@@ -3691,7 +3695,7 @@ document discusses roads not taken; everything above it is the road taken.
    candidate). Applying urgent functional updates directly and discarding
    them makes the commit-time fold provably wrong (it computes 3 where
    React computes 4 in the standard interleaving), and the only repair —
-   retaining urgent entries — *is* the always-log rule. The write tax is
+   retaining urgent entries — _is_ the always-log rule. The write tax is
    the honest price; it is gated at ≤2× (G-6b) instead of wished away.
 4. **Rejected: drop-on-abort retirement** (from the forked-worlds
    candidate). Discarding a batch's writes when it produced no React work
@@ -3703,7 +3707,7 @@ document discusses roads not taken; everything above it is the road taken.
    (also from forked-worlds). Deriving invalidation from one world's
    dependency set while serving another world's cache tears on
    world-divergent dependencies. This design re-walks dependencies per
-   world; keys memo validity on the *re-observed* read set, recorded in full
+   world; keys memo validity on the _re-observed_ read set, recorded in full
    — unlogged reads included, as zero pairs — in packed certificates (10.5);
    carries per-world registries (the slot memo chains) so pending-world-only
    dependencies still notify watchers (9.8); and keeps the divergence
@@ -3730,13 +3734,13 @@ document discusses roads not taken; everything above it is the road taken.
    originated in the three rejected designs. Their architectures died; their
    engineering hygiene is most of sections 15–19.
 8. **The write-mode gate was decided in three rounds, and the loose
-   contract is a chosen trade, not an oversight.** *Watcher-count gating*
+   contract is a chosen trade, not an oversight.** _Watcher-count gating_
    ("log once someone subscribes") was rejected as unsound — the app's
    first transition writes before any watcher exists and leaves no receipt
-   for the component that mounts mid-transition. *Permanent logging from
-   bridge activation* was rejected as the default because it taxes every
+   for the component that mounts mid-transition. _Permanent logging from
+   bridge activation_ was rejected as the default because it taxes every
    imperative write in every React app forever, including idle-time timer
-   and socket writes React never sees. The adopted *quiescence gate* logs
+   and socket writes React never sees. The adopted _quiescence gate_ logs
    exactly the writes any future render could need to exclude — everything
    concurrent with open or pending React work — and knowingly gives up lane
    inheritance for writes made while React is fully idle: the documented
@@ -3772,4 +3776,4 @@ document discusses roads not taken; everything above it is the road taken.
 
 ---
 
-*End of spec.*
+_End of spec._
