@@ -10,7 +10,7 @@
  *   FRAMEWORK=arena node --expose-gc /tmp/kairo-entry.mjs
  */
 import * as arenaLib from "../../arena/src/index"
-import * as alienLib from "../../../upstream-alien-signals/esm/index.mjs"
+import * as alienLib from "../../../vendor/alien-signals/esm/index.mjs"
 
 import { avoidablePropagation } from "../../../milomg-reactivity-benchmark/packages/core/src/benches/kairo/avoidable"
 import { broadPropagation } from "../../../milomg-reactivity-benchmark/packages/core/src/benches/kairo/broad"

@@ -2,7 +2,7 @@
 	path = milomg-reactivity-benchmark
 	url = https://github.com/justjake/js-reactivity-benchmark.git
 [submodule "upstream-alien-signals"]
-	path = upstream-alien-signals
+	path = vendor/alien-signals
 	url = https://github.com/stackblitz/alien-signals
 [submodule "vendor/anod"]
 	path = vendor/anod

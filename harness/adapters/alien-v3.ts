@@ -1,6 +1,6 @@
 /**
  * Adapter for upstream alien-signals v3.2.1 (the reference implementation).
- * Installed via "file:../upstream-alien-signals" (prebuilt esm/ + types/).
+ * Installed via "file:../vendor/alien-signals" (prebuilt esm/ + types/).
  */
 import {
   computed,

@@ -6,7 +6,7 @@
  */
 import * as arrayd from "../src/index"
 // eslint-disable-next-line import/no-relative-packages
-import * as alien from "../../../upstream-alien-signals/src/index"
+import * as alien from "../../../vendor/alien-signals/src/index"
 
 const lib: typeof arrayd = (process.env.ALIEN ? (alien as unknown) : arrayd) as typeof arrayd
 

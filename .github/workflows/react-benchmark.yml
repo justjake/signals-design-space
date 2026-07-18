@@ -57,7 +57,7 @@ jobs:
         run: |
           git submodule update --init \
             packages/dalien-signals \
-            upstream-alien-signals
+            vendor/alien-signals
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -67,7 +67,7 @@ jobs:
 
       # Build linked packages before the root install materializes them.
       - name: Build upstream alien-signals (esm/ is a local build artifact)
-        working-directory: upstream-alien-signals
+        working-directory: vendor/alien-signals
         run: |
           npm install
           # A fresh install resolves a TS 7 without

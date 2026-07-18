@@ -1,7 +1,7 @@
 /** Creation-cost profile: signals + 1-dep effects, arrayd vs alien. */
 import * as arrayd from "../src/index"
 // eslint-disable-next-line import/no-relative-packages
-import * as alien from "../../../upstream-alien-signals/src/index"
+import * as alien from "../../../vendor/alien-signals/src/index"
 
 const lib: typeof arrayd = (process.env.ALIEN ? (alien as unknown) : arrayd) as typeof arrayd
 const { signal, effect, effectScope } = lib

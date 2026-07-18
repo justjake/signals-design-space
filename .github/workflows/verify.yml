@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Init inlining source submodule
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+        run: git submodule update --init packages/dalien-signals vendor/alien-signals
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Init workspace source submodules
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+        run: git submodule update --init packages/dalien-signals vendor/alien-signals
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Init workspace source submodules
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+        run: git submodule update --init packages/dalien-signals vendor/alien-signals
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Init workspace source submodules
-        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+        run: git submodule update --init packages/dalien-signals vendor/alien-signals
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:

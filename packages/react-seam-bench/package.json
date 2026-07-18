@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "alien-signals": "link:../../upstream-alien-signals",
+    "alien-signals": "link:../../vendor/alien-signals",
     "cosignals": "workspace:*",
     "cosignals-arena": "workspace:*",
     "dalien-signals": "link:../dalien-signals",

@@ -21,7 +21,7 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url))
 const LIBS = {
   probe: here("../src/index.ts"),
   arena: here("../../arena/src/index.ts"),
-  alien: here("../../../upstream-alien-signals/esm/index.mjs"),
+  alien: here("../../../vendor/alien-signals/esm/index.mjs"),
 }
 
 const libName = process.argv[2] ?? "probe"

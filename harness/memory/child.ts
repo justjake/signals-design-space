@@ -1,6 +1,6 @@
 /**
  * Memory probe child: measures retained heap for ONE framework.
- * Port of upstream-alien-signals/benchs/memoryUsage.mjs with its bug FIXED:
+ * Port of vendor/alien-signals/benchs/memoryUsage.mjs with its bug FIXED:
  * effect bodies are wrapped in braces so they do not return numbers (upstream
  * `effect(() => last())` returns a number that the effect runtime would treat
  * as a cleanup function, crashing v3.2.1 in the tree phase).

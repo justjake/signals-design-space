@@ -4,7 +4,7 @@
  *
  *   FRAMEWORK=arrayd pnpm -C harness conformance
  *
- * Wiring copied from upstream-alien-signals/tests/conformance.spec.ts.
+ * Wiring copied from vendor/alien-signals/tests/conformance.spec.ts.
  */
 import { describe, expect, test } from "vitest"
 import {

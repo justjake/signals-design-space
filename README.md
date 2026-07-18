@@ -105,7 +105,7 @@ submodules needed by the workspace before installing:
 
 ```sh
 corepack enable
-git submodule update --init packages/dalien-signals upstream-alien-signals
+git submodule update --init packages/dalien-signals vendor/alien-signals
 pnpm install --frozen-lockfile
 ```
 
@@ -162,7 +162,8 @@ pnpm run publish
 The command runs package typechecks and tests, packs all three packages,
 typechecks an isolated consumer against the tarballs, and publishes those
 tarballs in dependency order. It chooses the versions and npm tags with the
-same policy as CI and skips versions already on npm.
+same policy as CI and skips versions already on npm. The release plan and
+tarballs are written under the ignored `build/` directory.
 
 Use `--dry-run` to invoke `npm publish --dry-run`. Use `--full` to add the
 Playwright battery and production devtools tests. A live publish requires a

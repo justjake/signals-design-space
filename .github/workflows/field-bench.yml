@@ -22,7 +22,7 @@
 # Submodules: checkout uses submodules: false, then a targeted
 # `git submodule update --init` for exactly what each job needs —
 # milomg-reactivity-benchmark (bench suites import its TS source),
-# upstream-alien-signals (the alien-v3 baseline; harness deps carry a file:
+# vendor/alien-signals (the alien-v3 baseline; harness deps carry a file:
 # dep on it, so it must exist AND be built before pnpm install copies it),
 # and packages/dalien-signals (the `dalien` adapter imports its src/ directly
 # and the root lockfile carries its workspace importer). This avoids cloning
@@ -52,7 +52,7 @@ concurrency:
 env:
   BASELINE: alien-v3
   # The three submodules the harness path needs (see header comment).
-  HARNESS_SUBMODULES: milomg-reactivity-benchmark upstream-alien-signals packages/dalien-signals
+  HARNESS_SUBMODULES: milomg-reactivity-benchmark vendor/alien-signals packages/dalien-signals
 
 jobs:
   # Read the adapter registry once; conformance/bench matrices derive from it.
@@ -111,7 +111,7 @@ jobs:
       # exist BEFORE the root install because the harness consumes
       # alien-signals via the file: protocol (pnpm copies at install time).
       - name: Build upstream alien-signals
-        working-directory: upstream-alien-signals
+        working-directory: vendor/alien-signals
         run: |
           pnpm install --ignore-workspace --frozen-lockfile
           pnpm run build
@@ -151,7 +151,7 @@ jobs:
           node-version: 24
 
       - name: Build upstream alien-signals
-        working-directory: upstream-alien-signals
+        working-directory: vendor/alien-signals
         run: |
           pnpm install --ignore-workspace --frozen-lockfile
           pnpm run build
@@ -241,7 +241,7 @@ jobs:
           node-version: 24
 
       - name: Build upstream alien-signals
-        working-directory: upstream-alien-signals
+        working-directory: vendor/alien-signals
         run: |
           pnpm install --ignore-workspace --frozen-lockfile
           pnpm run build
