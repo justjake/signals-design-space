@@ -468,6 +468,34 @@ startSignalTransition(() => count.update((x) => x * 2)) // draft until commit
 - Multiple roots are supported; one transition can span them, and each
   root's render passes stay internally consistent.
 
+## Performance
+
+The [justjake/js-reactivity-benchmark](https://github.com/justjake/js-reactivity-benchmark)
+fork of [milomg/js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark)
+uses median-of-N timing, one process per framework, and interleaved rounds to
+reduce shared-runner noise. It measures signal creation and propagation without
+React.
+
+[![Core signal benchmark totals. Lower is better.](https://raw.githubusercontent.com/justjake/signals-design-space/main/docs/performance/signals-node.png)](https://github.com/justjake/signals-design-space/actions/runs/29652090926)
+
+Raw data: [CSV](https://github.com/justjake/signals-design-space/blob/main/docs/performance/signals-node.csv).
+Source: [CI run](https://github.com/justjake/signals-design-space/actions/runs/29652090926).
+
+The [React seam benchmark](https://github.com/justjake/signals-design-space/tree/main/packages/react-seam-bench)
+runs fan-out updates, transitions under load, and mount scenarios through each
+library's React binding. It uses ReactDOM and jsdom, so the chart measures
+JavaScript work without browser layout or paint.
+
+[![React seam benchmark totals. Lower is better.](https://raw.githubusercontent.com/justjake/signals-design-space/main/docs/performance/react.png)](https://github.com/justjake/signals-design-space/actions/runs/29655219049)
+
+Raw data: [CSV](https://github.com/justjake/signals-design-space/blob/main/docs/performance/react.csv).
+Source: [CI run](https://github.com/justjake/signals-design-space/actions/runs/29655219049).
+
+Each chart reports the median of three interleaved rounds on a GitHub Actions
+x86_64 runner with Node v24.18.0. Compare contenders within one chart; hosted
+runner differences below about 5% are noise. Totals combine different workloads
+and are not application performance predictions.
+
 ## See also
 
 - [cosignals](https://www.npmjs.com/package/cosignals) — the object-graph
