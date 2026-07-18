@@ -9,6 +9,7 @@
     "memory": "pnpm -C harness memory",
     "typecheck": "pnpm -C harness typecheck",
     "play": "pnpm --filter react-signals-playground dev --open",
+    "bump": "node scripts/bump.mjs",
     "publish": "node scripts/publish-release.mjs",
     "release:plan:test": "node --test scripts/release-plan.test.mjs",
     "release:test": "node --test scripts/*.test.mjs",
