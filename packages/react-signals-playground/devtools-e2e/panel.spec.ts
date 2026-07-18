@@ -72,6 +72,19 @@ test("graph trackpad gestures keep the pinch focal point fixed and scroll to pan
       }
       afterPan: { x: number; y: number; width: number; height: number }
     }>((resolve) => {
+      // React applies the zoom/pan state asynchronously, so a fixed number
+      // of animation frames races the commit on a loaded machine. Poll the
+      // viewBox until the gesture's effect is visible (bounded), then move on.
+      const waitFor = (done: () => boolean, next: () => void, deadline: number) => {
+        const check = () => {
+          if (done() || performance.now() > deadline) {
+            next()
+          } else {
+            requestAnimationFrame(check)
+          }
+        }
+        requestAnimationFrame(check)
+      }
       const before = { point: pointAtGesture(), width: viewBox().width }
       // ctrl+wheel = trackpad pinch (zoom in).
       graph.dispatchEvent(
@@ -84,33 +97,39 @@ test("graph trackpad gestures keep the pinch focal point fixed and scroll to pan
           cancelable: true,
         }),
       )
-      requestAnimationFrame(() => {
-        const afterPinch = {
-          point: pointAtGesture(),
-          x: viewBox().x,
-          y: viewBox().y,
-          width: viewBox().width,
-          height: viewBox().height,
-        }
-        // plain wheel = pan.
-        graph.dispatchEvent(
-          new WheelEvent("wheel", { deltaX: 12, deltaY: 18, bubbles: true, cancelable: true }),
-        )
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            resolve({
-              before,
-              afterPinch,
-              afterPan: {
-                x: viewBox().x,
-                y: viewBox().y,
-                width: viewBox().width,
-                height: viewBox().height,
-              },
-            })
-          }),
-        )
-      })
+      waitFor(
+        () => viewBox().width !== before.width,
+        () => {
+          const afterPinch = {
+            point: pointAtGesture(),
+            x: viewBox().x,
+            y: viewBox().y,
+            width: viewBox().width,
+            height: viewBox().height,
+          }
+          // plain wheel = pan.
+          graph.dispatchEvent(
+            new WheelEvent("wheel", { deltaX: 12, deltaY: 18, bubbles: true, cancelable: true }),
+          )
+          waitFor(
+            () => viewBox().x !== afterPinch.x && viewBox().y !== afterPinch.y,
+            () => {
+              resolve({
+                before,
+                afterPinch,
+                afterPan: {
+                  x: viewBox().x,
+                  y: viewBox().y,
+                  width: viewBox().width,
+                  height: viewBox().height,
+                },
+              })
+            },
+            performance.now() + 5000,
+          )
+        },
+        performance.now() + 5000,
+      )
     })
   })
 
