@@ -3,5 +3,6 @@ packages:
   - harness
   - packages/*
   - packages/cosignals/react18
+  - packages/cosignals-arena/react18
 onlyBuiltDependencies:
   - esbuild

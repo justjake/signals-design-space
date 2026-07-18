@@ -231,6 +231,18 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@24.13.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.23.0)
 
+  packages/cosignals-arena/react18:
+    dependencies:
+      react:
+        specifier: 18.2.0
+        version: 18.2.0
+      react-dom:
+        specifier: 18.2.0
+        version: 18.2.0(react@18.2.0)
+      scheduler:
+        specifier: 0.23.2
+        version: 0.23.2
+
   packages/cosignals/react18:
     dependencies:
       react:

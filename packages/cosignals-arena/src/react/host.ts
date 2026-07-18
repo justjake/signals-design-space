@@ -23,7 +23,7 @@
 import * as React from "react"
 import * as Scheduler from "scheduler"
 import {
-  trace,
+  activeTracer,
   Flag,
   isUninitialized,
   NO_EVENT,
@@ -96,15 +96,70 @@ const hostedDrafts = new Map<DraftId, HostedDraft>()
 
 let handle: ReactSignalsHandle | null = null
 
+/**
+ * The two fields of React's shared-internals object this file consumes,
+ * under their React 19 names:
+ * - H: the current hooks dispatcher. Read by isRendering(); never written.
+ * - T: the current transition object, null outside startTransition. Read
+ *   to classify writes; written to restore or clear a transition around a
+ *   dispatch (dispatchDraftWake, dispatchUrgent) — which is exactly what
+ *   React's own startTransition does with the same field.
+ */
 interface SharedInternals {
   H?: { useEffect?: unknown; useState?: unknown } | null
   T?: object | null
 }
 
-const reactInternals: SharedInternals =
-  ((React as unknown as Record<string, unknown>)[
-    "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"
-  ] as SharedInternals | undefined) ?? {}
+/**
+ * React 18's shared-internals shape. It carries the same two values as
+ * React 19's, one level deeper and under different names.
+ */
+interface LegacySharedInternals {
+  ReactCurrentDispatcher: { current: { useEffect?: unknown; useState?: unknown } | null }
+  ReactCurrentBatchConfig: { transition: object | null }
+}
+
+/**
+ * Find the version of React's shared internals this process is running:
+ * React 19 exposes __CLIENT_INTERNALS_…, React 18 exposes
+ * __SECRET_INTERNALS_…. For React 18 the returned object presents the
+ * legacy shape under the 19 field names through live accessors — React
+ * mutates these fields around every render and transition, so the shim
+ * must forward each access to the real object, never copy values.
+ *
+ * 18.2 is the compatibility floor: 18.0 and 18.1 represent the current
+ * transition as a number instead of a per-startTransition object, which
+ * breaks keying drafts by transition identity (draftsByTransition) and
+ * restoring an owning transition by reference.
+ */
+function resolveReactInternals(): SharedInternals {
+  const exported = React as unknown as Record<string, unknown>
+  const modern = exported["__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"] as
+    | SharedInternals
+    | undefined
+  if (modern != null) {
+    return modern
+  }
+  const legacy = exported["__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED"] as
+    | LegacySharedInternals
+    | undefined
+  if (legacy != null) {
+    return {
+      get H() {
+        return legacy.ReactCurrentDispatcher.current
+      },
+      get T() {
+        return legacy.ReactCurrentBatchConfig.transition
+      },
+      set T(next: object | null | undefined) {
+        legacy.ReactCurrentBatchConfig.transition = next ?? null
+      },
+    }
+  }
+  return {}
+}
+
+const reactInternals: SharedInternals = resolveReactInternals()
 
 /**
  * React parks a context-only dispatcher between renders. All of its hooks
@@ -136,7 +191,7 @@ function renderWriteGuard(): void {
       "cosignals-arena: state was written during a React render. " +
         "Render must be pure; move the write into an event handler or effect.",
     )
-    trace?.emitEvent("policy-error", null, NO_EVENT, {
+    activeTracer?.emitEvent("policy-error", null, NO_EVENT, {
       error,
       phase: "render-write",
     })
@@ -195,7 +250,7 @@ function armNoteExpiry(mine: RenderWorldNote): void {
   try {
     Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire)
   } catch (error) {
-    trace?.emitEvent("scheduler-fallback", null, NO_EVENT, {
+    activeTracer?.emitEvent("scheduler-fallback", null, NO_EVENT, {
       error,
       phase: "render-note-expiry",
       root: mine.connection ?? undefined,
@@ -367,7 +422,7 @@ export function correctSubscription(
     if (hosted === undefined || !hosted.audience.has(connection)) {
       continue
     }
-    deliver(id, trace?.getDraftWrite(hosted.draft) ?? NO_EVENT)
+    deliver(id, activeTracer?.getDraftWrite(hosted.draft) ?? NO_EVENT)
   }
   if (resolutionDiffers(node, rendered)) {
     dispatch(REPAIR_WAKE)
@@ -487,9 +542,9 @@ export function registerRootConnection(connection: ReactRootConnection): () => v
 export function confirmRootCommit(connection: ReactRootConnection, ids: readonly DraftId[]): void {
   connection.committing = true
   try {
-    const sink = trace
+    const tracer = activeTracer
     let commitEvent: TraceEventId = NO_EVENT
-    if (sink !== null) {
+    if (tracer !== null) {
       // The commit is caused by the committed draft's last write (its
       // open event when it never wrote), so the committed frame chains
       // back to the transition's origin instead of rooting itself.
@@ -497,11 +552,11 @@ export function confirmRootCommit(connection: ReactRootConnection, ids: readonly
       for (const id of ids) {
         const draft = hostedDrafts.get(id)?.draft
         if (draft !== undefined) {
-          const lastWrite = sink.getDraftWrite(draft)
-          commitCause = lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft)
+          const lastWrite = tracer.getDraftWrite(draft)
+          commitCause = lastWrite !== NO_EVENT ? lastWrite : tracer.getCause(draft)
         }
       }
-      commitEvent = sink.emitEvent("transition-commit", null, commitCause, {
+      commitEvent = tracer.emitEvent("transition-commit", null, commitCause, {
         root: connection,
         world: ids,
       })

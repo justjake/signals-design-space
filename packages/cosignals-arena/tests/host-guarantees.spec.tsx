@@ -2,8 +2,8 @@
 /** Host guarantees: loud registration, unmount reclamation, quiescence. */
 import { describe, expect, test } from "vitest"
 import * as React from "react"
-import { act } from "react"
 import { createRoot } from "react-dom/client"
+import { act } from "./helpers.tsx"
 import { createAtom, createEffect, flushScheduledEffects, type Atom } from "cosignals-arena"
 import { nodeOf } from "cosignals-arena/unstable"
 import { discardDraft, liveDraftCount, openDraft, runWithDraftWrites } from "../src/worlds.ts"

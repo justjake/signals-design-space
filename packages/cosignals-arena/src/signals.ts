@@ -48,7 +48,7 @@ import {
   resetGraphForBenchmark,
   runUpdater,
   untrack as graphUntrack,
-  trace,
+  activeTracer,
   writeCell,
   graphMemory,
 } from "./graph.ts"
@@ -525,8 +525,8 @@ function updateAtom<T>(x: Atom<T>, fn: (prev: T) => T): void {
   try {
     next = runUpdater(fn, previous)
   } catch (error) {
-    if (trace !== null) {
-      trace.emitEvent("callback-error", activeEvaluation, currentCause, {
+    if (activeTracer !== null) {
+      activeTracer.emitEvent("callback-error", activeEvaluation, currentCause, {
         error,
         phase: "updater",
       })

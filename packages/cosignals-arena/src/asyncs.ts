@@ -34,7 +34,7 @@ import {
   startBatch,
   endBatch,
   tickGraphChange,
-  trace,
+  activeTracer,
   untrack,
   graphMemory,
 } from "./graph.ts"
@@ -149,11 +149,11 @@ export function makeSuspension(): Suspension {
       }
       ep.resolve = null
       resolveRaw()
-      if (trace !== null) {
+      if (activeTracer !== null) {
         // The suspension promise is now fulfilled. React may retry because
         // of that fact, but the engine does not observe when it schedules or
         // which later render is that retry.
-        trace.emitEvent("retry", null, cause, { suspension: ep })
+        activeTracer.emitEvent("retry", null, cause, { suspension: ep })
       }
     },
   }
@@ -194,8 +194,8 @@ function settle(box: ThenableBox, status: "fulfilled" | "rejected", result: unkn
   box.status = status
   box.result = result
   const cause =
-    trace !== null
-      ? trace.emitEvent("settle", null, NO_EVENT, {
+    activeTracer !== null
+      ? activeTracer.emitEvent("settle", null, NO_EVENT, {
           status: box.status,
           error: box.status === "rejected" ? box.result : undefined,
         })
@@ -270,8 +270,8 @@ export function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>)
       ? (consumer.throwable as Suspension)
       : makeSuspension()
   box.parkedSuspensions!.add(suspension)
-  if (trace !== null) {
-    trace.emitEvent("compute-suspend", consumer, currentCause, { suspension })
+  if (activeTracer !== null) {
+    activeTracer.emitEvent("compute-suspend", consumer, currentCause, { suspension })
   }
   consumer.throwable = suspension
   graphMemory[consumer.id + NodeSlot.Flags] = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended

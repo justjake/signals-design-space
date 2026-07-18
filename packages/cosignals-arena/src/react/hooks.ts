@@ -56,7 +56,7 @@ import {
 } from "../signals.ts"
 import { type ErrorBox, type ResolvedState, type Suspension } from "../asyncs.ts"
 import {
-  trace,
+  activeTracer,
   Flag,
   NO_EVENT,
   observeNode,
@@ -115,7 +115,7 @@ function requireRootConnection(hook: string): ReactRootConnection {
       `${hook} was rendered without a CosignalsProvider above it. ` +
         "Wrap the tree in <CosignalsProvider>, once per root.",
     )
-    trace?.emitEvent("policy-error", null, NO_EVENT, {
+    activeTracer?.emitEvent("policy-error", null, NO_EVENT, {
       error,
       phase: "missing-provider",
     })
@@ -146,8 +146,8 @@ function unwrapState(
   }
   if (asyncBits === Flag.AsyncError) {
     const error = (st.throwable as ErrorBox).error
-    const sink = trace
-    sink?.emitEvent("render-error", node, sink.getCause(node), { error, root: connection })
+    const tracer = activeTracer
+    tracer?.emitEvent("render-error", node, tracer.getCause(node), { error, root: connection })
     throw error
   }
   const suspension = st.throwable as Suspension
@@ -158,7 +158,7 @@ function unwrapState(
   // This render path is about to throw the suspension promise. The root
   // identifies the rendering connection; it does not claim that React catches
   // the promise, parks work, or schedules a retry.
-  trace?.emitEvent("render-suspend", node, NO_EVENT, {
+  activeTracer?.emitEvent("render-suspend", node, NO_EVENT, {
     root: connection,
     suspension,
   })
@@ -227,7 +227,7 @@ export function useSignal<T>(x: Signal<T>): T {
         return
       }
       state.delivered.add(id)
-      trace?.emitEvent("transition-notify", state.watcher ?? node, cause, {
+      activeTracer?.emitEvent("transition-notify", state.watcher ?? node, cause, {
         draftId: id,
         root: connection,
       })
@@ -261,7 +261,7 @@ export function useSignal<T>(x: Signal<T>): T {
       // The state change that woke this watcher (the write/settle/fold the
       // invalidation stamped) causes the notify; the render this dispatch
       // produces is caused by the notify in turn.
-      trace?.emitEvent("notify", state.watcher ?? node, cause, { root: connection })
+      activeTracer?.emitEvent("notify", state.watcher ?? node, cause, { root: connection })
       wake(REPAIR_WAKE)
     },
     [node, connection, state, wake],

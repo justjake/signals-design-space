@@ -475,15 +475,26 @@ export interface TraceSink {
   getDraftWrite(draft: object): TraceEventId
   setDraftWrite(draft: object, cause: TraceEventId): void
 }
-export let trace: TraceSink | null = null
+/**
+ * The active trace sink, or null when detached (the steady state).
+ *
+ * Naming convention at use sites: a function that emits more than once, or
+ * emits inside a loop, captures this binding once as `const tracer =
+ * activeTracer` and branches on the local — reading a mutable module
+ * binding repeatedly cannot be hoisted by the JIT across calls. Every
+ * trace-only computation (cause lookups, span bookkeeping, saving and
+ * restoring currentCause) must sit inside the `tracer !== null` branch, so
+ * a detached emit site costs exactly one null check.
+ */
+export let activeTracer: TraceSink | null = null
 /**
  * Install or detach the engine's low-level trace sink.
  *
  * Only one sink is active at a time. Passing `null` returns every emit site to
  * its detached, single-null-check path.
  */
-export function setTracer(sink: TraceSink | null): void {
-  trace = sink
+export function setTracer(tracer: TraceSink | null): void {
+  activeTracer = tracer
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +650,8 @@ let writesForbidden: string | null = null
  */
 function throwSignalAccessForbidden(kind: "read" | "write", reason: string): never {
   const error = kind === "read" ? new SignalReadForbidden(reason) : new SignalWriteForbidden(reason)
-  if (trace !== null) {
-    trace.emitEvent("policy-error", activeEvaluation, currentCause, { error, phase: kind })
+  if (activeTracer !== null) {
+    activeTracer.emitEvent("policy-error", activeEvaluation, currentCause, { error, phase: kind })
   }
   throw error
 }
@@ -1150,8 +1161,8 @@ function createGraphCore(
         try {
           cleanup = cell.lifetime!(ctx)
         } catch (error) {
-          if (trace !== null) {
-            trace.emitEvent("callback-error", cell, trace.getCause(cell), {
+          if (activeTracer !== null) {
+            activeTracer.emitEvent("callback-error", cell, activeTracer.getCause(cell), {
               error,
               phase: "on-observed",
             })
@@ -1166,8 +1177,8 @@ function createGraphCore(
           try {
             untrack(cleanup)
           } catch (error) {
-            if (trace !== null) {
-              trace.emitEvent("cleanup-error", cell, trace.getCause(cell), {
+            if (activeTracer !== null) {
+              activeTracer.emitEvent("cleanup-error", cell, activeTracer.getCause(cell), {
                 error,
                 phase: "on-observed",
               })
@@ -1585,7 +1596,7 @@ function createGraphCore(
       // The wave's cause (the write/settle driving it) is the propagate's cause.
       hotHook(pinnedInternals[linkDep(link) >> RECORD_SHIFT]!, "propagate", cause)
     }
-    const sink = trace
+    const tracer = activeTracer
     let stack = waveStack
     let top = 0
     let cur: Link = link
@@ -1599,7 +1610,9 @@ function createGraphCore(
         }
       } else {
         mem[sub + NodeSlot.Flags] = flags | Flag.StaleCheck
-        sink?.setCause(pinnedInternals[sub >> RECORD_SHIFT]!, cause)
+        if (tracer !== null) {
+          tracer.setCause(pinnedInternals[sub >> RECORD_SHIFT]!, cause)
+        }
         if ((flags & Flag.Watching) !== 0) {
           scheduleWatcher(sub, flags | Flag.StaleCheck)
         } else if ((flags & Flag.KindDerived) !== 0) {
@@ -1681,7 +1694,7 @@ function createGraphCore(
     valueChanged?: (node: ReactiveNode) => boolean,
   ): void {
     const pass = ++pokePass
-    const sink = trace
+    const tracer = activeTracer
     const nodeId = node.id
     let wakes: RenderWatcherNode[] | null = null
     let changed = valueChanged?.(node) ?? true
@@ -1710,8 +1723,8 @@ function createGraphCore(
               // A cause-less poke (a root commit with no tracer, a rebase
               // after an equality no-op) keeps the previous attribution
               // instead of wiping a pending delivery's cause.
-              if (cause !== NO_EVENT) {
-                sink?.setCause(w, cause)
+              if (tracer !== null && cause !== NO_EVENT) {
+                tracer.setCause(w, cause)
               }
               if (wake !== undefined && w.onDraftWake !== undefined) {
                 ;(wakes ??= []).push(w)
@@ -1723,8 +1736,8 @@ function createGraphCore(
             // render) opens its compute span with this cause, so a
             // background recompute chains through the draft activity
             // that disturbed it.
-            if (cause !== NO_EVENT) {
-              sink?.setCause(pinnedInternals[sub >> RECORD_SHIFT]!, cause)
+            if (tracer !== null && cause !== NO_EVENT) {
+              tracer.setCause(pinnedInternals[sub >> RECORD_SHIFT]!, cause)
             }
             const subSubs = subsOf(sub)
             if (subSubs !== undefined) {
@@ -1792,7 +1805,7 @@ function createGraphCore(
     const id = node.id
     const flags: Flags = (M[id + NodeSlot.Flags] & ~Flag.StaleMask) | Flag.StaleDirty
     M[id + NodeSlot.Flags] = flags
-    trace?.setCause(node, cause)
+    activeTracer?.setCause(node, cause)
     // Invariant: changes are stamped with the CURRENT clock, after the tick.
     graphClocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
     if ((flags & Flag.Watching) !== 0) {
@@ -1873,8 +1886,8 @@ function createGraphCore(
   /** Out of line so the throw's construction stays out of drain bytecode. */
   function throwDrainCycle(): never {
     const error = new Error("effect drain did not settle (cycle?)")
-    if (trace !== null) {
-      trace.emitEvent("flush-error", null, currentCause, { error, phase: "cycle" })
+    if (activeTracer !== null) {
+      activeTracer.emitEvent("flush-error", null, currentCause, { error, phase: "cycle" })
     }
     throw error
   }
@@ -2066,6 +2079,7 @@ function createGraphCore(
           // staleness bits clear together in one masked store.
           setFlags(w, flagsOf(w) & ~(Flag.Scheduled | Flag.StaleMask))
         }
+        const tracer = activeTracer
         try {
           for (let i = 0; i < n; i++) {
             const w = delivering[i] as RenderWatcherNode
@@ -2074,7 +2088,7 @@ function createGraphCore(
             // record may already be reclaimed and reused, so its flags
             // word cannot be read.
             if (pinnedInternals[w.id >> RECORD_SHIFT] === w) {
-              w.onNotify!(trace?.getCause(w) ?? NO_EVENT)
+              w.onNotify!(tracer !== null ? tracer.getCause(w) : NO_EVENT)
             }
           }
         } finally {
@@ -2111,8 +2125,11 @@ function createGraphCore(
       cell.value = init()
     } catch (error) {
       cell.initializer = init
-      if (trace !== null) {
-        trace.emitEvent("callback-error", cell, currentCause, { error, phase: "initializer" })
+      if (activeTracer !== null) {
+        activeTracer.emitEvent("callback-error", cell, currentCause, {
+          error,
+          phase: "initializer",
+        })
       }
       throw error
     } finally {
@@ -2155,7 +2172,7 @@ function createGraphCore(
       // graph and force the full path — live draft worlds (certificate
       // readings and the single-draft cutoff rely on changedAt stamps and
       // clock ticks) and an attached tracer (write events).
-      if (trace === null && !hasLiveDrafts()) {
+      if (activeTracer === null && !hasLiveDrafts()) {
         cell.value = next
         return true
       }
@@ -2168,7 +2185,8 @@ function createGraphCore(
     graphChangeClock++
     baseChangedAtGraphChange = graphChangeClock
     clocks[(id >> ClockSlot.Shift) + ClockSlot.ChangedAt] = graphChangeClock
-    const cause = trace !== null ? trace.emitEvent(intent, cell, currentCause) : NO_EVENT
+    const cause =
+      activeTracer !== null ? activeTracer.emitEvent(intent, cell, currentCause) : NO_EVENT
     propagateFrom(cell as CellNode<unknown>, cause)
     return true
   }
@@ -2198,10 +2216,11 @@ function createGraphCore(
   }
 
   function recompute(node: DerivedNode<unknown>): void {
+    const tracer = activeTracer
     if (hotHook !== null) {
       // The re-eval is caused by the state change that invalidated this node
       // (propagation stamped it), or the operation in flight if unstamped.
-      const cause = trace?.getCause(node) ?? NO_EVENT
+      const cause = tracer !== null ? tracer.getCause(node) : NO_EVENT
       hotHook(node, "pull", cause !== NO_EVENT ? cause : currentCause)
     }
     const mem = M
@@ -2225,22 +2244,28 @@ function createGraphCore(
     let hasError = false
     let error: unknown
     let value: unknown
-    // A computed's first run is a lazy eval on read, so nothing has propagated a
-    // cause to it yet and the compute would orphan. Fall
-    // back to the active operation's cause (currentCause) — the write or fold in
-    // flight — so a first "new result" chains back to what triggered it. Outside
-    // an operation currentCause is NO_EVENT, so this never mis-attributes.
-    const sink = trace
-    const nodeCause = sink?.getCause(node) ?? NO_EVENT
-    const computeCause = nodeCause !== NO_EVENT ? nodeCause : currentCause
-    // First evaluation is 'compute' (the node coming into existence); every
-    // later evaluation is 'recompute'. Distinct kinds so the trace tells a
-    // node's birth from a node churning — no display-layer remap.
-    const compute =
-      sink !== null
-        ? sink.startSpan(node.value === UNINITIALIZED ? "compute" : "recompute", node, computeCause)
-        : NO_EVENT
-    const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
+    // Span and cause bookkeeping happen only while a tracer is attached;
+    // detached, span stays NO_EVENT and gates the restore below.
+    let span = NO_EVENT
+    let prevCause = NO_EVENT
+    if (tracer !== null) {
+      // A computed's first run is a lazy eval on read, so nothing has
+      // propagated a cause to it yet and the compute would orphan. Fall back
+      // to the active operation's cause (currentCause) — the write or fold in
+      // flight — so a first "new result" chains back to what triggered it.
+      // Outside an operation currentCause is NO_EVENT, so this never
+      // mis-attributes.
+      const storedCause = tracer.getCause(node)
+      // First evaluation is 'compute' (the node coming into existence); every
+      // later evaluation is 'recompute'. Distinct kinds so the trace tells a
+      // node's birth from a node churning — no display-layer remap.
+      span = tracer.startSpan(
+        node.value === UNINITIALIZED ? "compute" : "recompute",
+        node,
+        storedCause !== NO_EVENT ? storedCause : currentCause,
+      )
+      prevCause = setCurrentCause(span)
+    }
     try {
       value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
     } catch (e) {
@@ -2249,12 +2274,15 @@ function createGraphCore(
       } else {
         hasError = true
         error = e
-        if (trace !== null) {
-          trace.emitEvent("compute-error", node, compute, { error: e })
+        // Re-read the module binding rather than the capture: the error must
+        // reach whichever tracer is attached now, including one the compute
+        // body itself just attached (span is NO_EVENT for that tracer).
+        if (activeTracer !== null) {
+          activeTracer.emitEvent("compute-error", node, span, { error: e })
         }
       }
     } finally {
-      if (compute !== NO_EVENT) {
+      if (span !== NO_EVENT) {
         setCurrentCause(prevCause)
       }
       // A nested eval advanced the pass id; restore ours so trimming is exact.
@@ -2295,8 +2323,8 @@ function createGraphCore(
       (graphChangeClock !== preGraphChange ? Flag.StaleDirty : 0)
     mem[id + NodeSlot.Flags] = finalFlags
     validAtColumn[id >> RECORD_SHIFT] = preGraphChange
-    if (compute !== NO_EVENT && trace?.endSpan !== undefined) {
-      trace.endSpan(compute, { changed })
+    if (span !== NO_EVENT && tracer!.endSpan !== undefined) {
+      tracer!.endSpan(span, { changed })
     }
     // An effect this very evaluation disposed (Watching set, Watched
     // clear) kept its record for the stamps above; every write is done,
@@ -2608,8 +2636,8 @@ function createGraphCore(
       try {
         untrack(c)
       } catch (e) {
-        if (trace !== null) {
-          trace.emitEvent("cleanup-error", w, trace.getCause(w), { error: e })
+        if (activeTracer !== null) {
+          activeTracer.emitEvent("cleanup-error", w, activeTracer.getCause(w), { error: e })
         }
         disposeEffect(w)
         throw e
@@ -2632,16 +2660,26 @@ function createGraphCore(
     // this run.
     activeConsumer = null
     activeEffectOwner = w
-    const sink = trace
-    const cause = sink !== null ? sink.startSpan("effect", w, sink.getCause(w)) : NO_EVENT
-    const prevCause = setCurrentCause(cause)
+    // Span and cause bookkeeping happen only while a tracer is attached;
+    // detached, currentCause is read by no one, so saving and restoring it
+    // would be dead stores. span gates the restore below.
+    const tracer = activeTracer
+    let span = NO_EVENT
+    let prevCause = NO_EVENT
+    if (tracer !== null) {
+      span = tracer.startSpan("effect", w, tracer.getCause(w))
+      prevCause = setCurrentCause(span)
+    }
     try {
       let ret: void | (() => void)
       try {
         ret = w.handler(value, previous)
       } catch (error) {
-        if (trace !== null) {
-          trace.emitEvent("effect-error", w, cause, { error })
+        // Re-read the module binding rather than the capture: the error must
+        // reach whichever tracer is attached now, including one the handler
+        // itself just attached (span is NO_EVENT for that tracer).
+        if (activeTracer !== null) {
+          activeTracer.emitEvent("effect-error", w, span, { error })
         }
         throw error
       }
@@ -2649,11 +2687,13 @@ function createGraphCore(
         w.cleanup = ret
       }
     } finally {
-      setCurrentCause(prevCause)
       activeConsumer = prevConsumer
       activeEffectOwner = prevOwner
-      if (cause !== NO_EVENT && trace?.endSpan !== undefined) {
-        trace.endSpan(cause)
+      if (span !== NO_EVENT) {
+        setCurrentCause(prevCause)
+        if (tracer!.endSpan !== undefined) {
+          tracer!.endSpan(span)
+        }
       }
     }
   }
@@ -2710,8 +2750,8 @@ function createGraphCore(
         try {
           untrack(c)
         } catch (error) {
-          if (trace !== null) {
-            trace.emitEvent("cleanup-error", w, trace.getCause(w), { error })
+          if (activeTracer !== null) {
+            activeTracer.emitEvent("cleanup-error", w, activeTracer.getCause(w), { error })
           }
           if (!failed) {
             failed = true
@@ -3028,8 +3068,8 @@ function createGraphCore(
         activeConsumer = prevConsumer
       }
     } catch (error) {
-      if (trace !== null) {
-        trace.emitEvent("callback-error", null, currentCause, { error, phase: "scope" })
+      if (activeTracer !== null) {
+        activeTracer.emitEvent("callback-error", null, currentCause, { error, phase: "scope" })
       }
       try {
         disposeScope(w)
@@ -3108,9 +3148,9 @@ function createGraphCore(
         // (Never-computed nodes are exempt: they are born StaleDirty with
         // no dependency edges, so no wave was ever swallowed.)
         setFlags(sub, flagsOf(sub) | Flag.StaleCheck)
-        const sink = trace
-        if (sink !== null) {
-          sink.setCause(sub, sink.getCause(node))
+        const tracer = activeTracer
+        if (tracer !== null) {
+          tracer.setCause(sub, tracer.getCause(node))
         }
         scheduleWatcher(subId, flagsOf(sub))
       }

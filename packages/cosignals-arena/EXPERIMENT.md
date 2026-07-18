@@ -398,3 +398,29 @@ renames that followed it:
 
 Typecheck and all 421 package tests (conformance, oracle fuzz, GC/leak,
 React suites) pass at this point.
+
+## 2026-07-17 source convergence: one tracer concept, React 18 support
+
+Same-day follow-up carrying the source package's next three commits:
+
+- The trace seam's module binding is now `activeTracer` (was `trace`),
+  with the source's use-site convention: hot functions capture it once
+  as `const tracer` and every trace-only computation (cause lookups,
+  span bookkeeping, saving/restoring currentCause) sits inside the one
+  `tracer !== null` branch. recompute and runHandler skip the
+  currentCause save/restore entirely when detached, and their error
+  catch blocks re-read the module binding so a tracer attached by the
+  failing callback still hears the error. Ported by hand into this
+  fork's core closure across propagateWave, pokeDraftWatchers, flush's
+  render-notify delivery, recompute, runHandler, and observeNode.
+- React 18.2 compatibility: peer deps drop to react/react-dom >=18.2.0
+  plus an explicit scheduler peer, host.ts resolves React's shared
+  internals per React line, and `pnpm test:react18` runs the suite
+  against a pinned 18.2.0 fixture package (react18/, a workspace member
+  so react-dom 18's react and scheduler peers resolve to the 18 line).
+- The harness adapter's (compute, reaction) pair effect style, merged
+  in the prior round from the source working tree, is now anchored to
+  its committed form.
+
+Typecheck and all 421 tests pass on both React 19 and the pinned
+React 18 fixture.
