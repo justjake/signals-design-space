@@ -92,12 +92,10 @@ async function waitFor(predicate, timeoutMs = 30000) {
 let impl
 if (contender === "cosignals-arena") {
   const engine = await import("cosignals-arena")
-  const bindings = await import("../src/react/index.ts")
-  bindings.registerReactSignals()
   const wrappedCreateRoot = (el) => {
     const root = ReactDOMClient.createRoot(el)
     return {
-      render: (node) => root.render(React.createElement(bindings.CosignalsProvider, null, node)),
+      render: (node) => root.render(React.createElement(engine.CosignalsProvider, null, node)),
       unmount: () => root.unmount(),
     }
   }
@@ -110,13 +108,13 @@ if (contender === "cosignals-arena") {
       return cells
     },
     useCell(cell) {
-      return bindings.useSignal(cell)
+      return engine.useSignal(cell)
     },
     write(cell, v) {
       cell.set(v)
     },
     writeManyInTransition(cells, v) {
-      bindings.startSignalTransition(() => {
+      engine.startSignalTransition(() => {
         for (const c of cells) {
           c.set(v)
         }

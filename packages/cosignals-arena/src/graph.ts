@@ -44,6 +44,23 @@ import type { DraftId } from "./worlds.ts"
 export type EqualsFn<T> = (a: T, b: T) => boolean
 
 /**
+ * Compare two readings under a node's equality function.
+ *
+ * The default equality is Object.is, and `node.equals(a, b)` is then an
+ * indirect call through a function pointer loaded from the node — the
+ * single hottest line of recompute in CPU profiles. Testing the pointer
+ * against the builtin first lets the optimizer emit the comparison
+ * inline; custom equality functions take the plain call.
+ */
+const OBJECT_IS = Object.is
+function valuesEqual(equals: EqualsFn<unknown>, a: unknown, b: unknown): boolean {
+  if (equals === OBJECT_IS) {
+    return Object.is(a, b)
+  }
+  return equals(a, b)
+}
+
+/**
  * Weak number brand. Plain numbers assign in, so creation and increment
  * stay cast-free (`let x: EvalPass = 1; x++`), but a value of one brand
  * does not assign to a slot or parameter of another — counter mixups are
@@ -622,10 +639,18 @@ export function initializeDerived<T>(
 declare const queueMicrotask: (fn: () => void) => void
 declare const setTimeout: (fn: () => void, ms?: number) => unknown
 
-/** Hard iteration ceiling: converts livelock into a thrown error. */
+/** Ceilings and thresholds for the drain and validation loops. */
 const enum Limit {
-  /** Queued-effect pulls per drain before declaring a non-settling cycle. */
+  /**
+   * Queued-effect pulls per drain before declaring a non-settling cycle;
+   * converts a livelock into a thrown error.
+   */
   DrainRuns = 100_000,
+  /**
+   * Recursion frames the pull validation spends before diverting a unary
+   * chain to the iterative resolver (see ensureFresh and chainResolve).
+   */
+  ChainDivertDepth = 16,
 }
 
 export class SignalReadForbidden extends Error {
@@ -1142,6 +1167,11 @@ function createGraphCore(
   /** Settle observation state now (also called from tests). */
   function flushLifetimeTransitions(): void {
     lifetimeFlushScheduled = false
+    if (pendingLifetimeCells.size === 0) {
+      // Callers loop through here (test flushes, the scheduled-effect drain);
+      // the copy below would allocate on every call even when idle.
+      return
+    }
     const cells = [...pendingLifetimeCells]
     pendingLifetimeCells.clear()
     for (const cell of cells) {
@@ -1550,7 +1580,7 @@ function createGraphCore(
 
   /**
    * Suspended traversal positions for the invalidation wave: a persistent
-   * integer stack rather than per-frame heap cells. propagateWave never runs
+   * integer stack rather than per-frame heap cells. The wave never runs
    * user code, so it cannot nest — one module-level stack serves every wave
    * with zero allocation on the steady path.
    */
@@ -1566,25 +1596,22 @@ function createGraphCore(
   /**
    * The invalidation wave: push marks down the watched subs closure.
    *
-   * Marks are always StaleCheck ("possibly stale"): consumers confirm against
-   * dependency changedAt READINGS before recomputing or re-running. Readings —
-   * not marks — are the recompute trigger, which is what makes
-   * write-then-revert inside a batch a true no-op.
+   * Both wave entry points (a cell write, a settlement invalidation) run
+   * only after a proven value change, so the root's direct subscribers are
+   * definitely stale: they get StaleDirty, and their pull recomputes
+   * without a validation walk. Anything deeper sits behind a derived that
+   * may recompute to an equal value, so {@link markSubtreeStale} gives it
+   * StaleCheck ("possibly stale") and its pull confirms against dependency
+   * changedAt readings before recomputing or re-running.
    *
-   * Per-node visit rules (the wave's contract, also applied by any site that
-   * installs a back-edge onto a stale dep — see observeNode):
-   * 1. already stale → re-schedule an unscheduled watcher; do not descend
-   *    (sound under the stale-cover invariant: dep stale ⇒ sub stale or
-   *    scheduled, so everything below is already marked);
-   * 2. Clean → set StaleCheck (never StaleDirty) and record the causal event;
-   * 3. Watching → schedule; watchers have no subscribers, so never descend;
-   * 4. KindDerived → descend (the Clean→StaleCheck transition is the wave's
-   *    visited test).
-   *
-   * Iterative in alien-signals' shape: a link cursor, the pending sibling, and
-   * an explicit stack of suspended positions — single-child descents reuse the
-   * pending sibling instead of pushing, so plain chains run with no stack
-   * growth at all.
+   * Visit rules for the direct ring:
+   * 1. already stale: upgrade the mark to StaleDirty — this wave proves the
+   *    node's dependency changed — and re-schedule the watcher if it is not
+   *    scheduled. Do not descend: a stale dependency implies its subscribers
+   *    are already stale or scheduled, so everything below is already marked.
+   * 2. clean: set StaleDirty and record the causal event for tracing;
+   * 3. Watching: schedule; watchers have no subscribers, so never descend;
+   * 4. KindDerived: mark its subscriber subtree StaleCheck.
    */
   function propagateWave(link: Link | undefined, cause: TraceEventId): void {
     const mem = M
@@ -1596,6 +1623,53 @@ function createGraphCore(
       // The wave's cause (the write/settle driving it) is the propagate's cause.
       hotHook(pinnedInternals[linkDep(link) >> RECORD_SHIFT]!, "propagate", cause)
     }
+    const tracer = activeTracer
+    for (let l: Link = link; l !== 0; l = mem[l + LinkSlot.LinkNextSub]) {
+      const sub = mem[l + LinkSlot.LinkSub]
+      const flags = mem[sub + NodeSlot.Flags]
+      if ((flags & Flag.StaleMask) !== 0) {
+        const upgraded = (flags & ~Flag.StaleMask) | Flag.StaleDirty
+        if ((flags & Flag.StaleDirty) === 0) {
+          mem[sub + NodeSlot.Flags] = upgraded
+        }
+        if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
+          scheduleWatcher(sub, upgraded)
+        }
+        continue
+      }
+      const marked = flags | Flag.StaleDirty
+      mem[sub + NodeSlot.Flags] = marked
+      if (tracer !== null) {
+        tracer.setCause(pinnedInternals[sub >> RECORD_SHIFT]!, cause)
+      }
+      if ((flags & Flag.Watching) !== 0) {
+        scheduleWatcher(sub, marked)
+      } else if ((flags & Flag.KindDerived) !== 0) {
+        const subSubs = mem[sub + NodeSlot.Subs]
+        if (subSubs !== 0) {
+          markSubtreeStale(subSubs, cause)
+        }
+      }
+    }
+  }
+
+  /**
+   * Mark a derived's subscriber subtree possibly-stale (StaleCheck) and
+   * schedule its watchers — the wave below {@link propagateWave}'s direct
+   * ring. Visit rules match the direct ring except that marks are
+   * StaleCheck and never upgrade an existing mark; the stale-cover
+   * invariant (dep stale ⇒ sub stale or scheduled) still means an
+   * already-stale node is never descended into. This contract is also
+   * applied by any site that installs a back-edge onto a stale dep — see
+   * observeNode.
+   *
+   * Iterative in alien-signals' shape: a link cursor, the pending sibling, and
+   * an explicit stack of suspended positions — single-child descents reuse the
+   * pending sibling instead of pushing, so plain chains run with no stack
+   * growth at all.
+   */
+  function markSubtreeStale(link: Link, cause: TraceEventId): void {
+    const mem = M
     const tracer = activeTracer
     let stack = waveStack
     let top = 0
@@ -1926,7 +2000,15 @@ function createGraphCore(
           if ((flags & Flag.Watched) === 0) {
             continue
           }
-          ensureFresh(w)
+          // Dispatch the pull inline. A proven-dirty effect (the common
+          // delivery: its direct dependency changed) recomputes without the
+          // validation preamble; a possibly-stale one takes the full
+          // validation walk. Clean means an already-superseded entry.
+          if ((flags & Flag.StaleDirty) !== 0 || w.value === UNINITIALIZED) {
+            recompute(w)
+          } else if ((flags & Flag.StaleMask) !== 0) {
+            ensureFresh(w, flags & ~Flag.Scheduled)
+          }
           if (generationColumn[id >> RECORD_SHIFT] !== gens[start]) {
             continue
           }
@@ -1937,13 +2019,18 @@ function createGraphCore(
           if ((cflags & Flag.AsyncSuspended) !== 0) {
             continue
           }
-          if (w.lastHandled !== UNINITIALIZED && w.equals(w.value, w.lastHandled)) {
+          if (w.lastHandled !== UNINITIALIZED && valuesEqual(w.equals, w.value, w.lastHandled)) {
             continue
           }
           if ((cflags & Flag.Scheduled) !== 0) {
             continue // re-marked by its own pull; the next round delivers
           }
-          runEffectCleanup(w)
+          // Guarded at the call site: most effects have neither a previous
+          // run's children nor a cleanup, and skipping the call keeps the
+          // common path in this loop.
+          if (w.children !== undefined || w.cleanup !== undefined) {
+            runEffectCleanup(w)
+          }
           if (
             generationColumn[id >> RECORD_SHIFT] === gens[start] &&
             (mem[id + NodeSlot.Flags] & Flag.Watched) !== 0
@@ -1966,13 +2053,21 @@ function createGraphCore(
           const w = pins[id >> RECORD_SHIFT] as EffectNode
           const flags: Flags = mem[id + NodeSlot.Flags]
           // Consume the queue membership so later writes can re-enqueue. The
-          // evaluated effect retains its staleness mark for ensureFresh.
+          // evaluated effect retains its staleness mark for the pull below.
           mem[id + NodeSlot.Flags] = flags & ~Flag.Scheduled
           if ((flags & Flag.Watched) === 0) {
             handles[i] = undefined
             continue
           }
-          ensureFresh(w)
+          // Dispatch the pull inline. A proven-dirty effect (the common
+          // delivery: its direct dependency changed) recomputes without the
+          // validation preamble; a possibly-stale one takes the full
+          // validation walk. Clean means an already-superseded entry.
+          if ((flags & Flag.StaleDirty) !== 0 || w.value === UNINITIALIZED) {
+            recompute(w)
+          } else if ((flags & Flag.StaleMask) !== 0) {
+            ensureFresh(w, flags & ~Flag.Scheduled)
+          }
           // The pull runs user code (compute bodies) that can dispose this
           // very effect; a reclaimed record's flags cannot be read.
           if (generationColumn[id >> RECORD_SHIFT] !== gens[i]) {
@@ -1989,7 +2084,7 @@ function createGraphCore(
             handles[i] = undefined
             continue
           }
-          if (w.lastHandled !== UNINITIALIZED && w.equals(w.value, w.lastHandled)) {
+          if (w.lastHandled !== UNINITIALIZED && valuesEqual(w.equals, w.value, w.lastHandled)) {
             handles[i] = undefined
             continue
           }
@@ -2010,7 +2105,12 @@ function createGraphCore(
             handles[i] = undefined
             continue
           }
-          runEffectCleanup(w)
+          // Guarded at the call site: most effects have neither a previous
+          // run's children nor a cleanup, and skipping the call keeps the
+          // common path in this loop.
+          if (w.children !== undefined || w.cleanup !== undefined) {
+            runEffectCleanup(w)
+          }
         }
         // Phase 2b: handlers, reading the settled value at run time.
         for (let i = start; i < end; i++) {
@@ -2160,7 +2260,7 @@ function createGraphCore(
     // The equality contract compares against the base value, so a write that
     // arrives before the first read still runs the initializer.
     materializeCell(cell)
-    if (cell.equals(cell.value as T, next)) {
+    if (valuesEqual(cell.equals as EqualsFn<unknown>, cell.value, next)) {
       return false
     }
     let id = cell.id
@@ -2298,12 +2398,23 @@ function createGraphCore(
     // the full fold.
     let changed: boolean
     if (!parked && !hasError && (mem[id + NodeSlot.Flags] & Flag.AsyncMask) === 0) {
-      const prev = node.value
-      if (prev === UNINITIALIZED || !node.equals(prev, value)) {
+      if ((mem[id + NodeSlot.Flags] & Flag.WatchRunEffect) !== 0 && tracer === null) {
+        // An effect has no subscribers, so nothing ever compares against its
+        // changedAt reading; the delivery cutoff is the drain's comparison
+        // with the last handled value. Skipping the equality here keeps each
+        // delivery at one comparison instead of two. With a tracer attached,
+        // take the general arm so the recompute span reports a real
+        // `changed`.
         node.value = value
         changed = true
       } else {
-        changed = false
+        const prev = node.value
+        if (prev === UNINITIALIZED || !valuesEqual(node.equals, prev, value)) {
+          node.value = value
+          changed = true
+        } else {
+          changed = false
+        }
       }
     } else {
       changed = finishCompute(node, parked, hasError, error, value)
@@ -2483,8 +2594,12 @@ function createGraphCore(
       // reading compare per level, handles held by the recursion);
       // chainResolve absorbs only the deep tail, iteratively, so a
       // 150k-node chain costs 16 frames plus one descent-and-climb.
+      // The threshold matters both ways: waiting 16 frames keeps shallow
+      // validation — e.g. every single-dependency effect pull on a write —
+      // on plain recursion frames, and 16 is far enough below engine stack
+      // limits that the frames already spent leave room to spare.
       if (
-        depth === 16 &&
+        depth === Limit.ChainDivertDepth &&
         (flags & Flag.StaleDirty) === 0 &&
         node.value !== UNINITIALIZED &&
         chainResolve(node)
@@ -2514,10 +2629,16 @@ function createGraphCore(
         (dflags & Flag.KindDerived) !== 0 &&
         (dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
       ) {
+        // Reaching the divert depth without diverting means this level is
+        // not a unary chain link (several dependencies, or not plain
+        // StaleCheck). Restart the child's budget so a unary run further
+        // down still gets its diversion at ITS 16th level; branching
+        // stretches stay on recursion frames, where depth is bounded by
+        // graph shape rather than chain length.
         ensureFresh(
           pins[depId >> RECORD_SHIFT] as DerivedNode<unknown>,
           dflags,
-          depth === 16 ? 0 : depth + 1,
+          depth === Limit.ChainDivertDepth ? 0 : depth + 1,
         )
       }
       if (clocks[(depId >> ClockSlot.Shift) + ClockSlot.ChangedAt] > validAt) {

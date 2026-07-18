@@ -2,6 +2,25 @@
   "name": "cosignals-arena",
   "version": "0.1.0",
   "description": "The data-oriented build of cosignals: the same concurrent signals API for React, with the reactive graph stored in typed-array records instead of linked JS objects. Probably faster; definitely harder to read.",
+  "keywords": [
+    "async",
+    "atom",
+    "concurrent",
+    "concurrent-rendering",
+    "data-oriented",
+    "hooks",
+    "react",
+    "reactive",
+    "signals",
+    "state",
+    "state-management",
+    "store",
+    "suspense",
+    "transitions",
+    "typed-array"
+  ],
+  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals-arena#readme",
+  "bugs": "https://github.com/justjake/signals-design-space/issues",
   "license": "MIT",
   "author": "Jake Teton-Landis <just.1.jake@gmail.com>",
   "repository": {
@@ -9,36 +28,20 @@
     "url": "git+https://github.com/justjake/signals-design-space.git",
     "directory": "packages/cosignals-arena"
   },
-  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals-arena#readme",
-  "bugs": "https://github.com/justjake/signals-design-space/issues",
-  "keywords": [
-    "react",
-    "signals",
-    "state",
-    "state-management",
-    "store",
-    "concurrent",
-    "concurrent-rendering",
-    "transitions",
-    "suspense",
-    "async",
-    "reactive",
-    "atom",
-    "hooks",
-    "data-oriented",
-    "typed-array"
-  ],
-  "type": "module",
-  "sideEffects": [
-    "./src/react/index.ts",
-    "./dist/react/index.js"
-  ],
   "files": [
     "dist",
     "src"
   ],
+  "type": "module",
+  "sideEffects": [
+    "./src/index.ts",
+    "./src/react/index.ts",
+    "./dist/index.js",
+    "./dist/react/index.js"
+  ],
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core.ts",
     "./ssr": "./src/ssr.ts",
     "./react": "./src/react/index.ts",
     "./debug": "./src/debug/index.ts",
@@ -53,6 +56,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./core": {
+        "types": "./dist/core.d.ts",
+        "default": "./dist/core.js"
       },
       "./ssr": {
         "types": "./dist/ssr.d.ts",

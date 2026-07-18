@@ -1,6 +1,12 @@
 /** createEffect() source overloads (signal / tuple / record) and shallowEquals. */
 import { describe, expect, test } from "vitest"
-import { createAtom, createComputed, createEffect, shallowEquals, type Atom } from "cosignals-arena"
+import {
+  createAtom,
+  createComputed,
+  createEffect,
+  shallowEquals,
+  type Atom,
+} from "cosignals-arena/core"
 
 describe("shallowEquals", () => {
   test("compares arrays element-wise, one level deep", () => {

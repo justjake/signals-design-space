@@ -294,6 +294,12 @@ export function appendUrgentIntent(
   kind: OpKind,
   payload: unknown,
 ): boolean {
+  if (rebaseLogs.size === 0) {
+    // No cell anywhere has a rebase log — the steady state for apps not
+    // running transitions. A size check is cheaper than hashing the cell
+    // through Map.get on every write.
+    return false
+  }
   const log = rebaseLogs.get(cell)
   if (log === undefined) {
     return false

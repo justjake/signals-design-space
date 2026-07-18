@@ -14,7 +14,7 @@
  */
 import { registerReactSignals } from "./host.ts"
 
-registerReactSignals()
+export const unregisterReactSignals = registerReactSignals()
 
 export { registerReactSignals, resetReactSignalsForTest, type ReactSignalsHandle } from "./host.ts"
 export { CosignalsProvider } from "./CosignalsProvider.ts"

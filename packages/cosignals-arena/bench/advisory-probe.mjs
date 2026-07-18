@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, co
 
 const React = (await import("react")).default ?? (await import("react"))
 const { createRoot } = await import("react-dom/client")
-const { createAtom } = await import("cosignals-arena")
+const { createAtom } = await import("cosignals-arena/core")
 const { CosignalsProvider, registerReactSignals, useSignal, startSignalTransition } =
   await import("../src/react/index.ts")
 

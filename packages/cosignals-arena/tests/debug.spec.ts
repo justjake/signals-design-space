@@ -38,8 +38,10 @@ describe("debug/inspect — inert observation", () => {
       expect(snap.value).toBe(20) // old value, not 200 — proves no recompute
       expect(snap.stale).toBe(true)
     }
-    // The load-bearing property: inspecting emitted zero compute events.
-    expect(tracer.events().filter((e) => e.kind === "compute")).toHaveLength(0)
+    // The load-bearing property: inspecting emitted zero evaluation events.
+    expect(
+      tracer.events().filter((e) => e.kind === "compute" || e.kind === "recompute"),
+    ).toHaveLength(0)
     tracer.stop()
 
     // A real read re-evaluates and clears staleness.

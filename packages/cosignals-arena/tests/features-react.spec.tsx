@@ -173,7 +173,7 @@ describe("scenario 15 — causality traces", () => {
     let events = tracer.events()
     const write = events.find((event) => event.kind === "set" && event.label === "key")!
     const compute = events.find((event) => event.kind === "compute" && event.label === "data")!
-    expect(compute.cause).toBe(write.id) // the background recompute chains through the drafted write
+    expect(compute.cause).toBe(write.id) // 'data' first-evaluates here, chaining through the drafted write
     expect(compute.draftId).toBeUndefined()
     expect(compute.world).toEqual([write.draftId])
     const suspended = events.find(

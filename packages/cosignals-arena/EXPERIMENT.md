@@ -424,3 +424,35 @@ Same-day follow-up carrying the source package's next three commits:
 
 Typecheck and all 421 tests pass on both React 19 and the pinned
 React 18 fixture.
+
+## 2026-07-18 source convergence: two-grade wave, delivery trim, core entry
+
+Next-day round carrying the source package's perf and packaging work:
+
+- Two-grade invalidation wave: propagateWave now marks the changed
+  node's direct subscribers StaleDirty (both wave entry points run only
+  after a proven value change, so their pull recomputes without the
+  validation walk) and hands anything deeper to the new
+  markSubtreeStale, which keeps the StaleCheck confirm-first contract.
+  The drain dispatches pulls inline — StaleDirty effects recompute
+  directly, StaleCheck ones take ensureFresh — in both the one-entry
+  fast path and the phased path.
+- Delivery pipeline trims: valuesEqual fast-paths the default Object.is
+  equality (writeCell, recompute, both drain cutoff sites),
+  runEffectCleanup is guarded at its call sites for effects with no
+  children and no cleanup, recompute skips the equality fold for effect
+  nodes when no tracer is attached, flushLifetimeTransitions returns
+  before allocating when idle, and appendUrgentIntent skips the
+  per-write Map.get while no rebase logs exist. The arena drain already
+  hoisted the ambient-collector detach, so that part was a no-op here.
+- The divert threshold in ensureFresh is now the named
+  Limit.ChainDivertDepth, with the source's rationale comments adapted
+  to this fork's chainResolve.
+- Entry points: src/core.ts is the React-free API surface, the root
+  entry re-exports core plus the React bindings (importing it registers
+  the host), react/index exposes unregisterReactSignals, and
+  package.json gains the ./core export in both dev and publish maps.
+  tests/entry-points.spec.ts pins the combination contract.
+
+Typecheck and all 423 tests pass on both React 19 and the pinned
+React 18 fixture; the oracle fuzz suite passes standalone.
