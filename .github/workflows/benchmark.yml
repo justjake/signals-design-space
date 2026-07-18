@@ -37,8 +37,11 @@ on:
         required: false
         default: "3"
 
+# The event name is part of the group so a push to main cannot cancel a
+# long manual ALL-frameworks dispatch (or vice versa); each kind only
+# supersedes its own.
 concurrency:
-  group: benchmark-${{ github.ref }}
+  group: benchmark-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
