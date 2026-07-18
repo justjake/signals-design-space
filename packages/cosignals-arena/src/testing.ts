@@ -5,4 +5,4 @@
  * or tracers must reset between cases to stay independent. Application
  * code should never import this entry.
  */
-export { resetEngineForTest } from "./signals.ts"
+export { arenaStats, resetEngineForTest, setArenaCapacityForTesting } from "./signals.ts"
