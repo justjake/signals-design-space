@@ -278,14 +278,17 @@ What it costs:
   pool, free lists, a pin table, and `FinalizationRegistry`-driven
   reclamation replace "let the GC handle it". Reading `src/graph.ts`
   requires holding the record layout in your head.
-- **Memory limitations.** The record arena has a fixed capacity
-  (2,097,152 records; the backing buffer reserves address space up front
-  and the OS commits pages on first touch). Creating signals beyond it
-  throws `RangeError: cosignals-arena record arena exhausted` — there is
-  deliberately no growth path, because growth would cost the hot paths
-  their constant base pointer. A dropped computed's record is reclaimed
-  and reused, but the ceiling is real: an app that creates unbounded
-  signals will hit it.
+- **Memory behavior to know about.** The record arena starts at
+  2,097,152 records (the backing buffer reserves address space up front
+  and the OS commits pages on first touch) and grows automatically:
+  it doubles once it runs three-quarters full, applied at the next
+  microtask. `growCapacity(records)` pre-sizes it explicitly — call it
+  at startup before building a very large graph, because growing under
+  a warm graph pays a one-time copy of every live record, and a single
+  synchronous burst that outruns the remaining headroom before any
+  microtask can run still throws
+  `RangeError: cosignals-arena record arena exhausted`. Design notes in
+  `docs/arena-growth.md`.
 - One reclamation caveat: a linked dependency's handle is pinned by the
   engine, and a pinned handle retains its compute closure's whole scope
   chain. Build long computed chains through small factory functions (each
@@ -511,7 +514,7 @@ combine different workloads and are not application performance predictions.
 
 - [cosignals](https://www.npmjs.com/package/cosignals) — the object-graph
   original: the same API and semantics on plain JS objects. Easier to read
-  and debug, no arena capacity ceiling. Start there; reach for the arena
+  and debug, no arena to manage. Start there; reach for the arena
   when profiling says the graph itself is hot.
 - [dalien-signals](https://www.npmjs.com/package/dalien-signals) — a fork
   of [alien-signals](https://www.npmjs.com/package/alien-signals) with a
