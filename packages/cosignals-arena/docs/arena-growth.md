@@ -31,29 +31,51 @@ ceiling at that size:
   `RangeError`. The quarter-capacity trigger makes this take hundreds of
   thousands of allocations inside one operation.
 
-## Why growth applies only at an empty stack
+## Growth rebuilds the engine, one generation per arena
 
-Node and link records are offsets into module-level typed arrays, and
-hot functions open function-local views of those arrays once per
-activation (`const mem = M`). A frame that is still running when the
-arrays are replaced would keep writing through its stale view, and any
-link offset it holds in a local would address the wrong record after
-relocation. So the arena may only move when no engine frame is live.
+The engine is a closure whose typed-array views bind as function-scope
+consts, which an optimizing compiler embeds as constants across the hot
+walks. Growth must not give that up: making the view bindings mutable
+was measured 12-14% slower geomean across the graph benchmarks (a
+binding with any assignment site is never constant-folded), and
+resizable ArrayBuffers measure worse still. So a generation's arrays
+NEVER move. Growth builds the bigger arrays, then instantiates a fresh
+engine closure — the next generation — over them, handing the hot
+state (allocation pointers, free stacks, clocks, pass counters, effect
+lanes, pending queues, the finalization registry) across by value or by
+stable reference.
 
-User callbacks run under engine frames from many directions — compute
-bodies, handlers, cleanups, equality callbacks, lazy initializers,
-observation lifetime callbacks, tracer sinks, the devtools hot hook —
-and any of them could call `growCapacity`. Instrumenting every such
-entry with a busy bracket would tax hot paths and stay fragile against
-the next callback surface added. Instead, growth never applies
-synchronously under user code at all: it applies only from its own
-microtask, where the JS stack is empty. Engine frames cannot span a
-microtask boundary — evaluations and drains unwind by throw rather than
-suspend — so the only engine state that can still be live there is a
-batch held open across `await`, which `batchDepth` covers. A growth
-deferred by such a batch re-arms when the outermost batch closes and
-whenever a fresh record allocation still sees the gap below the
-trigger.
+Everything that outlives a generation reaches the engine through module
+scope, never through a captured closure-internal function:
+
+- The public surface is a set of stable wrapper identities delegating
+  to the current generation. A caller may capture any of them by VALUE
+  (destructure, store in a callback) and the capture keeps working
+  after a growth; rebindable `export let` bindings alone would not
+  cover value captures, only live-binding references.
+- Disposers, retained observation-lifetime `ctx.get`/`ctx.set`
+  callbacks, and the finalization registry's cleanup all route through
+  the current-generation slot.
+- Scheduled drains (microtask and timer pumps) go through module
+  trampolines that resolve the engine at run time.
+
+## Why a generation turns over only at an empty stack
+
+A live engine frame holds function-local views of its generation's
+arrays and link offsets in locals; a turnover under it would strand
+both. User callbacks run under engine frames from many directions —
+compute bodies, handlers, cleanups, equality callbacks, lazy
+initializers, observation lifetime callbacks, tracer sinks, the
+devtools hot hook — and any of them could call `growCapacity`.
+Instrumenting every such entry with a busy bracket would tax hot paths
+and stay fragile against the next callback surface added. Instead,
+growth applies only from its own microtask, where the JS stack is
+empty. Engine frames cannot span a microtask boundary — evaluations and
+drains unwind by throw rather than suspend — so the only engine state
+that can still be live there is a batch held open across `await`, which
+the idle check covers. A growth deferred by such a batch re-arms when
+the outermost batch closes and whenever a fresh record allocation still
+sees the gap below the trigger.
 
 The one synchronous exception is `growCapacity` on a never-touched
 arena (neither bump pointer has moved): no record exists for any engine
@@ -97,17 +119,23 @@ stamps copy bit-exact with the int32 copy.
 
 ## What growth costs
 
-- **Before the first growth: nothing.** The array bindings are `let`,
-  but V8 treats a context slot as constant until its first reassignment,
-  so the pre-growth hot path compiles exactly as the fixed-capacity
-  arena did. The trigger check is one compare on the fresh-record
-  allocation path (free-list reuse never changes the gap and skips it).
+- **Steady state: one current-generation load per public call.** Each
+  public entry loads the current-engine slot and a property before the
+  direct engine call; engine-internal calls (the walks, the drains, the
+  evaluators) stay direct closure calls over const-embedded arrays. The
+  trigger check is one compare on the fresh-record allocation path
+  (free-list reuse never changes the gap and skips it).
 - **At growth: one copy of the live regions** plus the delta rewrite,
-  both linear in live records, and a one-time deopt of functions that
-  embedded the old array constants.
-- **After a growth: one context load per function activation** to open
-  each local view — the same cost the module-level bindings already
-  paid, since a bundler emits module state as mutable context slots.
+  both linear in live records, and a fresh engine instantiation.
+- **After a growth: mixed-generation call-site feedback.** The second
+  instantiation of the same engine literals shares their feedback slots,
+  so post-growth code runs somewhat despecialized. Growth is expected to
+  be rare and mostly pre-graph (`growCapacity` at startup); if
+  post-growth steady state ever matters, dalien-signals' answer —
+  compiling each generation from its own source text via `new Function`
+  for fresh function identities — is the known fix, at the price of
+  requiring a runtime-codegen-permitted host and a self-contained
+  factory.
 
 `resetEngineForTest` and the benchmark reset keep the grown capacity;
 they rewind the allocation pointers within it.
