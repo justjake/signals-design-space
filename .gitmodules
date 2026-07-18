@@ -1,6 +1,6 @@
 [submodule "milomg-reactivity-benchmark"]
 	path = milomg-reactivity-benchmark
-	url = https://github.com/milomg/js-reactivity-benchmark
+	url = https://github.com/justjake/js-reactivity-benchmark.git
 [submodule "upstream-alien-signals"]
 	path = upstream-alien-signals
 	url = https://github.com/stackblitz/alien-signals
