@@ -1,0 +1,21 @@
+{
+  "name": "cosignals-release-consumer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cosignals": "0.0.0",
+    "cosignals-arena": "0.0.0",
+    "cosignals-devtools": "0.0.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "typescript": "7.0.2"
+  }
+}

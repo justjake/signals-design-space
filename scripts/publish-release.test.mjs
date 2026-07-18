@@ -6,7 +6,7 @@ import {
   parsePublishArgs,
   releasePaths,
 } from "./publish-release.mjs"
-import { npmPublishInvocation, publishPlannedArtifacts } from "./publish-tarballs.mjs"
+import { pnpmPublishInvocation, publishPlannedArtifacts } from "./publish-tarballs.mjs"
 
 test("publish arguments default to a real, lightweight release", () => {
   assert.deepEqual(parsePublishArgs([]), {
@@ -128,9 +128,9 @@ test("dry runs check every tarball even when its version exists", async () => {
   assert.deepEqual(published, ["cosignals"])
 })
 
-test("npm publishes outside the pnpm workspace", () => {
+test("pnpm publishes outside the workspace", () => {
   assert.deepEqual(
-    npmPublishInvocation(
+    pnpmPublishInvocation(
       {
         name: "cosignals",
         version: "1.2.3",
@@ -140,6 +140,7 @@ test("npm publishes outside the pnpm workspace", () => {
       true,
     ),
     {
+      command: "pnpm",
       args: [
         "publish",
         "/tmp/release-artifacts/cosignals-1.2.3.tgz",
@@ -147,6 +148,7 @@ test("npm publishes outside the pnpm workspace", () => {
         "next",
         "--access",
         "public",
+        "--no-git-checks",
         "--dry-run",
       ],
       cwd: tmpdir(),

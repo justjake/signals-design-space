@@ -68,7 +68,7 @@ export async function publishPlannedArtifacts({
   }
 }
 
-export function npmPublishInvocation(release, dryRun) {
+export function pnpmPublishInvocation(release, dryRun) {
   const args = [
     "publish",
     release.tarballPath,
@@ -76,9 +76,10 @@ export function npmPublishInvocation(release, dryRun) {
     release.tag,
     "--access",
     "public",
+    "--no-git-checks",
   ]
   if (dryRun) args.push("--dry-run")
-  return { args, cwd: tmpdir() }
+  return { command: "pnpm", args, cwd: tmpdir() }
 }
 
 function parseArgs(args) {
@@ -110,8 +111,8 @@ async function main() {
     versionExists: npmVersionExists,
     publishTarball: async (release, dryRun) => {
       console.log(`${dryRun ? "Checking" : "Publishing"} ${release.name}@${release.version}`)
-      const invocation = npmPublishInvocation(release, dryRun)
-      run("npm", invocation.args, { cwd: invocation.cwd })
+      const invocation = pnpmPublishInvocation(release, dryRun)
+      run(invocation.command, invocation.args, { cwd: invocation.cwd })
     },
   })
 }

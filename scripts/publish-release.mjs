@@ -38,7 +38,7 @@ Build, test, pack, verify, and publish the cosignals packages.
 
 Options:
   --dry-run       Run npm publish --dry-run instead of publishing.
-  --full          Run the Playwright battery and production devtools tests.
+  --full          Run the Playwright battery and production devtools tests before packing.
   --allow-dirty   Permit a real publish from a dirty worktree.
   --pack-only     Test, build, and pack into build/release-artifacts.
   --verify-only   Verify the tarballs in build/release-artifacts.
@@ -162,7 +162,7 @@ async function main() {
         ...options,
         status: output("git", ["status", "--porcelain"]),
       })
-      if (!options.dryRun) run("npm", ["whoami"])
+      if (!options.dryRun) run("pnpm", ["whoami"])
     }
   }
 

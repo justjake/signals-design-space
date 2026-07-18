@@ -5,13 +5,7 @@ import { basename, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { readReleaseArtifacts } from "./publish-tarballs.mjs"
 
-const ignoredNames = new Set([
-  ".git",
-  "dist",
-  "node_modules",
-  "playwright-report",
-  "test-results",
-])
+const ignoredNames = new Set([".git", "dist", "node_modules"])
 
 function run(command, args, options = {}) {
   console.log(`$ ${command} ${args.join(" ")}`)
@@ -24,22 +18,19 @@ function run(command, args, options = {}) {
 function parseArgs(args) {
   const options = {
     artifactsDirectory: "",
-    full: false,
     keep: false,
     workDirectory: "",
   }
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]
-    if (arg === "--full") {
-      options.full = true
-    } else if (arg === "--keep") {
+    if (arg === "--keep") {
       options.keep = true
     } else if (arg === "--work-directory") {
       options.workDirectory = args[++index] ?? ""
       if (options.workDirectory === "") throw new Error("Missing --work-directory value")
     } else if (arg === "--help" || arg === "-h") {
       console.log(
-        "Usage: node scripts/verify-release-artifacts.mjs <artifacts-directory> [--full] [--keep] [--work-directory <path>]",
+        "Usage: node scripts/verify-release-artifacts.mjs <artifacts-directory> [--keep] [--work-directory <path>]",
       )
       return null
     } else if (options.artifactsDirectory === "") {
@@ -52,21 +43,18 @@ function parseArgs(args) {
   return options
 }
 
-async function copyPlayground(rootDirectory, workDirectory) {
-  const source = join(rootDirectory, "packages/react-signals-playground")
-  const destination = join(workDirectory, "packages/react-signals-playground")
-  await mkdir(join(workDirectory, "packages"), { recursive: true })
+export async function copyReleaseConsumer(rootDirectory, destination) {
+  const source = join(rootDirectory, "scripts/release-consumer")
+  await mkdir(destination, { recursive: true })
   await cp(source, destination, {
     recursive: true,
     filter: (sourcePath) => !ignoredNames.has(basename(sourcePath)),
   })
-  await cp(join(rootDirectory, "tsconfig.base.json"), join(workDirectory, "tsconfig.base.json"))
   return destination
 }
 
 export async function verifyReleaseArtifacts({
   artifactsDirectory,
-  full,
   keep,
   rootDirectory,
   workDirectory,
@@ -83,8 +71,8 @@ export async function verifyReleaseArtifacts({
   }
 
   try {
-    const playgroundDirectory = await copyPlayground(rootDirectory, consumerRoot)
-    const manifestPath = join(playgroundDirectory, "package.json")
+    const consumerDirectory = await copyReleaseConsumer(rootDirectory, consumerRoot)
+    const manifestPath = join(consumerDirectory, "package.json")
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
     for (const release of releases) {
       if (manifest.dependencies?.[release.name] === undefined) {
@@ -95,25 +83,10 @@ export async function verifyReleaseArtifacts({
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
     run("pnpm", ["install", "--ignore-workspace", "--no-frozen-lockfile"], {
-      cwd: playgroundDirectory,
+      cwd: consumerDirectory,
     })
-    run("pnpm", ["check"], { cwd: playgroundDirectory })
-
-    if (full) {
-      const installArgs =
-        process.platform === "linux"
-          ? ["exec", "playwright", "install", "--with-deps", "chromium"]
-          : ["exec", "playwright", "install", "chromium"]
-      run("pnpm", installArgs, { cwd: playgroundDirectory })
-      run("pnpm", ["battery"], {
-        cwd: playgroundDirectory,
-        env: { ...process.env, CI: "true" },
-      })
-      run("pnpm", ["devtools-e2e"], {
-        cwd: playgroundDirectory,
-        env: { ...process.env, CI: "true", DEVTOOLS_E2E_PRODUCTION: "1" },
-      })
-    }
+    run("pnpm", ["check"], { cwd: consumerDirectory })
+    run("pnpm", ["test"], { cwd: consumerDirectory })
 
     console.log(`Verified ${releases.length} packed packages.`)
   } finally {

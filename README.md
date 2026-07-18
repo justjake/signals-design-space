@@ -90,6 +90,6 @@ tarballs in dependency order. It chooses the versions and npm tags with the
 same policy as CI and skips versions already on npm. The release plan and
 tarballs are written under the ignored `build/` directory.
 
-Use `--dry-run` to invoke `npm publish --dry-run`. Use `--full` to add the
+Use `--dry-run` to invoke `pnpm publish --dry-run`. Use `--full` to add the
 Playwright battery and production devtools tests. A live publish requires a
 clean worktree unless `--allow-dirty` is passed.
