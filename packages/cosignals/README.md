@@ -20,6 +20,8 @@ What sets `cosignals` apart is how writes interact with React:
 - Async values as state: a computed can read a promise. The first load
   suspends through React Suspense; a refetch keeps showing the previous
   value while `isPending` reports that newer data is loading.
+- *Uses React internals*. If you depend on this library, you may not be
+  able to upgrade React.
 
 ```tsx
 import { createRoot } from "react-dom/client"
