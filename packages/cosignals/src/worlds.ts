@@ -285,6 +285,12 @@ export function appendUrgentIntent(
   kind: OpKind,
   payload: unknown,
 ): boolean {
+  if (rebaseLogs.size === 0) {
+    // No atom anywhere has a rebase log — the steady state for apps not
+    // running transitions. A size check is cheaper than hashing the atom
+    // through Map.get on every write.
+    return false
+  }
   const log = rebaseLogs.get(atom)
   if (log === undefined) {
     return false

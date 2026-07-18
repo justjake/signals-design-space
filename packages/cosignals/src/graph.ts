@@ -53,6 +53,23 @@ import type { DraftId, World } from "./worlds.ts"
  */
 export type EqualsFn<T> = (a: T, b: T) => boolean
 
+/**
+ * Compare two readings under a node's equality function.
+ *
+ * The default equality is Object.is, and `node.equals(a, b)` is then an
+ * indirect call through a function pointer loaded from the node — the
+ * single hottest line of recompute in CPU profiles. Testing the pointer
+ * against the builtin first lets the optimizer emit the comparison
+ * inline; custom equality functions take the plain call.
+ */
+const OBJECT_IS = Object.is
+function valuesEqual(equals: EqualsFn<unknown>, a: unknown, b: unknown): boolean {
+  if (equals === OBJECT_IS) {
+    return Object.is(a, b)
+  }
+  return equals(a, b)
+}
+
 declare const brand: unique symbol
 /**
  * Weak number brand. Plain numbers assign in, so creation and increment
@@ -715,6 +732,11 @@ function noteLifetimeTransition(node: ProducerNode): void {
 /** Settle observation state now (also called from tests). */
 export function flushLifetimeTransitions(): void {
   lifetimeFlushScheduled = false
+  if (pendingLifetimeAtoms.size === 0) {
+    // Callers loop through here (test flushes, the scheduled-effect drain);
+    // the copy below would allocate on every call even when idle.
+    return
+  }
   const atoms = [...pendingLifetimeAtoms]
   pendingLifetimeAtoms.clear()
   for (const atom of atoms) {
@@ -1385,39 +1407,56 @@ function drainLane(state: LaneState): void {
       const start = state.head
       const end = state.count
       state.head = end
-      // Phase 1: pull.
-      for (let i = start; i < end; i++) {
-        if (++guard > Limit.DrainRuns) {
-          const error = new Error("effect drain did not settle (cycle?)")
-          if (activeTracer !== null) {
-            activeTracer.emitEvent("flush-error", null, currentCause, { error, phase: "cycle" })
+      // Phase 1: pull. Pulls run detached from any ambient collector, the
+      // same detachment ensureFresh performs; hoisting it out of the loop
+      // spares every entry a save/restore pair. recompute saves and
+      // restores the consumer itself, so the null holds across entries.
+      const prevConsumer = activeConsumer
+      activeConsumer = null
+      try {
+        for (let i = start; i < end; i++) {
+          if (++guard > Limit.DrainRuns) {
+            const error = new Error("effect drain did not settle (cycle?)")
+            if (activeTracer !== null) {
+              activeTracer.emitEvent("flush-error", null, currentCause, { error, phase: "cycle" })
+            }
+            throw error
           }
-          throw error
+          const w = state.queue[i]!
+          const flags = w.flags
+          // Consume the queue membership so later writes can re-enqueue. The
+          // evaluated effect retains its staleness mark for the pull below.
+          w.flags = flags & ~Flag.Scheduled
+          if ((flags & Flag.Watched) === 0) {
+            state.queue[i] = undefined
+            continue
+          }
+          // Dispatch the pull inline. A proven-dirty effect (the common
+          // delivery: its direct dependency changed) recomputes without the
+          // validation preamble; a possibly-stale one takes the full
+          // validation walk. Clean means an already-superseded entry.
+          if ((flags & Flag.StaleDirty) !== 0 || w.value === UNINITIALIZED) {
+            recompute(w)
+          } else if ((flags & Flag.StaleMask) !== 0) {
+            ensureFreshAt(w, 0)
+          }
+          const cflags = w.flags
+          if ((cflags & Flag.AsyncError) !== 0) {
+            state.queue[i] = undefined
+            throw (w.throwable as ErrorBox).error
+          }
+          if ((cflags & Flag.AsyncSuspended) !== 0) {
+            // Parked: silent. Settlement invalidates and re-enqueues the effect.
+            state.queue[i] = undefined
+            continue
+          }
+          if (w.lastHandled !== UNINITIALIZED && valuesEqual(w.equals, w.value, w.lastHandled)) {
+            state.queue[i] = undefined
+            continue
+          }
         }
-        const w = state.queue[i]!
-        const flags = w.flags
-        // Consume the queue membership so later writes can re-enqueue. The
-        // evaluated effect retains its staleness mark for ensureFresh.
-        w.flags = flags & ~Flag.Scheduled
-        if ((flags & Flag.Watched) === 0) {
-          state.queue[i] = undefined
-          continue
-        }
-        ensureFresh(w)
-        const cflags = w.flags
-        if ((cflags & Flag.AsyncError) !== 0) {
-          state.queue[i] = undefined
-          throw (w.throwable as ErrorBox).error
-        }
-        if ((cflags & Flag.AsyncSuspended) !== 0) {
-          // Parked: silent. Settlement invalidates and re-enqueues the effect.
-          state.queue[i] = undefined
-          continue
-        }
-        if (w.lastHandled !== UNINITIALIZED && w.equals(w.value, w.lastHandled)) {
-          state.queue[i] = undefined
-          continue
-        }
+      } finally {
+        activeConsumer = prevConsumer
       }
       // Phase 2a: cleanups.
       for (let i = start; i < end; i++) {
@@ -1431,7 +1470,12 @@ function drainLane(state: LaneState): void {
           state.queue[i] = undefined
           continue
         }
-        runEffectCleanup(w)
+        // Guarded at the call site: most effects have neither a previous
+        // run's children nor a cleanup, and skipping the call keeps the
+        // common path in this loop.
+        if (w.children !== undefined || w.cleanup !== undefined) {
+          runEffectCleanup(w)
+        }
       }
       // Phase 2b: handlers, reading the settled value at run time.
       for (let i = start; i < end; i++) {
@@ -1632,7 +1676,7 @@ export function writeAtom<T>(
   // The equality check compares against the current base value, so a
   // write that arrives before the first read still runs the initializer.
   materializeAtom(atom)
-  if (atom.equals(atom.value as T, next)) {
+  if (valuesEqual(atom.equals as EqualsFn<unknown>, atom.value, next)) {
     return false
   }
   atom.value = next
@@ -1743,10 +1787,21 @@ function recompute(node: EvaluatedNode<unknown>): void {
   // it needs none of the park/error/span folding.
   let changed: boolean
   if (!parked && !hasError && (node.flags & Flag.AsyncMask) === 0) {
-    const prev = node.value
-    changed = prev === UNINITIALIZED || !node.equals(prev, value)
-    if (changed) {
+    if ((node.flags & Flag.WatchRunEffect) !== 0 && tracer === null) {
+      // An effect has no subscribers, so nothing ever compares against its
+      // changedAt reading; the delivery cutoff is the drain's comparison
+      // with the last handled value. Skipping the equality here keeps each
+      // delivery at one comparison instead of two. With a tracer attached,
+      // take the general arm so the recompute span reports a real
+      // `changed`.
       node.value = value
+      changed = true
+    } else {
+      const prev = node.value
+      changed = prev === UNINITIALIZED || !valuesEqual(node.equals, prev, value)
+      if (changed) {
+        node.value = value
+      }
     }
   } else {
     changed = finishCompute(node, parked, hasError, error, value)
