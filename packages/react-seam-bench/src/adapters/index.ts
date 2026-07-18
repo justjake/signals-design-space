@@ -11,8 +11,10 @@ import type { Contender } from "./types.js"
 const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
   cosignals: () => import("./cosignals.js"),
   "cosignals-arena": () => import("./cosignalsArena.js"),
+  "cosignals-reducer": () => import("./cosignalsReducer.js"),
   "alien-uses": () => import("./alien.js"),
   "dalien-uses": () => import("./dalien.js"),
+  "redux-toolkit": () => import("./reduxToolkit.js"),
   "baseline-context": () => import("./baselineContext.js"),
   "baseline-local": () => import("./baselineLocal.js"),
 }

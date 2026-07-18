@@ -28,6 +28,12 @@ const vendored = [
 ]
 
 export default {
+  // Pre-commit hook (.vite-hooks/pre-commit runs `vp staged`): format the
+  // files being committed. fmt.ignorePatterns below keeps vendored code
+  // untouched.
+  staged: {
+    "*": "vp fmt",
+  },
   test: {
     // `vp test` at the repo root runs exactly these suites, each with its
     // own existing vitest.config.ts (vitest 4 projects). Per-package

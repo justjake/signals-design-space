@@ -22,9 +22,11 @@ export interface CellStore {
   /** Teardown between scenarios. */
   dispose(): void
   /**
-   * Only the context baseline sets this: its cell values live in a
-   * useReducer inside this component, so scenarios must mount it above the
-   * cells. Contenders whose stores live outside React omit it.
+   * Set by contenders whose reads need a component mounted above the
+   * cells: the context baseline (its cell values live in a useReducer
+   * inside this component), redux-toolkit (react-redux's store context),
+   * and the cosignals contenders (CosignalsProvider). Contenders whose
+   * hooks reach their store directly omit it.
    */
   Provider?: ComponentType<{ children: ReactNode }>
 }

@@ -6,8 +6,10 @@
 export const contenderNames = [
   "cosignals",
   "cosignals-arena",
+  "cosignals-reducer",
   "alien-uses",
   "dalien-uses",
+  "redux-toolkit",
   "baseline-context",
   "baseline-local",
 ] as const

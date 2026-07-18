@@ -13,13 +13,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@reduxjs/toolkit": "^2.12.0",
     "alien-signals": "link:../../vendor/alien-signals",
     "cosignals": "workspace:*",
     "cosignals-arena": "workspace:*",
     "dalien-signals": "link:../dalien-signals",
     "jsdom": "^26.1.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-redux": "^9.3.0"
   },
   "devDependencies": {
     "@types/node": "24.13.2",
