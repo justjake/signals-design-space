@@ -527,9 +527,9 @@ combine different workloads and are not application performance predictions.
   [alien-signals](https://github.com/stackblitz/alien-signals), the basis
   of the fast linked-list signals graph
 - [Ryan Carniato](https://twitter.com/RyanCarniato) and
-  [the SolidJS](https://github.com/solidjs) team for
+  [the SolidJS team](https://github.com/orgs/solidjs/people) for
   [SolidJS 2](https://github.com/solidjs/solid), which inspired this
-  package's API shape and support for async
+  package's API shape and support for async.
 - [Milo M](https://twitter.com/milomg__) for
   [reactively](https://github.com/milomg/reactively) and the
   [js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark).
