@@ -117,7 +117,6 @@ export function LogView({
     compute: true,
     render: true,
     effect: true,
-    internals: false,
     hot: backend.hotMode?.() ?? false,
   }))
   const [paused, setPaused] = useState<LogRow[] | undefined>(undefined)

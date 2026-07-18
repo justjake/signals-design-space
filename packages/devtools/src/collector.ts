@@ -90,6 +90,13 @@ export class Collector implements Backend {
   private readonly listeners = new Set<() => void>()
   private t0 = 0
   private flushQueued = false
+  /**
+   * Id of the most recent write/notify event, maintained as events are
+   * recorded. Kept incrementally because hot mode asks for it on every
+   * uncaused hot step — scanning the ring there would walk past the very
+   * hot events filling it.
+   */
+  private latestCauseId: EventId = 0 as EventId
 
   constructor(provider: NodeProvider, opts?: { capacity?: number; now?: () => number }) {
     this.provider = provider
@@ -133,6 +140,8 @@ export class Collector implements Backend {
       this.ringHead = (this.ringHead + 1) % this.capacity
     }
     this.byId.set(id, evt)
+    const cls = kindClass(kind)
+    if (cls === "write" || cls === "notify") this.latestCauseId = id
     if (node !== undefined && nodeKind !== undefined) {
       let st = this.nodes.get(node)
       if (st === undefined) {
@@ -153,7 +162,6 @@ export class Collector implements Backend {
       }
       st.lastEventId = id
       st.lastKind = kind
-      const cls = kindClass(kind)
       if (cls === "compute") st.recomputes++
       if (cls === "write") st.changes++
       if (kind === "check") st.checks++
@@ -233,10 +241,12 @@ export class Collector implements Backend {
 
   /**
    * The most recent state-change event (a write or a notify), so the render
-   * observer can root a cascade at what triggered the pass.
+   * observer and uncaused hot steps can root a cascade at what triggered the
+   * pass. May name an event already evicted from the ring; cause-chain walks
+   * treat a missing id as the end of the chain.
    */
   latestSignalCause(): EventId {
-    return this.events({ classes: ["write", "notify"] }, 1)[0]?.id ?? (0 as EventId)
+    return this.latestCauseId
   }
 
   private scheduleFlush(): void {

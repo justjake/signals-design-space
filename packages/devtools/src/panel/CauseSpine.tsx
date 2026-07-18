@@ -25,7 +25,7 @@ export function EventRef({
   const inner = (
     <>
       <span className={`chip ${row.cls}`}>{row.kind}</span>
-      {showName && row.name !== null ? <span className="lname">{row.name}</span> : null}
+      {showName && row.name !== undefined ? <span className="lname">{row.name}</span> : null}
       <span className="eid">{fmtId("event", row.id)}</span>
     </>
   )

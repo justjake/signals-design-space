@@ -452,7 +452,7 @@ export function attachEngineDevtools(
             void collector.record(
               step,
               register(node),
-              ((cause || collector.latestSignalCause()) ?? 0) as EventId,
+              (cause || collector.latestSignalCause()) as EventId,
               kindOf(node),
               {},
             )

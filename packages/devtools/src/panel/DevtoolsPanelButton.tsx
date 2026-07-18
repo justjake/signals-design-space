@@ -234,8 +234,10 @@ function Grip({ dock, onResize }: { dock: "right" | "bottom"; onResize: (delta: 
       onPointerMove={(e) => {
         if (last.current === undefined) return
         const cur = dock === "right" ? e.clientX : e.clientY
-        // Inner edge: dragging toward the page grows the pane.
-        onResize(dock === "right" ? last.current - cur : last.current - cur)
+        // Inner edge: dragging toward the page center grows the pane. The
+        // delta sign is the same for both docks — the grip is the left edge
+        // when docked right and the top edge when docked bottom.
+        onResize(last.current - cur)
         last.current = cur
       }}
       onPointerUp={(e) => {

@@ -11,10 +11,11 @@ import { kindVar } from "./kind-style.ts"
 import { flashClass, useFlashOnChange } from "./useFlash.ts"
 
 /**
- * The "+ metrics" opt-in node-list columns (DESIGN §6 progressive disclosure);
- * clicking a header ranks the listed window by that metric, descending.
- * DESIGN §6's fourth column, "downstream cost", is a follow-on: it needs the
- * trace-ring chain-walk attribution of DESIGN §4, which nothing computes yet.
+ * The "+ metrics" opt-in node-list columns, hidden by default so the list
+ * stays scannable; clicking a header ranks the listed window by that
+ * metric, descending. A fourth column, "downstream cost" (time spent in
+ * work a node's changes caused), is a follow-on: it needs per-event cost
+ * attribution rolled up along cause chains, which nothing computes yet.
  */
 type MetricKey = "recomputes" | "selfUs" | "unchanged"
 const METRIC_COLS: { key: MetricKey; label: string; tip: string }[] = [
