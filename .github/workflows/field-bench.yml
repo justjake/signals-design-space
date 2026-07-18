@@ -71,7 +71,7 @@ jobs:
         id: list
         run: |
           list=$(sed -n "/adapterNames = \[/,/\] as const/p" harness/adapters/index.ts \
-            | grep -oE "'[a-z0-9-]+'" | tr -d "'")
+            | grep -oE "[\"'][a-z0-9-]+[\"']" | tr -d "\"'")
           test -n "$list" # registry parse must never silently produce an empty matrix
           json=$(printf '%s\n' "$list" | jq -R . | jq -sc .)
           csv=$(printf '%s\n' "$list" | paste -sd, -)
