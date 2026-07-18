@@ -1,8 +1,7 @@
 # Effects: the split primitive, schedules, and delivery
 
 This document is the design for the effect subsystem: what an effect is,
-when it runs, and why the engine validates it the way it does. It also
-records what this design replaced, for readers migrating old code.
+when it runs, and why the engine validates it the way it does.
 
 ## The primitive
 
@@ -192,49 +191,3 @@ machinery.
 
 - No provider is required: the hooks observe base state, which needs no
   root channel. StrictMode's double mount nets one live effect.
-
-## What this replaced
-
-- `effect(fn)`, the tracked-and-side-effecting single body, and with it
-  the entire second validation path: watcher dependency lists, the
-  watcher's validation watermark and its pre-run stamping discipline, and
-  the flush's per-watcher dependency confirmation loop. One `EffectNode`
-  now stores the effect's dynamic dependencies and shares the computed
-  evaluator. Pinned watchers are only used by render subscriptions; each
-  holds its observed node and never re-tracks.
-- `useSignalEffect`'s re-render channel: the force reducer, the
-  version/rerun bookkeeping, and the scheduled-effect handshake
-  (`WatchSchedule`) that asked React to re-render a component purely to
-  reach its phase effect.
-- Committed-view effects and committed views (`committed(x, container)`,
-  then `committed(x)` and `useCommitted` entirely, the twin
-  committed-view watcher and its certificate-edge refresh). The per-root
-  machinery existed to observe the window where a transition has
-  committed on one React root but not yet on another; on a single root
-  that window is unobservable — the commit marker retires the draft
-  before any descendant layout effect runs, so the committed view is
-  always base state. What remained after that cut was a shell over base
-  reads with no ecosystem precedent (React and Solid keep the committed
-  view implicit), so the query was removed outright. Render soundness
-  across multiple roots is unaffected (per-root render snapshots and
-  retirement-waits-for-all-roots remain); during multi-root commit skew,
-  effects and ambient reads observe values at retirement rather than per
-  root.
-
-## Migration sketch (for posterity)
-
-Two units, engine-first because the old hook machinery reads per-root
-committed state:
-
-1. Engine + React effect rewrite: split primitive, lanes, two-phase
-   drain, hook rewrite, pump installation, adapter shims
-   (benchmark-harness `effect(fn)` becomes compute-with-side-effects plus
-   a no-op handler and `equals: () => false` — sound because harness
-   bodies read but never write signals).
-2. Committed-view removal: first the per-root bookkeeping and the
-   provider `container` plumbing, then `committed()`/`useCommitted`
-   outright.
-
-Tests pin the new contract rather than porting old pins: value cutoff
-instead of conservative re-runs, lane timing, drain-sourced errors, and
-provider-free operation.

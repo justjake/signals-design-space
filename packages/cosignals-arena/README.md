@@ -1,10 +1,12 @@
 # cosignals-arena
 
-> Historical naming: `signals-royale-fx2-dalien` is now named `cosignals-arena`.
-
 A reactive state engine with first-class support for React concurrent
 rendering, whose graph lives in typed-array records instead of linked JS
-objects. It is two layers:
+objects. It is the data-oriented build of
+[cosignals](https://www.npmjs.com/package/cosignals): same public API,
+same tests, different memory layout (see
+[Data-oriented design](#data-oriented-design) for what that buys and
+costs). It is two layers:
 
 - a conventional signal graph — writable atoms, lazy cached computeds,
   effects, batching — with equality cutoff and batched delivery. Node and
@@ -17,18 +19,19 @@ objects. It is two layers:
 
 The root entry (`cosignals-arena`) is React-free and dependency-free.
 React bindings ship as a subpath — `cosignals-arena/react` — with
-`react`/`react-dom` (>= 19) as peer dependencies; they run on stock React,
-no patches or build flags. The npm package contains ESM JavaScript and
-TypeScript declarations compiled from this repository's TypeScript source.
+`react`/`react-dom` 18.2 or later as peer dependencies; they run on stock
+React, no patches or build flags. The npm package contains ESM JavaScript
+and TypeScript declarations compiled from this repository's TypeScript
+source.
 
 ## Core API
 
 ```ts
-import { createAtom, createComputed, effect, batch, untracked } from "cosignals-arena"
+import { createAtom, createComputed, createEffect, batch, untrack } from "cosignals-arena"
 
 const count = createAtom(1)
 const double = createComputed(() => count.get() * 2)
-const stop = effect(
+const stop = createEffect(
   () => double.get(), // compute: tracked, pure
   (value) => console.log(value), // handler: untracked side effect
 ) // the handler runs now, then when the settled value changes
@@ -61,9 +64,9 @@ stop()
   `shallowEquals` (exported; an explicit `equals` overrides):
 
   ```ts
-  effect(query, (q) => syncUrl(q))
-  effect([user, theme], ([u, t]) => paintHeader(u, t))
-  effect({ user, theme }, ({ user, theme }) => paintHeader(user, theme))
+  createEffect(query, (q) => syncUrl(q))
+  createEffect([user, theme], ([u, t]) => paintHeader(u, t))
+  createEffect({ user, theme }, ({ user, theme }) => paintHeader(user, theme))
   ```
 
   The handler runs untracked with the source's settled `(value, previous)`
@@ -76,7 +79,7 @@ stop()
   calling the handler. `effectScope(fn)` collects every effect created inside
   and returns one disposer.
 
-- **Schedules:** `effect(compute, handler, { schedule })` picks when
+- **Schedules:** `createEffect(compute, handler, { schedule })` picks when
   signal-triggered re-runs drain: `'sync'` (default — inside the flush
   when the write settles), `'useLayoutEffect'`, or `'useEffect'` — named
   for the React phases that run them. With a provider mounted, the
@@ -213,6 +216,8 @@ initializers do not run — the installed value satisfies the first read.
 ## Causality tracing
 
 ```ts
+import { attachTracer } from "cosignals-arena/debug"
+
 const t = attachTracer({ capacity: 4096 })
 // ... run your app ...
 t.whyLastDelivery(node) // ["#42 deliver", "#41 write \"count\"", ...]
@@ -247,21 +252,58 @@ capacity and overflow is counted, never silent.
 
 Leaks are bugs here, not optimizations.
 
-## Implementation notes
+## Data-oriented design
 
-This package is a data-oriented re-implementation of the same public
-contract as its object-graph sibling, built to measure what typed-array
-records buy and cost on a real engine. EXPERIMENT.md records the design,
-the optimization rounds, and the measured frontier; `docs/two-tier-graph.md`
-covers the watched/unwatched graph mechanics and `docs/effects.md` the
-effect subsystem.
+This package is the data-oriented build of
+[cosignals](https://www.npmjs.com/package/cosignals): the same public
+contract and test suite, re-implemented so the reactive graph lives in
+flat typed arrays instead of linked JS objects.
+
+What that means concretely:
+
+- Every node and dependency edge is a fixed-size record inside one shared
+  `Int32Array`; clock readings live in `Float64Array` views over the same
+  buffer. A "reference" between records is a numeric id, not an object
+  pointer.
+- The hot paths — invalidation waves, cache validation, effect drains —
+  walk integers through contiguous memory instead of chasing pointers
+  through the heap. That is the performance bet: better cache locality,
+  fewer allocations, less garbage-collector pressure.
+- The public handles (`Atom`, `Computed`) stay ordinary objects, so the
+  API feels identical to cosignals; only the engine underneath changes.
+
+What it costs:
+
+- **Harder to understand.** The engine manages its own memory: a record
+  pool, free lists, a pin table, and `FinalizationRegistry`-driven
+  reclamation replace "let the GC handle it". Reading `src/graph.ts`
+  requires holding the record layout in your head.
+- **Memory limitations.** The record arena has a fixed capacity
+  (2,097,152 records; the backing buffer reserves address space up front
+  and the OS commits pages on first touch). Creating signals beyond it
+  throws `RangeError: cosignals-arena record arena exhausted` — there is
+  deliberately no growth path, because growth would cost the hot paths
+  their constant base pointer. A dropped computed's record is reclaimed
+  and reused, but the ceiling is real: an app that creates unbounded
+  signals will hit it.
+- One reclamation caveat: a linked dependency's handle is pinned by the
+  engine, and a pinned handle retains its compute closure's whole scope
+  chain. Build long computed chains through small factory functions (each
+  compute's scope containing only its own inputs) rather than one shared
+  scope that also holds handles from higher in the chain.
+
+If you are unsure which package to use, start with
+[cosignals](https://www.npmjs.com/package/cosignals) and reach for the
+arena when profiling says the graph itself is hot. EXPERIMENT.md records
+the design, the optimization rounds, and the measured frontier;
+`docs/two-tier-graph.md` covers the watched/unwatched graph mechanics and
+`docs/effects.md` the effect subsystem.
 
 # React bindings: `cosignals-arena/react`
 
 Bindings for stock React — no patches, no build flags, no globals.
-Developed and tested against the React 19.3 canary
-(`19.3.0-canary-e71a6393-20260702`); any React >= 19 satisfies the peer
-range.
+Requires `react` and `react-dom` 18.2 or later as peer dependencies;
+the suite runs against both React 19 and a pinned React 18.2.
 
 ## The design premise: React decides what each render sees
 
@@ -275,11 +317,11 @@ at sync priority, no matter where the write came from).
 These bindings invert the relationship. The engine never decides what a
 render pass may see; React does:
 
-- `SignalsFrameworkProvider` connects a React subtree to the signals runtime;
-  the packaged `createRoot` wrapper installs one around the root. Providers
-  cannot be nested. A provider's only state is a list of transition draft ids
-  managed by `useReducer`. Its context value is identity-stable, so publishing
-  the connection never re-renders consumers.
+- `CosignalsProvider` connects a React subtree to the signals runtime;
+  render one at the top of each root. Providers cannot be nested. A
+  provider's only state is a list of transition draft ids managed by
+  `useReducer`. Its context value is identity-stable, so publishing the
+  connection never re-renders consumers.
 - A transition write opens an engine draft. The draft id is dispatched from
   inside `React.startTransition` to each root connection and, for each written
   atom, to exactly the subscribers of that atom (and of computeds over
@@ -298,10 +340,11 @@ render pass may see; React does:
   subscriber, and the hook dispatches into its own reducer only if
   re-rendering would actually show the committed tree something different
   (a per-subscriber compare — equal resolutions, foreign transitions, and
-  already-delivered folds all stay silent). There is no
-  `useSyncExternalStore` underneath and no store snapshot: subscriptions
-  attach in effects, and the gap between rendering and attaching is closed
-  by a commit-time repair.
+  already-delivered folds all stay silent). Store changes are never
+  escalated to sync priority: subscriptions attach in effects, the gap
+  between rendering and attaching is closed by a commit-time repair, and
+  a subscription-less `useSyncExternalStore` call supplies only React's
+  own pre-commit consistency check.
 
 ### Writes re-render with exactly `useState`'s urgency
 
@@ -330,14 +373,12 @@ subtree, another root's render, an interleaved flush) falls back to BASE
 rather than consuming a stale snapshot or leaking live drafts into an
 urgent frame.
 
-Every provider-dependent hook (`useValue`, `useComputed`, and
-`useIsPending`) requires a `SignalsFrameworkProvider` above it and throws
+Every provider-dependent hook (`useSignal`, `useComputed`, and
+`useIsPending`) requires a `CosignalsProvider` above it and throws
 without one. The provider is the channel that delivers transitions to its
-subtree, so a subscriber outside one cannot see them. Create roots with
-`wrapCreateRoot(createRoot)` or wrap the tree in
-`<SignalsFrameworkProvider>`. `useSignalEffect` and
-`useSignalLayoutEffect` observe base state, which needs no root channel,
-so they work without a provider — as do the plain function reads
+subtree, so a subscriber outside one cannot see them. `useSignalEffect`
+and `useSignalLayoutEffect` observe base state, which needs no root
+channel, so they work without a provider — as do the plain function reads
 (`latest`, `isPending`).
 
 ## Out of scope: DOM-mutation attribution
@@ -356,9 +397,8 @@ does not offer a DOM mutation window.
 ```tsx
 import { createRoot } from "react-dom/client"
 import {
-  registerReactSignals,
-  wrapCreateRoot,
-  useValue,
+  CosignalsProvider,
+  useSignal,
   useComputed,
   useSignalEffect,
   useSignalLayoutEffect,
@@ -369,13 +409,10 @@ import {
 } from "cosignals-arena/react"
 import { createAtom } from "cosignals-arena"
 
-registerReactSignals() // stock React; idempotent
-
-const root = wrapCreateRoot(createRoot)(container)
 const count = createAtom(0)
 
 function Counter() {
-  const n = useValue(count) // what this render pass sees
+  const n = useSignal(count) // what this render pass sees
   const pending = useIsPending(count) // newer data behind the screen?
   return (
     <button onClick={() => count.set(n + 1)}>
@@ -385,10 +422,16 @@ function Counter() {
   )
 }
 
+createRoot(container).render(
+  <CosignalsProvider>
+    <Counter />
+  </CosignalsProvider>,
+)
+
 startSignalTransition(() => count.update((x) => x * 2)) // draft until commit
 ```
 
-- `useValue(x)` — subscribing read; resolves what the current render pass
+- `useSignal(x)` — subscribing read; resolves what the current render pass
   sees; suspends by
   handing React the engine's stable pending promise (a transition holds; an
   urgent render with settled history serves stale instead — no fallback
@@ -424,3 +467,15 @@ startSignalTransition(() => count.update((x) => x * 2)) // draft until commit
 - Writing during render throws.
 - Multiple roots are supported; one transition can span them, and each
   root's render passes stay internally consistent.
+
+## See also
+
+- [cosignals](https://www.npmjs.com/package/cosignals) — the object-graph
+  original: the same API and semantics on plain JS objects. Easier to read
+  and debug, no arena capacity ceiling. Start there; reach for the arena
+  when profiling says the graph itself is hot.
+- [dalien-signals](https://www.npmjs.com/package/dalien-signals) — a fork
+  of [alien-signals](https://www.npmjs.com/package/alien-signals) with a
+  data-oriented memory layout. Probably the fastest signals library for
+  JavaScript, but not React-concurrent compatible: it has no equivalent of
+  the transition drafts these packages exist for.

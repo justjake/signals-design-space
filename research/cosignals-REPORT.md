@@ -652,7 +652,7 @@ node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
 
 The watched tier now runs the full alien-signals edge discipline; the
 unwatched tier keeps stamp-pull validation. Design and as-built deltas:
-`docs/two-tier-graph.md` (authoritative — mechanics, invariants, the three
+`research/cosignals-two-tier-graph.md` (authoritative — mechanics, invariants, the three
 deviations found while landing, and the §11 DerivedState merge). Summary:
 
 - **Promote validates** (fixes two verified defects): the first observer's
@@ -738,7 +738,7 @@ refetches with a user nonce and pass unchanged against both the pre- and
 post-deletion engine. Structural dividend: evaluation is now the only source
 of dependency edges, so "a derived's deps list is exactly what its last
 evaluation read, in read order" is unconditional — a dev-gated assertion
-after every trim enforces it (docs/two-tier-graph.md), and the stamp-0
+after every trim enforces it (research/cosignals-two-tier-graph.md), and the stamp-0
 adopted-edge class exits the dedup probe's domain. Gates: tsc clean;
 274 passed (278 − 4 refresh-only tests); oracle 3 passed at 1200 seeds;
 battery 23 passed / 2 failed — scenario 16 DOM-mutation (pre-existing
@@ -957,6 +957,6 @@ uSES: "expected '1' to be '0'"). Guards: mixed signal+setState atomicity
 lazy-chain/cutoff/net-revert watermark pins. The net-revert restoration was
 later removed after a mid-batch read proved that moving an atom's reading
 backward could preserve an intermediate computed cache. Full design argument in
-docs/final-unit.md. Gates: tsc clean; 290 tests; 1200-seed oracle twice
+packages/cosignals-arena/docs/final-unit.md. Gates: tsc clean; 290 tests; 1200-seed oracle twice
 (deterministic-green, subscriber model mirrors the notify predicate);
 battery at the pinned 23/2/1.

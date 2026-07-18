@@ -669,3 +669,16 @@ engine works — including how the React bindings register themselves
 when `cosignals/react` is imported? [INTERNALS.md](./INTERNALS.md)
 covers the architecture and the `cosignals/unstable` and
 `cosignals/debug` entry points.
+
+## See also
+
+- [cosignals-arena](https://www.npmjs.com/package/cosignals-arena) — the
+  data-oriented build of this library: the same API and semantics, with
+  the reactive graph stored in typed-array records instead of JS objects.
+  Probably faster, but harder to understand and it comes with memory
+  limitations (a fixed-capacity record arena).
+- [dalien-signals](https://www.npmjs.com/package/dalien-signals) — a fork
+  of [alien-signals](https://www.npmjs.com/package/alien-signals) with a
+  data-oriented memory layout. Probably the fastest signals library for
+  JavaScript, but not React-concurrent compatible: it has no equivalent of
+  the transition support this library exists for.

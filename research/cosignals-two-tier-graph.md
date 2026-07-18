@@ -553,7 +553,7 @@ Landed evidence (5-run medians, pre-change measured on the same session's
 stash of `src/` — coarse floors, not pins): quiet reads 4.28 vs 4.18 ms/1e6
 (parity), deep-chain 1k write+pull 7.44 vs 8.51 ms/200 (−13%), fanout-200
 writes 18.66 vs 20.74 ms/2000 (−10%), promote/demote churn 35.7 vs 36.6
-ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in REPORT.md
+ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in cosignals-REPORT.md
 (transition p95 ~10.0 ms, mount-5000 median 57 ms vs baseline 69 ms).
 
 ## 10. Risks
@@ -734,7 +734,7 @@ document's sections above describe the code at landing time. The mapping:
 A later round replaced the single-body effect with a compute + handler
 pair and moved watcher validation to drain sites; sections above describe
 the code at their own landing time. The mapping (full design:
-docs/effects.md):
+packages/cosignals/docs/effects.md):
 
 - `runWatcher`'s per-watcher validation loop is gone. One dynamically
   tracked `EffectNode` owns both its dependencies and delivery state while
