@@ -130,7 +130,7 @@ svg.push(
 // bars
 frameworks.forEach((f, i) => {
   const y = TOP + i * ROW + (ROW - BAR) / 2
-  const isOurs = f.fw === "cosignals"
+  const isOurs = f.fw === "cosignals" || f.fw === "cosignals-arena"
   const isDalien = f.fw === "dalien-uses"
   svg.push(
     `<text x="${LABEL_W - 8}" y="${y + BAR / 2 + 4}" font-size="12" text-anchor="end" fill="${INK}"${isOurs ? ' font-weight="700"' : isDalien ? ' font-weight="600"' : ""}>${esc(f.fw)}</text>`,
