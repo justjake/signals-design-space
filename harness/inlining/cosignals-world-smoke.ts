@@ -1,4 +1,4 @@
-import { createAtom, createComputed } from "../../packages/cosignals/src/index.ts"
+import { createAtom, createComputed } from "../../packages/cosignals/src/core.ts"
 import { withWorld } from "../../packages/cosignals/src/graph.ts"
 import {
   discardDraft,

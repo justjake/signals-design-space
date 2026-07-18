@@ -4,7 +4,7 @@ import {
   createEffect,
   flushScheduledEffects,
   type Computed,
-} from "../../packages/cosignals/src/index.ts"
+} from "../../packages/cosignals/src/core.ts"
 import { withWorld } from "../../packages/cosignals/src/graph.ts"
 import { BASE_WORLD } from "../../packages/cosignals/src/worlds.ts"
 
