@@ -22,7 +22,11 @@ import type { Scenario } from "./scenario.js"
 import { drain, p95, renderCells, sleep, until } from "./support.js"
 
 const N = 2000
-const URGENT_UPDATES = 30
+// 100 samples so a single-click stall (a blocking store's whole cost lands
+// on one click) sits above the p95 cutoff yet cannot make the p95 itself;
+// contenders are separated by how many clicks they slow down, not by one
+// unlucky sample. The worst single click still reports as urgentMaxMs.
+const URGENT_UPDATES = 100
 const URGENT_INTERVAL_MS = 16
 
 /**

@@ -13,7 +13,7 @@ Three scenarios, each one CSV row per contender:
 | test         | shape                                                                                                                               | time column                              |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | `fanout`     | 5000 independent cells, one component each; 200 single-cell writes from outside React                                               | median write-to-commit latency (ms)      |
-| `transition` | 2000 cells rewritten inside `React.startTransition` while an unrelated urgent `useState` input updates 30 times at ~16 ms intervals | p95 urgent update-to-commit latency (ms) |
+| `transition` | 2000 cells rewritten inside `React.startTransition` while an unrelated urgent `useState` input updates 100 times at ~16 ms intervals | p95 urgent update-to-commit latency (ms) |
 | `mount`      | mount + first commit of the 5000-cell tree, 5 fresh roots                                                                           | median mount time (ms)                   |
 
 Secondary stats (cell re-renders per write, transition completion time,
