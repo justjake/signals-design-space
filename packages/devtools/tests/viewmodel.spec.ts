@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { createAtom, createComputed, createEffect } from "cosignals"
+import { createAtom, createComputed, createEffect } from "cosignals/core"
 import { attachCosignalsDevtools } from "../src/cosignals.ts"
 import { inspectorModel, logRows, nodeRows } from "../src/panel/viewmodel.ts"
 

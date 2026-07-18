@@ -2,19 +2,17 @@
 import { createElement, useRef, type ReactNode } from "react"
 import { createRoot as createReactRoot } from "react-dom/client"
 import {
+  CosignalsProvider,
   createAtom as createCosignalsAtom,
   createComputed as createCosignalsComputed,
-  type Atom,
-  type Computed,
-} from "cosignals"
-import {
-  CosignalsProvider,
   registerReactSignals,
   startSignalTransition,
+  type Atom,
+  type Computed,
   useComputed,
   useSignalEffect as useCosignalsSignalEffect,
   useSignal as useCosignalsSignal,
-} from "cosignals/react"
+} from "cosignals"
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from "./interface"
 
 export const name = "cosignals"

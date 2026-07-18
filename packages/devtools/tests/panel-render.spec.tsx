@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react"
 import { describe, expect, it } from "vitest"
-import { createAtom, createComputed, createEffect } from "cosignals"
+import { createAtom, createComputed, createEffect } from "cosignals/core"
 import { attachCosignalsDevtools } from "../src/cosignals.ts"
 import { mountDevtools } from "../src/panel/mount.tsx"
 

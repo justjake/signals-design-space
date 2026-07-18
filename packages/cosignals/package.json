@@ -29,7 +29,9 @@
   ],
   "type": "module",
   "sideEffects": [
+    "./src/index.ts",
     "./src/react/index.ts",
+    "./dist/index.js",
     "./dist/react/index.js"
   ],
   "files": [
@@ -40,6 +42,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core.ts",
     "./ssr": "./src/ssr.ts",
     "./react": "./src/react/index.ts",
     "./debug": "./src/debug/index.ts",
@@ -54,6 +57,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./core": {
+        "types": "./dist/core.d.ts",
+        "default": "./dist/core.js"
       },
       "./ssr": {
         "types": "./dist/ssr.d.ts",

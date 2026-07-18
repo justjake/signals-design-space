@@ -10,13 +10,15 @@
  * CosignalsProvider is mandatory, so this contender sets Provider.
  * registerReactSignals() is idempotent and process-wide.
  */
-import { batch, createAtom, type Atom } from "cosignals"
 import {
-  registerReactSignals,
+  batch,
   CosignalsProvider,
+  createAtom,
+  registerReactSignals,
   startSignalTransition,
+  type Atom,
   useSignal,
-} from "cosignals/react"
+} from "cosignals"
 import type { Contender } from "./types.js"
 
 registerReactSignals()

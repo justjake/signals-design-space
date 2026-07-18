@@ -26,8 +26,13 @@ support for transitions and concurrent rendering. See
 
 ```tsx
 import { createRoot } from "react-dom/client"
-import { createAtom, createComputed } from "cosignals"
-import { CosignalsProvider, useSignal, useSignalEffect } from "cosignals/react"
+import {
+  CosignalsProvider,
+  createAtom,
+  createComputed,
+  useSignal,
+  useSignalEffect,
+} from "cosignals"
 
 // Signals can live outside the tree
 // and be shared directly or through context.
@@ -72,12 +77,12 @@ yarn add cosignals
 bun add cosignals
 ```
 
-`cosignals/react` requires `react` and `react-dom` 18.2 or later as peer
-dependencies. You must render `<CosignalsProvider>` as your React root:
+`cosignals` requires `react` and `react-dom` 18.2 or later as peer dependencies.
+You must render `<CosignalsProvider>` as your React root:
 
 ```tsx
 import { createRoot } from "react-dom/client"
-import { CosignalsProvider } from "cosignals/react"
+import { CosignalsProvider } from "cosignals"
 import { App } from "./App"
 
 createRoot(document.getElementById("root")!).render(
@@ -97,12 +102,12 @@ Configure your linter to check [signal effects](#usesignaleffect):
 
 Available modules:
 
-- `cosignals`: React-free core for creating signals, deriving values, reacting
-  to changes, and batching writes: `createAtom`, `createComputed`,
-  `createEffect`, `batch`, `latest`, `isPending`, `shallowEquals`.
+- `cosignals`: the core signals API, React hooks, and
+  `CosignalsProvider`. Importing it registers the React integration.
+- `cosignals/core`: the React-free signals API for creating signals, deriving
+  values, reacting to changes, and batching writes.
 - `cosignals/react`: hooks and the provider that connect signals to
-  components: `useSignal`, `useComputed`, `useSignalEffect`,
-  `useSignalLayoutEffect`, `useSignalTransition`, `CosignalsProvider`.
+  components. This subpath remains available for split imports.
 - `cosignals/ssr`: serialize and restore atom state across server and
   client. _Experimental_.
 - `cosignals/testing`: reset engine state between tests.
