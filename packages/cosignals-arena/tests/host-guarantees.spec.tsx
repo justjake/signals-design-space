@@ -182,7 +182,9 @@ describe("registration", () => {
     g.IS_REACT_ACT_ENVIRONMENT = false
     try {
       a.set(1)
-      await tick()
+      // React schedules its own render pass; on a loaded machine the commit
+      // can take more than one macrotask, so poll rather than racing it.
+      for (let i = 0; i < 50 && seen.length < 2; i++) await tick()
       // The handler ran in the commit's layout phase: the DOM already
       // shows the value the same write rendered. A free-running microtask
       // pump would log [1, '0'] — the effect a frame ahead of React.
