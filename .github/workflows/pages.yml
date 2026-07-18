@@ -1,16 +1,9 @@
 # Builds the react-signals-playground explainer site and publishes it to
 # GitHub Pages on every push to main.
 #
-# The site's stress field and in-page benchmarks import adapter source from
-# the milomg-reactivity-benchmark submodule, whose own pnpm workspace carries
-# file: dependencies back into this repo:
-#   - alien-signals   -> vendor/alien-signals — must be BUILT before the
-#                        submodule install, since pnpm copies file: packages
-#                        at install time and esm/ is a local build artifact
-#   - dalien-signals  -> packages/dalien-signals — same: esm/ is a build
-#                        artifact, so build before the submodule install
-#   - cosignals, cosignals-arena -> workspace packages whose dev exports
-#                        point at src/*.ts, so no build step needed
+# Toolchain, submodules, and workspace installs come from the shared
+# .github/actions/site-deps composite action (also used by verify.yml's
+# browser battery job).
 name: pages
 
 on:
@@ -41,45 +34,7 @@ jobs:
         with:
           submodules: false
 
-      - name: Init site submodules (targeted)
-        run: git submodule update --init milomg-reactivity-benchmark vendor/alien-signals packages/dalien-signals
-
-      # Node and pnpm come from the repo's committed toolchain pins
-      # (mise.toml, checksummed by mise.lock). Only those two: the pins
-      # also carry bun and the vite-plus CLI, which this job never runs.
-      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
-        with:
-          install_args: node pnpm
-
-      # esm/ is a local build artifact; it must exist before the benchmark
-      # submodule's install copies the package via its file: dependency.
-      - name: Build upstream alien-signals
-        working-directory: vendor/alien-signals
-        run: |
-          pnpm install --ignore-workspace --frozen-lockfile
-          pnpm run build
-
-      - name: Install (root, filtered to the site closure)
-        run: pnpm install --frozen-lockfile --filter "react-signals-playground..."
-
-      # Same as alien-signals: dalien's esm/ must exist before the benchmark
-      # submodule install below. Install against dalien's own lockfile
-      # (--ignore-workspace): build.js needs the TypeScript compiler API that
-      # its lockfile pins, while the root lockfile resolves `typescript:
-      # latest` to TS 7, which dropped getParsedCommandLineOfConfigFile.
-      - name: Build dalien-signals
-        working-directory: packages/dalien-signals
-        run: |
-          pnpm install --ignore-workspace
-          node build.js
-
-      # The benchmark submodule is its own pnpm workspace with its own
-      # lockfile; the site's field/bench adapters resolve their library
-      # imports (alien-signals/esm, dalien-signals, @solidjs/signals, …)
-      # through its node_modules.
-      - name: Install benchmark submodule workspace
-        working-directory: milomg-reactivity-benchmark
-        run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/site-deps
 
       - name: Configure Pages
         id: pages

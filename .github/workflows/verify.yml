@@ -132,20 +132,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Init workspace source submodules
-        run: git submodule update --init packages/dalien-signals vendor/alien-signals
-
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        with:
-          version: 11.15.0
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install browser battery dependencies
-        run: pnpm install --frozen-lockfile --filter "react-signals-playground..."
+      # The playground's typecheck covers the stress-field and benchmark
+      # code, which imports adapter source from the reactivity-benchmark
+      # submodule; the composite installs that whole dependency graph.
+      - uses: ./.github/actions/site-deps
 
       - name: Install bundled Chromium
         working-directory: packages/react-signals-playground

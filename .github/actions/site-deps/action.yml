@@ -1,0 +1,61 @@
+# Everything the react-signals-playground needs to typecheck, test, and
+# build: the toolchain plus the reactivity-benchmark submodule workspace.
+#
+# The playground's stress field and in-page benchmarks import adapter source
+# from the milomg-reactivity-benchmark submodule, whose own pnpm workspace
+# carries file: dependencies back into this repo:
+#   - alien-signals   -> vendor/alien-signals — must be BUILT before the
+#                        submodule install, since pnpm copies file: packages
+#                        at install time and esm/ + types/ are local build
+#                        artifacts
+#   - dalien-signals  -> packages/dalien-signals — same: esm/ is a build
+#                        artifact, so build before the submodule install
+#   - cosignals, cosignals-arena -> workspace packages whose dev exports
+#                        point at src/*.ts, so no build step needed
+name: site-deps
+description: Install toolchain, submodules, and workspaces for the playground site
+
+runs:
+  using: composite
+  steps:
+    - name: Init site submodules (targeted)
+      shell: bash
+      run: git submodule update --init milomg-reactivity-benchmark vendor/alien-signals packages/dalien-signals
+
+    # Node and pnpm come from the repo's committed toolchain pins
+    # (mise.toml, checksummed by mise.lock). Only those two: the pins
+    # also carry bun and the vite-plus CLI, which these jobs never run.
+    - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+      with:
+        install_args: node pnpm
+
+    - name: Build upstream alien-signals
+      shell: bash
+      working-directory: vendor/alien-signals
+      run: |
+        pnpm install --ignore-workspace --frozen-lockfile
+        pnpm run build
+
+    - name: Install (root, filtered to the site closure)
+      shell: bash
+      run: pnpm install --frozen-lockfile --filter "react-signals-playground..."
+
+    # Install against dalien's own lockfile (--ignore-workspace): build.js
+    # needs the TypeScript compiler API that its lockfile pins, while the
+    # root lockfile resolves `typescript: latest` to TS 7, which dropped
+    # getParsedCommandLineOfConfigFile.
+    - name: Build dalien-signals
+      shell: bash
+      working-directory: packages/dalien-signals
+      run: |
+        pnpm install --ignore-workspace
+        node build.js
+
+    # The benchmark submodule is its own pnpm workspace with its own
+    # lockfile; the site's field/bench adapters resolve their library
+    # imports (alien-signals/esm, dalien-signals, @solidjs/signals, …)
+    # through its node_modules.
+    - name: Install benchmark submodule workspace
+      shell: bash
+      working-directory: milomg-reactivity-benchmark
+      run: pnpm install --frozen-lockfile
