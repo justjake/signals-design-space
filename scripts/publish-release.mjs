@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { npmVersionExists } from "./npm-registry.mjs"
 import { createReleasePlan } from "./release-plan.mjs"
@@ -41,10 +40,9 @@ Options:
   --dry-run       Run npm publish --dry-run instead of publishing.
   --full          Run the Playwright battery and production devtools tests.
   --allow-dirty   Permit a real publish from a dirty worktree.
-  --pack-only     Test, build, and pack into --artifacts.
-  --verify-only   Verify the tarballs in --artifacts.
-  --publish-only  Publish the tarballs in --artifacts.
-  --artifacts     Artifact directory for a staged CI invocation.
+  --pack-only     Test, build, and pack into build/release-artifacts.
+  --verify-only   Verify the tarballs in build/release-artifacts.
+  --publish-only  Publish the tarballs in build/release-artifacts.
   --work-directory  Keep artifact-consumer files in this directory.
   -h, --help      Show this help.`)
 }
@@ -52,7 +50,6 @@ Options:
 export function parsePublishArgs(args) {
   const options = {
     allowDirty: false,
-    artifactsDirectory: "",
     dryRun: false,
     full: false,
     stage: "all",
@@ -65,11 +62,6 @@ export function parsePublishArgs(args) {
       continue
     } else if (arg === "--allow-dirty") {
       options.allowDirty = true
-    } else if (arg === "--artifacts") {
-      options.artifactsDirectory = args[++index] ?? ""
-      if (options.artifactsDirectory === "") throw new Error("Missing --artifacts value")
-    } else if (arg.startsWith("--artifacts=")) {
-      options.artifactsDirectory = arg.slice("--artifacts=".length)
     } else if (arg === "--work-directory") {
       options.workDirectory = args[++index] ?? ""
       if (options.workDirectory === "") throw new Error("Missing --work-directory value")
@@ -88,10 +80,16 @@ export function parsePublishArgs(args) {
       throw new Error(`Unknown argument: ${arg}`)
     }
   }
-  if (options.stage !== "all" && options.artifactsDirectory === "") {
-    throw new Error(`${args.find((arg) => arg.endsWith("-only"))} requires --artifacts`)
-  }
   return options
+}
+
+export function releasePaths(directory) {
+  const buildDirectory = join(directory, "build")
+  return {
+    artifactsDirectory: join(buildDirectory, "release-artifacts"),
+    buildDirectory,
+    planPath: join(buildDirectory, "release-plan.json"),
+  }
 }
 
 export function assertPublishableWorktree({ allowDirty, dryRun, status }) {
@@ -168,55 +166,47 @@ async function main() {
     }
   }
 
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosignals-publish-"))
-  const planPath = join(temporaryDirectory, "release-plan.json")
-  const artifactsDirectory =
-    options.artifactsDirectory === ""
-      ? join(temporaryDirectory, "release-artifacts")
-      : resolve(rootDirectory, options.artifactsDirectory)
+  const { artifactsDirectory, buildDirectory, planPath } = releasePaths(rootDirectory)
 
-  try {
-    if (options.stage === "all" || options.stage === "pack") {
-      const plan = await createReleasePlan({
-        eventName: process.env["GITHUB_EVENT_NAME"] || "push",
-        branch:
-          process.env["GITHUB_HEAD_REF"] ||
-          process.env["GITHUB_REF_NAME"] ||
-          output("git", ["branch", "--show-current"]),
-        sha: process.env["GITHUB_SHA"] || output("git", ["rev-parse", "HEAD"]),
-        rootDirectory,
-        versionExists: npmVersionExists,
-      })
-      await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`)
+  if (options.stage === "all" || options.stage === "pack") {
+    await mkdir(buildDirectory, { recursive: true })
+    const plan = await createReleasePlan({
+      eventName: process.env["GITHUB_EVENT_NAME"] || "push",
+      branch:
+        process.env["GITHUB_HEAD_REF"] ||
+        process.env["GITHUB_REF_NAME"] ||
+        output("git", ["branch", "--show-current"]),
+      sha: process.env["GITHUB_SHA"] || output("git", ["rev-parse", "HEAD"]),
+      rootDirectory,
+      versionExists: npmVersionExists,
+    })
+    await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`)
 
-      console.log("Release plan:")
-      for (const release of plan) {
-        console.log(`  ${release.name}@${release.version} --tag ${release.tag}`)
-      }
-      console.log(`  source verification: ${options.full ? "full" : "unit tests"}`)
-      console.log("")
-
-      verifySource(options.full)
-      run("pnpm", ["release:pack", planPath, artifactsDirectory])
+    console.log("Release plan:")
+    for (const release of plan) {
+      console.log(`  ${release.name}@${release.version} --tag ${release.tag}`)
     }
+    console.log(`  source verification: ${options.full ? "full" : "unit tests"}`)
+    console.log("")
 
-    if (options.stage === "all" || options.stage === "verify") {
-      await verifyReleaseArtifacts({
-        artifactsDirectory,
-        full: options.full,
-        keep: false,
-        rootDirectory,
-        workDirectory: options.workDirectory,
-      })
-    }
+    verifySource(options.full)
+    run("pnpm", ["release:pack", planPath, artifactsDirectory])
+  }
 
-    if (publishes) {
-      const publishArgs = ["scripts/publish-tarballs.mjs", artifactsDirectory]
-      if (options.dryRun) publishArgs.push("--dry-run")
-      run("node", publishArgs)
-    }
-  } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true })
+  if (options.stage === "all" || options.stage === "verify") {
+    await verifyReleaseArtifacts({
+      artifactsDirectory,
+      full: options.full,
+      keep: false,
+      rootDirectory,
+      workDirectory: options.workDirectory,
+    })
+  }
+
+  if (publishes) {
+    const publishArgs = ["scripts/publish-tarballs.mjs", artifactsDirectory]
+    if (options.dryRun) publishArgs.push("--dry-run")
+    run("node", publishArgs)
   }
 }
 

@@ -1,12 +1,16 @@
 import assert from "node:assert/strict"
+import { tmpdir } from "node:os"
 import test from "node:test"
-import { assertPublishableWorktree, parsePublishArgs } from "./publish-release.mjs"
+import {
+  assertPublishableWorktree,
+  parsePublishArgs,
+  releasePaths,
+} from "./publish-release.mjs"
 import { npmPublishInvocation, publishPlannedArtifacts } from "./publish-tarballs.mjs"
 
 test("publish arguments default to a real, lightweight release", () => {
   assert.deepEqual(parsePublishArgs([]), {
     allowDirty: false,
-    artifactsDirectory: "",
     dryRun: false,
     full: false,
     stage: "all",
@@ -17,7 +21,6 @@ test("publish arguments default to a real, lightweight release", () => {
 test("publish arguments enable independent safety and verification options", () => {
   assert.deepEqual(parsePublishArgs(["--", "--dry-run", "--full", "--allow-dirty"]), {
     allowDirty: true,
-    artifactsDirectory: "",
     dryRun: true,
     full: true,
     stage: "all",
@@ -26,10 +29,9 @@ test("publish arguments enable independent safety and verification options", () 
   assert.throws(() => parsePublishArgs(["--skip-tests"]), /Unknown argument/)
 })
 
-test("CI stages share the publish driver and require an artifact directory", () => {
-  assert.deepEqual(parsePublishArgs(["--pack-only", "--artifacts", "release-artifacts"]), {
+test("CI stages share the publish driver", () => {
+  assert.deepEqual(parsePublishArgs(["--pack-only"]), {
     allowDirty: false,
-    artifactsDirectory: "release-artifacts",
     dryRun: false,
     full: false,
     stage: "pack",
@@ -38,33 +40,37 @@ test("CI stages share the publish driver and require an artifact directory", () 
   assert.deepEqual(
     parsePublishArgs([
       "--verify-only",
-      "--artifacts=release-artifacts",
       "--full",
       "--work-directory",
       "/tmp/release-consumer",
     ]),
     {
       allowDirty: false,
-      artifactsDirectory: "release-artifacts",
       dryRun: false,
       full: true,
       stage: "verify",
       workDirectory: "/tmp/release-consumer",
     },
   )
-  assert.deepEqual(parsePublishArgs(["--publish-only", "--artifacts", "release-artifacts"]), {
+  assert.deepEqual(parsePublishArgs(["--publish-only"]), {
     allowDirty: false,
-    artifactsDirectory: "release-artifacts",
     dryRun: false,
     full: false,
     stage: "publish",
     workDirectory: "",
   })
-  assert.throws(() => parsePublishArgs(["--pack-only"]), /--artifacts/)
   assert.throws(
-    () => parsePublishArgs(["--pack-only", "--verify-only", "--artifacts", "out"]),
+    () => parsePublishArgs(["--pack-only", "--verify-only"]),
     /only one release stage/,
   )
+})
+
+test("release plans and tarballs stay under the ignored build directory", () => {
+  assert.deepEqual(releasePaths("/repo"), {
+    artifactsDirectory: "/repo/build/release-artifacts",
+    buildDirectory: "/repo/build",
+    planPath: "/repo/build/release-plan.json",
+  })
 })
 
 test("real publishes require a clean worktree unless explicitly allowed", () => {
@@ -122,7 +128,7 @@ test("dry runs check every tarball even when its version exists", async () => {
   assert.deepEqual(published, ["cosignals"])
 })
 
-test("npm publishes from the artifact directory instead of the pnpm workspace", () => {
+test("npm publishes outside the pnpm workspace", () => {
   assert.deepEqual(
     npmPublishInvocation(
       {
@@ -143,7 +149,7 @@ test("npm publishes from the artifact directory instead of the pnpm workspace", 
         "public",
         "--dry-run",
       ],
-      cwd: "/tmp/release-artifacts",
+      cwd: tmpdir(),
     },
   )
 })

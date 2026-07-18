@@ -11,8 +11,11 @@ import { join, resolve } from "node:path"
 // stamped into each package.json before packing and restored afterwards.
 
 const rootDirectory = process.cwd()
-const planPath = resolve(rootDirectory, process.argv[2] ?? "release-plan.json")
-const artifactsDirectory = resolve(rootDirectory, process.argv[3] ?? "release-artifacts")
+const planPath = resolve(rootDirectory, process.argv[2] ?? "build/release-plan.json")
+const artifactsDirectory = resolve(
+  rootDirectory,
+  process.argv[3] ?? "build/release-artifacts",
+)
 const plan = JSON.parse(await readFile(planPath, "utf8"))
 
 await rm(artifactsDirectory, { recursive: true, force: true })

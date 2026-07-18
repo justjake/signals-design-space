@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { readFile } from "node:fs/promises"
-import { basename, dirname, join, resolve } from "node:path"
+import { tmpdir } from "node:os"
+import { basename, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { npmVersionExists } from "./npm-registry.mjs"
 
@@ -77,7 +78,7 @@ export function npmPublishInvocation(release, dryRun) {
     "public",
   ]
   if (dryRun) args.push("--dry-run")
-  return { args, cwd: dirname(release.tarballPath) }
+  return { args, cwd: tmpdir() }
 }
 
 function parseArgs(args) {

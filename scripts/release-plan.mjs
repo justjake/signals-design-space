@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { dirname, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { npmVersionExists } from "./npm-registry.mjs"
 
@@ -66,7 +67,7 @@ export async function createReleasePlan({ eventName, branch, sha, rootDirectory,
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const rootDirectory = process.cwd()
-  const output = process.argv[2] ?? "release-plan.json"
+  const output = resolve(rootDirectory, process.argv[2] ?? "build/release-plan.json")
   const plan = await createReleasePlan({
     eventName: process.env.GITHUB_EVENT_NAME ?? "",
     branch: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME || "",
@@ -74,6 +75,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     rootDirectory,
     versionExists: npmVersionExists,
   })
+  await mkdir(dirname(output), { recursive: true })
   await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`)
   for (const release of plan) console.log(`${release.name}@${release.version} --tag ${release.tag}`)
 }

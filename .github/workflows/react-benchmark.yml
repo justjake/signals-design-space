@@ -19,7 +19,6 @@ on:
       - "packages/react-seam-bench/**"
       - "packages/cosignals-arena/**"
       - "packages/dalien-signals"
-      - "daishi-concurrent-benchmark"
       - ".github/workflows/react-benchmark.yml"
   workflow_dispatch:
     inputs:

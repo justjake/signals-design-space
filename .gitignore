@@ -1,8 +1,7 @@
 node_modules/
 dist/
+/build/
 *.tsbuildinfo
 .DS_Store
 harness/results/*
-release-plan.json
-release-artifacts/
 test-results/
