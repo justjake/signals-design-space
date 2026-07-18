@@ -27,7 +27,7 @@
  * batch.
  */
 import * as React from "react"
-import { drainUseLayoutEffectLane, drainDeferredEffects, trace, NO_EVENT } from "../graph.ts"
+import { drainUseLayoutEffectLane, drainDeferredEffects, activeTracer, NO_EVENT } from "../graph.ts"
 import { isLiveDraft, type DraftId } from "../worlds.ts"
 import {
   confirmRootCommit,
@@ -151,7 +151,7 @@ export function CosignalsProvider(props: CosignalsProviderProps): React.ReactEle
         "CosignalsProvider. Mount one provider per root, at the top " +
         "of the tree.",
     )
-    trace?.emitEvent("policy-error", null, NO_EVENT, {
+    activeTracer?.emitEvent("policy-error", null, NO_EVENT, {
       error,
       phase: "nested-provider",
     })

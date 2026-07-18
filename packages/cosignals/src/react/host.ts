@@ -23,7 +23,7 @@
 import * as React from "react"
 import * as Scheduler from "scheduler"
 import {
-  trace,
+  activeTracer,
   Flag,
   isUninitialized,
   NO_EVENT,
@@ -136,7 +136,7 @@ function renderWriteGuard(): void {
       "cosignals: state was written during a React render. " +
         "Render must be pure; move the write into an event handler or effect.",
     )
-    trace?.emitEvent("policy-error", null, NO_EVENT, {
+    activeTracer?.emitEvent("policy-error", null, NO_EVENT, {
       error,
       phase: "render-write",
     })
@@ -195,7 +195,7 @@ function armNoteExpiry(mine: RenderWorldNote): void {
   try {
     Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire)
   } catch (error) {
-    trace?.emitEvent("scheduler-fallback", null, NO_EVENT, {
+    activeTracer?.emitEvent("scheduler-fallback", null, NO_EVENT, {
       error,
       phase: "render-note-expiry",
       root: mine.connection ?? undefined,
@@ -367,7 +367,7 @@ export function correctSubscription(
     if (hosted === undefined || !hosted.audience.has(connection)) {
       continue
     }
-    deliver(id, trace?.getDraftWrite(hosted.draft) ?? NO_EVENT)
+    deliver(id, activeTracer?.getDraftWrite(hosted.draft) ?? NO_EVENT)
   }
   if (resolutionDiffers(node, rendered)) {
     dispatch(REPAIR_WAKE)
@@ -487,9 +487,9 @@ export function registerRootConnection(connection: ReactRootConnection): () => v
 export function confirmRootCommit(connection: ReactRootConnection, ids: readonly DraftId[]): void {
   connection.committing = true
   try {
-    const sink = trace
+    const tracer = activeTracer
     let commitEvent: TraceEventId = NO_EVENT
-    if (sink !== null) {
+    if (tracer !== null) {
       // The commit is caused by the committed draft's last write (its
       // open event when it never wrote), so the committed frame chains
       // back to the transition's origin instead of rooting itself.
@@ -497,11 +497,11 @@ export function confirmRootCommit(connection: ReactRootConnection, ids: readonly
       for (const id of ids) {
         const draft = hostedDrafts.get(id)?.draft
         if (draft !== undefined) {
-          const lastWrite = sink.getDraftWrite(draft)
-          commitCause = lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft)
+          const lastWrite = tracer.getDraftWrite(draft)
+          commitCause = lastWrite !== NO_EVENT ? lastWrite : tracer.getCause(draft)
         }
       }
-      commitEvent = sink.emitEvent("transition-commit", null, commitCause, {
+      commitEvent = tracer.emitEvent("transition-commit", null, commitCause, {
         root: connection,
         world: ids,
       })

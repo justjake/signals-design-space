@@ -82,7 +82,7 @@ import {
   startBatch,
   endBatch,
   tickGraphChange,
-  trace,
+  activeTracer,
   writeAtom,
 } from "./graph.ts"
 import {
@@ -214,13 +214,13 @@ export function openDraft(): Draft {
     world: { drafts, sig: String(id) },
     atoms: new Set(),
   }
-  const sink = trace
-  if (sink !== null) {
+  const tracer = activeTracer
+  if (tracer !== null) {
     // The transition roots at the operation in flight — the DOM-event
     // origin a devtools adapter attributed, or the write/effect whose
     // first drafted write opened it — so the whole causal subtree of the
     // transition chains back to what the user did.
-    sink.setCause(draft, sink.emitEvent("transition-open", null, currentCause, { draftId: id }))
+    tracer.setCause(draft, tracer.emitEvent("transition-open", null, currentCause, { draftId: id }))
   }
   drafts.push(draft)
   liveDrafts.set(draft.id, draft)
@@ -255,13 +255,13 @@ export function appendDraftIntent(
   draft.atoms.add(atom)
   draftRevisionByAtom.set(atom, tickGraphChange())
   let cause: TraceEventId = NO_EVENT
-  const sink = trace
-  if (sink !== null) {
-    cause = sink.emitEvent(kind, atom, sink.getCause(draft), {
+  const tracer = activeTracer
+  if (tracer !== null) {
+    cause = tracer.emitEvent(kind, atom, tracer.getCause(draft), {
       draftId: draft.id,
     })
-    sink.setDraftWrite(draft, cause)
-    sink.setCause(atom, cause)
+    tracer.setDraftWrite(draft, cause)
+    tracer.setCause(atom, cause)
   }
   if (draft.cutoffAtGraphChange !== 0 && draft.cutoffAtGraphChange >= currentBaseChange()) {
     cutoffWorld = draft.world
@@ -363,8 +363,8 @@ function applyIntent(atom: AtomNode<unknown>, value: unknown, intent: Intent): u
       // A single-draft cutoff is advisory and swallows this replay below.
       // Ordinary reads and retirement propagate it, so only those observed
       // callback failures enter the trace.
-      if (cutoffWorld === null && trace !== null) {
-        trace.emitEvent("callback-error", atom, currentCause, { error, phase: "updater" })
+      if (cutoffWorld === null && activeTracer !== null) {
+        activeTracer.emitEvent("callback-error", atom, currentCause, { error, phase: "updater" })
       }
       throw error
     }
@@ -391,14 +391,14 @@ export function retireDraft(id: DraftId): void {
   liveDrafts.delete(id)
   draft.state = "retired"
   tickGraphChange()
-  const sink = trace
-  const lastWrite = sink?.getDraftWrite(draft) ?? NO_EVENT
+  const tracer = activeTracer
+  const lastWrite = tracer?.getDraftWrite(draft) ?? NO_EVENT
   const evt =
-    sink !== null
-      ? sink.emitEvent(
+    tracer !== null
+      ? tracer.emitEvent(
           "transition-retire",
           null,
-          lastWrite !== NO_EVENT ? lastWrite : sink.getCause(draft),
+          lastWrite !== NO_EVENT ? lastWrite : tracer.getCause(draft),
           { draftId: id },
         )
       : NO_EVENT
@@ -441,10 +441,10 @@ export function discardDraft(id: DraftId): void {
   liveDrafts.delete(id)
   draft.state = "discarded"
   tickGraphChange()
-  const sink = trace
+  const tracer = activeTracer
   const evt =
-    sink !== null
-      ? sink.emitEvent("transition-discard", null, sink.getCause(draft), { draftId: id })
+    tracer !== null
+      ? tracer.emitEvent("transition-discard", null, tracer.getCause(draft), { draftId: id })
       : NO_EVENT
   for (const atom of draft.atoms) {
     draftRevisionByAtom.set(atom, currentGraphChange())
@@ -875,16 +875,16 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
     certificate.count = 1
     clearInactiveCertificateEntries(certificate, previousCount)
     fresh = { flags: 0, value: replayLog(atom, world) }
-  } else if (trace === null) {
+  } else if (activeTracer === null) {
     fresh = draftEvaluate(node as ComputedNode<unknown>, world, memo?.state, certificate)
   } else {
-    const sink = trace
+    const tracer = activeTracer
     const previousState = memo?.state
     const computeWorld: DraftId[] = []
     for (const draft of world.drafts) {
       computeWorld.push(draft.id)
     }
-    const compute = sink.startSpan("compute", node, sink.getCause(node), { world: computeWorld })
+    const compute = tracer.startSpan("compute", node, tracer.getCause(node), { world: computeWorld })
     const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
     try {
       fresh = draftEvaluate(node as ComputedNode<unknown>, world, previousState, certificate)
@@ -893,21 +893,21 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
         setCurrentCause(prevCause)
       }
     }
-    if (trace !== null) {
+    if (activeTracer !== null) {
       if ((fresh.flags & Flag.AsyncSuspended) !== 0) {
-        trace.emitEvent("compute-suspend", node, compute, {
+        activeTracer.emitEvent("compute-suspend", node, compute, {
           suspension: fresh.throwable as Suspension,
           world: computeWorld,
         })
       } else if ((fresh.flags & Flag.AsyncError) !== 0 && fresh !== previousState) {
-        trace.emitEvent("compute-error", node, compute, {
+        activeTracer.emitEvent("compute-error", node, compute, {
           error: (fresh.throwable as ErrorBox).error,
           world: computeWorld,
         })
       }
     }
-    if (compute !== NO_EVENT && sink.endSpan !== undefined) {
-      sink.endSpan(compute)
+    if (compute !== NO_EVENT && tracer.endSpan !== undefined) {
+      tracer.endSpan(compute)
     }
   }
   // Keep the previous state record when the fresh resolution is

@@ -45,7 +45,7 @@ import {
   resetEffectLanes,
   runUpdater,
   untrack as graphUntrack,
-  trace,
+  activeTracer,
   writeAtom,
 } from "./graph.ts"
 import {
@@ -550,8 +550,8 @@ function updateAtom<T>(x: Atom<T>, fn: (prev: T) => T): void {
   try {
     next = runUpdater(fn, previous)
   } catch (error) {
-    if (trace !== null) {
-      trace.emitEvent("callback-error", activeEvaluation, currentCause, { error, phase: "updater" })
+    if (activeTracer !== null) {
+      activeTracer.emitEvent("callback-error", activeEvaluation, currentCause, { error, phase: "updater" })
     }
     throw error
   }

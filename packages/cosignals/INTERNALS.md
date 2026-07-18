@@ -166,8 +166,8 @@ engine emits these strings verbatim and devtools should show them
 verbatim; renaming a concept means renaming its string at the emit site,
 never adding a translation table.
 
-For tooling that needs its own sink instead of the built-in ring:
-`setTracer(sink)` installs a custom `TraceSink`, and `setHotTracer`
+For tooling that needs its own tracer instead of the built-in ring:
+`setTracer(tracer)` installs a custom `TraceSink`, and `setHotTracer`
 gates a separate, off-by-default, very-high-volume feed of internal
 algorithm steps (`propagate`, `check`, `pull`).
 
