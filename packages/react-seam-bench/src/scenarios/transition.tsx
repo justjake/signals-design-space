@@ -1,15 +1,23 @@
 /**
  * The transition seam: rewrite all 2000 cells inside React.startTransition
- * while an unrelated urgent useState input keeps updating. Bindings that
- * classify external writes into the transition let each urgent update
- * commit quickly while the bulk re-render proceeds at transition priority.
+ * while urgent clicks keep arriving on an unrelated button. Bindings that
+ * classify external writes into the transition let each click commit
+ * quickly while the bulk re-render proceeds at transition priority.
  * useSyncExternalStore contenders instead re-render synchronously (see
- * adapters/useReactive.ts), so their first urgent update waits behind the
- * full blocking flush — that asymmetry in the p95 is the measurement, not
- * a harness bug. Native useState/useReducer baselines do participate in
- * transitions, so they sit between the two.
+ * adapters/useReactive.ts), so a click that lands during their blocking
+ * flush waits for all of it — that asymmetry in the p95 is the
+ * measurement, not a harness bug.
+ *
+ * Urgency is simulated with real DOM click events, not a setState from
+ * the timer callback, because React prioritizes them differently: a
+ * discrete event preempts an in-flight transition render, while a
+ * default-priority update (what setState gets in a timer context) queues
+ * behind the entire remaining transition render and its commit. A timer
+ * setState here would measure that queueing rule — one unlucky update
+ * absorbing a multi-hundred-ms stall on a slow core — instead of what a
+ * user feels when they click mid-transition.
  */
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { Scenario } from "./scenario.js"
 import { drain, p95, renderCells, sleep, until } from "./support.js"
 
@@ -17,24 +25,34 @@ const N = 2000
 const URGENT_UPDATES = 30
 const URGENT_INTERVAL_MS = 16
 
-let urgentSetter: ((v: number) => void) | null = null
+/**
+ * The value the next click commits. The scenario chooses it outside React
+ * and the click handler reads it, so the handler needs no per-update
+ * re-wiring and the button's subtree stays byte-identical between
+ * updates.
+ */
+let nextUrgent = 0
 
 function UrgentInput() {
   const [v, setV] = useState(0)
-  useEffect(() => {
-    urgentSetter = setV
-    return () => {
-      if (urgentSetter === setV) {
-        urgentSetter = null
-      }
-    }
-  }, [])
-  return <output id="urgent">{v}</output>
+  return (
+    <button id="urgent" onClick={() => setV(nextUrgent)}>
+      {v}
+    </button>
+  )
 }
 
 function readUrgent(): string | null {
   const el = document.getElementById("urgent")
   return el === null ? null : el.textContent
+}
+
+function clickUrgent(): void {
+  const el = document.getElementById("urgent")
+  if (el === null) {
+    throw new Error("transition: urgent input is not mounted")
+  }
+  el.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }))
 }
 
 const transition: Scenario = {
@@ -54,18 +72,15 @@ const transition: Scenario = {
     const tStart = performance.now()
     store.writeManyInTransition(updates)
     for (let k = 1; k <= URGENT_UPDATES; k++) {
-      // The first urgent update fires immediately so it contends with
-      // however the contender scheduled the bulk re-render; the rest
-      // pace at roughly one per frame.
+      // The first click fires immediately so it contends with however the
+      // contender scheduled the bulk re-render; the rest pace at roughly
+      // one per frame.
       if (k > 1) {
         await sleep(URGENT_INTERVAL_MS)
       }
-      const set = urgentSetter
-      if (set === null) {
-        throw new Error("transition: urgent input is not mounted")
-      }
+      nextUrgent = k
       const t0 = performance.now()
-      set(k)
+      clickUrgent()
       await until(() => readUrgent() === String(k), `urgent update ${k}`)
       latencies.push(performance.now() - t0)
     }
