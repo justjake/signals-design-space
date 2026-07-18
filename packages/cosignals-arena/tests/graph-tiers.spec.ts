@@ -38,12 +38,12 @@ import {
 import {
   createAtom,
   createComputed,
-  effect,
-  nodeOf,
-  resetEngineForTest,
+  createEffect,
   type AtomOptions,
   type Computed,
 } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
+import { resetEngineForTest } from "../src/testing.ts"
 import { appendDraftIntent, discardDraft, openDraft } from "../src/worlds.ts"
 
 function atom<T>(initial: T | (() => T), opts?: AtomOptions<T>): CellNode<T> {
@@ -701,7 +701,7 @@ describe.each([
 test("a public engine reset cannot erase an active sync drain", () => {
   const source = createAtom(0)
   const events: string[] = []
-  const stop = effect(
+  const stop = createEffect(
     () => source.get(),
     (value) => {
       events.push(`run:${value}:begin`)

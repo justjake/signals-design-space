@@ -9,19 +9,17 @@
  */
 import { describe, expect, test } from "vitest"
 import {
-  Flag,
   createComputed,
-  effect,
+  createEffect,
   isPending,
   latest,
-  nodeOf,
-  read,
-  resetEngineForTest,
   createAtom,
   batch,
   type Atom,
   type Computed,
 } from "../src/index.ts"
+import { Flag, nodeOf } from "../src/unstable.ts"
+import { resetEngineForTest } from "../src/testing.ts"
 import {
   discardDraft,
   draftsAffecting,
@@ -250,9 +248,9 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
   let disposeEffect: (() => void) | null = null
 
   const engRead = (ref: Ref): number =>
-    "atom" in ref ? read(engAtoms[ref.atom]) : read(engComputeds[ref.computed])
+    "atom" in ref ? engAtoms[ref.atom].get() : engComputeds[ref.computed].get()
 
-  // Scoped subscribers mirror the useValue hook shape, with both of its
+  // Scoped subscribers mirror the useSignal hook shape, with both of its
   // channels: the render-notify channel (predicate compare, re-read on
   // change) and the draft-wake channel (wakes deliver draft ids into a
   // per-subscriber world, exactly like the per-hook reducer; attach-time
@@ -402,7 +400,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
           engComputeds.push(createComputed(fn))
           if (effectRef === null && ix === 0) {
             effectRef = { computed: 0 }
-            disposeEffect = effect(
+            disposeEffect = createEffect(
               () => engComputeds[0].get(),
               (v) => {
                 if (effectLog.length === 0 || effectLog[effectLog.length - 1] !== v) {
@@ -544,14 +542,14 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     }
     // Final base-state sweep + effect-log comparison.
     for (let aix = 0; aix < engAtoms.length; aix++) {
-      const got = read(engAtoms[aix])
+      const got = engAtoms[aix].get()
       const want = modelValue(model, aix, null)
       if (got !== want) {
         return `final sweep atom ${aix}: engine ${got} != model ${want}`
       }
     }
     for (let computedIx = 0; computedIx < engComputeds.length; computedIx++) {
-      const got = read(engComputeds[computedIx])
+      const got = engComputeds[computedIx].get()
       const want = modelEval(model, exprs, { computed: computedIx }, null)
       if (got !== want) {
         return `final sweep computed ${computedIx}: engine ${got} != model ${want}`

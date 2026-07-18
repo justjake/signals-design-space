@@ -86,7 +86,7 @@ import {
   endBatch,
   tickGraphChange,
   trace,
-  untracked,
+  untrack,
   writeCell,
 } from "./graph.ts"
 import {
@@ -873,7 +873,7 @@ export function resolveState(node: ReactiveNode, world: World): ResolvedState {
     if ((node.flags & Flag.KindCell) !== 0) {
       peekCell(node as CellNode<unknown>)
     } else {
-      untracked(() => ensureFresh(node as DerivedNode<unknown>))
+      untrack(() => ensureFresh(node as DerivedNode<unknown>))
     }
     recordSource(node)
     return node as CellNode<unknown> | DerivedNode<unknown>
@@ -1028,7 +1028,7 @@ function draftEvaluate(
   const prevEvaluation = setActiveEvaluation(node)
   try {
     const previous = isUninitialized(node.value) ? undefined : node.value
-    const value = untracked(() => withWorld(world, () => node.fn(worldUse as never, previous)))
+    const value = untrack(() => withWorld(world, () => node.fn(worldUse as never, previous)))
     return { flags: 0, value }
   } catch (e) {
     if (e === WORLD_PARKED) {

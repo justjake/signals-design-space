@@ -7,7 +7,7 @@ records what this design replaced, for readers migrating old code.
 ## The primitive
 
 ```ts
-const stop = effect(
+const stop = createEffect(
 	() => derive(a.get(), b.get()),               // compute: tracked, pure
 	(value, previous) => { ...; return cleanup }, // handler: untracked side effect
 	{ equals, label, schedule },
@@ -28,7 +28,7 @@ An effect is two functions with different rules:
 The first run happens synchronously at creation when the compute settles
 immediately; a compute that parks on its first evaluation fires its first
 handler at settlement, on the effect's schedule. A creation-time compute
-error disposes the effect and rethrows. `effect` returns a disposer, and
+error disposes the effect and rethrows. `createEffect` returns a disposer, and
 `effectScope` collects effects exactly as before.
 
 There is no single-function form. A body that both tracks and side-effects
@@ -76,7 +76,7 @@ else — not the first run, not disposal, not the change test.
   then useLayoutEffect, then useEffect.
 - The engine core is dependency-free: its built-in pumps are
   `queueMicrotask` (useLayoutEffect) and `setTimeout(0)` (useEffect).
-- With React mounted, each `SignalsFrameworkProvider` hosts the drains
+- With React mounted, each `CosignalsProvider` hosts the drains
   instead: a lane request re-renders a null last-child sentinel by reducer
   dispatch, at the same ambient priority as the subscriber wakes from the
   same write, so React batches both into one render pass. The sentinel's
@@ -163,7 +163,7 @@ useSignalEffect(() => ({ watch, run, equals?, label? }), deps)       // useEffec
 useSignalLayoutEffect(() => ({ watch, run, equals?, label? }), deps) // useLayoutEffect lane
 ```
 
-The factory-built spec names effect()'s two slots: `watch` is the source
+The factory-built spec names createEffect()'s two slots: `watch` is the source
 (a compute function, a signal, a tuple, or a record) and `run` is the
 handler. The factory runs inside the matching React phase effect, keyed
 on `deps`: mount and deps changes dispose the previous effect and set up

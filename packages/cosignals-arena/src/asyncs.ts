@@ -35,7 +35,7 @@ import {
   endBatch,
   tickGraphChange,
   trace,
-  untracked,
+  untrack,
   graphMemory,
 } from "./graph.ts"
 
@@ -224,7 +224,7 @@ function settle(box: ThenableBox, status: "fulfilled" | "rejected", result: unkn
       }
       invalidateDerived(node, cause)
       try {
-        untracked(() => ensureFresh(node))
+        untrack(() => ensureFresh(node))
       } catch {
         // The evaluation outcome (pending or error) is recorded on the
         // node; readers encounter it at their own read sites.

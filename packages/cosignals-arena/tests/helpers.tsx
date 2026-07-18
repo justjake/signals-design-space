@@ -4,9 +4,9 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { flushScheduledEffects } from "cosignals-arena"
 import {
+  CosignalsProvider,
   registerReactSignals,
   resetReactSignalsForTest,
-  wrapCreateRoot,
   type ReactSignalsHandle,
 } from "cosignals-arena/react"
 
@@ -23,7 +23,20 @@ export interface Harness {
   cleanup(): Promise<void>
 }
 
-const frameworkCreateRoot = wrapCreateRoot(createRoot as never)
+function frameworkCreateRoot(container: HTMLElement): {
+  render(node: unknown): void
+  unmount(): void
+} {
+  const root = createRoot(container)
+  return {
+    render(node: unknown) {
+      root.render(<CosignalsProvider>{node as React.ReactNode}</CosignalsProvider>)
+    },
+    unmount() {
+      root.unmount()
+    },
+  }
+}
 
 export function makeHarness(): Harness {
   resetReactSignalsForTest()

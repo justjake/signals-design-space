@@ -1,14 +1,7 @@
 /** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from "vitest"
-import {
-  createAtom,
-  createComputed,
-  effect,
-  isPending,
-  latest,
-  nodeOf,
-  read,
-} from "../src/index.ts"
+import { createAtom, createComputed, createEffect, isPending, latest } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
 import { ErrorBox, makeSuspension, trackThenable } from "../src/asyncs.ts"
 import { currentCause, observeNode, setCurrentCause } from "../src/graph.ts"
 import { BASE_WORLD, resolveState } from "../src/worlds.ts"
@@ -72,12 +65,12 @@ describe("pending as graph state", () => {
     let thrown1: unknown
     let thrown2: unknown
     try {
-      read(c)
+      c.get()
     } catch (e) {
       thrown1 = e
     }
     try {
-      read(c)
+      c.get()
     } catch (e) {
       thrown2 = e
     }
@@ -88,7 +81,7 @@ describe("pending as graph state", () => {
     expect(isPending(c)).toBe(false)
     gate.resolve("done")
     await tick()
-    expect(read(c)).toBe("done")
+    expect(c.get()).toBe("done")
     expect(isPending(c)).toBe(false)
   })
 
@@ -99,7 +92,7 @@ describe("pending as graph state", () => {
     let firstSuspension: unknown
     let secondSuspension: unknown
     try {
-      read(c)
+      c.get()
     } catch (error) {
       firstSuspension = error
     }
@@ -107,7 +100,7 @@ describe("pending as graph state", () => {
     first.resolve(1)
     await tick()
     try {
-      read(c)
+      c.get()
     } catch (error) {
       secondSuspension = error
     }
@@ -115,7 +108,7 @@ describe("pending as graph state", () => {
 
     second.resolve(2)
     await tick()
-    expect(read(c)).toBe(3)
+    expect(c.get()).toBe(3)
   })
 
   test("stale value keeps serving while a refetch is pending; latest never suspends", async () => {
@@ -127,19 +120,19 @@ describe("pending as graph state", () => {
     const c = createComputed((use) => use(gates[nonce.get()].promise))
     gates[0].resolve(1)
     try {
-      read(c) // first touch attaches to the (already resolved) thenable
+      c.get() // first touch attaches to the (already resolved) thenable
     } catch {
       /* parks until the settlement microtask */
     }
     await tick()
-    expect(read(c)).toBe(1)
+    expect(c.get()).toBe(1)
     nonce.set(1)
-    expect(read(c)).toBe(1) // stale serves
+    expect(c.get()).toBe(1) // stale serves
     expect(latest(c)).toBe(1)
     expect(isPending(c)).toBe(true)
     gates[1].resolve(2)
     await tick()
-    expect(read(c)).toBe(2)
+    expect(c.get()).toBe(2)
     expect(isPending(c)).toBe(false)
   })
 
@@ -148,19 +141,19 @@ describe("pending as graph state", () => {
     const inner = createComputed((use) => use(gate.promise))
     const outer = createComputed(() => inner.get() + 1)
     expect(isPending(outer)).toBe(false)
-    expect(() => read(outer)).toThrow()
+    expect(() => outer.get()).toThrow()
     // A forwarded first load is still a first load: not pending.
     expect(isPending(outer)).toBe(false)
     gate.resolve(41)
     await tick()
-    expect(read(outer)).toBe(42)
+    expect(outer.get()).toBe(42)
   })
 
   test("settlement behaves as a write: effects observing downstream re-run", async () => {
     const gate = deferred<number>()
     const c = createComputed((use) => use(gate.promise) * 2)
     const seen: unknown[] = []
-    effect(
+    createEffect(
       () => c.get(),
       (v) => {
         seen.push(v)
@@ -178,7 +171,7 @@ describe("pending as graph state", () => {
     const source = createAtom(1)
     const gate = controlledThenable<number>()
     const seen: number[] = []
-    const stop = effect(
+    const stop = createEffect(
       (use) => source.get() + use(gate.thenable),
       (value) => {
         seen.push(value)
@@ -209,7 +202,7 @@ describe("pending as graph state", () => {
       throw boom
     })
 
-    expect(() => read(c)).toThrow()
+    expect(() => c.get()).toThrow()
     expect(box.parkedNodes!.size).toBe(1)
     expect(box.parkedSuspensions!.size).toBe(1)
     const suspension = box.parkedSuspensions!.values().next().value!
@@ -237,26 +230,26 @@ describe("pending as graph state", () => {
   test("the first terminal callback wins and later scheduling still flushes", () => {
     const fulfilled = controlledThenable<number>()
     const value = createComputed((use) => use(fulfilled.thenable))
-    expect(() => read(value)).toThrow()
+    expect(() => value.get()).toThrow()
     fulfilled.fulfill(1)
-    expect(read(value)).toBe(1)
+    expect(value.get()).toBe(1)
     expect(() => fulfilled.reject(new Error("late rejection"))).not.toThrow()
     expect(() => fulfilled.fulfill(2)).not.toThrow()
-    expect(read(value)).toBe(1)
+    expect(value.get()).toBe(1)
 
     const rejected = controlledThenable<number>()
     const failure = createComputed((use) => use(rejected.thenable))
     const firstError = new Error("first rejection")
-    expect(() => read(failure)).toThrow()
+    expect(() => failure.get()).toThrow()
     rejected.reject(firstError)
-    expect(() => read(failure)).toThrow(firstError)
+    expect(() => failure.get()).toThrow(firstError)
     expect(() => rejected.fulfill(2)).not.toThrow()
     expect(() => rejected.reject(new Error("late rejection"))).not.toThrow()
-    expect(() => read(failure)).toThrow(firstError)
+    expect(() => failure.get()).toThrow(firstError)
 
     const source = createAtom(0)
     const seen: number[] = []
-    const stop = effect(
+    const stop = createEffect(
       () => source.get(),
       (v) => {
         seen.push(v)
@@ -272,16 +265,16 @@ describe("pending as graph state", () => {
     const rejected = deferred<never>()
     const value = createComputed((use) => use(fulfilled.promise))
     const failure = createComputed((use) => use(rejected.promise))
-    expect(() => read(value)).toThrow()
-    expect(() => read(failure)).toThrow()
+    expect(() => value.get()).toThrow()
+    expect(() => failure.get()).toThrow()
 
     fulfilled.resolve(undefined)
     rejected.reject(undefined)
     await tick()
-    expect(read(value)).toBeUndefined()
+    expect(value.get()).toBeUndefined()
     let didThrow = false
     try {
-      read(failure)
+      failure.get()
     } catch (reason) {
       didThrow = true
       expect(reason).toBeUndefined()
@@ -299,7 +292,7 @@ describe("pending as graph state", () => {
     const { thenable, fulfill } = controlledThenable<number>()
     const trigger = createAtom(0)
     let handlerRuns = 0
-    const stop = effect(
+    const stop = createEffect(
       (use) => (trigger.get() === 0 ? 0 : (use(thenable) as number)),
       () => {
         handlerRuns++
@@ -312,7 +305,7 @@ describe("pending as graph state", () => {
     const probe = createAtom(0)
     let probeComputeRuns = 0
     let probeHandlerRuns = 0
-    const stopProbe = effect(
+    const stopProbe = createEffect(
       () => {
         probeComputeRuns++
         return probe.get()
@@ -342,14 +335,14 @@ describe("errors are reference-stable boxes", () => {
       throw boom
     })
     try {
-      read(failure)
+      failure.get()
     } catch {}
     const first = resolveState(nodeOf(failure), BASE_WORLD).throwable
     expect(first instanceof ErrorBox).toBe(true)
 
     source.set(1)
     try {
-      read(failure)
+      failure.get()
     } catch {}
     expect(resolveState(nodeOf(failure), BASE_WORLD).throwable).toBe(first)
 
@@ -364,7 +357,7 @@ describe("errors are reference-stable boxes", () => {
     const boom = new Error("boom")
     const c = createComputed((use) => use(gate.promise))
     try {
-      read(c)
+      c.get()
     } catch {
       /* pending */
     }
@@ -373,12 +366,12 @@ describe("errors are reference-stable boxes", () => {
     let e1: unknown
     let e2: unknown
     try {
-      read(c)
+      c.get()
     } catch (e) {
       e1 = e
     }
     try {
-      read(c)
+      c.get()
     } catch (e) {
       e2 = e
     }
@@ -392,7 +385,7 @@ describe("errors are reference-stable boxes", () => {
       throw boom
     })
     const d = createComputed(() => c.get())
-    expect(() => read(d)).toThrow(boom)
-    expect(() => read(d)).toThrow(boom)
+    expect(() => d.get()).toThrow(boom)
+    expect(() => d.get()).toThrow(boom)
   })
 })

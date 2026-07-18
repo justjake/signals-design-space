@@ -1,7 +1,7 @@
 /**
  * React seam benchmark: what a React app pays between an external write and
- * the committed DOM. Real createRoot from this package's fork build, jsdom,
- * real timers, no act. One scenario per child process; stdout is pure CSV
+ * the committed DOM. Real createRoot, jsdom, real timers, no act. One
+ * scenario per child process; stdout is pure CSV
  * `scenario,contender,stat,ms`.
  *
  * Scenarios:
@@ -38,6 +38,12 @@ if (process.argv[2] === undefined) {
           timeout: 180000,
         },
       )
+      if (r.error !== undefined) {
+        throw r.error
+      }
+      if (r.status !== 0) {
+        process.exit(r.status ?? 1)
+      }
       process.stdout.write(r.stdout ?? "")
     }
   }
@@ -88,7 +94,13 @@ if (contender === "cosignals-arena") {
   const engine = await import("cosignals-arena")
   const bindings = await import("../src/react/index.ts")
   bindings.registerReactSignals()
-  const wrappedCreateRoot = bindings.wrapCreateRoot(ReactDOMClient.createRoot)
+  const wrappedCreateRoot = (el) => {
+    const root = ReactDOMClient.createRoot(el)
+    return {
+      render: (node) => root.render(React.createElement(bindings.CosignalsProvider, null, node)),
+      unmount: () => root.unmount(),
+    }
+  }
   impl = {
     createCells(n) {
       const cells = []
@@ -98,7 +110,7 @@ if (contender === "cosignals-arena") {
       return cells
     },
     useCell(cell) {
-      return bindings.useValue(cell)
+      return bindings.useSignal(cell)
     },
     write(cell, v) {
       cell.set(v)

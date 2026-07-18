@@ -43,7 +43,7 @@ import {
 import {
   createAtom,
   createComputed,
-  effect,
+  createEffect,
   isPendingPassive,
   isUninitialized,
   nodeOf,
@@ -53,7 +53,7 @@ import {
   type Signal,
   type SignalValues,
   type UseFn,
-} from "../index.ts"
+} from "../signals.ts"
 import { type ErrorBox, type ResolvedState, type Suspension } from "../asyncs.ts"
 import {
   trace,
@@ -77,11 +77,7 @@ import {
   type ReactRootConnection,
   type RenderedResolution,
 } from "./host.ts"
-import {
-  EMPTY_WORLD,
-  ReactRootConnectionContext,
-  worldsReducer,
-} from "./SignalsFrameworkProvider.ts"
+import { EMPTY_WORLD, ReactRootConnectionContext, worldsReducer } from "./CosignalsProvider.ts"
 
 interface UseValueState {
   delivered: Set<DraftId>
@@ -108,16 +104,16 @@ const NO_STORE_SUBSCRIPTION = (): (() => void) => NOOP
 const NO_IDS: readonly DraftId[] = []
 
 /**
- * These hooks cannot work without a SignalsFrameworkProvider. The root
+ * These hooks cannot work without a CosignalsProvider. The root
  * connection carries transition worlds, and a subscriber without one has
- * no channel for them. Fail at the hook and name both supported fixes.
+ * no channel for them. Fail at the hook and name the fix.
  */
 function requireRootConnection(hook: string): ReactRootConnection {
   const connection = useContext(ReactRootConnectionContext)
   if (connection === null) {
     const error = new Error(
-      `${hook} was rendered without a SignalsFrameworkProvider above it. ` +
-        "Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalsFrameworkProvider>.",
+      `${hook} was rendered without a CosignalsProvider above it. ` +
+        "Wrap the tree in <CosignalsProvider>, once per root.",
     )
     trace?.emitEvent("policy-error", null, NO_EVENT, {
       error,
@@ -186,9 +182,9 @@ function unwrapState(
  * equal. The gap for subscribers that attached late is closed by
  * correctSubscription at subscribe time.
  */
-export function useValue<T>(x: Signal<T>): T {
+export function useSignal<T>(x: Signal<T>): T {
   const node = nodeOf(x)
-  const connection = requireRootConnection("useValue")
+  const connection = requireRootConnection("useSignal")
   const [hookWorld, wake] = useReducer(worldsReducer, EMPTY_WORLD)
   const baseSnapshot = useCallback((): GraphChangeClock => {
     resolveState(node, BASE_WORLD)
@@ -303,21 +299,26 @@ export function useValue<T>(x: Signal<T>): T {
 }
 
 /**
- * A component-owned computed. No explicit disposal: an unwatched
- * computed only holds references toward its dependencies, so dropping it
- * at unmount makes it garbage-collectible.
+ * A component-owned computed. `fn` gets the same arguments as a
+ * createComputed body — `use` to unwrap promises (suspending this
+ * component on a first load) and the previous settled value. No explicit
+ * disposal: an unwatched computed only holds references toward its
+ * dependencies, so dropping it at unmount makes it garbage-collectible.
  */
-export function useComputed<T>(fn: () => T, deps: React.DependencyList): T {
-  requireRootConnection("useComputed") // fail with this hook's name, not useValue's
+export function useComputed<T>(
+  fn: (use: UseFn, previous: T | undefined) => T,
+  deps: React.DependencyList,
+): T {
+  requireRootConnection("useComputed") // fail with this hook's name, not useSignal's
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const c = useMemo(() => createComputed(fn), deps)
-  return useValue(c)
+  return useSignal(c)
 }
 
 /**
  * Everything a spec's `watch` can be: a compute function, a signal, a
  * tuple of signals, or a record of signals — the same shapes
- * {@link effect} accepts as its first argument.
+ * {@link createEffect} accepts as its first argument.
  */
 export type WatchSource =
   | ((use: UseFn, previous: any) => unknown)
@@ -347,7 +348,7 @@ export interface SignalEffectSpec<S extends WatchSource> {
    * - a signal: shorthand for a compute that reads it;
    * - a tuple or record of signals: shorthand for a compute that reads
    *   each one into a same-shaped tuple or record of values.
-   * These are the same shapes {@link effect} accepts as its first
+   * These are the same shapes {@link createEffect} accepts as its first
    * argument.
    */
   watch: S
@@ -385,7 +386,7 @@ function useSignalPhaseEffect(
 ): void {
   usePhaseEffect(() => {
     const spec = create()
-    return effect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
+    return createEffect(spec.watch, spec.run, { equals: spec.equals, label: spec.label, schedule })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
 }

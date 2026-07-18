@@ -1,6 +1,6 @@
-/** effect() source overloads (signal / tuple / record) and shallowEquals. */
+/** createEffect() source overloads (signal / tuple / record) and shallowEquals. */
 import { describe, expect, test } from "vitest"
-import { createAtom, createComputed, effect, shallowEquals, type Atom } from "cosignals-arena"
+import { createAtom, createComputed, createEffect, shallowEquals, type Atom } from "cosignals-arena"
 
 describe("shallowEquals", () => {
   test("compares arrays element-wise, one level deep", () => {
@@ -30,7 +30,7 @@ describe("effect signal source", () => {
   test("subscribes, delivers (value, previous), cuts on Object.is", () => {
     const a = createAtom(0)
     const seen: Array<[number, number | undefined]> = []
-    const stop = effect(a, (value, previous) => {
+    const stop = createEffect(a, (value, previous) => {
       seen.push([value, previous])
     })
     expect(seen).toEqual([[0, undefined]])
@@ -50,7 +50,7 @@ describe("effect signal source", () => {
     const a = createAtom(1)
     const parity = createComputed(() => a.get() % 2)
     const seen: number[] = []
-    const stop = effect(parity, (v) => {
+    const stop = createEffect(parity, (v) => {
       seen.push(v)
     })
     a.set(3) // parity unchanged: computed cutoff, no delivery
@@ -65,7 +65,7 @@ describe("effect tuple source", () => {
     const a = createAtom(1)
     const b = createAtom("x")
     const seen: Array<[[number, string], [number, string] | undefined]> = []
-    const stop = effect([a, b], (values, previous) => {
+    const stop = createEffect([a, b], (values, previous) => {
       seen.push([values, previous])
     })
     expect(seen).toEqual([[[1, "x"], undefined]])
@@ -82,7 +82,7 @@ describe("effect tuple source", () => {
   test("an explicit equals overrides the shallow default", () => {
     const a = createAtom(1)
     const seen: number[][] = []
-    const stop = effect(
+    const stop = createEffect(
       [a],
       (values) => {
         seen.push(values)
@@ -103,7 +103,7 @@ describe("effect record source", () => {
     const theme = createAtom("dark")
     const sources: Record<string, Atom<string>> = { user, theme }
     const seen: Array<Record<string, string>> = []
-    const stop = effect(sources, (values) => {
+    const stop = createEffect(sources, (values) => {
       seen.push(values)
     })
     expect(seen).toEqual([{ user: "ada", theme: "dark" }])
@@ -120,15 +120,15 @@ describe("source typing", () => {
     const n = createAtom(0)
     const s = createAtom("x")
     const stops = [
-      effect(n, (value) => {
+      createEffect(n, (value) => {
         value satisfies number
         // @ts-expect-error a number source never delivers strings
         value satisfies string
       }),
-      effect([n, s], (values) => {
+      createEffect([n, s], (values) => {
         values satisfies [number, string]
       }),
-      effect({ n, s }, (values) => {
+      createEffect({ n, s }, (values) => {
         values satisfies { n: number; s: string }
       }),
     ]

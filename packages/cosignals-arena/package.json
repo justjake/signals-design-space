@@ -4,11 +4,16 @@
   "private": true,
   "description": "Concurrent signals for React backed by typed-array graph storage",
   "type": "module",
+  "sideEffects": [
+    "./src/react/index.ts"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./ssr": "./src/ssr.ts",
     "./react": "./src/react/index.ts",
-    "./debug": "./src/debug/index.ts"
+    "./debug": "./src/debug/index.ts",
+    "./unstable": "./src/unstable.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",

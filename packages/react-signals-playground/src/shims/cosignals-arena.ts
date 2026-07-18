@@ -1,5 +1,5 @@
 /** `cosignals-arena` — the arena fork — behind the common shim interface. */
-import { useRef } from "react"
+import { createElement, useRef, type ReactNode } from "react"
 import { createRoot as createReactRoot } from "react-dom/client"
 import {
   createAtom as createCosignalsAtom,
@@ -8,18 +8,32 @@ import {
   type Computed,
 } from "cosignals-arena"
 import {
+  CosignalsProvider,
   registerReactSignals,
   startSignalTransition,
   useComputed,
   useSignalEffect as useCosignalsSignalEffect,
-  useValue,
-  wrapCreateRoot,
+  useSignal as useCosignalsSignal,
 } from "cosignals-arena/react"
 import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from "./interface"
 
 export const name = "cosignals-arena"
 export const transitionHoldStyle: TransitionHoldStyle = "suspense"
-export const createRoot = wrapCreateRoot(createReactRoot as never)
+
+export function createRoot(container: Element): {
+  render(node: ReactNode): void
+  unmount(): void
+} {
+  const root = createReactRoot(container)
+  return {
+    render(node: ReactNode) {
+      root.render(createElement(CosignalsProvider, null, node))
+    },
+    unmount() {
+      root.unmount()
+    },
+  }
+}
 
 export function register(): void {
   registerReactSignals()
@@ -54,11 +68,11 @@ export function createComputed<T>(fn: () => T, label?: string): ReadableSignal<T
 }
 
 export function useSignal<T>(signal: ReadableSignal<T>): T {
-  return useValue((signal as CosignalsAtom<T> | CosignalsComputed<T>).signal)
+  return useCosignalsSignal((signal as CosignalsAtom<T> | CosignalsComputed<T>).signal)
 }
 
 /**
- * A suspending computed: while parked its node carries cosignals's AsyncSuspended
+ * A suspending computed: while parked its node carries cosignals-arena's AsyncSuspended
  * flag, which the devtools reports as a "suspended" node. `toggle` parks it on
  * a fresh pending promise (bumping `epoch` re-runs the body so it re-parks) and,
  * called again, resolves that promise so the body reruns to 'loaded'.
@@ -98,7 +112,7 @@ export function createSuspending(): {
 }
 
 /**
- * The interface's split (compute, handler, deps) shape desugars to cosignals's
+ * The interface's split (compute, handler, deps) shape desugars to cosignals-arena's
  * factory form: one spec object per deps window.
  */
 export function useSignalEffect<T>(

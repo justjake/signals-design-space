@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 import { createRoot } from "react-dom/client"
-import { createAtom, createComputed, latest, nodeOf, read } from "cosignals-arena"
+import { createAtom, createComputed, latest } from "cosignals-arena"
+import { nodeOf } from "cosignals-arena/unstable"
 import {
-  SignalsFrameworkProvider,
+  CosignalsProvider,
   startSignalTransition,
   useSignalEffect,
   useSignalLayoutEffect,
-  useValue,
+  useSignal,
 } from "cosignals-arena/react"
 import { act, deferred, flushEffects, makeHarness, React, type Harness } from "./helpers.tsx"
 
@@ -309,7 +310,7 @@ describe("scheduled React signal effects", () => {
       return null
     }
     function Suspender() {
-      if (useValue(hold) && !gate.settled) {
+      if (useSignal(hold) && !gate.settled) {
         throw gate.promise
       }
       return null
@@ -330,7 +331,7 @@ describe("scheduled React signal effects", () => {
     })
     await flushEffects()
     expect(events).toEqual([]) // drafts are invisible to effects
-    expect(read(atom)).toBe(0)
+    expect(atom.get()).toBe(0)
     expect(latest(atom)).toBe(1)
     await act(async () => {
       gate.resolve()
@@ -359,7 +360,7 @@ describe("scheduled React signal effects", () => {
       return null
     }
     function Suspender() {
-      if (useValue(hold) && !gate.settled) {
+      if (useSignal(hold) && !gate.settled) {
         throw gate.promise
       }
       return null
@@ -415,7 +416,7 @@ describe("scheduled React signal effects", () => {
       return null
     }
     function Suspender() {
-      if (useValue(hold) && !gate.settled) {
+      if (useSignal(hold) && !gate.settled) {
         throw gate.promise
       }
       return null
@@ -427,17 +428,17 @@ describe("scheduled React signal effects", () => {
     try {
       await act(() => {
         firstRoot.render(
-          <SignalsFrameworkProvider>
+          <CosignalsProvider>
             <React.Suspense fallback={null}>
               <Effect seen={firstSeen} />
               <Suspender />
             </React.Suspense>
-          </SignalsFrameworkProvider>,
+          </CosignalsProvider>,
         )
         secondRoot.render(
-          <SignalsFrameworkProvider>
+          <CosignalsProvider>
             <Effect seen={secondSeen} />
-          </SignalsFrameworkProvider>,
+          </CosignalsProvider>,
         )
       })
       expect(firstSeen).toEqual([0])
@@ -454,7 +455,7 @@ describe("scheduled React signal effects", () => {
       // both effects stay silent.
       expect(firstSeen).toEqual([0])
       expect(secondSeen).toEqual([0])
-      expect(read(atom)).toBe(0)
+      expect(atom.get()).toBe(0)
       await act(async () => {
         gate.resolve()
         await gate.promise
@@ -462,7 +463,7 @@ describe("scheduled React signal effects", () => {
       await flushEffects()
       expect(firstSeen).toEqual([0, 1])
       expect(secondSeen).toEqual([0, 1])
-      expect(read(atom)).toBe(1)
+      expect(atom.get()).toBe(1)
     } finally {
       await act(() => {
         firstRoot.unmount()
@@ -494,7 +495,7 @@ describe("scheduled React signal effects", () => {
       return null
     }
     function Suspender() {
-      if (useValue(hold) && !gate.settled) {
+      if (useSignal(hold) && !gate.settled) {
         throw gate.promise
       }
       return null
@@ -514,7 +515,7 @@ describe("scheduled React signal effects", () => {
     })
     await flushEffects()
     expect(seen).toEqual([10])
-    expect(read(flag)).toBe(false)
+    expect(flag.get()).toBe(false)
 
     // Only the drafted world reads `right`; the base effect still tracks
     // the base branch and stays silent.
@@ -535,7 +536,7 @@ describe("scheduled React signal effects", () => {
     })
     await flushEffects()
     expect(seen).toEqual([10, 12, 20])
-    expect(read(flag)).toBe(true)
+    expect(flag.get()).toBe(true)
   })
 
   test("deps-array changes re-create the effect in the React phase", async () => {

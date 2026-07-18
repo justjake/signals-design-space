@@ -2,7 +2,7 @@
  * `cosignals-arena/debug/trace` — the tracer surface and the canonical
  * trace vocabulary.
  *
- * This module is the ONE source of kind strings. The engine emits these
+ * This module is the single source of kind strings. The engine emits these
  * verbatim and the devtools shows them verbatim: there is no runtime mapping
  * table anywhere. Renaming a concept means renaming its string here and at
  * its emit site — never adding a translation layer.
@@ -32,22 +32,18 @@ export type {
  * The canonical trace vocabulary: every string the engine actually emits today,
  * verbatim. The devtools' kind chips and filters are typed against this union
  * and show these strings as-is — there is no runtime mapping.
- *
- * A usability rename pass is pending design sign-off (candidates:
- * `write`→`set`/`update`, `effect-run`→`effect`, `deliver`→`notify`,
- * `render-value`→`render`, `provider-world-commit`→`commit`). When it lands,
- * the string changes here AND at the emit site together — never a translation
- * layer. Until then this reflects reality so nothing lies.
  */
 export type TraceKind =
   // Atom write, by the API verb the caller used (graph.ts / worlds.ts draft
   // path); the intent is threaded from set()/update().
   | "set"
   | "update"
-  // Computed lifecycle. `compute` fires just before node.fn() runs, only on
-  // real evaluation (never a cache hit); -error/-suspend when it throws or
-  // parks on a thenable.
+  // Computed lifecycle. Fires just before node.fn() runs, only on real
+  // evaluation (never a cache hit): `compute` on the first (the node coming
+  // into existence), `recompute` on every later run; -error/-suspend when it
+  // throws or parks on a thenable.
   | "compute"
+  | "recompute"
   | "compute-error"
   | "compute-suspend"
   // Effects (graph.ts).
@@ -79,71 +75,3 @@ export type TraceKind =
   | "propagate" // the invalidation wave marked subscribers possibly stale
   | "check" // a dependency-validation walk confirmed or cleared staleness
   | "pull" // a computed/effect computation re-evaluated
-
-/**
- * Coarse class for coloring and filtering in the UI — the ONLY place the
- * panel reduces the vocabulary. Maps who-acted, not a rename. Unknown strings
- * (a future kind the panel hasn't seen) resolve to `'system'` so the log
- * still renders.
- */
-export type TraceKindClass =
-  | "origin" // user input (a DOM event captured as the operation root)
-  | "write" // set / update
-  | "compute" // computed re-evaluation
-  | "notify" // watcher delivery
-  | "render" // render suspension / commit
-  | "effect" // effect runs
-  | "batch" // batch / draft lifecycle
-  | "async" // settle / retry / suspend
-  | "error" // *-error
-  | "hot" // hot algorithm steps (propagate / check / pull)
-  | "system" // anything else
-
-/**
- * Classify a kind for the UI. Pure; no mapping of the kind itself — just a
- * coarse bucket for color/filter. Unknown kinds fall through to 'system' so
- * the log still renders a future kind the panel hasn't seen.
- */
-export function kindClass(kind: TraceKind | string): TraceKindClass {
-  switch (kind) {
-    case "dom-event":
-      return "origin" // synthetic root the collector adds from window.event
-    case "set":
-    case "update":
-      return "write"
-    case "compute":
-      return "compute"
-    case "notify":
-    case "transition-notify":
-      return "notify"
-    case "render-suspend":
-    case "transition-commit":
-      return "render"
-    case "effect":
-      return "effect"
-    case "transition-open":
-    case "transition-retire":
-    case "transition-discard":
-      return "batch"
-    case "settle":
-    case "retry":
-    case "compute-suspend":
-      return "async"
-    case "compute-error":
-    case "effect-error":
-    case "render-error":
-    case "callback-error":
-    case "cleanup-error":
-    case "flush-error":
-    case "policy-error":
-      return "error"
-    case "propagate":
-    case "check":
-    case "pull":
-      return "hot"
-    case "scheduler-fallback":
-      return "system"
-    default:
-      return "system"
-  }
-}

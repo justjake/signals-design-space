@@ -16,15 +16,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 import { createRoot } from "react-dom/client"
 import { act, deferred, makeHarness, text, tick, React, type Harness } from "./helpers.tsx"
-import {
-  attachTracer,
-  createAtom,
-  createComputed,
-  latest,
-  read,
-  type TraceEvent,
-} from "cosignals-arena"
-import { startSignalTransition, useValue } from "cosignals-arena/react"
+import { createAtom, createComputed, latest } from "cosignals-arena"
+import { attachTracer, type TraceEvent } from "cosignals-arena/debug"
+import { startSignalTransition, useSignal } from "cosignals-arena/react"
 import { openDraft, runWithDraftWrites, type Draft } from "../src/worlds.ts"
 import { broadcastDraft } from "../src/react/host.ts"
 
@@ -42,8 +36,8 @@ function makeHeld() {
   const hold = createAtom(false)
   const gate = deferred<void>()
   function Holder() {
-    const v = useValue(a)
-    const held = useValue(hold)
+    const v = useSignal(a)
+    const held = useSignal(hold)
     if (held && !gate.settled) {
       throw gate.promise
     }
@@ -90,7 +84,7 @@ describe("tear: the render-world note is validity-gated", () => {
     // bails out, so nothing refreshed the note for this pass.
     await act(() => bump())
     expect(text(container)).toContain("p:1;")
-    expect(read(a)).toBe(1)
+    expect(a.get()).toBe(1)
     expect(probed).toEqual([1]) // base state, never the held draft
     await release()
     expect(text(container)).toBe("h:2;p:1;")
@@ -104,7 +98,7 @@ describe("tear: the render-world note is validity-gated", () => {
       </React.Suspense>,
     )
     await start()
-    // A plain root (no SignalsFrameworkProvider, zero hooks — plain latest()
+    // A plain root (no CosignalsProvider, zero hooks — plain latest()
     // calls are legal anywhere) rendered right after the transition pass:
     // no pass of this root ever refreshed any note.
     const sampled: number[] = []
@@ -137,7 +131,7 @@ describe("tear: the render-world note is validity-gated", () => {
       return <i>{k},</i>
     }
     function List() {
-      const n = useValue(items)
+      const n = useSignal(items)
       const kids = []
       for (let k = 0; k < n; k++) {
         kids.push(<SlowItem key={k} k={k} />)
@@ -229,7 +223,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const renders = new Array<number>(N).fill(0)
     function Item({ i }: { i: number }) {
       renders[i]++
-      return <i>{useValue(cells[i])};</i>
+      return <i>{useSignal(cells[i])};</i>
     }
     const grid = (
       <>
@@ -262,7 +256,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const hold = createAtom(false)
     const gate = deferred<void>()
     function Suspender() {
-      const held = useValue(hold)
+      const held = useSignal(hold)
       if (held && !gate.settled) {
         throw gate.promise
       }
@@ -318,8 +312,8 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const gate = deferred<void>()
     let bRenders = 0
     function AReader() {
-      const v = useValue(a)
-      const held = useValue(hold)
+      const v = useSignal(a)
+      const held = useSignal(hold)
       if (held && !gate.settled) {
         throw gate.promise
       }
@@ -327,7 +321,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     }
     function BReader() {
       bRenders++
-      return <i>b:{useValue(b)};</i>
+      return <i>b:{useSignal(b)};</i>
     }
     const { container } = await h.mount(
       <>
@@ -368,7 +362,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const renders = new Array<number>(SUBS).fill(0)
     function Sub({ i }: { i: number }) {
       renders[i]++
-      return <i>{useValue(computed)};</i>
+      return <i>{useSignal(computed)};</i>
     }
     const { container } = await h.mount(
       <>
@@ -422,14 +416,14 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const computed = createComputed(() => source.get(), { label: "late-computed" })
     const gate = deferred<void>()
     function Suspender() {
-      const value = useValue(source)
+      const value = useSignal(source)
       if (value > 0 && !gate.settled) {
         throw gate.promise
       }
       return <b>s:{value};</b>
     }
     function LateReader() {
-      return <i>r:{useValue(computed)};</i>
+      return <i>r:{useSignal(computed)};</i>
     }
     function App({ late }: { late: boolean }) {
       return (
@@ -486,7 +480,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const hold = createAtom(false)
     const gate = deferred<void>()
     function Suspender() {
-      const held = useValue(hold)
+      const held = useSignal(hold)
       if (held && !gate.settled) {
         throw gate.promise
       }
@@ -531,7 +525,7 @@ describe("wake: transition passes re-render only drafted-cell subscribers", () =
     const hold = createAtom(false)
     const gate = deferred<void>()
     function Suspender() {
-      const held = useValue(hold)
+      const held = useSignal(hold)
       if (held && !gate.settled) {
         throw gate.promise
       }

@@ -2,21 +2,17 @@
 import { describe, expect, test } from "vitest"
 import * as cosignalsArena from "../src/index.ts"
 import {
-  attachTracer,
-  Tracer,
   createComputed,
-  effect,
+  createEffect,
   isPending,
-  nodeOf,
-  read,
-  reducerAtom,
+  createReducerAtom,
   createAtom,
   type Atom,
   type Computed,
-  untracked,
-  update,
-  getActiveTracer,
+  untrack,
 } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
+import { attachTracer, getActiveTracer, Tracer } from "../src/debug/index.ts"
 import { initializeAtomState, installState, serializeAtomState } from "../src/ssr.ts"
 import {
   FORBID_WRITE_FROM_COMPUTED,
@@ -28,7 +24,7 @@ import {
   makeScope,
   observeNode,
   startBatch as graphStartBatch,
-  untracked as graphUntracked,
+  untrack as graphUntracked,
 } from "../src/graph.ts"
 import { openDraft, retireDraft, runWithDraftWrites } from "../src/worlds.ts"
 
@@ -51,10 +47,10 @@ describe("lifetime effects", () => {
       },
     })
     const c = createComputed(() => a.get() * 2)
-    read(c) // unobserved computed chain: no observation
+    c.get() // unobserved computed chain: no observation
     await tick()
     expect(log).toEqual([])
-    const dispose = effect(
+    const dispose = createEffect(
       () => c.get(),
       () => {},
     ) // observes the chain into a
@@ -80,18 +76,18 @@ describe("lifetime effects", () => {
         return () => log.push("off")
       },
     })
-    const d1 = effect(
+    const d1 = createEffect(
       () => a.get(),
       () => {},
     )
     d1()
-    const d2 = effect(
+    const d2 = createEffect(
       () => a.get(),
       () => {},
     )
     await tick()
     expect(log).toEqual(["on"]) // net one activation across the flap
-    expect(read(a)).toBe(42)
+    expect(a.get()).toBe(42)
     d2()
     await tick()
     expect(log).toEqual(["on", "off"])
@@ -108,7 +104,7 @@ test("public execution controls are the graph functions", () => {
   expect(cosignalsArena.batch).toBe(graphBatch)
   expect(cosignalsArena.startBatch).toBe(graphStartBatch)
   expect(cosignalsArena.endBatch).toBe(graphEndBatch)
-  expect(cosignalsArena.untracked).toBe(graphUntracked)
+  expect(cosignalsArena.untrack).toBe(graphUntracked)
   expect(cosignalsArena.flushScheduledEffects).toBe(graphFlushScheduledEffects)
 })
 
@@ -120,8 +116,8 @@ describe("lazy initializers", () => {
       return 7
     })
     expect(runs).toBe(0)
-    expect(read(a)).toBe(7)
-    expect(read(a)).toBe(7)
+    expect(a.get()).toBe(7)
+    expect(a.get()).toBe(7)
     expect(runs).toBe(1)
   })
 
@@ -133,13 +129,13 @@ describe("lazy initializers", () => {
     })
     a.set(5)
     expect(runs).toBe(1)
-    expect(read(a)).toBe(5)
+    expect(a.get()).toBe(5)
   })
 
   test("update before first read applies against the initialized base", () => {
     const a = createAtom(() => 10)
-    update(a, (x) => x + 5)
-    expect(read(a)).toBe(15)
+    a.update((x) => x + 5)
+    expect(a.get()).toBe(15)
   })
 
   test("an initializer is forbidden from writing", () => {
@@ -148,7 +144,7 @@ describe("lazy initializers", () => {
       b.set(1)
       return 0
     })
-    expect(() => read(a)).toThrow(/initializer/)
+    expect(() => a.get()).toThrow(/initializer/)
   })
 
   test("a throwing initializer retries on the next read", () => {
@@ -160,14 +156,14 @@ describe("lazy initializers", () => {
       }
       return 5
     })
-    expect(() => read(a)).toThrow("flaky")
-    expect(read(a)).toBe(5)
+    expect(() => a.get()).toThrow("flaky")
+    expect(a.get()).toBe(5)
     expect(runs).toBe(2)
   })
 
   test("a cyclic initializer throws a clear error", () => {
     const a = createAtom((): number => a.get() + 1)
-    expect(() => read(a)).toThrow(/cyclic lazy initializer/)
+    expect(() => a.get()).toThrow(/cyclic lazy initializer/)
   })
 
   test("subscription materializes", () => {
@@ -185,7 +181,7 @@ describe("lazy initializers", () => {
 describe("computed policy and APIs", () => {
   test("factories return graph nodes with one shared method prototype", () => {
     const source = createAtom(1)
-    const reduced = reducerAtom((state: number, action: number) => state + action, 1)
+    const reduced = createReducerAtom((state: number, action: number) => state + action, 1)
     const computedValue = createComputed(() => source.get() + 1)
     const otherComputed = createComputed(() => 0)
     expect(nodeOf(source)).toBe(source)
@@ -205,7 +201,7 @@ describe("computed policy and APIs", () => {
     expect(cosignalsArena).not.toHaveProperty("signal")
     expect(cosignalsArena).not.toHaveProperty("computed")
     expect(cosignalsArena.createAtom).toBe(createAtom)
-    expect(cosignalsArena.reducerAtom).toBe(reducerAtom)
+    expect(cosignalsArena.createReducerAtom).toBe(createReducerAtom)
     expect(cosignalsArena.createComputed).toBe(createComputed)
   })
 
@@ -269,10 +265,10 @@ describe("computed policy and APIs", () => {
     expect(target.get()).toBe(0)
   })
 
-  test("untracked does not bypass computed write policy", () => {
+  test("untrack does not bypass computed write policy", () => {
     const target = createAtom(0)
     const writer = createComputed(() =>
-      untracked(() => {
+      untrack(() => {
         target.set(1)
         return 1
       }),
@@ -282,7 +278,7 @@ describe("computed policy and APIs", () => {
   })
 
   test("ReducerAtom dispatches through its fixed reducer and inherits signal writes", () => {
-    const count = reducerAtom((state: number, action: number) => state + action, 10)
+    const count = createReducerAtom((state: number, action: number) => state + action, 10)
     count.dispatch(5)
     expect(count.get()).toBe(15)
     count.set(1)
@@ -304,7 +300,7 @@ describe("SSR", () => {
     })
     const c2 = createAtom("default")
     let effectRuns = 0
-    const dispose = effect(
+    const dispose = createEffect(
       () => c2.get(),
       () => {
         effectRuns++
@@ -313,8 +309,8 @@ describe("SSR", () => {
     initializeAtomState(json, [c1, c2])
     expect(initRuns).toBe(0)
     expect(effectRuns).toBe(1) // install did not count as a write
-    expect(read(c1)).toBe(5)
-    expect(read(c2)).toBe("x")
+    expect(c1.get()).toBe(5)
+    expect(c2.get()).toBe("x")
     expect(initRuns).toBe(0)
     dispose()
   })
@@ -324,10 +320,10 @@ describe("SSR", () => {
     const json = serializeAtomState({ count: a }, (_k, v) => (typeof v === "number" ? v * 10 : v))
     const b = createAtom(0)
     initializeAtomState(json, { count: b }, (_k, v) => (typeof v === "number" ? v / 10 : v))
-    expect(read(b)).toBe(2)
+    expect(b.get()).toBe(2)
     const fresh = createAtom(0)
     installState(fresh, 9)
-    expect(read(fresh)).toBe(9)
+    expect(fresh.get()).toBe(9)
   })
 })
 
@@ -390,7 +386,7 @@ describe("causality tracer", () => {
       throw boom
     })
     expect(() =>
-      update(atom, (value) => {
+      atom.update((value) => {
         updaterRuns++
         return value + 1
       }),
@@ -410,7 +406,7 @@ describe("causality tracer", () => {
       return 1
     })
     expect(getActiveTracer()).toBeNull()
-    expect(() => read(first)).toThrow(SignalWriteForbidden)
+    expect(() => first.get()).toThrow(SignalWriteForbidden)
     expect(getActiveTracer()).toBeNull()
 
     const tracer = attachTracer()
@@ -420,7 +416,7 @@ describe("causality tracer", () => {
     })
     let thrown: unknown
     try {
-      read(second)
+      second.get()
     } catch (error) {
       thrown = error
     }
@@ -438,7 +434,7 @@ describe("causality tracer", () => {
     const tracer = attachTracer()
     const bodyError = new Error("body")
     expect(() =>
-      effect(
+      createEffect(
         () => 1,
         () => {
           throw bodyError
@@ -446,7 +442,7 @@ describe("causality tracer", () => {
       ),
     ).toThrow(bodyError)
     const cleanupError = new Error("cleanup")
-    const dispose = effect(
+    const dispose = createEffect(
       () => 1,
       () => () => {
         throw cleanupError
@@ -457,7 +453,7 @@ describe("causality tracer", () => {
     // is a compute error, not an effect error — the handler never saw it.
     const computeError = new Error("compute")
     expect(() =>
-      effect(
+      createEffect(
         (): number => {
           throw computeError
         },
@@ -479,7 +475,7 @@ describe("causality tracer", () => {
     const source = createAtom(0)
     const cleanupError = { kind: "cleanup" }
     let dispose!: () => void
-    dispose = effect(
+    dispose = createEffect(
       () => source.get(),
       () => () => {
         dispose()
@@ -507,7 +503,7 @@ describe("causality tracer", () => {
     const attachedError = new Error("attached in handler")
     let attached!: Tracer
     expect(() =>
-      effect(
+      createEffect(
         () => 1,
         () => {
           attached = attachTracer()
@@ -525,7 +521,7 @@ describe("causality tracer", () => {
     const replacementError = new Error("replacement in handler")
     let replacement!: Tracer
     expect(() =>
-      effect(
+      createEffect(
         () => 1,
         () => {
           replacement = attachTracer()
@@ -546,7 +542,7 @@ describe("causality tracer", () => {
     const t = attachTracer({ capacity: 16 })
     const a = createAtom(0, { label: "a" })
     const b = createAtom(0, { label: "b" })
-    effect(
+    createEffect(
       () => a.get(),
       (v) => b.set(v + 1),
       { label: "copy a to b" },

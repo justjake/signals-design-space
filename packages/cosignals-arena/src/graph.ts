@@ -409,7 +409,7 @@ initDetachedRecords()
 
 /**
  * The computed body executing now, independent of dependency tracking.
- * untracked() clears activeConsumer but must not bypass computed policies.
+ * untrack() clears activeConsumer but must not bypass computed policies.
  */
 export let activeEvaluation: DerivedNode<unknown> | null = null
 
@@ -505,7 +505,7 @@ export type HotStep = "propagate" | "check" | "pull"
  * not retain the node — derive an id and drop the reference (the devtools
  * adapter maps nodes to numeric ids through WeakRefs).
  */
-export type HotFn = (node: ReactiveNode, step: HotStep) => void
+export type HotFn = (node: ReactiveNode, step: HotStep, cause: TraceEventId) => void
 let hotHook: HotFn | null = null
 /** Install or detach the hot hook. `null` restores the detached null-check path. */
 export function setHotTracer(fn: HotFn | null): void {
@@ -1164,7 +1164,7 @@ function createGraphCore(
         cell.lifetimeCleanup = undefined
         if (cleanup !== undefined) {
           try {
-            untracked(cleanup)
+            untrack(cleanup)
           } catch (error) {
             if (trace !== null) {
               trace.emitEvent("cleanup-error", cell, trace.getCause(cell), {
@@ -1582,7 +1582,8 @@ function createGraphCore(
     }
     if (hotHook !== null) {
       // Every link in a subscriber list shares its dep: the changed producer.
-      hotHook(pinnedInternals[linkDep(link) >> RECORD_SHIFT]!, "propagate")
+      // The wave's cause (the write/settle driving it) is the propagate's cause.
+      hotHook(pinnedInternals[linkDep(link) >> RECORD_SHIFT]!, "propagate", cause)
     }
     const sink = trace
     let stack = waveStack
@@ -2177,7 +2178,7 @@ function createGraphCore(
    * function, no per-node closure — the evaluating computed IS the
    * activeConsumer at call time. (Draft evaluations pass their own worldUse
    * instead; see worlds.ts.) A use() that escapes its evaluation — captured
-   * and called later, or called inside untracked() — finds no evaluating
+   * and called later, or called inside untrack() — finds no evaluating
    * computed and throws rather than park the wrong node.
    */
   const evalUse: UseFn = <U>(t: PromiseLike<U>): U => {
@@ -2198,7 +2199,10 @@ function createGraphCore(
 
   function recompute(node: DerivedNode<unknown>): void {
     if (hotHook !== null) {
-      hotHook(node, "pull")
+      // The re-eval is caused by the state change that invalidated this node
+      // (propagation stamped it), or the operation in flight if unstamped.
+      const cause = trace?.getCause(node) ?? NO_EVENT
+      hotHook(node, "pull", cause !== NO_EVENT ? cause : currentCause)
     }
     const mem = M
     const clocks = graphClocks
@@ -2229,7 +2233,13 @@ function createGraphCore(
     const sink = trace
     const nodeCause = sink?.getCause(node) ?? NO_EVENT
     const computeCause = nodeCause !== NO_EVENT ? nodeCause : currentCause
-    const compute = sink !== null ? sink.startSpan("compute", node, computeCause) : NO_EVENT
+    // First evaluation is 'compute' (the node coming into existence); every
+    // later evaluation is 'recompute'. Distinct kinds so the trace tells a
+    // node's birth from a node churning — no display-layer remap.
+    const compute =
+      sink !== null
+        ? sink.startSpan(node.value === UNINITIALIZED ? "compute" : "recompute", node, computeCause)
+        : NO_EVENT
     const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
     try {
       value = node.fn(evalUse, node.value === UNINITIALIZED ? undefined : node.value)
@@ -2427,7 +2437,9 @@ function createGraphCore(
   /** Bring a derived up to date; exact recompute counts are the contract. */
   function ensureFresh(node: DerivedNode<unknown>, knownFlags?: Flags, depth = 0): void {
     if (hotHook !== null) {
-      hotHook(node, "check")
+      // A read validating this node's dependencies — caused by the operation
+      // in flight (the read/wave that reached here).
+      hotHook(node, "check", currentCause)
     }
     const mem = M
     const clocks = graphClocks
@@ -2521,7 +2533,7 @@ function createGraphCore(
   }
 
   /** Run `fn` without adding its signal reads to the active dependency list. */
-  function untracked<T>(fn: () => T): T {
+  function untrack<T>(fn: () => T): T {
     const prev = activeConsumer
     activeConsumer = null
     try {
@@ -2594,7 +2606,7 @@ function createGraphCore(
       const c = w.cleanup
       w.cleanup = undefined
       try {
-        untracked(c)
+        untrack(c)
       } catch (e) {
         if (trace !== null) {
           trace.emitEvent("cleanup-error", w, trace.getCause(w), { error: e })
@@ -2696,7 +2708,7 @@ function createGraphCore(
         const c = w.cleanup
         w.cleanup = undefined
         try {
-          untracked(c)
+          untrack(c)
         } catch (error) {
           if (trace !== null) {
             trace.emitEvent("cleanup-error", w, trace.getCause(w), { error })
@@ -3150,7 +3162,7 @@ function createGraphCore(
     writeCell,
     ensureFresh,
     readDerived,
-    untracked,
+    untrack,
     getActiveConsumer,
     disposeWatcher,
     makeEffect,
@@ -3199,7 +3211,7 @@ export const readCell = core.readCell
 export const writeCell = core.writeCell
 export const ensureFresh = core.ensureFresh
 export const readDerived = core.readDerived
-export const untracked = core.untracked
+export const untrack = core.untrack
 export const getActiveConsumer = core.getActiveConsumer
 export const disposeWatcher = core.disposeWatcher
 export const makeEffect = core.makeEffect

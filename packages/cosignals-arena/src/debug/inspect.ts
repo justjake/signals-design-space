@@ -4,7 +4,7 @@
  *
  * Everything here is inert: plain field reads (node.value / node.throwable /
  * node.flags) and record-list walks. Nothing calls the reactive read API.
- * That distinction is load-bearing: `read(x)` (even wrapped in `untracked`)
+ * That distinction is load-bearing: `x.get()` (even wrapped in `untrack`)
  * evaluates a stale computed, advancing clocks and emitting a `compute` into
  * the very trace the devtools is observing. Reading the cached field does not.
  * So the devtools sees the last-known value plus a `stale` flag, never a value
@@ -29,7 +29,7 @@ import {
 } from "../graph.ts"
 
 // nodeOf maps a public Signal to its node handle.
-export { nodeOf } from "../index.ts"
+export { nodeOf } from "../signals.ts"
 
 // Opaque node handles for consumers: pass them to inspect/deps/subs; never
 // read their fields (that's the encapsulation boundary).

@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 import { act, makeHarness, text, tick, React, type Harness } from "./helpers.tsx"
 import { createAtom } from "cosignals-arena"
-import { useValue } from "cosignals-arena/react"
+import { useSignal } from "cosignals-arena/react"
 
 let h: Harness
 let prevActEnv: boolean | undefined
@@ -43,7 +43,7 @@ describe("base writes behave like useState", () => {
   test("a timeout-origin write renders at default priority: not in the microtask window", async () => {
     const a = createAtom(0)
     function App() {
-      return <span>{useValue(a)}</span>
+      return <span>{useSignal(a)}</span>
     }
     const { container } = await h.mount(<App />)
     expect(text(container)).toBe("0")
@@ -70,7 +70,7 @@ describe("base writes behave like useState", () => {
     function App() {
       return (
         <button onClick={() => a.set(1)}>
-          <span>{useValue(a)}</span>
+          <span>{useSignal(a)}</span>
         </button>
       )
     }
@@ -95,7 +95,7 @@ describe("base writes behave like useState", () => {
       setSt = set
       return (
         <span>
-          {useValue(a)},{st}
+          {useSignal(a)},{st}
         </span>
       )
     }
@@ -124,7 +124,7 @@ describe("base writes behave like useState", () => {
     let renders = 0
     function App() {
       renders++
-      return <span>{useValue(a)}</span>
+      return <span>{useSignal(a)}</span>
     }
     const { container } = await h.mount(<App />)
     const before = renders
@@ -155,7 +155,7 @@ describe("the render→attach gap", () => {
     let readerRenders = 0
     function Reader() {
       readerRenders++
-      return <span>{useValue(a)}</span>
+      return <span>{useSignal(a)}</span>
     }
     function LayoutWriter() {
       React.useLayoutEffect(() => {

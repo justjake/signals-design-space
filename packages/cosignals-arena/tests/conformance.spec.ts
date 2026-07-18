@@ -10,7 +10,8 @@ import {
   type ReactiveFramework,
 } from "reactive-framework-test-suite"
 import adapter from "./harness-adapter.ts"
-import { createAtom, createComputed, effect, nodeOf } from "../src/index.ts"
+import { createAtom, createComputed, createEffect } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
 
 const framework = {
   ...adapter,
@@ -153,7 +154,7 @@ describe("cosignals-arena :: Effect Lifecycle (split-effect contract)", () => {
   test("#38 cleanup runs before each handler re-run", () => {
     const a = createAtom(0)
     const log: string[] = []
-    const dispose = effect(
+    const dispose = createEffect(
       () => a.get(),
       (v) => {
         log.push(`run:${v}`)
@@ -177,7 +178,7 @@ describe("cosignals-arena :: Effect Lifecycle (split-effect contract)", () => {
   test("#89 a compute error leaves the previous cleanup paired", () => {
     const a = createAtom(1)
     const log: string[] = []
-    const dispose = effect(
+    const dispose = createEffect(
       () => {
         const v = a.get()
         if (v === 2) {
@@ -212,13 +213,13 @@ describe("cosignals-arena :: Effect Lifecycle (split-effect contract)", () => {
       }
       return s.get()
     })
-    dispose1 = effect(
+    dispose1 = createEffect(
       () => a.get(),
       () => {
         e1runs++
       },
     )
-    const disposeKeeper = effect(
+    const disposeKeeper = createEffect(
       () => a.get(),
       () => {},
     )
@@ -241,20 +242,20 @@ describe("cosignals-arena :: Effect Lifecycle (split-effect contract)", () => {
     const c = createAtom(0)
     let bRuns = 0
     let cRuns = 0
-    const dispose = effect(
+    const dispose = createEffect(
       () => a.get(),
       () => {
-        effect(
+        createEffect(
           () => b.get(),
           () => {
             bRuns++
           },
         )
-        effect(
+        createEffect(
           () => c.get(),
           () => {
             cRuns++
-            effect(
+            createEffect(
               () => c.get(),
               () => {},
             ) // third level: owned by the inner run

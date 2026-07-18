@@ -369,3 +369,32 @@ equality-cutoff chains ~1.31 (was 1.34), wide fan-out 1.15-1.18 (was
 ~1.43), cellx 1.01-1.16, effect create+dispose the one row above its
 old band (1.68, attributed above) — and every large dynamic-graph row
 still wins (0.85-0.94).
+
+## 2026-07-17 source convergence: audience-specific entry points
+
+The fork now carries the source package's public-API restructure and the
+renames that followed it:
+
+- src/index.ts moved to src/signals.ts; index.ts is a curated facade
+  exporting only the app-author surface. `cosignals-arena/unstable`
+  exposes the integration seams (nodeOf, Flag, setRenderWorldProvider,
+  SIGNAL_BRAND, ...; the node type is this fork's `ReactiveNode` where
+  the source exports `ProducerNode`) and `cosignals-arena/testing`
+  exposes resetEngineForTest. The free read/set/update functions are
+  gone; the Atom/Computed methods are canonical.
+- Solid-style renames: effect → createEffect, reducerAtom →
+  createReducerAtom, untracked → untrack (through the core closure and
+  its worlds/asyncs callers). isSignalHandle is now isSignal and checks
+  a Symbol.for brand (`cosignals-arena.signal` — deliberately distinct
+  from the source package's brand, so the two engines never accept each
+  other's handles) stored once on each handle prototype.
+- Importing `cosignals-arena/react` registers the host bindings
+  (package.json gains the sideEffects entry); useValue is now useSignal
+  and SignalsFrameworkProvider is now CosignalsProvider.
+- Devtools vocabulary: kindClass moved out to the devtools panel, and
+  the engine now distinguishes a node's first evaluation (`compute`)
+  from later runs (`recompute`) at the base recompute span. The hot
+  channel's hook gained the causal-event argument on all three steps.
+
+Typecheck and all 421 package tests (conformance, oracle fuzz, GC/leak,
+React suites) pass at this point.

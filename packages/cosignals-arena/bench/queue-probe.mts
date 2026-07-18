@@ -15,7 +15,8 @@
  *
  * Run: node --expose-gc --import tsx bench/queue-probe.mts
  */
-import { effect, nodeOf, createAtom } from "../src/index.ts"
+import { createAtom, createEffect } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
 import { observeNode } from "../src/graph.ts"
 
 if (typeof gc !== "function") {
@@ -69,10 +70,13 @@ measure("effect burst", () => {
   let hits = 0
   for (let s = 0; s < SUBS; s++) {
     held.push(
-      effect(() => {
-        cell.get()
-        hits++
-      }),
+      createEffect(
+        () => {
+          cell.get()
+          hits++
+        },
+        () => {},
+      ),
     )
   }
   return (i) => cell.set(i + 1)

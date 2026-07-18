@@ -4,14 +4,15 @@ import { describe, expect, test } from "vitest"
 import * as React from "react"
 import { act } from "react"
 import { createRoot } from "react-dom/client"
-import { createAtom, effect, flushScheduledEffects, nodeOf, read, type Atom } from "cosignals-arena"
+import { createAtom, createEffect, flushScheduledEffects, type Atom } from "cosignals-arena"
+import { nodeOf } from "cosignals-arena/unstable"
 import { discardDraft, liveDraftCount, openDraft, runWithDraftWrites } from "../src/worlds.ts"
 import {
   registerReactSignals,
   resetReactSignalsForTest,
-  SignalsFrameworkProvider,
+  CosignalsProvider,
   startSignalTransition,
-  useValue,
+  useSignal,
 } from "cosignals-arena/react"
 import {
   broadcastDraft,
@@ -23,7 +24,7 @@ import {
   EMPTY_WORLD,
   ReactRootConnectionContext,
   worldsReducer,
-} from "../src/react/SignalsFrameworkProvider.ts"
+} from "../src/react/CosignalsProvider.ts"
 import { makeHarness, text, tick } from "./helpers.tsx"
 import { nextSubscriber } from "../src/graph.ts"
 
@@ -100,14 +101,14 @@ describe("registration", () => {
     const source = createAtom(0)
     const layoutSeen: number[] = []
     const passiveSeen: number[] = []
-    const stopA = effect(
+    const stopA = createEffect(
       () => source.get(),
       (value) => {
         layoutSeen.push(value)
       },
       { schedule: "useLayoutEffect" },
     )
-    const stopB = effect(
+    const stopB = createEffect(
       () => source.get(),
       (value) => {
         passiveSeen.push(value)
@@ -138,7 +139,7 @@ describe("registration", () => {
     const unregister = registerEffectHost(() => {})
     const source = createAtom(0)
     const seen: number[] = []
-    const stop = effect(
+    const stop = createEffect(
       () => source.get(),
       (value) => {
         seen.push(value)
@@ -163,11 +164,11 @@ describe("registration", () => {
     const h = makeHarness()
     const a = createAtom(0)
     function App() {
-      return <span>{useValue(a)}</span>
+      return <span>{useSignal(a)}</span>
     }
     const { container } = await h.mount(<App />)
     const seen: Array<[value: number, dom: string]> = []
-    const stop = effect(
+    const stop = createEffect(
       () => a.get(),
       (value) => {
         seen.push([value, text(container)])
@@ -203,15 +204,15 @@ describe("registration", () => {
 
     const drafted = createAtom(0)
     startSignalTransition(() => drafted.set(1))
-    expect(read(drafted)).toBe(0)
+    expect(drafted.get()).toBe(0)
     await Promise.resolve()
-    expect(read(drafted)).toBe(1)
+    expect(drafted.get()).toBe(1)
 
     handle.dispose()
     resetReactSignalsForTest()
     const urgent = createAtom(0)
     startSignalTransition(() => urgent.set(1))
-    expect(read(urgent)).toBe(1)
+    expect(urgent.get()).toBe(1)
   })
 
   test("reset keeps disposal from a pending lifetime cleanup", async () => {
@@ -224,7 +225,7 @@ describe("registration", () => {
         handle.dispose()
       },
     })
-    const stop = effect(
+    const stop = createEffect(
       () => observed.get(),
       () => {},
     )
@@ -235,7 +236,7 @@ describe("registration", () => {
     expect(cleaned).toBe(true)
     const urgent = createAtom(0)
     startSignalTransition(() => urgent.set(1))
-    expect(read(urgent)).toBe(1)
+    expect(urgent.get()).toBe(1)
   })
 
   test("a detached connection record has no trace-only fields", async () => {
@@ -251,9 +252,9 @@ describe("registration", () => {
     try {
       await act(() => {
         root.render(
-          <SignalsFrameworkProvider>
+          <CosignalsProvider>
             <Child />
-          </SignalsFrameworkProvider>,
+          </CosignalsProvider>,
         )
       })
       expect(Object.keys(connection!)).toEqual(["dispatch", "committing"])
@@ -271,18 +272,18 @@ describe("registration", () => {
     const root = createRoot(container)
     const seen: Array<[rendered: number, committed: number, liveDrafts: number]> = []
     function Child() {
-      const value = useValue(atom)
+      const value = useSignal(atom)
       React.useLayoutEffect(() => {
-        seen.push([value, read(atom), liveDraftCount()])
+        seen.push([value, atom.get(), liveDraftCount()])
       })
       return null
     }
     try {
       await act(() => {
         root.render(
-          <SignalsFrameworkProvider>
+          <CosignalsProvider>
             <Child />
-          </SignalsFrameworkProvider>,
+          </CosignalsProvider>,
         )
       })
       expect(seen).toEqual([[0, 0, 0]])
@@ -310,7 +311,7 @@ describe("hosted draft lifetime", () => {
     expect(liveDraftCount()).toBe(1)
     await Promise.resolve()
     expect(liveDraftCount()).toBe(0)
-    expect(read(a)).toBe(1)
+    expect(a.get()).toBe(1)
   })
 
   test("unregistering the last recipient retires its live drafts", () => {
@@ -328,7 +329,7 @@ describe("hosted draft lifetime", () => {
     expect(liveDraftCount()).toBe(1)
     unregister()
     expect(liveDraftCount()).toBe(0)
-    expect(read(a)).toBe(2)
+    expect(a.get()).toBe(2)
   })
 })
 
@@ -344,7 +345,7 @@ describe("unmount reclamation", () => {
       return <>{kids}</>
     }
     function Item() {
-      return <i>{useValue(a)}</i>
+      return <i>{useSignal(a)}</i>
     }
     const { root, container } = await h.mount(<Many />)
     expect(subCount(a)).toBe(50)
@@ -360,14 +361,14 @@ describe("unmount reclamation", () => {
     })
     expect(subCount(a)).toBe(0) // deterministic unsubscription at unmount
     await h.cleanup()
-    expect(read(a)).toBe(1)
+    expect(a.get()).toBe(1)
   })
 
   test("a full mount/write/transition/unmount cycle leaves no live drafts", async () => {
     const h = makeHarness()
     const a = createAtom(0)
     function App() {
-      return <span>{useValue(a)}</span>
+      return <span>{useSignal(a)}</span>
     }
     const m1 = await h.mount(<App />)
     const m2 = await h.mount(<App />)

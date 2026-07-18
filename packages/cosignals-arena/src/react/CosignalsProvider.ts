@@ -1,5 +1,5 @@
 /**
- * SignalsFrameworkProvider: the component that delivers transitions to
+ * CosignalsProvider: the component that delivers transitions to
  * one React root.
  *
  * Its reducer state is the set of transition draft ids this root has been
@@ -48,7 +48,7 @@ export interface WorldState {
 export const EMPTY_WORLD: WorldState = { ids: [] }
 
 /**
- * Shared by the connection and every useValue hook: accumulate live draft
+ * Shared by the connection and every useSignal hook: accumulate live draft
  * ids and prune dead ones — retired and discarded drafts resolve to base
  * state anyway, and a long-lived subscriber must not grow history
  * forever. The ids array changes only with membership, but the wrapper is
@@ -90,7 +90,7 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
  */
 export const ReactRootConnectionContext = React.createContext<ReactRootConnection | null>(null)
 
-export interface SignalsFrameworkProviderProps {
+export interface CosignalsProviderProps {
   children?: React.ReactNode
 }
 
@@ -144,12 +144,12 @@ function DeferredEffectHost(): null {
  * Connect a React subtree to the signals runtime. A descendant provider
  * would replace this connection for part of the subtree, so nesting throws.
  */
-export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): React.ReactElement {
+export function CosignalsProvider(props: CosignalsProviderProps): React.ReactElement {
   if (React.useContext(ReactRootConnectionContext) !== null) {
     const error = new Error(
-      "SignalsFrameworkProvider cannot be nested inside another " +
-        "SignalsFrameworkProvider. Mount it outside the other provider, " +
-        "or use wrapCreateRoot(createRoot).",
+      "CosignalsProvider cannot be nested inside another " +
+        "CosignalsProvider. Mount one provider per root, at the top " +
+        "of the tree.",
     )
     trace?.emitEvent("policy-error", null, NO_EVENT, {
       error,
@@ -174,37 +174,4 @@ export function SignalsFrameworkProvider(props: SignalsFrameworkProviderProps): 
     props.children,
     React.createElement(DeferredEffectHost, null),
   )
-}
-
-/**
- * A React root whose render() wraps the tree in a
- * SignalsFrameworkProvider.
- */
-export interface WrappedRoot {
-  render(node: React.ReactNode): void
-  unmount(): void
-}
-
-/**
- * A createRoot with the provider pre-installed: every render() is wrapped
- * in this root's SignalsFrameworkProvider, so transitions work without
- * composing anything.
- */
-export function wrapCreateRoot(
-  createRoot: (
-    el: Element,
-    opts?: unknown,
-  ) => { render(node: React.ReactNode): void; unmount(): void },
-): (el: Element, opts?: unknown) => WrappedRoot {
-  return (el, opts) => {
-    const root = createRoot(el, opts)
-    return {
-      render(node: React.ReactNode) {
-        root.render(React.createElement(SignalsFrameworkProvider, null, node))
-      },
-      unmount() {
-        root.unmount()
-      },
-    }
-  }
 }

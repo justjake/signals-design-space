@@ -10,16 +10,9 @@
  * - Draft retirement drops rebase logs and world memos (quiescence).
  */
 import { describe, expect, test } from "vitest"
-import {
-  attachTracer,
-  createAtom,
-  createComputed,
-  effect,
-  effectScope,
-  nodeOf,
-  read,
-  type Atom,
-} from "../src/index.ts"
+import { createAtom, createComputed, createEffect, effectScope, type Atom } from "../src/index.ts"
+import { nodeOf } from "../src/unstable.ts"
+import { attachTracer } from "../src/debug/index.ts"
 import { nextSubscriber, observeNode, type CellNode, type Link } from "../src/graph.ts"
 import {
   liveDraftCount,
@@ -63,7 +56,7 @@ describe("leak audit", () => {
     ;(() => {
       const mid = createComputed(() => base.get() * 2)
       const top = createComputed(() => mid.get() + 1)
-      expect(read(top)).toBe(3)
+      expect(top.get()).toBe(3)
       reg.register(top, null)
     })()
     await collect()
@@ -87,7 +80,7 @@ describe("leak audit", () => {
     expect(nodeOf(c).worldMemos).toBeNull()
     expect(nodeOf(a).worldMemos).toBeNull()
     expect(liveDraftCount()).toBe(0)
-    expect(read(a)).toBe(6)
+    expect(a.get()).toBe(6)
   })
 
   test("a retired draft id in long-lived state retains neither the Draft record nor its logged intents", async () => {
@@ -108,7 +101,7 @@ describe("leak audit", () => {
       payloadRef = new WeakRef(payload)
       retireDraft(draft.id)
     })()
-    expect(read(a).n).toBe(1) // the fold landed the logged payload in base state
+    expect(a.get().n).toBe(1) // the fold landed the logged payload in base state
     a.set({ n: 2 }) // base state moves on: nothing references the payload
     await collect(10)
     expect(committedReducerState.length).toBe(1) // the id is still held — and inert
@@ -129,7 +122,7 @@ describe("leak audit", () => {
       // unsubscribe: promote installed back-edges down to the atom, and
       // demote must remove every one of them.
       const unsub = observeNode(nodeOf(top), () => {})
-      expect(read(top)).toBe(3)
+      expect(top.get()).toBe(3)
       expect(subCount(base)).toBe(1)
       unsub()
       expect(subCount(base)).toBe(0)
@@ -142,7 +135,7 @@ describe("leak audit", () => {
 
   test("disposing an effect deterministically unlinks now (no GC needed)", () => {
     const base = createAtom(1)
-    const dispose = effect(
+    const dispose = createEffect(
       () => base.get(),
       () => {},
     )
@@ -161,7 +154,7 @@ describe("leak audit", () => {
     const atom = createAtom(0)
     const payloadRef = (() => {
       const payload = { tag: "effect-closure-payload" }
-      const dispose = effect(
+      const dispose = createEffect(
         () => {
           void payload
           return atom.get()
@@ -202,7 +195,7 @@ describe("leak audit", () => {
     // EXPERIMENT.md's lifetime notes.
     const grow = (previous: { get(): number }) => createComputed(() => previous.get() + 1)
     const watch = (top: { get(): number }) =>
-      effect(
+      createEffect(
         () => top.get(),
         () => {},
       )
@@ -243,7 +236,7 @@ describe("leak audit", () => {
     const atom = createAtom(0)
     let armed = false
     const payloadRef = (() => {
-      const disposeThrowing = effect(
+      const disposeThrowing = createEffect(
         () => atom.get(),
         () => {
           if (armed) {
@@ -254,7 +247,7 @@ describe("leak audit", () => {
       // Scheduled behind the thrower: the aborted drain clears it via the
       // catch path, which must null its unconsumed slot too.
       const payload = { tag: "preempted-effect-payload" }
-      const disposePreempted = effect(
+      const disposePreempted = createEffect(
         () => {
           void payload
           return atom.get()
@@ -279,7 +272,7 @@ describe("leak audit", () => {
       // Common usage: the per-effect disposer is dropped because the scope
       // owns the effect. Collecting that disposer is not abandonment — the
       // effect must stay live until the scope goes.
-      void effect(
+      void createEffect(
         () => base.get(),
         () => {
           runs++
