@@ -1694,7 +1694,8 @@ export function writeAtom<T>(
   graphChangeClock++
   baseChangedAtGraphChange = graphChangeClock
   atom.changedAtGraphChange = graphChangeClock
-  const cause = activeTracer !== null ? activeTracer.emitEvent(intent, atom, currentCause) : NO_EVENT
+  const cause =
+    activeTracer !== null ? activeTracer.emitEvent(intent, atom, currentCause) : NO_EVENT
   propagateWave(atom.subs, cause)
   if (batchDepth === 0) {
     flush()

@@ -1,7 +1,21 @@
 {
   "name": "cosignals-devtools",
   "version": "0.1.0",
-  "description": "Devtools for cosignals: a live dependency-graph explorer and a causal event log that answers \"why did this re-render?\" — mounted inline in your app or as a Chrome DevTools panel.",
+  "description": "Devtools for cosignals: a live dependency-graph explorer and a causal event log inline in your app or as a Chrome DevTools panel.",
+  "keywords": [
+    "chrome-extension",
+    "cosignals",
+    "debugger",
+    "debugging",
+    "dependency-graph",
+    "devtools",
+    "react",
+    "signals",
+    "state-management",
+    "tracing"
+  ],
+  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/devtools#readme",
+  "bugs": "https://github.com/justjake/signals-design-space/issues",
   "license": "MIT",
   "author": "Jake Teton-Landis <just.1.jake@gmail.com>",
   "repository": {
@@ -9,26 +23,12 @@
     "url": "git+https://github.com/justjake/signals-design-space.git",
     "directory": "packages/devtools"
   },
-  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/devtools#readme",
-  "bugs": "https://github.com/justjake/signals-design-space/issues",
-  "keywords": [
-    "cosignals",
-    "signals",
-    "react",
-    "devtools",
-    "debugger",
-    "debugging",
-    "tracing",
-    "dependency-graph",
-    "state-management",
-    "chrome-extension"
-  ],
-  "type": "module",
-  "sideEffects": false,
   "files": [
     "dist",
     "src"
   ],
+  "type": "module",
+  "sideEffects": false,
   "exports": {
     "./protocol": "./src/protocol.ts",
     "./collector": "./src/collector.ts",

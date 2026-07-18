@@ -551,7 +551,10 @@ function updateAtom<T>(x: Atom<T>, fn: (prev: T) => T): void {
     next = runUpdater(fn, previous)
   } catch (error) {
     if (activeTracer !== null) {
-      activeTracer.emitEvent("callback-error", activeEvaluation, currentCause, { error, phase: "updater" })
+      activeTracer.emitEvent("callback-error", activeEvaluation, currentCause, {
+        error,
+        phase: "updater",
+      })
     }
     throw error
   }

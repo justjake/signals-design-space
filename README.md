@@ -15,11 +15,11 @@ verification, and the research record that produced the current design.
 
 ## Packages
 
-| Package | Purpose |
-| --- | --- |
-| [`cosignals`](packages/cosignals/) | The main implementation. It includes the React-free graph, React bindings, async values, SSR state transfer, tracing, and testing APIs. |
+| Package                                        | Purpose                                                                                                                                         |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`cosignals`](packages/cosignals/)             | The main implementation. It includes the React-free graph, React bindings, async values, SSR state transfer, tracing, and testing APIs.         |
 | [`cosignals-arena`](packages/cosignals-arena/) | The same public API and concurrent behavior with nodes and links stored in typed-array records. It is retained as the data-oriented comparison. |
-| [`cosignals-devtools`](packages/devtools/) | A dependency-graph explorer and causal event log for both engines, available inline or as a Chrome DevTools panel. |
+| [`cosignals-devtools`](packages/devtools/)     | A dependency-graph explorer and causal event log for both engines, available inline or as a Chrome DevTools panel.                              |
 
 The core entry points are React-free and dependency-free. React support lives at
 `cosignals/react` and `cosignals-arena/react`, with `react` and `react-dom` as
@@ -85,15 +85,15 @@ The behavioral contract is documented in
 
 ## Repository map
 
-| Path | Purpose |
-| --- | --- |
-| [`harness`](harness/) | Shared signal conformance, core benchmarks, memory probes, and inlining checks. |
-| [`packages/react-signals-playground`](packages/react-signals-playground/) | Browser playground plus Playwright batteries for concurrent behavior and devtools. |
-| [`packages/react-seam-bench`](packages/react-seam-bench/) | Measures write-to-commit fan-out, urgent latency during transitions, and mount cost. |
-| [`packages/dalien-signals`](packages/dalien-signals/) | Submodule containing the packed-layout baseline used by benchmarks. |
-| [`libs`](libs/) | Focused graph-layout and propagation experiments used by the core harness. |
-| [`research`](research/), [`plans`](plans/), [`reviews`](reviews/) | Design studies, measured experiments, implementation plans, and adversarial reviews. |
-| [`royale`](royale/) | Archived results and notes from the independent implementation tournament. Its old harness and adapters have been removed. |
+| Path                                                                      | Purpose                                                                                                                    |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [`harness`](harness/)                                                     | Shared signal conformance, core benchmarks, memory probes, and inlining checks.                                            |
+| [`packages/react-signals-playground`](packages/react-signals-playground/) | Browser playground plus Playwright batteries for concurrent behavior and devtools.                                         |
+| [`packages/react-seam-bench`](packages/react-seam-bench/)                 | Measures write-to-commit fan-out, urgent latency during transitions, and mount cost.                                       |
+| [`packages/dalien-signals`](packages/dalien-signals/)                     | Submodule containing the packed-layout baseline used by benchmarks.                                                        |
+| [`libs`](libs/)                                                           | Focused graph-layout and propagation experiments used by the core harness.                                                 |
+| [`research`](research/), [`plans`](plans/), [`reviews`](reviews/)         | Design studies, measured experiments, implementation plans, and adversarial reviews.                                       |
+| [`royale`](royale/)                                                       | Archived results and notes from the independent implementation tournament. Its old harness and adapters have been removed. |
 
 Vendored and submodule sources are comparison material, not additional packages
 maintained by this workspace.

@@ -890,7 +890,9 @@ export function resolveState(node: ProducerNode, world: World): ResolvedState {
     for (const draft of world.drafts) {
       computeWorld.push(draft.id)
     }
-    const compute = tracer.startSpan("compute", node, tracer.getCause(node), { world: computeWorld })
+    const compute = tracer.startSpan("compute", node, tracer.getCause(node), {
+      world: computeWorld,
+    })
     const prevCause = compute !== NO_EVENT ? setCurrentCause(compute) : NO_EVENT
     try {
       fresh = draftEvaluate(node as ComputedNode<unknown>, world, previousState, certificate)

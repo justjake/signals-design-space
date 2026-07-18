@@ -1,7 +1,25 @@
 {
   "name": "cosignals",
   "version": "0.1.0",
-  "description": "The first concurrent signals library for React, and the fastest: writes participate in transitions exactly like useState, async values suspend on first load and keep serving data while refetching, and re-renders schedule the way React intends.",
+  "description": "Concurrent signals library for React: works with transitions and suspense. Reasonably fast.",
+  "keywords": [
+    "async",
+    "atom",
+    "concurrent",
+    "concurrent-rendering",
+    "hooks",
+    "react",
+    "reactive",
+    "signals",
+    "state",
+    "state-management",
+    "store",
+    "suspense",
+    "transitions",
+    "useTransition"
+  ],
+  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals#readme",
+  "bugs": "https://github.com/justjake/signals-design-space/issues",
   "license": "MIT",
   "author": "Jake Teton-Landis <just.1.jake@gmail.com>",
   "repository": {
@@ -9,23 +27,11 @@
     "url": "git+https://github.com/justjake/signals-design-space.git",
     "directory": "packages/cosignals"
   },
-  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals#readme",
-  "bugs": "https://github.com/justjake/signals-design-space/issues",
-  "keywords": [
-    "react",
-    "signals",
-    "state",
-    "state-management",
-    "store",
-    "concurrent",
-    "concurrent-rendering",
-    "transitions",
-    "useTransition",
-    "suspense",
-    "async",
-    "reactive",
-    "atom",
-    "hooks"
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "INTERNALS.md"
   ],
   "type": "module",
   "sideEffects": [
@@ -33,12 +39,6 @@
     "./src/react/index.ts",
     "./dist/index.js",
     "./dist/react/index.js"
-  ],
-  "files": [
-    "dist",
-    "src",
-    "docs",
-    "INTERNALS.md"
   ],
   "exports": {
     ".": "./src/index.ts",
