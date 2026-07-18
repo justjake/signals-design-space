@@ -277,7 +277,7 @@ your two package dirs (plus the vendor/react gitlink if git insists).
   `/Users/jitl/src/alien-signals-opt`).
 - **Forbidden reading** (design-independence — the whole point is a fresh design):
   `packages/cosignals-first-draft*/src/**`, `packages/concurrent-solid-react/src/**`, `spec/`,
-  `design-loop/`, `monitor-design/`, `research/`, `reviews/`, `plans/`,
+  `design-loop/`, `research/monitor-design/`, `research/`, `reviews/`, `plans/`,
   `react-concurrent-signals-arena*.md`, and the incumbents' SPEC-RESOLUTIONS.md.
 - **Allowed reading**: this file; every `tests/` / `test/` dir (tests define
   behavior); package READMEs; `harness/**`; `fork/README.md` and

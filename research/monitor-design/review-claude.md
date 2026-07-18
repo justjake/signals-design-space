@@ -1,4 +1,4 @@
-# Adversarial review — monitor-design/DESIGN.md ("cosignal, the monitor's cut")
+# Adversarial review — research/monitor-design/DESIGN.md ("cosignal, the monitor's cut")
 
 Reviewer: claude (independent; did not read rounds/ or other designs).
 Method: battery re-walk, counter-schedules against every dissolution claim,

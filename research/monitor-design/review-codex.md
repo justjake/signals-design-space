@@ -1,4 +1,4 @@
-# Adversarial correctness review: `monitor-design/DESIGN.md`
+# Adversarial correctness review: `research/monitor-design/DESIGN.md`
 
 ## Findings
 

@@ -5,3 +5,6 @@ dist/
 .DS_Store
 harness/results/*
 test-results/
+tmp/
+.pnpm-store/
+.claude/

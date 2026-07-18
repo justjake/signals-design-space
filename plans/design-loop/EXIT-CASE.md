@@ -11,7 +11,7 @@ Adopt the round-5 champion (`rounds/round-05/synthesis.md`, over the
 round-4 and round-3 bases — see O26) as the **design-complete baseline**,
 apply the **scope cuts** below (removing the parity-exceeding machinery the
 loop gold-plated), cross-check the result against the independently-written
-lean rebuild (`monitor-design/DESIGN.md` + its two reviews) and treat the
+lean rebuild (`research/monitor-design/DESIGN.md` + its two reviews) and treat the
 **intersection** as the implementation spec, then **move to implementation
 starting with the randomized oracle and the fork test suite** — the
 remaining defect class (repairs minting seam bugs) is precisely what
@@ -76,7 +76,7 @@ otherwise), counter/epoch hygiene (cheap).
 
 ## The convergence cross-check
 
-`monitor-design/DESIGN.md` — written in one shot from the genome alone,
+`research/monitor-design/DESIGN.md` — written in one shot from the genome alone,
 with the cuts applied — was reviewed by both models: codex 8 blockers
 ("architecturally unsound" — its label has fired on every artifact
 including two the judge sustained; the schedules are the signal), claude
