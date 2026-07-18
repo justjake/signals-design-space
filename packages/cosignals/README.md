@@ -1,27 +1,29 @@
 # cosignals
 
-Signals for React with first-class support for transitions and
-concurrent rendering. Signals are reactive values that live outside the
-component tree; components, derived values, and side effects that read
-them update automatically as they change.
+[Signals](https://github.com/tc39/proposal-signals) for React with first-class
+support for transitions and concurrent rendering. (See [what are signals?](#what-are-signals))
 
-What sets `cosignals` apart is how writes interact with React:
-
-- Transition-aware writes: a write inside `React.startTransition` stays
-  invisible to the current screen until the transition commits, exactly
-  like a `useState` update. A typical external store cannot do this: it
-  has one current value per key, so either the write shows up
-  immediately everywhere (defeating the transition) or the background
-  render cannot see it.
-- `useState`-like scheduling: a signal write re-renders its subscribers
+- **Transitions**: a write inside `React.startTransition` stays invisible to
+  the current screen until the transition commits, exactly like a `useState`
+  update. A typical external store cannot do this: it has one current value, so
+  either the write shows up immediately everywhere (defeating the transition) or
+  the background render cannot see it. [Details](#transition-writes).
+- **Async / Suspense**: a computed signal [can suspend](#async-computeds) with
+  `use(promise)` like a React component. It re-runs once the promise settles. On
+  the first run, components downstream suspend; if there's a previous value,
+  downstream signals and components see that while waiting.
+- **Scheduling**: a signal write re-renders its subscribers
   with the same priority React would give a `setState` call from the
-  same place, where `useSyncExternalStore` bindings render every store
-  change at synchronous priority.
-- Async values as state: a computed can read a promise. The first load
-  suspends through React Suspense; a refetch keeps showing the previous
-  value while `isPending` reports that newer data is loading.
-- *Uses React internals*. If you depend on this library, you may not be
-  able to upgrade React.
+  same place, where `useSyncExternalStore` bindings render every store change at
+  synchronous priority. [Signal-subscribed effects](#effects) run like _useEffect_ or
+  _useLayoutEffect_ without re-rendering the component.
+- **Supposedly supports multiple roots**: each root sees its own correct concurrent state,
+  unlike the experimental
+  [react-concurrent-store](https://github.com/thejustinwalsh/react-concurrent-store)
+  polyfill. _I'm not sure if it's completely correct though._
+- **Beware: uses React internals**: some of these magicks rely on React internals; if
+  you use this library, you may not be able to upgrade React. Tested with React
+  18.2.0 - 19.3.0 (unreleased as of 2026-07-18).
 
 ```tsx
 import { createRoot } from "react-dom/client"
@@ -65,40 +67,66 @@ Install:
 
 ```sh
 pnpm add cosignals
-# or: npm install cosignals · yarn add cosignals · bun add cosignals
+npm add cosignals
+yarn add cosignals
+bun add cosignals
 ```
 
 `cosignals/react` requires `react` and `react-dom` 18.2 or later as peer
-dependencies.
+dependencies. You must render `<CosignalsProvider>` as your React root:
 
-Import what you need. The package splits into entry points so an app
-only pays for what it imports:
+```tsx
+import { createRoot } from "react-dom/client"
+import { CosignalsProvider } from "cosignals/react"
+import { App } from "./App"
 
-- `cosignals`: create signals, derive values, react to changes, batch
-  writes — `createAtom`, `createComputed`, `createEffect`, `batch`,
-  `latest`, `isPending`. React-free and dependency-free.
+createRoot(document.getElementById("root")!).render(
+  <CosignalsProvider>
+    <App />
+  </CosignalsProvider>,
+)
+```
+
+Configure your linter to check [signal effects](#usesignaleffect):
+
+```jsonc
+"react-hooks/exhaustive-deps": ["error", {
+  "additionalHooks": "(useSignalEffect|useSignalLayoutEffect)"
+}]
+```
+
+Available modules:
+
+- `cosignals`: Pure core; React and dependency-free. Create signals, derive
+  values, react to changes, batch writes — `createAtom`, `createComputed`,
+  `createEffect`, `batch`, `latest`, `isPending`.
 - `cosignals/react`: hooks and the provider that connect signals to
   components — `useSignal`, `useComputed`, `useSignalEffect`,
-  `useSignalTransition`, `CosignalsProvider`.
+  `useSignalLayoutEffect`, `useSignalTransition`, `CosignalsProvider`.
 - `cosignals/ssr`: serialize and restore atom state across server and
-  client.
+  client. _Experimental_.
 - `cosignals/testing`: reset engine state between tests.
-- `cosignals/debug` and `cosignals/unstable`: tracing, inspection, and
-  engine integration seams, documented in [INTERNALS.md](./INTERNALS.md).
-
-Render `<CosignalsProvider>` at the top of each root, as in the example
-up top. The subscribing hooks — `useSignal`, `useComputed`, and
-`useIsPending` — require a provider above them and throw without one; it
-is the channel that delivers transitions to its subtree. Providers
-cannot be nested.
-
-`useSignalEffect`, `useSignalLayoutEffect`, and the plain function
-reads (`latest`, `isPending`) observe committed state, so they work
-with or without a provider. Multiple roots are
-supported: one transition can span them, and each root's render passes
-stay internally consistent.
+- `cosignals/debug` and `cosignals/unstable`: tracing, inspection, and engine
+  integration seams, documented in [INTERNALS.md](./INTERNALS.md). _Experimental_.
 
 ## What are signals?
+
+_Signals_ are a state management system made up of _atoms_, _computeds_, and
+_effects_, which form a graph of automatically-tracked dependency relationships:
+
+```mermaid
+flowchart LR
+    count["atom: count"] -->|read by| doubled["computed: doubled"]
+    doubled -->|read by| title["effect: document.title"]
+```
+
+A write to an atom _pushes invalidation_: it marks downstream work as possibly
+stale and schedules effects for revalidation. When a computed is read or a
+scheduled effect revalidates, it _pulls_ values from its upstream signals. If
+all upstream computeds recompute to equal values, the update stops. If the
+computed or effect's inputs change, then they re-run.
+
+## API
 
 ### Atoms
 
@@ -115,10 +143,11 @@ count.update((n) => n + 1) // write as a function of the previous value
 count.get() // 3
 ```
 
-In React, `useSignal` reads an atom and subscribes — the component
-re-renders whenever the value it would show changes — and `useAtom`
-creates a component-owned atom, made once on mount and
-garbage-collected after unmount:
+In React, `useSignal` reads an atom's state value and subscribes so the
+component re-renders when the atom's value changes.
+
+You can create an atom inside a component with `useAtom`, which does not
+subscribe to it.
 
 ```tsx
 import { useAtom, useSignal } from "cosignals/react"
@@ -130,12 +159,14 @@ function SearchBox() {
 }
 ```
 
-`createAtom(initial, options?)` accepts options:
+`createAtom(initial, options?)` / `useAtom(initial, options?)`:
 
-- `equals`: value equality for the write cutoff; defaults to
-  `Object.is`. A write whose value compares equal to the current one is
-  dropped, so nothing downstream re-runs.
-- `label`: a debug name shown in trace output.
+- `initial`: The initial state value of the atom. Can be a function to create
+  state lazily.
+- `equals`: used to compare state values. A `set` or `update` that writes a
+  value that `equals(prev, next)`, the write is dropped, so nothing downstream
+  re-runs. Defaults to `Object.is`.
+- `label`: a debug name shown devtools.
 - `onObserved`: tie an external resource to the atom's observed
   lifetime (below).
 
@@ -163,10 +194,10 @@ const price = createAtom(0, {
 
 ### Reducer atoms
 
-`createReducerAtom(reduce, initial, options?)` is an atom whose
-`dispatch` method applies one reducer fixed at creation, like
-`useReducer`. Read it with `get()` or `useSignal` like any other atom,
-and dispatch from event handlers or effects:
+`createReducerAtom(reduce, initial, options?)` is an atom with a
+`dispatch(action)` method that applies `reduce(state, action)`, like
+`useReducer`. Read it with `get()` or `useSignal` like any other atom, and
+dispatch from event handlers or effects:
 
 ```ts
 import { createReducerAtom } from "cosignals"
@@ -178,8 +209,8 @@ const todos = createReducerAtom(
 todos.dispatch({ type: "add", text: "write docs" })
 ```
 
-A dispatch inside a transition is recorded and replayed like a
-functional update, so keep the reducer pure.
+A dispatch inside a transition is recorded and may be replayed, so reducer
+functions should be pure.
 
 ### Computeds
 
@@ -199,7 +230,7 @@ doubled.get() // 20 — cached, the function does not run again
 ```
 
 Dependencies are dynamic: a branch not taken during an evaluation is
-not a dependency, so a change to it causes no recompute. The function
+not a dependency, so a change to it causes no recompute. The compute function
 receives two arguments — `use`, for reading promises (see
 [async computeds](#async-computeds)), and `previous`, the last settled
 value (`undefined` on the first run).
@@ -208,48 +239,29 @@ value (`undefined` on the first run).
 options as `createAtom`; `equals` decides whether a recomputed value
 counts as changed for consumers downstream.
 
-In React, `useComputed(fn, deps)` creates a component-owned computed.
-`fn` gets the same `(use, previous)` arguments, and the computed is
-recreated when `deps` change:
+In React, `useComputed(fn, deps)` creates a component-owned computed and returns
+its value. The computed is re-created when its `deps` (eg from props or
+React state) change.
 
 ```tsx
 import { useComputed, useSignal } from "cosignals/react"
 
 function Total({ taxRate }: { taxRate: number }) {
   const total = useComputed(() => subtotal.get() * (1 + taxRate), [taxRate])
-  return <span>{useSignal(total)}</span>
+  return <span>{total}</span>
 }
 ```
 
 ### Effects
 
 An **effect** runs a side effect when signals change, like `useEffect`.
-Atoms, computeds, and effects form a graph:
+Effects have two parts:
 
-```mermaid
-flowchart LR
-    count["atom: count"] -->|read by| doubled["computed: doubled"]
-    doubled -->|read by| title["effect: document.title"]
-```
-
-Arrows point from a value to the work that depends on it. A write marks
-downstream work as possibly stale and schedules effects; each value
-recomputes at its next read. A computed that recomputes to an equal
-value stops the update along that path, so its consumers keep their
-cached results.
-
-Every effect is two parts with different jobs:
-
-- watch: what the effect reacts to. It is tracked: the signals it reads
-  become the effect's dependencies.
-- run: the side effect, untracked. It is called with the new value and
+- `watch`: what the effect reacts to, a dependency-tracked compute function, a
+  signal signal, or a simple tuple or record of signals.
+- `run`: the side effect, untracked. It is called with the new value and
   the previous value it handled, and may return a cleanup that runs
   before the next `run` and at disposal.
-
-The split lets the engine re-run the watch to check whether anything
-actually changed before touching the side effect: the handler runs only
-when the watched value did change. Put reads the effect should react to
-in the watch.
 
 Effects observe committed state: a transition reaches every effect
 exactly once, when it commits — and only if it commits.
@@ -406,8 +418,8 @@ undisposed effects run forever.
 
 A pending transition and an in-flight refetch are the same situation:
 newer state exists behind what the screen currently shows. `cosignals`
-models both the same way — the current value keeps serving reads while
-the newer one is prepared — and `isPending` and `latest` are the two
+models both the same way: the current value keeps serving reads while
+the newer one is prepared. `isPending` and `latest` are the two
 ways to look across that gap.
 
 ### Transition writes
