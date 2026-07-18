@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
+import { npmVersionExists } from "./npm-registry.mjs"
 
 const packages = [
   { directory: "packages/cosignals", name: "cosignals" },
@@ -71,15 +72,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     branch: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME || "",
     sha: process.env.GITHUB_SHA ?? "",
     rootDirectory,
-    versionExists: async (name, version) => {
-      const response = await fetch(
-        `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
-      )
-      if (response.status === 404) return false
-      if (!response.ok)
-        throw new Error(`npm registry returned ${response.status} for ${name}@${version}`)
-      return true
-    },
+    versionExists: npmVersionExists,
   })
   await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`)
   for (const release of plan) console.log(`${release.name}@${release.version} --tag ${release.tag}`)

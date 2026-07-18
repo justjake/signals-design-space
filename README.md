@@ -150,4 +150,20 @@ React 19 compatibility matrix, inlining verification, and the Chromium battery.
 `cosignals`, `cosignals-arena`, and `cosignals-devtools`, installs those
 artifacts into isolated consumers, runs production-build browser tests, and
 runs the React 18 package suites before publishing. GitHub Actions are pinned to
-release commit SHAs.
+release commit SHAs. Its build, verification, and publish jobs invoke the same
+release command as local publishing.
+
+Run the same release locally with npm authentication:
+
+```sh
+pnpm run publish
+```
+
+The command runs package typechecks and tests, packs all three packages,
+typechecks an isolated consumer against the tarballs, and publishes those
+tarballs in dependency order. It chooses the versions and npm tags with the
+same policy as CI and skips versions already on npm.
+
+Use `--dry-run` to invoke `npm publish --dry-run`. Use `--full` to add the
+Playwright battery and production devtools tests. A live publish requires a
+clean worktree unless `--allow-dirty` is passed.
