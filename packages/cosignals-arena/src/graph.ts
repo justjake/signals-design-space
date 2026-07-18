@@ -744,32 +744,178 @@ export { UNINITIALIZED }
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// The engine core. One closure instantiation per process. The closure reads
-// the module-level arena bindings directly: arena growth replaces the arrays
-// and re-points those bindings, so the closure must not capture its own const
-// views of them. Function-local views (const mem = M) keep the per-call cost
-// at one slot load per activation, and the slots compile as constants until
-// the first growth actually reassigns them. The module re-exports the
-// returned functions under their original names, so the import surface is
-// unchanged.
+// The engine core. One closure instantiation PER ARENA GENERATION: the arena
+// views bind as function-scope consts, which an optimizing compiler can treat
+// as immutable across calls — module-level bindings compile to mutable
+// context-slot loads once a bundler rewrites them as plain vars (and a `let`
+// with any assignment site is never constant-folded; measured 12-14% slower
+// across the graph benchmarks). A given generation's arrays therefore NEVER
+// move. Growth builds new arrays, instantiates a fresh generation over them
+// (hot state rides across via GraphBoot), and re-points the module-level
+// `export let` bindings — so importers and every capture routed through
+// `currentEngine` reach the new generation, while the retired closure simply
+// becomes garbage. See docs/arena-growth.md.
 // ---------------------------------------------------------------------------
 
-function createGraphCore() {
+/**
+ * One effect lane: watchers queued toward one drain site, as (record id,
+ * generation) pairs. Ids never pin anything, so enqueue costs two int
+ * stores — no handle lookup, no write barrier — and a record reclaimed
+ * between schedule and drain gen-mismatches into a no-op. The drain's
+ * pull phase resolves survivors into the retained `handles` array so the
+ * run phases can re-check and invoke them; consumed handle slots are
+ * nulled so retained capacity never pins disposed effects.
+ */
+interface LaneState {
+  ids: Int32Array
+  gens: Int32Array
+  handles: Array<EffectNode | undefined>
+  /**
+   * Round cursor; entries below it are consumed. An index rather than
+   * shifting so wide drains stay linear.
+   */
+  head: number
+  count: number
+  /** The lane's pump is requested and has not run yet. */
+  pumpRequested: boolean
+}
+
+function makeLane(): LaneState {
+  return {
+    ids: new Int32Array(256),
+    gens: new Int32Array(256),
+    handles: [],
+    head: 0,
+    count: 0,
+    pumpRequested: false,
+  }
+}
+
+/** Point the module-level arena bindings at a successor generation's arrays. */
+function repointArenaViews(
+  nextM: Int32Array<ArrayBuffer>,
+  nextValidAt: Float64Array<ArrayBuffer>,
+  nextObserver: Int32Array<ArrayBuffer>,
+  nextPoke: Int32Array<ArrayBuffer>,
+  nextGeneration: Int32Array<ArrayBuffer>,
+): void {
+  graphMemory = nextM
+  graphClocks = new Float64Array(nextM.buffer)
+  validAtColumn = nextValidAt
+  observerColumn = nextObserver
+  pokeColumn = nextPoke
+  generationColumn = nextGeneration
+  M = nextM
+}
+
+/**
+ * The registry whose cleanups are still honored. Node ids survive arena
+ * growth, so one registry serves every generation; only the benchmark reset
+ * replaces it, and cleanups already enqueued for the replaced registry
+ * self-disarm on this identity check (their ids refer to the pre-reset
+ * arena, and reclaiming them would free whatever new node occupies the id).
+ */
+let currentNodeFinalizer: FinalizationRegistry<number> | null = null
+
+function makeNodeFinalizer(): FinalizationRegistry<number> {
+  const registry = new FinalizationRegistry<number>((id) => {
+    if (currentNodeFinalizer === registry) {
+      currentEngine.reclaimNodeRecord(id as ReactiveNodeId)
+    }
+  })
+  currentNodeFinalizer = registry
+  return registry
+}
+
+/**
+ * Hot per-generation state handed from a retiring generation to its
+ * successor. Node ids and the arrays that hold them survive growth verbatim,
+ * so everything here rides by value or by reference except the free-link
+ * stack, whose entries the retiring generation rewrites (link offsets move
+ * with the region).
+ */
+interface GraphBoot {
+  nextNodeRecord: number
+  nextLinkRecord: number
+  freeLinkStack: Int32Array
+  freeLinkCount: number
+  freeNodeStack: Int32Array
+  freeNodeCount: number
+  graphChangeClock: GraphChangeClock
+  baseChangedAtGraphChange: GraphChangeClock
+  evalPassCounter: EvalPass
+  pokePass: PokePass
+  lanes: readonly [LaneState, LaneState, LaneState]
+  lanePump: LanePump | null
+  renderNotifyQueue: Array<ReactiveNode | undefined>
+  renderNotifyCount: number
+  spareRenderNotify: Array<ReactiveNode | undefined> | null
+  pendingLifetimeCells: Set<CellNode<unknown>>
+  lifetimeFlushScheduled: boolean
+  pendingRegistrations: Array<ReactiveNode | undefined>
+  pendingRegistrationEnd: number
+  registrationScheduled: boolean
+  nodeFinalizer: FinalizationRegistry<number>
+}
+
+function initialGraphBoot(memoryWords: number): GraphBoot {
+  return {
+    nextNodeRecord: FIRST_REAL_RECORD,
+    nextLinkRecord: memoryWords,
+    freeLinkStack: new Int32Array(1024),
+    freeLinkCount: 0,
+    freeNodeStack: new Int32Array(1024),
+    freeNodeCount: 0,
+    graphChangeClock: 1 as GraphChangeClock,
+    baseChangedAtGraphChange: 1 as GraphChangeClock,
+    evalPassCounter: 1 as EvalPass,
+    pokePass: 0 as PokePass,
+    lanes: [makeLane(), makeLane(), makeLane()],
+    lanePump: null,
+    renderNotifyQueue: [],
+    renderNotifyCount: 0,
+    spareRenderNotify: [],
+    pendingLifetimeCells: new Set(),
+    lifetimeFlushScheduled: false,
+    pendingRegistrations: [],
+    pendingRegistrationEnd: 0,
+    registrationScheduled: false,
+    nodeFinalizer: makeNodeFinalizer(),
+  }
+}
+
+function createGraphCore(
+  memBase: Int32Array<ArrayBuffer>,
+  clockBase: Float64Array,
+  pinBase: Array<ReactiveNode | undefined>,
+  validAtBase: Float64Array,
+  observerBase: Int32Array<ArrayBuffer>,
+  pokeBase: Int32Array<ArrayBuffer>,
+  generationBase: Int32Array<ArrayBuffer>,
+  boot: GraphBoot,
+) {
+  const M = memBase
+  const graphClocks = clockBase
+  const pinnedInternals = pinBase
+  const validAtColumn = validAtBase
+  const observerColumn = observerBase
+  const pokeColumn = pokeBase
+  const generationColumn = generationBase
   // Two-ended allocation: node records grow up from the bottom, link records
   // grow down from the top. Node ids stay dense and contiguous (validation
   // walks touch adjacent lines; the pin table and side columns cover only
   // the node region), and link allocation needs no pin-table growth check.
-  let nextNodeRecord = FIRST_REAL_RECORD
-  let nextLinkRecord = M.length
+  let nextNodeRecord = boot.nextNodeRecord
+  let nextLinkRecord = boot.nextLinkRecord
   // Free records as explicit stacks, not intrusive next-pointers threaded
   // through the records: a stack pop is an independent indexed load, while
   // an intrusive pop chains a dependent memory read through every
   // allocation — and mass create/dispose cycles allocate in exactly that
   // serial pattern.
-  let freeLinkStack = new Int32Array(1024)
-  let freeLinkCount = 0
-  let freeNodeStack = new Int32Array(1024)
-  let freeNodeCount = 0
+  let freeLinkStack = boot.freeLinkStack
+  let freeLinkCount = boot.freeLinkCount
+  let freeNodeStack = boot.freeNodeStack
+  let freeNodeCount = boot.freeNodeCount
 
   function pushFreeLink(id: Link): void {
     if (freeLinkCount === freeLinkStack.length) {
@@ -789,109 +935,41 @@ function createGraphCore() {
     freeNodeStack[freeNodeCount++] = id
   }
 
-  // ---------------------------------------------------------------------------
-  // Arena growth (see docs/arena-growth.md). The arena may only move while no
-  // engine frame is live: frames hold function-local array views and link
-  // offsets that a move would invalidate, and user callbacks (compute bodies,
-  // handlers, cleanups, equality callbacks, tracer sinks, the devtools hot
-  // hook) run under such frames. Rather than instrument every one of those
-  // surfaces, growth applies only from its own microtask, where the JS stack
-  // is empty — the only engine state that can span a microtask boundary is a
-  // batch held across await, which batchDepth covers. The one synchronous
-  // exception is a never-touched arena (growCapacity below), where no engine
-  // frame can exist because there is nothing to operate on.
-  // ---------------------------------------------------------------------------
-
   // Fresh-record allocations request a growth once the free gap falls below
-  // this; kept as a word count so the trigger is one compare.
-  let growthTriggerWords = graphMemory.length >> 2
-  // An explicit growCapacity() target in words; growth honors it over doubling.
-  let requestedCapacityWords = 0
-  let arenaGrowthPending = false
-  let growthMicrotaskArmed = false
+  // this; a per-generation constant (a quarter of capacity), zero at the
+  // record ceiling so sustained allocation there stops arming microtasks
+  // that could never grow.
+  const growthTriggerWords =
+    memBase.length >= MAX_RECORD_CAPACITY * RECORD_STRIDE ? 0 : memBase.length >> 2
 
-  function requestArenaGrowth(): void {
-    arenaGrowthPending = true
-    if (!growthMicrotaskArmed) {
-      growthMicrotaskArmed = true
-      queueMicrotask(growArenaIfIdle)
-    }
+  /** No batch is open and no evaluation or drain is on the stack. */
+  function isIdle(): boolean {
+    return batchDepth === 0 && activeConsumer === null && activeEffectOwner === null
   }
 
-  function growArenaIfIdle(): void {
-    growthMicrotaskArmed = false
-    if (!arenaGrowthPending) {
-      return
-    }
-    if (batchDepth !== 0 || activeConsumer !== null || activeEffectOwner !== null) {
-      // A batch held across await (the markers are belt-and-suspenders: no
-      // evaluation or drain survives to a microtask, they unwind by throw).
-      // The pending growth re-arms when the batch closes and on the next
-      // fresh-record allocation below the trigger.
-      return
-    }
-    arenaGrowthPending = false
-    let target = requestedCapacityWords > M.length ? requestedCapacityWords : M.length * 2
-    requestedCapacityWords = 0
-    const maxWords = MAX_RECORD_CAPACITY * RECORD_STRIDE
-    if (target > maxWords) {
-      target = maxWords
-    }
-    if (target > M.length) {
-      migrateArena(target)
-    }
+  /** Neither bump pointer has ever moved: no record exists to operate on. */
+  function isVirgin(): boolean {
+    return nextNodeRecord === FIRST_REAL_RECORD && nextLinkRecord === M.length
   }
 
   /**
-   * Raise the arena's capacity to at least `records` 32-byte records. On an
-   * arena no operation has touched yet (app startup, before any signal is
-   * created — the intended call site) the raise applies immediately;
-   * otherwise it applies at the next microtask. Requests at or below the
-   * current capacity are no-ops. Growing under a warm graph pays a one-time
-   * copy of every live record, so prefer calling this before the graph is
-   * built.
+   * Retire this generation into a boot for a successor over `targetWords`
+   * words, building the new arrays and re-pointing the module-level view
+   * bindings. The node region copies verbatim (node ids are offsets from the
+   * bottom, so every id in handles, queues, the pin table, and the
+   * finalization registry survives unchanged; the clock view shares the
+   * buffer, so change stamps copy with it). The link region is anchored to
+   * the top, so it copies to the new top and every stored link offset moves
+   * by `delta`. Stored link offsets live in exactly three places: node
+   * records (Deps/Subs/SubsTail), link records (NextDep/PrevSub/NextSub),
+   * and the free-link stack. Freed node records are zeroed at reclaim and
+   * freed link records carry only stale-but-dead values, so
+   * blanket-rewriting both regions is safe. The depsTail cursor on handles
+   * also holds a link offset, but it is dead between operations — every
+   * evaluation zeroes it before the first read — and generations only turn
+   * over while no engine frame is live.
    */
-  function growCapacity(records: number): void {
-    if (!Number.isFinite(records) || records <= 0) {
-      throw new TypeError("growCapacity(): records must be a positive finite number")
-    }
-    if (records > MAX_RECORD_CAPACITY) {
-      throw new RangeError(
-        `growCapacity(): request exceeds the ${MAX_RECORD_CAPACITY}-record ceiling`,
-      )
-    }
-    const targetWords = Math.ceil(records) * RECORD_STRIDE
-    if (targetWords <= M.length) {
-      return
-    }
-    if (nextNodeRecord === FIRST_REAL_RECORD && nextLinkRecord === M.length) {
-      // Never-touched arena: the bump pointers have never moved, so no
-      // record exists for any engine frame to be operating on — replacing
-      // the (empty) arrays now is safe, and the caller can mass-build
-      // synchronously right away.
-      migrateArena(targetWords)
-      return
-    }
-    requestedCapacityWords = targetWords
-    requestArenaGrowth()
-  }
-
-  /**
-   * Move the live graph to an arena of `targetWords` words. The node region
-   * copies verbatim (node ids are offsets from the bottom, so every id in
-   * handles, queues, the pin table, and the finalization registry survives
-   * unchanged; the clock view shares the buffer, so change stamps copy with
-   * it). The link region is anchored to the top, so it copies to the new top
-   * and every stored link offset moves by `delta`. Stored link offsets live
-   * in exactly three places: node records (Deps/Subs/SubsTail), link records
-   * (NextDep/PrevSub/NextSub), and the free-link stack. Freed node records
-   * are zeroed at reclaim and freed link records carry only stale-but-dead
-   * values, so blanket-rewriting both regions is safe. The depsTail cursor on
-   * handles also holds a link offset, but it is dead between operations —
-   * every evaluation zeroes it before the first read — and the arena never
-   * moves while an evaluation is live.
-   */
-  function migrateArena(targetWords: number): void {
+  function takeGrowthBoot(targetWords: number): GraphBoot {
     const oldM = M
     const delta = targetWords - oldM.length
     const nextM = new Int32Array(targetWords)
@@ -938,43 +1016,34 @@ function createGraphCore() {
     nextPoke.set(pokeColumn.subarray(0, usedRecords))
     const nextGeneration = new Int32Array(records)
     nextGeneration.set(generationColumn.subarray(0, usedRecords))
-    nextLinkRecord += delta
-    // At the ceiling the trigger goes dead (the gap is never negative), so
-    // sustained allocation stops arming microtasks that could never grow.
-    growthTriggerWords =
-      targetWords >= MAX_RECORD_CAPACITY * RECORD_STRIDE ? 0 : targetWords >> 2
-    graphMemory = nextM
-    graphClocks = new Float64Array(nextM.buffer)
-    validAtColumn = nextValidAt
-    observerColumn = nextObserver
-    pokeColumn = nextPoke
-    generationColumn = nextGeneration
-    M = nextM
-  }
-
-  /**
-   * Test entry: migrate to a small arena so suites can exercise the growth
-   * trigger and the migration itself without allocating millions of records.
-   * Call it only from test top level — with no engine work on the stack, no
-   * batch open, and no evaluation in flight — the same footing the growth
-   * microtask runs on.
-   */
-  function setArenaCapacityForTesting(records: number): void {
-    if (batchDepth !== 0 || activeConsumer !== null || activeEffectOwner !== null) {
-      throw new Error("setArenaCapacityForTesting(): the engine is busy")
-    }
-    if (!Number.isInteger(records) || records <= 0 || records > MAX_RECORD_CAPACITY) {
-      throw new RangeError("setArenaCapacityForTesting(): bad record count")
-    }
-    const targetWords = records * RECORD_STRIDE
-    const liveWords = nextNodeRecord + (M.length - nextLinkRecord)
-    if (targetWords < liveWords) {
-      throw new RangeError("setArenaCapacityForTesting(): smaller than the live graph")
-    }
-    arenaGrowthPending = false
-    requestedCapacityWords = 0
-    if (targetWords !== M.length) {
-      migrateArena(targetWords)
+    // Handle getters and non-engine modules read the arena through the
+    // module bindings: point them at the successor's arrays now (the module
+    // bindings are shadowed by this generation's const views, so the
+    // re-point lives at module scope). This generation keeps its retired
+    // views and is dropped by the rebind that follows.
+    repointArenaViews(nextM, nextValidAt, nextObserver, nextPoke, nextGeneration)
+    return {
+      nextNodeRecord,
+      nextLinkRecord: nextLinkRecord + delta,
+      freeLinkStack,
+      freeLinkCount,
+      freeNodeStack,
+      freeNodeCount,
+      graphChangeClock,
+      baseChangedAtGraphChange,
+      evalPassCounter,
+      pokePass,
+      lanes,
+      lanePump,
+      renderNotifyQueue,
+      renderNotifyCount,
+      spareRenderNotify,
+      pendingLifetimeCells,
+      lifetimeFlushScheduled,
+      pendingRegistrations,
+      pendingRegistrationEnd,
+      registrationScheduled,
+      nodeFinalizer,
     }
   }
 
@@ -1162,7 +1231,7 @@ function createGraphCore() {
     return pinnedInternals[linkSub(id) >> RECORD_SHIFT]!
   }
 
-  let graphChangeClock: GraphChangeClock = 1
+  let graphChangeClock: GraphChangeClock = boot.graphChangeClock
   /**
    * The clock reading at the last BASE change — a cell write or a
    * settlement invalidation. Draft activity ticks the clock (world memos
@@ -1170,9 +1239,9 @@ function createGraphCore() {
    * so "did base state change since X" stays answerable: compare X against
    * this reading, not against the clock.
    */
-  let baseChangedAtGraphChange: GraphChangeClock = 1
+  let baseChangedAtGraphChange: GraphChangeClock = boot.baseChangedAtGraphChange
   /** Identity of the evaluation pass in progress. */
-  let evalPass: EvalPass = 1
+  let evalPass: EvalPass = boot.evalPassCounter
   /**
    * Pass counter — monotonic, never reused. Uniqueness is load-bearing for
    * the same-pass dedup probe in trackRead: an evalPass match there asserts
@@ -1181,7 +1250,7 @@ function createGraphCore() {
    * prefix — trimming would then silently drop a dependency the evaluation
    * read.
    */
-  let evalPassCounter: EvalPass = 1
+  let evalPassCounter: EvalPass = boot.evalPassCounter
   function newEvalPass(): EvalPass {
     evalPass = ++evalPassCounter
     return evalPass
@@ -1351,8 +1420,8 @@ function createGraphCore() {
   // net out instead of bouncing the resource.
   // ---------------------------------------------------------------------------
 
-  const pendingLifetimeCells = new Set<CellNode<unknown>>()
-  let lifetimeFlushScheduled = false
+  const pendingLifetimeCells = boot.pendingLifetimeCells
+  let lifetimeFlushScheduled = boot.lifetimeFlushScheduled
 
   /** Called at the promote/demote boundary (observation count 0<->1). */
   function noteLifetimeTransition(node: ReactiveNode): void {
@@ -1366,7 +1435,10 @@ function createGraphCore() {
     pendingLifetimeCells.add(cell)
     if (!lifetimeFlushScheduled) {
       lifetimeFlushScheduled = true
-      queueMicrotask(flushLifetimeTransitions)
+      // Module trampoline, not this closure's function: the callback may
+      // fire after an arena growth retired this generation, and the pending
+      // set and its scheduled flag ride to the successor.
+      queueMicrotask(pumpLifetimeTransitions)
     }
   }
 
@@ -1387,10 +1459,13 @@ function createGraphCore() {
       }
       cell.lifetimeActive = shouldBeActive
       if (shouldBeActive) {
+        // Escaping capture: a lifetime setup may retain ctx past this call
+        // (an interval writing via ctx.set), so it must reach the current
+        // generation after an arena growth.
         const ctx = {
-          get: () => peekCell(cell),
+          get: () => currentEngine.peekCell(cell),
           set: (v: unknown) => {
-            writeCell(cell, v)
+            currentEngine.writeCell(cell, v)
           },
         }
         let cleanup: void | (() => void)
@@ -1554,41 +1629,7 @@ function createGraphCore() {
   // Invalidation (push through watched edges)
   // ---------------------------------------------------------------------------
 
-  /**
-   * One effect lane: watchers queued toward one drain site, as (record id,
-   * generation) pairs. Ids never pin anything, so enqueue costs two int
-   * stores — no handle lookup, no write barrier — and a record reclaimed
-   * between schedule and drain gen-mismatches into a no-op. The drain's
-   * pull phase resolves survivors into the retained `handles` array so the
-   * run phases can re-check and invoke them; consumed handle slots are
-   * nulled so retained capacity never pins disposed effects.
-   */
-  interface LaneState {
-    ids: Int32Array
-    gens: Int32Array
-    handles: Array<EffectNode | undefined>
-    /**
-     * Round cursor; entries below it are consumed. An index rather than
-     * shifting so wide drains stay linear.
-     */
-    head: number
-    count: number
-    /** The lane's pump is requested and has not run yet. */
-    pumpRequested: boolean
-  }
-
-  function makeLane(): LaneState {
-    return {
-      ids: new Int32Array(256),
-      gens: new Int32Array(256),
-      handles: [],
-      head: 0,
-      count: 0,
-      pumpRequested: false,
-    }
-  }
-
-  const lanes: readonly [LaneState, LaneState, LaneState] = [makeLane(), makeLane(), makeLane()]
+  const lanes = boot.lanes
 
   function growLane(state: LaneState): void {
     const ids = new Int32Array(state.ids.length * 2)
@@ -1605,7 +1646,7 @@ function createGraphCore() {
    * (the React bindings re-render a per-root sentinel whose commit-phase
    * effects drain); false falls back to the built-in pumps.
    */
-  let lanePump: ((lane: Lane.UseLayoutEffect | Lane.UseEffect) => boolean) | null = null
+  let lanePump: ((lane: Lane.UseLayoutEffect | Lane.UseEffect) => boolean) | null = boot.lanePump
 
   function setLanePump(pump: typeof lanePump): void {
     lanePump = pump
@@ -1642,10 +1683,12 @@ function createGraphCore() {
     if (lanePump !== null && lanePump(lane)) {
       return
     }
+    // Module trampolines: a pump scheduled before an arena growth must
+    // drain through the successor generation (the lanes ride across).
     if (lane === Lane.UseLayoutEffect) {
-      queueMicrotask(drainUseLayoutEffectLane)
+      queueMicrotask(pumpLayoutLane)
     } else {
-      setTimeout(drainDeferredEffects, 0)
+      setTimeout(pumpDeferredLanes, 0)
     }
   }
 
@@ -1702,8 +1745,8 @@ function createGraphCore() {
    * onNotify land in the spare, so a wave's iteration never sees entries added
    * during delivery.
    */
-  let renderNotifyQueue: Array<ReactiveNode | undefined> = []
-  let renderNotifyCount = 0
+  let renderNotifyQueue: Array<ReactiveNode | undefined> = boot.renderNotifyQueue
+  let renderNotifyCount = boot.renderNotifyCount
   /**
    * The off-duty render-notify buffer; null while checked out by a draining
    * frame. Delivery can nest (onNotify may write, and that flush drains the
@@ -1711,7 +1754,7 @@ function createGraphCore() {
    * finds the spare checked out and must not reuse a buffer that is
    * mid-iteration.
    */
-  let spareRenderNotify: Array<ReactiveNode | undefined> | null = []
+  let spareRenderNotify: Array<ReactiveNode | undefined> | null = boot.spareRenderNotify
 
   /**
    * Route a watcher into its queue by capability bit and lane. Scope
@@ -1939,7 +1982,7 @@ function createGraphCore() {
    * node's pokePass reading needs no clearing: a match asserts "this walk
    * already visited the node" and nothing else (same discipline as EvalPass).
    */
-  let pokePass: PokePass = 0
+  let pokePass: PokePass = boot.pokePass
 
   /**
    * The poke walk: notify draft watchers of a node without touching base
@@ -3197,9 +3240,9 @@ function createGraphCore() {
     pushFreeNode(id)
   }
 
-  let pendingRegistrations: Array<ReactiveNode | undefined> = []
-  let pendingRegistrationEnd = 0
-  let registrationScheduled = false
+  let pendingRegistrations: Array<ReactiveNode | undefined> = boot.pendingRegistrations
+  let pendingRegistrationEnd = boot.pendingRegistrationEnd
+  let registrationScheduled = boot.registrationScheduled
 
   function queueNodeRegistration(owner: ReactiveNode): void {
     pendingRegistrations[pendingRegistrationEnd++] = owner
@@ -3207,20 +3250,12 @@ function createGraphCore() {
       drainPendingRegistrations()
     } else if (!registrationScheduled) {
       registrationScheduled = true
-      queueMicrotask(drainPendingRegistrations)
+      // Module trampoline: the queue and its flag ride across a growth.
+      queueMicrotask(pumpRegistrations)
     }
   }
 
-  function makeNodeFinalizer(): FinalizationRegistry<number> {
-    const registry = new FinalizationRegistry<number>((id) => {
-      if (nodeFinalizer === registry) {
-        reclaimNodeRecord(id)
-      }
-    })
-    return registry
-  }
-
-  let nodeFinalizer = makeNodeFinalizer()
+  let nodeFinalizer = boot.nodeFinalizer
 
   function drainPendingRegistrations(): void {
     registrationScheduled = false
@@ -3379,7 +3414,10 @@ function createGraphCore() {
       }
       throw error
     }
-    return () => disposeEffect(w)
+    // Escaping capture: route through the module engine binding so a
+    // disposer created before an arena growth disposes through the current
+    // generation (its record and id survive growth verbatim).
+    return () => currentEngine.disposeEffect(w)
   }
 
   /**
@@ -3414,7 +3452,8 @@ function createGraphCore() {
       }
       throw error
     }
-    return () => disposeScope(w)
+    // Escaping capture: routed like makeEffect's disposer.
+    return () => currentEngine.disposeScope(w)
   }
 
   /**
@@ -3505,7 +3544,7 @@ function createGraphCore() {
     // the watcher node rides along as a property for the render hook, which
     // records notify/render/transition-notify against it — so those events
     // belong to the component's subscription, not to the producer it watches.
-    return Object.assign(() => disposeWatcher(sub), { watcher: sub })
+    return Object.assign(() => currentEngine.disposeWatcher(sub), { watcher: sub })
   }
 
   return {
@@ -3541,57 +3580,249 @@ function createGraphCore() {
     untrack,
     getActiveConsumer,
     disposeWatcher,
+    disposeEffect,
+    disposeScope,
     makeEffect,
     makeScope,
     observeNode,
     resetGraphForBenchmark,
-    growCapacity,
-    setArenaCapacityForTesting,
+    reclaimNodeRecord,
+    drainPendingRegistrations,
+    isIdle,
+    isVirgin,
+    takeGrowthBoot,
     arenaStats,
   }
 }
 
-const core = createGraphCore()
+type GraphCore = ReturnType<typeof createGraphCore>
 
-export const ensureNodeRecord = core.ensureNodeRecord
-export const nextDependency = core.nextDependency
-export const dependencyOf = core.dependencyOf
-export const nextSubscriber = core.nextSubscriber
-export const subscriberOf = core.subscriberOf
-export const currentGraphChange = core.currentGraphChange
-export const tickGraphChange = core.tickGraphChange
-export const currentBaseChange = core.currentBaseChange
-export const addObserver = core.addObserver
-export const removeObserver = core.removeObserver
-export const flushLifetimeTransitions = core.flushLifetimeTransitions
-export const pokeDraftWatchers = core.pokeDraftWatchers
-export const propagateFrom = core.propagateFrom
-export const invalidateDerived = core.invalidateDerived
-export const startBatch = core.startBatch
-export const endBatch = core.endBatch
-export const batch = core.batch
-export const flush = core.flush
-export const setLanePump = core.setLanePump
-export const drainUseLayoutEffectLane = core.drainUseLayoutEffectLane
-export const drainDeferredEffects = core.drainDeferredEffects
-export const repumpDeferredLanes = core.repumpDeferredLanes
-export const flushScheduledEffects = core.flushScheduledEffects
-export const resetEffectLanes = core.resetEffectLanes
-export const peekCell = core.peekCell
-export const readCell = core.readCell
-export const writeCell = core.writeCell
-export const ensureFresh = core.ensureFresh
-export const readDerived = core.readDerived
-export const untrack = core.untrack
-export const getActiveConsumer = core.getActiveConsumer
-export const disposeWatcher = core.disposeWatcher
-export const makeEffect = core.makeEffect
-export const makeScope = core.makeScope
-export const observeNode = core.observeNode
-export const resetGraphForBenchmark = core.resetGraphForBenchmark
-export const growCapacity = core.growCapacity
-export const setArenaCapacityForTesting = core.setArenaCapacityForTesting
-export const arenaStats = core.arenaStats
+// ---------------------------------------------------------------------------
+// The current arena generation, and the growth controller over it (see
+// docs/arena-growth.md). Generations may only turn over while no engine frame
+// is live: frames hold const array views and link offsets that a move would
+// invalidate, and user callbacks (compute bodies, handlers, cleanups,
+// equality callbacks, tracer sinks, the devtools hot hook) run under such
+// frames. Rather than instrument every one of those surfaces, growth applies
+// only from its own microtask, where the JS stack is empty — the only engine
+// state that can span a microtask boundary is a batch held across await,
+// which isIdle() covers. The one synchronous exception is a never-touched
+// arena (growCapacity below), where no engine frame can exist because there
+// is nothing to operate on.
+//
+// Everything that outlives a generation reaches the engine through
+// `currentEngine` or the `export let` bindings below — never through a
+// captured closure-internal function.
+// ---------------------------------------------------------------------------
+
+// An explicit growCapacity() target in words; growth honors it over doubling.
+let requestedCapacityWords = 0
+let arenaGrowthPending = false
+let growthMicrotaskArmed = false
+
+function requestArenaGrowth(): void {
+  arenaGrowthPending = true
+  if (!growthMicrotaskArmed) {
+    growthMicrotaskArmed = true
+    queueMicrotask(growArenaIfIdle)
+  }
+}
+
+function growArenaIfIdle(): void {
+  growthMicrotaskArmed = false
+  if (!arenaGrowthPending) {
+    return
+  }
+  if (!currentEngine.isIdle()) {
+    // A batch held across await (evaluations and drains cannot reach a
+    // microtask boundary: they unwind by throw). The pending growth re-arms
+    // when the batch closes and on the next fresh-record allocation below
+    // the trigger.
+    return
+  }
+  arenaGrowthPending = false
+  let target =
+    requestedCapacityWords > graphMemory.length ? requestedCapacityWords : graphMemory.length * 2
+  requestedCapacityWords = 0
+  const maxWords = MAX_RECORD_CAPACITY * RECORD_STRIDE
+  if (target > maxWords) {
+    target = maxWords
+  }
+  if (target > graphMemory.length) {
+    migrateToCapacity(target)
+  }
+}
+
+/** Retire the current generation into a successor over `targetWords` words. */
+function migrateToCapacity(targetWords: number): void {
+  const boot = currentEngine.takeGrowthBoot(targetWords)
+  currentEngine = createGraphCore(
+    graphMemory,
+    graphClocks,
+    pinnedInternals,
+    validAtColumn,
+    observerColumn,
+    pokeColumn,
+    generationColumn,
+    boot,
+  )
+}
+
+/**
+ * Raise the arena's capacity to at least `records` 32-byte records. On an
+ * arena no operation has touched yet (app startup, before any signal is
+ * created — the intended call site) the raise applies immediately; otherwise
+ * it applies at the next microtask. Requests at or below the current
+ * capacity are no-ops. Growing under a warm graph pays a one-time copy of
+ * every live record, so prefer calling this before the graph is built.
+ */
+export function growCapacity(records: number): void {
+  if (!Number.isFinite(records) || records <= 0) {
+    throw new TypeError("growCapacity(): records must be a positive finite number")
+  }
+  if (records > MAX_RECORD_CAPACITY) {
+    throw new RangeError(
+      `growCapacity(): request exceeds the ${MAX_RECORD_CAPACITY}-record ceiling`,
+    )
+  }
+  const targetWords = Math.ceil(records) * RECORD_STRIDE
+  if (targetWords <= graphMemory.length) {
+    return
+  }
+  if (currentEngine.isVirgin()) {
+    migrateToCapacity(targetWords)
+    return
+  }
+  requestedCapacityWords = targetWords
+  requestArenaGrowth()
+}
+
+/**
+ * Test entry: migrate to a small arena so suites can exercise the growth
+ * trigger and the migration itself without allocating millions of records.
+ * Call it only from test top level — with no engine work on the stack, no
+ * batch open, and no evaluation in flight — the same footing the growth
+ * microtask runs on.
+ */
+export function setArenaCapacityForTesting(records: number): void {
+  if (!currentEngine.isIdle()) {
+    throw new Error("setArenaCapacityForTesting(): the engine is busy")
+  }
+  if (!Number.isInteger(records) || records <= 0 || records > MAX_RECORD_CAPACITY) {
+    throw new RangeError("setArenaCapacityForTesting(): bad record count")
+  }
+  const targetWords = records * RECORD_STRIDE
+  const stats = currentEngine.arenaStats()
+  if (targetWords < (stats.nodeRecords + stats.linkRecords) * RECORD_STRIDE) {
+    throw new RangeError("setArenaCapacityForTesting(): smaller than the live graph")
+  }
+  arenaGrowthPending = false
+  requestedCapacityWords = 0
+  if (targetWords !== graphMemory.length) {
+    migrateToCapacity(targetWords)
+  }
+}
+
+/** Diagnostic counts for tests and tooling; allocates a fresh object. */
+export function arenaStats(): ReturnType<GraphCore["arenaStats"]> {
+  return currentEngine.arenaStats()
+}
+
+// Scheduled-callback trampolines: a pump queued by one generation may fire
+// after a growth retired it, so the callback resolves the engine at run time.
+function pumpRegistrations(): void {
+  currentEngine.drainPendingRegistrations()
+}
+function pumpLifetimeTransitions(): void {
+  currentEngine.flushLifetimeTransitions()
+}
+function pumpLayoutLane(): void {
+  currentEngine.drainUseLayoutEffectLane()
+}
+function pumpDeferredLanes(): void {
+  currentEngine.drainDeferredEffects()
+}
+
+let currentEngine: GraphCore = createGraphCore(
+  graphMemory,
+  graphClocks,
+  pinnedInternals,
+  validAtColumn,
+  observerColumn,
+  pokeColumn,
+  generationColumn,
+  initialGraphBoot(graphMemory.length),
+)
+
+// The public surface: stable wrapper identities delegating to the current
+// generation. A caller may capture any of these by VALUE (destructure, store
+// in a callback, pass to describe.each) and the capture keeps working after
+// growth — only live-binding references would survive an `export let`
+// rebind, and captured values would not. The cost is one mutable-slot load
+// plus a property load per public call; engine-internal calls stay direct.
+export const ensureNodeRecord: GraphCore["ensureNodeRecord"] = (node) =>
+  currentEngine.ensureNodeRecord(node)
+export const nextDependency: GraphCore["nextDependency"] = (id) =>
+  currentEngine.nextDependency(id)
+export const dependencyOf: GraphCore["dependencyOf"] = (id) => currentEngine.dependencyOf(id)
+export const nextSubscriber: GraphCore["nextSubscriber"] = (id) =>
+  currentEngine.nextSubscriber(id)
+export const subscriberOf: GraphCore["subscriberOf"] = (id) => currentEngine.subscriberOf(id)
+export const currentGraphChange: GraphCore["currentGraphChange"] = () =>
+  currentEngine.currentGraphChange()
+export const tickGraphChange: GraphCore["tickGraphChange"] = () =>
+  currentEngine.tickGraphChange()
+export const currentBaseChange: GraphCore["currentBaseChange"] = () =>
+  currentEngine.currentBaseChange()
+export const addObserver: GraphCore["addObserver"] = (node) => currentEngine.addObserver(node)
+export const removeObserver: GraphCore["removeObserver"] = (node) =>
+  currentEngine.removeObserver(node)
+export const flushLifetimeTransitions: GraphCore["flushLifetimeTransitions"] = () =>
+  currentEngine.flushLifetimeTransitions()
+export const pokeDraftWatchers: GraphCore["pokeDraftWatchers"] = (
+  node,
+  cause,
+  wake,
+  valueChanged,
+) => currentEngine.pokeDraftWatchers(node, cause, wake, valueChanged)
+export const propagateFrom: GraphCore["propagateFrom"] = (cell, cause) =>
+  currentEngine.propagateFrom(cell, cause)
+export const invalidateDerived: GraphCore["invalidateDerived"] = (node, cause) =>
+  currentEngine.invalidateDerived(node, cause)
+export const startBatch: GraphCore["startBatch"] = () => currentEngine.startBatch()
+export const endBatch: GraphCore["endBatch"] = () => currentEngine.endBatch()
+export const batch: GraphCore["batch"] = (fn) => currentEngine.batch(fn)
+export const flush: GraphCore["flush"] = () => currentEngine.flush()
+export const setLanePump: GraphCore["setLanePump"] = (pump) => currentEngine.setLanePump(pump)
+export const drainUseLayoutEffectLane: GraphCore["drainUseLayoutEffectLane"] = () =>
+  currentEngine.drainUseLayoutEffectLane()
+export const drainDeferredEffects: GraphCore["drainDeferredEffects"] = () =>
+  currentEngine.drainDeferredEffects()
+export const repumpDeferredLanes: GraphCore["repumpDeferredLanes"] = () =>
+  currentEngine.repumpDeferredLanes()
+export const flushScheduledEffects: GraphCore["flushScheduledEffects"] = () =>
+  currentEngine.flushScheduledEffects()
+export const resetEffectLanes: GraphCore["resetEffectLanes"] = () =>
+  currentEngine.resetEffectLanes()
+export const peekCell: GraphCore["peekCell"] = (cell) => currentEngine.peekCell(cell)
+export const readCell: GraphCore["readCell"] = (cell) => currentEngine.readCell(cell)
+export const writeCell: GraphCore["writeCell"] = (cell, next, intent) =>
+  currentEngine.writeCell(cell, next, intent)
+export const ensureFresh: GraphCore["ensureFresh"] = (node, knownFlags, depth) =>
+  currentEngine.ensureFresh(node, knownFlags, depth)
+export const readDerived: GraphCore["readDerived"] = (node) => currentEngine.readDerived(node)
+export const untrack: GraphCore["untrack"] = (fn) => currentEngine.untrack(fn)
+export const getActiveConsumer: GraphCore["getActiveConsumer"] = () =>
+  currentEngine.getActiveConsumer()
+export const disposeWatcher: GraphCore["disposeWatcher"] = (w) =>
+  currentEngine.disposeWatcher(w)
+export const makeEffect: GraphCore["makeEffect"] = (compute, handler, lane, equals, label) =>
+  currentEngine.makeEffect(compute, handler, lane, equals, label)
+export const makeScope: GraphCore["makeScope"] = (fn) => currentEngine.makeScope(fn)
+export const observeNode: GraphCore["observeNode"] = (node, notify, draftWake, label) =>
+  currentEngine.observeNode(node, notify, draftWake, label)
+export const resetGraphForBenchmark: GraphCore["resetGraphForBenchmark"] = () =>
+  currentEngine.resetGraphForBenchmark()
 
 /**
  * The host lane pump's shape: install with setLanePump (see the closure's

@@ -182,6 +182,46 @@ describe("migration correctness", () => {
     stop()
   })
 
+  test("captures created before growth reach the successor generation", async () => {
+    setArenaCapacityForTesting(1024)
+    // A lifetime ctx the setup retains past its call, and a disposer — both
+    // captured from the pre-growth generation.
+    let storedSet: ((v: number) => void) | undefined
+    const a = createAtom(0, {
+      onObserved: (ctx) => {
+        storedSet = ctx.set
+      },
+    })
+    const seen: number[] = []
+    const stop = createEffect(a, (v) => {
+      seen.push(v)
+    })
+    flushScheduledEffects() // settle the observation lifetime
+    expect(storedSet).toBeDefined()
+    growCapacity(4096)
+    await microtasks()
+    expect(arenaStats().capacityRecords).toBe(4096)
+    storedSet!(7) // pre-growth ctx.set writes through the current generation
+    expect(seen).toEqual([0, 7])
+    stop() // pre-growth disposer disposes through the current generation
+    storedSet!(9)
+    expect(seen).toEqual([0, 7])
+  })
+
+  test("benchmark reset after growth keeps the grown capacity", async () => {
+    setArenaCapacityForTesting(1024)
+    const a = createAtom(1)
+    createComputed(() => a.get()).get()
+    growCapacity(4096)
+    await microtasks()
+    expect(arenaStats().capacityRecords).toBe(4096)
+    resetGraphForBenchmark()
+    expect(arenaStats().capacityRecords).toBe(4096)
+    // The rewound arena is untouched again, so growCapacity applies now.
+    growCapacity(8192)
+    expect(arenaStats().capacityRecords).toBe(8192)
+  })
+
   test("a churned graph stays correct through growth", async () => {
     setArenaCapacityForTesting(256)
     const width = 40
