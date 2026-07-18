@@ -5,8 +5,9 @@
  * Both `cosignals/debug` and `cosignals-arena/debug`
  * export the same surface (that contract is the whole point of the debug
  * entry); this module is the one adapter body, parameterized over that
- * surface, and `./cosignals` / `./cosignals-arena` are thin bindings of it. It installs
- * the trace hook (events flow straight through, kind strings verbatim) and
+ * surface, and `./cosignals` / `./cosignals-arena` are thin bindings of it. It builds
+ * the trace hook (events flow straight through, kind strings verbatim) —
+ * installed and removed by the session's `attach()`/`detach()` — and
  * implements the NodeProvider with the inert `inspect`/`deps`/`subs` peeks.
  * Node handles are held only via WeakRef and pruned through a
  * FinalizationRegistry, so attaching the devtools never keeps a disposed
@@ -209,17 +210,48 @@ function describeEvent(ev: Event): string {
   return ev.type
 }
 
+/**
+ * A devtools session: one collector wired to one engine, with the trace hooks
+ * toggleable. Recording costs real time on every signal operation (previews,
+ * stack capture, ring writes), so hosts start and stop it deliberately;
+ * everything the collector recorded stays readable while detached.
+ */
 export interface EngineDevtools {
   collector: Collector
+  /**
+   * Install the trace hooks (engine tracer, hot channel if the panel enabled
+   * it, React render observer) and expose the collector on
+   * `globalThis.__SIGNALS_DEVTOOLS__`. Idempotent; safe to call after
+   * `detach()` to resume recording into the same collector.
+   */
+  attach(): void
+  /**
+   * Remove the trace hooks and clear the global. The collector and its
+   * recorded events survive, so a panel can keep displaying them. Idempotent.
+   */
   detach(): void
 }
 
 /**
- * Attach the collector to the given engine's debug surface and expose it on
- * `globalThis.__SIGNALS_DEVTOOLS__`. Call the returned `detach()` to remove
- * the trace hook and stop observing.
+ * Create a devtools session for the given engine's debug surface and
+ * immediately attach it. Equivalent to `createEngineDevtools(...)` followed
+ * by `attach()` — the one-call form for hosts that always record.
  */
 export function attachEngineDevtools(
+  engine: EngineDebug,
+  opts?: { capacity?: number; now?: () => number },
+): EngineDevtools {
+  const devtools = createEngineDevtools(engine, opts)
+  devtools.attach()
+  return devtools
+}
+
+/**
+ * Build the collector and tracer for the given engine's debug surface without
+ * installing anything. No engine hook is touched and no event is recorded
+ * until `attach()` is called, so creating a session is free for the page.
+ */
+export function createEngineDevtools(
   engine: EngineDebug,
   opts?: { capacity?: number; now?: () => number },
 ): EngineDevtools {
@@ -427,56 +459,71 @@ export function attachEngineDevtools(
     }
     return collector.record(kind, nodeIdNum, parent, nodeKind, data) as unknown as number
   }
-  engine.setTracer({
+  const tracer = {
     emitEvent: emit,
     startSpan: emit,
-    endSpan: (id, attrs) => collector.endSpan(id as unknown as EventId, attrs?.changed),
-    getCause: (owner) => causes.get(owner) ?? 0,
-    setCause: (owner, cause) => causes.set(owner, cause),
-    getDraftWrite: (draft) => draftWrites.get(draft) ?? 0,
-    setDraftWrite: (draft, cause) => draftWrites.set(draft, cause),
-  })
+    endSpan: (id: number, attrs?: { changed?: boolean }) =>
+      collector.endSpan(id as unknown as EventId, attrs?.changed),
+    getCause: (owner: object) => causes.get(owner) ?? 0,
+    setCause: (owner: object, cause: number) => void causes.set(owner, cause),
+    getDraftWrite: (draft: object) => draftWrites.get(draft) ?? 0,
+    setDraftWrite: (draft: object, cause: number) => void draftWrites.set(draft, cause),
+  }
 
   // Hot algorithm channel: the engine hook is installed only while hot mode
-  // is on (collector.setHotMode), so the disabled cost stays the engine's own
-  // per-site null check. Each hot event carries the node's registered id and
-  // the step string — the ring never holds a node, same as every other event.
-  // A `check` fires during a read, which often has no signal operation in scope
-  // (currentCause is 0), so fall its cause back to the latest state change — the
-  // write whose downstream re-render triggered the read — so hot steps group
-  // under the operation instead of piling up as uncaused roots.
-  collector.setHotSource((on) =>
-    engine.setHotTracer(
-      on
-        ? (node, step, cause) =>
-            void collector.record(
-              step,
-              register(node),
-              (cause || collector.latestSignalCause()) as EventId,
-              kindOf(node),
-              {},
-            )
-        : null,
-    ),
-  )
+  // is on (collector.setHotMode) AND the session is attached, so the disabled
+  // cost stays the engine's own per-site null check. Each hot event carries
+  // the node's registered id and the step string — the ring never holds a
+  // node, same as every other event. A `check` fires during a read, which
+  // often has no signal operation in scope (currentCause is 0), so fall its
+  // cause back to the latest state change — the write whose downstream
+  // re-render triggered the read — so hot steps group under the operation
+  // instead of piling up as uncaused roots. The panel's hot toggle survives a
+  // detach: reattaching restores the hook if hot mode was left on.
+  let attached = false
+  let hotOn = false
+  const hotTracer = (node: EngineNode, step: string, cause?: number) =>
+    void collector.record(
+      step,
+      register(node),
+      (cause || collector.latestSignalCause()) as EventId,
+      kindOf(node),
+      {},
+    )
+  const applyHot = () => engine.setHotTracer(attached && hotOn ? hotTracer : null)
+  collector.setHotSource((on) => {
+    hotOn = on
+    applyHot()
+  })
 
   // React render causality lives entirely in the devtools. The engine emits
-  // notifications; bippy observes the resulting fiber commits.
-  const detachReactRender = attachReactRenderTracer(
+  // notifications; bippy observes the resulting fiber commits. bippy patches
+  // the shared React DevTools hook once at creation; the setter only flips
+  // whether commits are recorded.
+  const setReactRenderActive = attachReactRenderTracer(
     collector,
     () => collector.latestSignalCause(),
     (watcher, component) => componentLabels.set(watcher, component),
   )
 
   const g = globalThis as { __SIGNALS_DEVTOOLS__?: unknown }
-  g.__SIGNALS_DEVTOOLS__ = collector
 
   return {
     collector,
+    attach() {
+      if (attached) return
+      attached = true
+      engine.setTracer(tracer)
+      applyHot()
+      setReactRenderActive(true)
+      g.__SIGNALS_DEVTOOLS__ = collector
+    },
     detach() {
+      if (!attached) return
+      attached = false
       engine.setTracer(null)
-      engine.setHotTracer(null)
-      detachReactRender()
+      applyHot()
+      setReactRenderActive(false)
       if (g.__SIGNALS_DEVTOOLS__ === collector) g.__SIGNALS_DEVTOOLS__ = undefined
     },
   }

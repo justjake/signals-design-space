@@ -68,16 +68,17 @@ function renderReason(fiber: Fiber, phase: RenderPhase, parentRendered: boolean)
 /**
  * Install the render observer. `latestSignalCause` supplies the id of the most
  * recent signal event (a notify/write) so a cascade root can chain to what
- * triggered the pass. Returns a detach that quiets the channel — bippy patches
- * the shared DevTools hook once, so detach flips a local flag rather than
- * un-patching.
+ * triggered the pass. Returns an on/off setter — bippy patches the shared
+ * DevTools hook once and cannot un-patch, so pausing and resuming flip a local
+ * flag instead. The channel starts off; the caller turns it on when it starts
+ * recording.
  */
 export function attachReactRenderTracer(
   collector: Collector,
   latestSignalCause: () => EventId,
   labelWatcher: (watcher: object, component: string) => void,
-): () => void {
-  let active = true
+): (on: boolean) => void {
+  let active = false
   instrument(
     secure({
       onCommitFiberRoot(_rendererID: number, root: FiberRoot) {
@@ -150,7 +151,7 @@ export function attachReactRenderTracer(
       },
     }),
   )
-  return () => {
-    active = false
+  return (on: boolean) => {
+    active = on
   }
 }

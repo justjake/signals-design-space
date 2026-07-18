@@ -6,20 +6,38 @@
 
 import * as cosignalsDebug from "cosignals/debug"
 import { NO_EVENT } from "cosignals/debug"
-import { attachEngineDevtools, type EngineDebug, type EngineDevtools } from "./engine.ts"
+import {
+  attachEngineDevtools,
+  createEngineDevtools,
+  type EngineDebug,
+  type EngineDevtools,
+} from "./engine.ts"
 
 export type CosignalsDevtools = EngineDevtools
 
 /**
- * Attach the collector to the active cosignals engine and expose it on
- * `globalThis.__SIGNALS_DEVTOOLS__`. Call the returned `detach()` to remove
- * the trace hook and stop observing.
+ * Create a devtools session for the active cosignals engine and start
+ * recording immediately: the trace hooks are installed and the collector is
+ * exposed on `globalThis.__SIGNALS_DEVTOOLS__`. Call the returned `detach()`
+ * to stop recording; `attach()` resumes into the same collector.
  */
 export function attachCosignalsDevtools(opts?: {
   capacity?: number
   now?: () => number
 }): CosignalsDevtools {
   return attachEngineDevtools(cosignalsDebug as EngineDebug, opts)
+}
+
+/**
+ * Create a devtools session for the active cosignals engine without
+ * recording anything yet. Nothing is traced — and the page pays nothing —
+ * until the returned session's `attach()` is called.
+ */
+export function createCosignalsDevtools(opts?: {
+  capacity?: number
+  now?: () => number
+}): CosignalsDevtools {
+  return createEngineDevtools(cosignalsDebug as EngineDebug, opts)
 }
 
 // Re-export so callers can reference the root sentinel if they build cause
