@@ -15,11 +15,13 @@ The engine is a conventional signal graph with a small transition
 overlay on top. The layers, by module:
 
 - `src/graph.ts` — the base signal graph: atoms, computeds, effects,
-  batching. Change moves in two phases: a write pushes "possibly stale"
-  marks down the subscriber edges without recomputing anything, and a
-  read pulls, recomputing a node only when a dependency actually changed
-  value since the node last validated. Staleness is decided by comparing
-  readings of a module-wide change clock, not by flags alone. Nodes are
+  batching. Change moves in two phases: a write pushes staleness marks
+  down the subscriber edges without recomputing anything ("definitely
+  stale" for the changed node's direct subscribers, "possibly stale"
+  below them), and a read pulls, recomputing a node only when a
+  dependency actually changed value since the node last validated.
+  Staleness is decided by comparing readings of a module-wide change
+  clock, not by flags alone. Nodes are
   watched (linked into subscriber lists, reached by push) or unwatched
   (validated lazily on read against the clock); an unwatched computed
   holds references toward its dependencies only, so dropping the last
