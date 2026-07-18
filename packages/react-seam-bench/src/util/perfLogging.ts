@@ -11,6 +11,14 @@ export interface PerfResultStrings {
   time: string
 }
 
+/**
+ * Pseudo-test name for the child's single-thread speed probe. The child
+ * reports it like any other row; the isolated runner uses it to detect
+ * rounds that ran on slow silicon (macOS placing the process on
+ * efficiency cores roughly triples it) and excludes the row from output.
+ */
+export const CALIBRATION_TEST = "__probe__"
+
 const columnWidth: Record<keyof PerfResultStrings, number> = {
   framework: 32,
   test: 60,
