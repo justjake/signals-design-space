@@ -1,7 +1,12 @@
 /** Shared test harness: registration, roots, act plumbing. */
 import * as React from "react"
-import { act } from "react"
+// React 18.2 (the suite's support floor) has no top-level act export; its
+// act lives in react-dom/test-utils. React 19 keeps that export only as a
+// stub that throws when called, so prefer React.act when it exists.
+import { act as legacyAct } from "react-dom/test-utils"
 import { createRoot } from "react-dom/client"
+
+export const act: typeof legacyAct = React.act ?? legacyAct
 import { flushScheduledEffects } from "cosignals"
 import {
   CosignalsProvider,
@@ -105,4 +110,4 @@ export const flushEffects = (): Promise<void> =>
     flushScheduledEffects()
   })
 
-export { act, React }
+export { React }

@@ -1,0 +1,11 @@
+{
+  "name": "cosignals-react18-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned React 18 copies for the cosignals test suite (pnpm test:react18). Pins the 18.2.0 support floor. A separate package so pnpm resolves react-dom 18's react and scheduler peers to the 18-line versions instead of the workspace's React 19.",
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "scheduler": "0.23.2"
+  }
+}

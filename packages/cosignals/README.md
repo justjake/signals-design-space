@@ -66,7 +66,7 @@ pnpm add cosignals
 # or: npm install cosignals · yarn add cosignals · bun add cosignals
 ```
 
-`cosignals/react` requires `react` and `react-dom` 19 or later as peer
+`cosignals/react` requires `react` and `react-dom` 18.2 or later as peer
 dependencies.
 
 Import what you need. The package splits into entry points so an app
