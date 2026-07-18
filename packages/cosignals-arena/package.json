@@ -1,11 +1,41 @@
 {
   "name": "cosignals-arena",
   "version": "0.1.0",
-  "private": true,
-  "description": "Concurrent signals for React backed by typed-array graph storage",
+  "description": "The data-oriented build of cosignals: the same concurrent signals API for React, with the reactive graph stored in typed-array records instead of linked JS objects. Probably faster; definitely harder to read.",
+  "license": "MIT",
+  "author": "Jake Teton-Landis <just.1.jake@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/justjake/signals-design-space.git",
+    "directory": "packages/cosignals-arena"
+  },
+  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals-arena#readme",
+  "bugs": "https://github.com/justjake/signals-design-space/issues",
+  "keywords": [
+    "react",
+    "signals",
+    "state",
+    "state-management",
+    "store",
+    "concurrent",
+    "concurrent-rendering",
+    "transitions",
+    "suspense",
+    "async",
+    "reactive",
+    "atom",
+    "hooks",
+    "data-oriented",
+    "typed-array"
+  ],
   "type": "module",
   "sideEffects": [
-    "./src/react/index.ts"
+    "./src/react/index.ts",
+    "./dist/react/index.js"
+  ],
+  "files": [
+    "dist",
+    "src"
   ],
   "exports": {
     ".": "./src/index.ts",
@@ -13,10 +43,43 @@
     "./react": "./src/react/index.ts",
     "./debug": "./src/debug/index.ts",
     "./unstable": "./src/unstable.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./ssr": {
+        "types": "./dist/ssr.d.ts",
+        "default": "./dist/ssr.js"
+      },
+      "./react": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "./debug": {
+        "types": "./dist/debug/index.d.ts",
+        "default": "./dist/debug/index.js"
+      },
+      "./unstable": {
+        "types": "./dist/unstable.d.ts",
+        "default": "./dist/unstable.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "./package.json": "./package.json"
+    }
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:react18": "COSIGNALS_REACT=18 vitest run",

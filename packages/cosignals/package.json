@@ -1,11 +1,42 @@
 {
   "name": "cosignals",
   "version": "0.1.0",
-  "private": true,
-  "description": "Concurrent signals for React",
+  "description": "The first concurrent signals library for React, and the fastest: writes participate in transitions exactly like useState, async values suspend on first load and keep serving data while refetching, and re-renders schedule the way React intends.",
+  "license": "MIT",
+  "author": "Jake Teton-Landis <just.1.jake@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/justjake/signals-design-space.git",
+    "directory": "packages/cosignals"
+  },
+  "homepage": "https://github.com/justjake/signals-design-space/tree/main/packages/cosignals#readme",
+  "bugs": "https://github.com/justjake/signals-design-space/issues",
+  "keywords": [
+    "react",
+    "signals",
+    "state",
+    "state-management",
+    "store",
+    "concurrent",
+    "concurrent-rendering",
+    "transitions",
+    "useTransition",
+    "suspense",
+    "async",
+    "reactive",
+    "atom",
+    "hooks"
+  ],
   "type": "module",
   "sideEffects": [
-    "./src/react/index.ts"
+    "./src/react/index.ts",
+    "./dist/react/index.js"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "INTERNALS.md"
   ],
   "exports": {
     ".": "./src/index.ts",
@@ -13,10 +44,43 @@
     "./react": "./src/react/index.ts",
     "./debug": "./src/debug/index.ts",
     "./unstable": "./src/unstable.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./ssr": {
+        "types": "./dist/ssr.d.ts",
+        "default": "./dist/ssr.js"
+      },
+      "./react": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "./debug": {
+        "types": "./dist/debug/index.d.ts",
+        "default": "./dist/debug/index.js"
+      },
+      "./unstable": {
+        "types": "./dist/unstable.d.ts",
+        "default": "./dist/unstable.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "./package.json": "./package.json"
+    }
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "format-doc-comments": "node tools/format-doc-comments.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
