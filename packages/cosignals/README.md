@@ -1,24 +1,23 @@
 # cosignals
 
 [Signals](https://github.com/tc39/proposal-signals) for React with first-class
-support for transitions and concurrent rendering. (See [what are signals?](#what-are-signals))
+support for transitions and concurrent rendering. See
+[What are signals?](#what-are-signals) for an introduction.
 
 - **Transitions**: a write inside `React.startTransition` stays invisible to
   the current screen until the transition commits, exactly like a `useState`
-  update. A typical external store cannot do this: it has one current value, so
-  either the write shows up immediately everywhere (defeating the transition) or
-  the background render cannot see it. [Details](#transition-writes).
+  update. A typical external store cannot do this: it has one current value; it
+  must expose the write immediately or hide it from the background render.
+  [Details](#transition-writes).
 - **Async / Suspense**: a computed signal [can suspend](#async-computeds) with
   `use(promise)` like a React component. It re-runs once the promise settles. On
   the first run, components downstream suspend; if there's a previous value,
   downstream signals and components see that while waiting.
 - **Scheduling**: a signal write re-renders its subscribers
   with the same priority React would give a `setState` call from the
-  same place, where `useSyncExternalStore` bindings render every store change at
-  synchronous priority. [Signal-subscribed effects](#effects) run like _useEffect_ or
-  _useLayoutEffect_ without re-rendering the component.
-- **Supposedly supports multiple roots**: each root sees its own correct concurrent state,
-  unlike the experimental
+  same place. In contrast, `useSyncExternalStore` renders every store change at
+  synchronous priority.
+- **Multiple roots**: each root has its own concurrent state, unlike the experimental
   [react-concurrent-store](https://github.com/thejustinwalsh/react-concurrent-store)
   polyfill. _I'm not sure if it's completely correct though._
 - **Beware: uses React internals**: some of these magicks rely on React internals; if
@@ -30,7 +29,8 @@ import { createRoot } from "react-dom/client"
 import { createAtom, createComputed } from "cosignals"
 import { CosignalsProvider, useSignal, useSignalEffect } from "cosignals/react"
 
-// Signals may live outside the tree; share them across components freely or via context.
+// Signals can live outside the tree
+// and be shared directly or through context.
 const count = createAtom(0)
 const doubled = createComputed(() => count.get() * 2)
 
@@ -97,11 +97,11 @@ Configure your linter to check [signal effects](#usesignaleffect):
 
 Available modules:
 
-- `cosignals`: Pure core; React and dependency-free. Create signals, derive
-  values, react to changes, batch writes — `createAtom`, `createComputed`,
-  `createEffect`, `batch`, `latest`, `isPending`.
+- `cosignals`: React-free core for creating signals, deriving values, reacting
+  to changes, and batching writes: `createAtom`, `createComputed`,
+  `createEffect`, `batch`, `latest`, `isPending`, `shallowEquals`.
 - `cosignals/react`: hooks and the provider that connect signals to
-  components — `useSignal`, `useComputed`, `useSignalEffect`,
+  components: `useSignal`, `useComputed`, `useSignalEffect`,
   `useSignalLayoutEffect`, `useSignalTransition`, `CosignalsProvider`.
 - `cosignals/ssr`: serialize and restore atom state across server and
   client. _Experimental_.
@@ -163,10 +163,10 @@ function SearchBox() {
 
 - `initial`: The initial state value of the atom. Can be a function to create
   state lazily.
-- `equals`: used to compare state values. A `set` or `update` that writes a
-  value that `equals(prev, next)`, the write is dropped, so nothing downstream
-  re-runs. Defaults to `Object.is`.
-- `label`: a debug name shown devtools.
+- `equals`: compares state values. If `equals(prev, next)` returns true for a
+  `set` or `update`, the write is dropped and nothing downstream re-runs.
+  Defaults to `Object.is`.
+- `label`: a debug name shown in developer tools.
 - `onObserved`: tie an external resource to the atom's observed
   lifetime (below).
 
@@ -177,11 +177,10 @@ untracked, at the first read, write, or subscription:
 const config = createAtom(() => loadConfig())
 ```
 
-`onObserved` runs when the atom gains its first subscriber of any kind —
-an effect, a watched computed chain, or a React component — and its
-cleanup runs when the last subscriber of every kind is gone.
-Subscribe/unsubscribe flaps within a tick coalesce, so a StrictMode
-double-mount nets one activation:
+`onObserved` is a `useEffect`-like callback that allows binding external
+resources to an atom's state. It runs when the atom gains its first subscriber
+(effect, computed, or component) and should return a `cleanup` function. Its
+cleanup runs when the last subscriber is removed.
 
 ```ts
 const price = createAtom(0, {
@@ -225,15 +224,15 @@ import { createComputed } from "cosignals"
 const doubled = createComputed(() => count.get() * 2)
 doubled.get() // 6
 count.set(10)
-doubled.get() // 20 — recomputed because count changed
-doubled.get() // 20 — cached, the function does not run again
+doubled.get() // 20; recomputed because count changed
+doubled.get() // 20; cached without running the function again
 ```
 
 Dependencies are dynamic: a branch not taken during an evaluation is
-not a dependency, so a change to it causes no recompute. The compute function
-receives two arguments — `use`, for reading promises (see
-[async computeds](#async-computeds)), and `previous`, the last settled
-value (`undefined` on the first run).
+not a dependency, so changing it does not trigger recomputation. The function
+receives two arguments: `use` reads promises (see
+[async computeds](#async-computeds)), and `previous` is the last settled value
+(`undefined` on the first run).
 
 `createComputed(fn, options?)` takes the same `equals` and `label`
 options as `createAtom`; `equals` decides whether a recomputed value
@@ -258,74 +257,71 @@ An **effect** runs a side effect when signals change, like `useEffect`.
 Effects have two parts:
 
 - `watch`: what the effect reacts to, a dependency-tracked compute function, a
-  signal signal, or a simple tuple or record of signals.
+  signal, or a simple tuple or record of signals.
 - `run`: the side effect, untracked. It is called with the new value and
   the previous value it handled, and may return a cleanup that runs
   before the next `run` and at disposal.
 
 Effects observe committed state: a transition reaches every effect
-exactly once, when it commits — and only if it commits.
+exactly once when it commits. An abandoned transition reaches no effects.
 
 #### useSignalEffect
 
-A component-owned effect. The factory you pass works like a `useEffect`
-body: it runs on mount and again whenever `deps` change (disposing the
-effect it previously built, so captured props and state stay fresh) and
-returns the spec: `{ watch, run, equals?, label? }`.
+A component-owned effect. Its body function returns an options object `{ watch,
+run, equals?, label? }`. The body is called on mount and whenever `deps` change.
+Before re-running, it disposes the previous effect so captured props and state
+stay current.
 
 The effect subscribes to its watched signals directly, so a component
-can react to signals it never renders. Reaching the same signal through
-`useEffect` would mean reading it with `useSignal` and listing the
-value in deps — subscribing the whole component and re-rendering it
-just to feed the effect.
+can react to signal changes without re-rendering.
 
-`watch` takes three shapes. Watch one signal — `run` receives its
-value:
+`watch` takes three shapes:
 
-```tsx
-useSignalEffect(
-  () => ({
-    watch: query,
-    run: (q) => analytics.search(q),
-  }),
-  [],
-)
-```
+- When watching one signal, `run` receives its value:
 
-Watch a tuple or record of signals — `run` receives a container of
-values with the same shape:
+  ```tsx
+  useSignalEffect(
+    () => ({
+      watch: query,
+      run: (q) => analytics.search(q),
+    }),
+    [],
+  )
+  ```
 
-```tsx
-useSignalEffect(
-  () => ({
-    watch: [user, theme],
-    run: ([u, t]) => paintHeader(u, t),
-  }),
-  [],
-)
+- When watching a tuple or record of signals, `run` receives values in the same
+  shape:
 
-useSignalEffect(
-  () => ({
-    watch: { user, theme },
-    run: ({ user, theme }) => paintHeader(user, theme),
-  }),
-  [],
-)
-```
+  ```tsx
+  useSignalEffect(
+    () => ({
+      watch: [user, theme],
+      run: ([u, t]) => paintHeader(u, t),
+    }),
+    [],
+  )
 
-Watch a compute function — tracked while it runs, so the signals it
-reads (and only those, branch by branch) become dependencies; `run`
-receives its result:
+  useSignalEffect(
+    () => ({
+      watch: { user, theme },
+      run: ({ user, theme }) => paintHeader(user, theme),
+    }),
+    [],
+  )
+  ```
 
-```tsx
-useSignalEffect(
-  () => ({
-    watch: () => matchRoute(pathname.get(), routes.get()),
-    run: (route) => announcePageChange(route.title),
-  }),
-  [],
-)
-```
+- When watching a compute function, the signals read by the executed branches
+  become dependencies. `run` receives the function's result:
+
+  ```tsx
+  useSignalEffect(
+    () => ({
+      watch: () => matchRoute(pathname.get(), routes.get()),
+      run: (route) => announcePageChange(route.title),
+    }),
+    [],
+  )
+  ```
 
 Because one closure carries every capture, `react-hooks/exhaustive-deps`
 can check the whole spec once the hooks are listed:
@@ -339,15 +335,15 @@ can check the whole spec once the hooks are listed:
 #### useSignalLayoutEffect
 
 The same factory and spec as `useSignalEffect`, but `run` fires in the
-layout phase — after DOM mutations, before paint, like
-`useLayoutEffect`. Use it when the handler measures or mutates the DOM
-and the result must be visible in the same frame.
+layout phase after DOM mutations and before paint, like `useLayoutEffect`. Use
+it when the handler measures or mutates the DOM and the result must appear in
+the same frame.
 
 #### createEffect
 
-For effects owned outside the component tree — module scope, stores,
-non-React code. The watch source and handler are direct arguments (the
-same three watch shapes), and it returns a disposer:
+Use `createEffect` for effects owned outside the component tree, such as module
+scope, stores, or non-React code. It takes the watch source and handler as
+direct arguments and returns a disposer:
 
 ```ts
 import { createEffect } from "cosignals"
@@ -370,33 +366,30 @@ createEffect(
 stop() // dispose: run the last cleanup, drop the graph edges
 ```
 
-The tuple and record shorthands rebuild their container on every run,
-so they default their cutoff to `shallowEquals` (exported for reuse);
-an explicit `equals` option overrides. If the watch throws, the error
-surfaces where the effect runs.
+The tuple and record shorthands rebuild their container on every run. They use
+the exported `shallowEquals` function by default. An explicit `equals` option
+overrides it. If `watch` throws, the error surfaces where the effect runs.
 
 The first run happens synchronously, at creation. Async sources relax
 that:
 
-- nothing has settled yet: the first handler run waits for the value;
-- loading again behind an earlier value: the effect stays quiet and
-  keeps the last cleanup installed (`isPending` is the loading
-  indicator);
+- nothing has settled yet: the handler waits for the first value.
+- loading again behind an earlier value: the effect keeps the last cleanup
+  installed and does not run. Use `isPending` as the loading indicator.
 - a load completes: the handler runs only if the new value differs from
   the last one it handled.
 
 The `schedule` option picks when signal-triggered re-runs happen:
 
-- `'sync'` (the default): immediately, as part of the write;
+- `'sync'` (the default): immediately, as part of the write.
 - `'useLayoutEffect'` or `'useEffect'`: in that phase of the React
   update the change caused, alongside components' own effects of that
   phase. Without React mounted, a microtask or `setTimeout(0)`
   approximates the timing.
 
 The first run at creation is always synchronous, whatever the schedule.
-`flushScheduledEffects()` runs every scheduled effect immediately — for
-tests and non-React environments where nothing else forces scheduled
-work to a deterministic moment.
+`flushScheduledEffects()` runs every scheduled effect immediately. Use it in
+tests and non-React environments that need deterministic timing.
 
 `effectScope(fn)` collects every effect created inside `fn` and returns
 one disposer for the group:
@@ -411,16 +404,15 @@ const stopAll = effectScope(() => {
 stopAll()
 ```
 
-Effects and scopes hold graph edges until their disposer is called;
-undisposed effects run forever.
+Effects and scopes stay subscribed until their disposer is called. Undisposed
+effects run forever.
 
 ## Transitions and async
 
-A pending transition and an in-flight refetch are the same situation:
-newer state exists behind what the screen currently shows. `cosignals`
-models both the same way: the current value keeps serving reads while
-the newer one is prepared. `isPending` and `latest` are the two
-ways to look across that gap.
+A pending transition and an in-flight refetch both prepare newer state behind
+the current screen. In either case, reads keep returning the current value
+while the newer one is prepared. Use `isPending` and `latest` to inspect the
+pending state.
 
 ### Transition writes
 
@@ -434,23 +426,23 @@ per-hook queues, and each render pass chooses which updates to apply.
 `cosignals` gives atoms the same machinery:
 
 - a write made inside a transition is recorded in a draft attached to
-  that transition, leaving the atom itself as it was;
+  that transition, leaving the atom unchanged.
 - the committed screen, ordinary reads, and effects keep seeing the
-  value without the draft;
+  value without the draft.
 - the transition's own render passes see the value with the draft
-  applied;
+  applied.
 - when the transition commits, the draft folds into the atom and every
-  ordinary reader sees the change, once.
+  ordinary reader sees the change once.
 
 Functional updates recorded in a draft replay over urgent writes that
-land in the meantime, in the order they were dispatched — the same rule
-React applies to queued `useState` updaters. For a counter at 1:
+land in the meantime, in dispatch order. React applies the same rule to queued
+`useState` updaters. For a counter at 1:
 
 ```ts
 const n = createAtom(1)
-// inside a transition:  n.update((x) => x + 2)   — recorded in a draft
-// then an urgent write: n.update((x) => x * 2)   — applies immediately
-n.get() // 2 — the screen shows 1 * 2; the draft is hidden
+// Inside a transition, n.update((x) => x + 2) is recorded in a draft.
+// An urgent n.update((x) => x * 2) then applies immediately.
+n.get() // 2; the screen shows 1 * 2 while the draft stays hidden
 // the transition's render sees (1 + 2) * 2 = 6, and 6 is what commits
 ```
 
@@ -480,7 +472,7 @@ function FilterTabs() {
 ```
 
 - `useSignalTransition()`: React's `useTransition` combined with a
-  signal batch; `pending` covers the transition's whole lifetime,
+  signal batch; `pending` covers the full transition,
   including renders held by Suspense.
 - `startSignalTransition(fn)`: `React.startTransition` plus one signal
   batch, for writes started outside a component.
@@ -489,16 +481,14 @@ function FilterTabs() {
   wrappers just add the batch.
 
 While the transition is pending, its writes are visible only to its own
-render passes — `useSignal` in the work-in-progress tree sees them,
-while the committed screen, `get()` outside renders, and effects keep
-seeing the old value. When it commits, the writes land everywhere at
-once.
+render passes. `useSignal` in the work-in-progress tree sees them. The committed
+screen, `get()` outside renders, and effects keep seeing the old value. On
+commit, the writes become visible everywhere.
 
 ### Async computeds
 
 A computed reads a promise through its `use` argument. `use(thenable)`
-returns the settled value or parks the evaluation until the promise
-settles:
+returns the settled value or suspends the evaluation until the promise settles:
 
 ```ts
 const userId = createAtom(1)
@@ -507,11 +497,11 @@ const user = createComputed((use) => use(fetchUser(userId.get())))
 
 What a read of an async computed returns depends on the promise:
 
-- settled: returns the settled value;
+- settled: returns the settled value.
 - loading again behind an earlier settled value (a refetch): keeps
-  returning that earlier value, and `isPending` reports true;
+  returning that earlier value, and `isPending` reports true.
 - loading with nothing settled yet (a first load): throws the
-  computed's stable pending promise, which React Suspense catches;
+  computed's stable pending promise, which React Suspense catches.
 - failed: rethrows the same error object at every read site.
 
 Under `useSignal`, that means: a first load suspends the component; a
@@ -519,20 +509,19 @@ refetch keeps showing the settled value, with `useIsPending` as the
 loading indicator; and a render inside a transition suspends into the
 transition, so the current screen holds instead of showing a fallback.
 
-Settlement behaves like a write: dependents are notified and parked
-readers retry. The pending promise is stable while a load is in flight,
+Settlement behaves like a write: dependents are notified and suspended readers
+retry. The pending promise is stable while a load is in flight,
 so a suspended React render never re-issues the fetch.
 
-Keep thenables stable per input set — derive them from state, as in the
-example, with `fetchUser` caching its promise per id. A function that
-creates a brand-new promise on every evaluation would refetch on every
-settlement; that is a data-layer bug this library cannot paper over.
+Promises passed to `use` must be cached so the same Promise instance is used
+across re-computes, [like with React's `use`](https://react.dev/reference/react/use#caching-promises-for-client-components).
+In this example, `fetchUser` must cache its promise by ID. Creating a new
+promise on every evaluation causes another fetch after every settlement.
 
-To refetch with unchanged inputs, own the trigger: keep a version atom,
-read it inside the computed, and bump it to fetch again. A version bump
-is an ordinary write, so it composes with everything writes do — inside
-a transition, the refetch happens inside that transition and the
-current screen holds:
+_Refresh pattern_: To refetch with unchanged inputs, create a version atom. Read
+it inside the computed and increment it to fetch again. The increment is an
+ordinary write. Inside a transition, the refetch joins that transition and the
+current screen stays visible:
 
 ```ts
 const userVersion = createAtom(0)
@@ -543,25 +532,20 @@ userVersion.update((v) => v + 1) // refetch; user serves stale data while loadin
 
 ### isPending and useIsPending
 
-`isPending(x)` is true while newer data exists behind what is shown — a
-pending transition has written `x`, or an async computed is loading
-again behind its settled value. It only reports: reading it leaves the
-computed exactly as it was, where a `get()` might evaluate, refetch, or
-suspend. A first load reads false — pending means newer data behind
-data already shown, and a first load has nothing shown yet; that case
-belongs to Suspense.
+`isPending(x)` is true when a transition has written `x` or an async computed
+is reloading behind its settled value. It does not evaluate, refetch, or suspend
+the computed as `get()` might. It returns false during the first load because no
+earlier value exists; Suspense handles that case.
 
-`useIsPending(x)` is the same read as a subscription. The flip is
-delivered urgently, outside any transition — an indicator must not be
-held back by the transition it indicates. React's own `useTransition`
-schedules its `isPending` the same way.
+`useIsPending(x)` subscribes a component to `isPending(x)`. Changes to
+`isPending(x)` are delivered urgently, like how React's `useTransition` reports
+its `isPending`.
 
 ### latest
 
-`latest(x)` reads the newest view — committed state plus every pending
-transition's writes. Where a plain read would suspend (an async
-computed that has never settled), `latest` returns `undefined` instead;
-a failed computed still rethrows its error.
+`latest(x)` reads committed state plus every pending transition's writes. If a
+plain read would suspend because an async computed has never settled, `latest`
+returns `undefined`. A failed computed still rethrows its error.
 
 Inside a computed evaluation or a render, `latest` resolves the
 caller's own snapshot instead of reading ahead, because mixing
@@ -573,10 +557,10 @@ tracked dependency: when `x` changes, the reader re-runs.
 Every re-render caused by a signal write gets the scheduling React
 would give a `setState` from the same place:
 
-- a click handler: renders synchronously, before the next paint;
+- a DOM event handler: renders synchronously, before the next paint.
 - a timeout, promise, or network callback: default priority, which can
-  land after a paint — wrap the write in `flushSync` when the DOM must
-  update immediately, exactly as for React state;
+  land after a paint. Wrap the write in `flushSync` when the DOM must
+  update immediately, as with React state.
 - inside a transition: the transition's own render passes.
 
 A signal write and a `setState` in the same callback commit in one
@@ -589,10 +573,10 @@ effects instead.
 
 ### batch
 
-`batch(fn)` runs `fn` as one unit of change. Writes inside still apply
-in order, but computeds, effects, and subscribers settle only after the
-outermost batch closes — so intermediate states never leak out, and a
-value that changes and reverts within one batch runs no effects:
+`batch(fn)` groups writes. They apply in order, but computeds, effects, and
+subscribers settle only after the outermost batch closes. Intermediate states
+stay hidden, and a value that changes and reverts within one batch runs no
+effects:
 
 ```ts
 import { batch } from "cosignals"
@@ -605,7 +589,7 @@ batch(() => {
   firstName.set("Ada")
   lastName.set("Lovelace")
 })
-// fullName recomputed once; effects over it ran once
+// fullName recomputes once, and its effects run once.
 ```
 
 `startBatch()` and `endBatch()` are the manual pair for work that does
@@ -614,9 +598,9 @@ work fits.
 
 ### untrack and peek
 
-`untrack(fn)` runs `fn` without adding its signal reads to the active
-dependency list. Use it inside a watch or computed for values the
-computation uses but should not react to:
+`untrack(fn)` returns `fn()` without adding its signal reads to the active
+dependency list. Use it inside a watch or computed for values the computation
+uses but should not react to:
 
 ```ts
 import { untrack } from "cosignals"
@@ -628,7 +612,7 @@ const results = createComputed(() => {
 })
 ```
 
-`x.peek()` reads the signal's value without it becoming a dependency,
+`signal.peek()` reads the signal's value without it becoming a dependency,
 like `untrack(() => x.get())`. This is usually a bad idea: the reader
 keeps working from the peeked value after it goes stale.
 
@@ -639,7 +623,7 @@ library, useful for APIs that accept either signals or plain values.
 
 ## Server rendering
 
-`cosignals/ssr` moves atom state across the server/client boundary:
+`cosignals/ssr` transfers atom state from the server to the client:
 
 ```ts
 import { initializeAtomState, installState, serializeAtomState } from "cosignals/ssr"
@@ -654,15 +638,13 @@ initializeAtomState(json, { count, query })
 installState(count, 42)
 ```
 
-Installing bypasses the write path: the value lands directly and
-satisfies the first read, skipping propagation, equality checks,
-effects, and lazy initializers.
+Installing state sets the value directly. It skips propagation, equality
+checks, effects, and lazy initializers. _Beware_.
 
 ## Testing
 
-Engine state is module-global (live transition drafts, scheduled
-effects, tracers), so tests that use transitions or effects should
-reset between cases:
+Transition drafts, scheduled effects, and tracers use module-level state. Tests
+that use transitions or effects should reset it between cases:
 
 ```ts
 import { resetEngineForTest } from "cosignals/testing"
@@ -674,39 +656,35 @@ beforeEach(() => {
 
 Existing atoms stay valid across a reset.
 
-## Going deeper
+## Internals
 
-Integrating another framework, building devtools, or curious how the
-engine works — including how the React bindings register themselves
-when `cosignals/react` is imported? [INTERNALS.md](./INTERNALS.md)
-covers the architecture and the `cosignals/unstable` and
-`cosignals/debug` entry points.
+See [INTERNALS.md](./INTERNALS.md) to integrate another framework, build
+developer tools, or understand the engine. It also documents the
+`cosignals/unstable` and `cosignals/debug` entry points.
 
 ## See also
 
-- [cosignals-arena](https://www.npmjs.com/package/cosignals-arena) — the
-  data-oriented build of this library: the same API and semantics, with
-  the reactive graph stored in typed-array records instead of JS objects.
-  Probably faster, but harder to understand and it comes with memory
-  limitations (a fixed-capacity record arena).
-- [dalien-signals](https://www.npmjs.com/package/dalien-signals) — a fork
+- [cosignals-arena](https://www.npmjs.com/package/cosignals-arena): a
+  data-oriented build with the same API and semantics. It stores the reactive
+  graph in fixed-capacity typed-array records instead of JavaScript objects.
+  This may improve speed but makes the implementation harder to understand.
+- [dalien-signals](https://www.npmjs.com/package/dalien-signals): a fork
   of [alien-signals](https://www.npmjs.com/package/alien-signals) with a
-  data-oriented memory layout. Probably the fastest signals library for
-  JavaScript, but not React-concurrent compatible: it has no equivalent of
-  the transition support this library exists for.
+  data-oriented memory layout. It is likely faster, but does not support React
+  concurrent rendering or transitions.
 
 ## Thanks
 
 - [Sophie Alpert](https://twitter.com/sophiebits) for teaching me about
-  React concurrent rendering and why it matters
+  React concurrent rendering and why it matters.
 - [Johnson Chu](https://twitter.com/johnsoncodehk) for
   [alien-signals](https://github.com/stackblitz/alien-signals), the basis
-  of the fast linked-list signals graph
+  of the fast linked-list signals graph.
 - [Ryan Carniato](https://twitter.com/RyanCarniato) and
   [the SolidJS](https://github.com/solidjs) team for
   [SolidJS 2](https://github.com/solidjs/solid), which inspired this
-  package's API shape and support for async
+  package's API shape and support for async.
 - [Milo M](https://twitter.com/milomg__) for
   [reactively](https://github.com/milomg/reactively) and the
   [js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark).
-  gotta go fast.
+  Gotta go fast.
