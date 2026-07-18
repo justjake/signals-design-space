@@ -7,6 +7,14 @@ import { ENTRIES } from "../entries"
 import { expect, test } from "../fixtures"
 import { clockTicks, gotoApp, testidText } from "../helpers"
 
+test("META-REDIRECT: root redirects temporarily to the default implementation", async ({
+  request,
+}) => {
+  const response = await request.get("/", { maxRedirects: 0 })
+  expect(response.status()).toBe(302)
+  expect(response.headers().location).toBe("/cosignals/")
+})
+
 test("META-IDENT: impl-name tile matches the entry; exactly one active tab", async ({
   page,
   entry,

@@ -99,8 +99,8 @@ function ControlApp(): React.ReactElement {
     <main>
       <h1>react control</h1>
       <p>
-        Vanilla React on the same patched build: useState + startTransition + Suspense only. No
-        signals engine loads on this page.
+        Vanilla React using useState, startTransition, and Suspense. No signals engine loads on
+        this page.
       </p>
       <span data-testid="impl-name">react-control</span>
       <span data-testid="control-clock">{clock}</span>

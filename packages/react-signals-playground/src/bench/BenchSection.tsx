@@ -117,12 +117,12 @@ export function BenchSection(): React.ReactElement {
     for (const suite of SUITES) {
       out[suite.key] = {}
       for (const lib of libs) {
-        setProgress(`${suite.label} — ${lib.label}`)
+        setProgress(`${suite.label} / ${lib.label}`)
         // A cell failure (a worker can overflow its stack where the same
         // suite passes under Node) skips that bar, not the run.
         try {
           out[suite.key][lib.key] = await runCell(suite.key, lib.key, (test, time) => {
-            setProgress(`${suite.label} — ${lib.label} — ${test}: ${time.toFixed(0)} ms`)
+            setProgress(`${suite.label} / ${lib.label} / ${test}: ${time.toFixed(0)} ms`)
           })
         } catch (error) {
           failed.push(`${suite.key}/${lib.label}: ${(error as Error).message ?? error}`)
@@ -131,7 +131,7 @@ export function BenchSection(): React.ReactElement {
         setFailures([...failed])
       }
     }
-    setProgress("done — one fresh worker per cell, single round, this machine")
+    setProgress("Done. One fresh worker per cell and one round on this machine.")
     setRunning(false)
   }
 
@@ -160,7 +160,7 @@ export function BenchSection(): React.ReactElement {
       </div>
       {results === null ? null : <BenchChart results={results} />}
       {failures.length === 0 ? null : (
-        <p className="hint">skipped: {failures.join(" · ")}</p>
+        <p className="hint">Skipped: {failures.join(" · ")}</p>
       )}
     </div>
   )
@@ -178,7 +178,7 @@ function BenchChart({ results }: { results: Results }): React.ReactElement {
     const best = Math.min(...Object.values(times))
     rows.push(
       <text key={`${suite.key}-name`} className="bench-name" x={0} y={y + 12}>
-        {suite.label} — suite total
+        {suite.label}, total
       </text>,
     )
     y += 20
@@ -212,9 +212,8 @@ function BenchChart({ results }: { results: Results }): React.ReactElement {
         {rows}
       </svg>
       <p className="hint">
-        bars: suite total ÷ fastest (lower is better) · absolute totals labelled · each cell = a
-        fresh worker realm, single round — the README's CI runs interleaved rounds and report
-        medians
+        Each bar shows the suite total relative to the fastest result. Lower is better. Each cell
+        runs once in a fresh worker. The package READMEs link to interleaved CI results.
       </p>
     </div>
   )

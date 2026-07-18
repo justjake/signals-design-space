@@ -634,7 +634,7 @@ function StatsPanel(): React.ReactElement {
           {lastSettled === undefined ? "–" : `${lastSettled.durationMs} ms`}
         </span>
       </Stat>
-      <Stat id="stat-renders" label="renders committed">
+      <Stat id="stat-renders" label="committed renders">
         <span
           className="now"
           data-testid="renders-committed"
@@ -816,7 +816,7 @@ function LabPanel(): React.ReactElement {
   return (
     <section className="lab" aria-label="transition lab">
       <div className="knob">
-        <label>nav latency — async data hold</label>
+        <label>navigation latency</label>
         <span className="libpick">
           {NAV_LATENCIES.map((option) => (
             <button
@@ -832,7 +832,7 @@ function LabPanel(): React.ReactElement {
         </span>
       </div>
       <div className="knob">
-        <label>row work — sync render weight</label>
+        <label>row computation</label>
         <span className="libpick">
           {CPU_WORK.map((option) => (
             <button
@@ -848,9 +848,8 @@ function LabPanel(): React.ReactElement {
         </span>
       </div>
       <p className="hint">
-        Latency delays each navigation's fake fetch — the destination suspends inside the transition
-        until the data arrives, and "hold" parks it until RELEASE. Row work adds hash rounds per
-        derived row instead: sync render weight, applied in a transition of its own.
+        Navigation latency delays the fake request. "hold" waits until you press release. Row
+        computation adds work to each derived table row.
       </p>
     </section>
   )
@@ -964,9 +963,8 @@ function Dashboard(): React.ReactElement {
   return (
     <div>
       <p className="viewlede">
-        Counter deriveds, all reading the shared <code>count</code> atom. The urgent and transition
-        increment buttons live in the controls strip so they stay reachable while any page is
-        loading.
+        These values derive from the shared <code>count</code> atom. Use the controls above to
+        update it urgently or in a transition.
       </p>
       <div className="cells">
         <div className="cell">
@@ -1019,8 +1017,7 @@ function TableView(): React.ReactElement {
     <div>
       <p className="viewlede">
         <span data-testid="row-visible">{rows.length}</span> of {total} rows visible · seed{" "}
-        <span data-testid="seed">{seed}</span> · every row is its own derived subscriber, and the
-        row-work knob multiplies what each derivation costs.
+        <span data-testid="seed">{seed}</span> · each row has its own computed value.
       </p>
       <div className="actions">
         <button
@@ -1083,8 +1080,8 @@ function DetailView(): React.ReactElement {
   return (
     <div>
       <p className="viewlede">
-        One row up close: its value under the current seed, its neighbors, and what it becomes under
-        the next {DETAIL_SEED_LOOKAHEAD} seeds.
+        The selected row under the current seed, beside its neighbors and its next{" "}
+        {DETAIL_SEED_LOOKAHEAD} values.
       </p>
       <div className="cells">
         <div className="cell">
@@ -1190,7 +1187,7 @@ function TimelineStrip(): React.ReactElement {
       <h3>
         transition timeline{" "}
         <span className="hint-inline">
-          bar = pending window (5 s scale) · amber ticks = urgent commits that landed inside it
+          5 s scale · amber ticks mark urgent commits during the transition
         </span>
       </h3>
       <TimelineLiveBar />

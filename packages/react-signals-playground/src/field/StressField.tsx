@@ -141,7 +141,7 @@ export function StressField(): React.ReactElement {
   const [tier, setTier] = React.useState("480p")
   const [mode, setMode] = React.useState<Mode>("wave")
   const [status, setStatus] = React.useState<"idle" | "building" | "running" | "failed">("idle")
-  const [note, setNote] = React.useState("pick a library and press start — nothing loads until then")
+  const [note, setNote] = React.useState("Choose a library and start. Code loads on demand.")
   const [stats, setStats] = React.useState<FieldStatsView | null>(null)
 
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
@@ -166,7 +166,7 @@ export function StressField(): React.ReactElement {
     async (libKey: string, tierKey: string) => {
       const seq = ++buildSeq.current
       setStatus("building")
-      setNote(`building ${libKey} @ ${tierKey}…`)
+      setNote(`Building ${libKey} at ${tierKey}…`)
       try {
         const framework = await libraryByKey(libKey).load()
         if (seq !== buildSeq.current) return
@@ -194,12 +194,12 @@ export function StressField(): React.ReactElement {
         })
         setStatus("running")
         setNote(
-          `${libKey} @ ${tierKey}: ${view.graph.nodes.toLocaleString()} nodes · draw on the canvas`,
+          `${libKey} at ${tierKey}. ${view.graph.nodes.toLocaleString()} nodes. Draw on the canvas.`,
         )
       } catch (error) {
         if (seq !== buildSeq.current) return
         setStatus("failed")
-        setNote(`build failed for ${libKey} @ ${tierKey} — ${String(error)}`)
+        setNote(`Could not build ${libKey} at ${tierKey}: ${String(error)}`)
       }
     },
     [disposeView],
@@ -329,7 +329,7 @@ export function StressField(): React.ReactElement {
                 key={entry.key}
                 type="button"
                 className={lib === entry.key ? "on" : undefined}
-                title={entry.slow === undefined ? entry.label : `${entry.label} — ${entry.slow}`}
+                title={entry.slow === undefined ? entry.label : `${entry.label}: ${entry.slow}`}
                 onClick={() => switchTo(entry.key, tier)}
               >
                 {entry.label}
@@ -339,7 +339,7 @@ export function StressField(): React.ReactElement {
           </span>
         </div>
         <div className="knob">
-          <label>resolution — one signal per pixel</label>
+          <label>resolution</label>
           <span className="libpick">
             {Object.keys(TIERS).map((key) => {
               const fits = tierFits(libraryByKey(lib), key)
@@ -380,7 +380,7 @@ export function StressField(): React.ReactElement {
             disabled={status === "building"}
             onClick={() => void start(lib, tier)}
           >
-            {status === "building" ? "building…" : "start the field"}
+            {status === "building" ? "building…" : "start field"}
           </button>
         )}
       </div>
@@ -388,7 +388,7 @@ export function StressField(): React.ReactElement {
       <section id="field-hud" aria-label="field stats">
         <div className="stat">
           <span ref={(el) => void (frameEl.current = el)}>–</span>
-          <label>write + propagate / frame</label>
+          <label>write and propagate per frame</label>
         </div>
         <div className="stat">
           <span ref={(el) => void (recomputedEl.current = el)}>–</span>

@@ -60,9 +60,8 @@ export function WhatAreSignals(): React.ReactElement {
     <section className="prose" aria-label="what are signals">
       <h2>What are signals?</h2>
       <p>
-        <em>Signals</em> are a state management system made up of <em>atoms</em>,{" "}
-        <em>computeds</em>, and <em>effects</em>, which form a graph of automatically-tracked
-        dependency relationships:
+        Signals form a dependency graph from automatically tracked reads. <em>Atoms</em> hold
+        writable values. <em>Computeds</em> derive values. <em>Effects</em> react to changes.
       </p>
       <div className="sigflow" role="img" aria-label="count atom read by doubled computed, read by a document.title effect">
         <span className="signode">atom: count</span>
@@ -72,11 +71,8 @@ export function WhatAreSignals(): React.ReactElement {
         <span className="signode">effect: document.title</span>
       </div>
       <p>
-        A write to an atom <em>pushes invalidation</em>: it marks downstream work as possibly stale
-        and schedules effects for revalidation. When a computed is read or a scheduled effect
-        revalidates, it <em>pulls</em> values from its upstream signals. If all upstream computeds
-        recompute to equal values, the update stops. If the computed or effect's inputs change,
-        then they re-run.
+        Writing an atom marks its dependents stale. Computeds update when read, and effects update
+        when scheduled. If a computed returns the same value, propagation stops there.
       </p>
     </section>
   )
@@ -87,10 +83,10 @@ export function Primitives(): React.ReactElement {
     <section className="prose" aria-label="primitives">
       <h2>The primitives</h2>
 
-      <h3>Atoms — writable values</h3>
+      <h3>Atoms</h3>
       <p>
-        An <strong>atom</strong> stores a value you can change over time. It is like{" "}
-        <code>useState</code>, but it lives outside any component:
+        An atom stores a writable value outside the component tree. Its API resembles{" "}
+        <code>useState</code>.
       </p>
       <Code>{`
 import { createAtom } from "${name}"
@@ -102,16 +98,14 @@ count.update((n) => n + 1) // write as a function of the previous value
 count.get() // 3
 `}</Code>
       <p>
-        In React, <code>useSignal(count)</code> reads the atom and subscribes, so the component
-        re-renders when the value changes — that is the whole wiring. The counter in the lab below
-        is exactly this pattern.
+        In React, <code>useSignal(count)</code> reads the atom and re-renders the component when it
+        changes. The counter below uses this pattern.
       </p>
 
-      <h3>Computeds — derived values</h3>
+      <h3>Computeds</h3>
       <p>
-        A <strong>computed</strong> derives a cached value from other signals, like{" "}
-        <code>useMemo</code> or a Redux selector. The signals its function reads become its
-        dependencies automatically, and it recomputes only when read after a dependency changed:
+        A computed caches a value derived from other signals, much like <code>useMemo</code> or a
+        Redux selector. It tracks the signals read by its function.
       </p>
       <Code>{`
 import { createComputed } from "${name}"
@@ -123,17 +117,15 @@ doubled.get() // 20; recomputed because count changed
 doubled.get() // 20; cached without running the function again
 `}</Code>
       <p>
-        Dependencies are dynamic: a branch not taken during an evaluation is not a dependency. A
-        computed can also read promises through its <code>use</code> argument and suspend like a
-        React component — see the async section of the README.
+        Dependencies can change between runs. A signal read only in one branch is tracked only when
+        that branch runs. Computeds can also read promises through <code>use</code> and suspend.
       </p>
 
-      <h3>Effects — reactions</h3>
+      <h3>Effects</h3>
       <p>
-        An <strong>effect</strong> runs a side effect when signals change, like{" "}
-        <code>useEffect</code>. Effects have two parts: <code>watch</code>, the tracked source, and{" "}
-        <code>run</code>, the untracked side effect. Effects observe committed state — a pending
-        transition reaches every effect exactly once, when it commits:
+        An effect reacts to signal changes. <code>watch</code> declares the tracked source, and{" "}
+        <code>run</code> performs the untracked side effect. Effects see committed state, so a
+        transition reaches them when it commits.
       </p>
       <Code>{`
 import { useSignalEffect } from "${name}"
@@ -149,8 +141,7 @@ useSignalEffect(
 )
 `}</Code>
       <p>
-        <code>createEffect(watch, run)</code> is the same shape for effects owned outside the
-        component tree — module scope, stores, or non-React code.
+        Outside React, use <code>createEffect(watch, run)</code> with the same two-part shape.
       </p>
     </section>
   )
@@ -159,41 +150,29 @@ useSignalEffect(
 export function TransitionsIntro(): React.ReactElement {
   return (
     <section className="prose" aria-label="transitions">
-      <h2>Transitions: the part external stores can't do</h2>
+      <h2>Transitions with external state</h2>
       <p>
-        React transitions let React prepare the next screen in the background while the current one
-        stays interactive: updates inside <code>startTransition</code> render in low-priority
-        passes, and the visible tree keeps showing the old state until the new tree is ready to
-        commit.
+        React transitions prepare the next screen while the current screen stays interactive. The
+        visible tree keeps its old state until the transition can commit.
       </p>
       <p>
-        This works for <code>useState</code> because React keeps pending updates in per-hook
-        queues, and each render pass chooses which updates to apply. A typical external store
-        cannot participate: it has one current value, so it must either expose a transition's
-        write immediately (the current screen flashes half-finished state) or hide it from the
-        background render (the transition renders stale data). <code>{name}</code> gives atoms the
-        same machinery React gives its own state:
+        React can do this with <code>useState</code> because each render chooses which queued
+        updates to apply. Most external stores expose one current value. They cannot show a pending
+        value to the transition without also exposing it to the current screen. <code>{name}</code>{" "}
+        keeps those views separate.
       </p>
       <ul>
-        <li>
-          a write made inside a transition is recorded in a draft attached to that transition,
-          leaving the atom unchanged;
-        </li>
-        <li>the committed screen, ordinary reads, and effects keep seeing the value without the draft;</li>
-        <li>the transition's own render passes see the value with the draft applied;</li>
-        <li>
-          when the transition commits, the draft folds into the atom and every ordinary reader sees
-          the change once.
-        </li>
+        <li>Writes inside a transition go into a draft.</li>
+        <li>The current screen, ordinary reads, and effects keep reading committed state.</li>
+        <li>The transition reads committed state with its draft applied.</li>
+        <li>On commit, the draft becomes the atom's current value.</li>
       </ul>
       <p>
-        The lab below is that machinery under load. It is a tiny browser: every navigation runs
-        inside <code>startSignalTransition</code> and suspends on a fake fetch until the
-        destination's data arrives. Set nav latency to <em>hold</em>, navigate, and then poke the
-        urgent controls — the counter, clock, and filter keep committing while the navigation
-        stays pending, and the timeline strip records every urgent commit that landed inside the
-        pending window. The consistency tile cross-checks reads in every committed frame; it has
-        never said TORN on either engine, and the Playwright battery pins that.
+        The lab below runs each navigation inside <code>startSignalTransition</code>. The
+        destination suspends until its fake request finishes. Choose <em>hold</em>, navigate, then
+        use the counter, clock, or filter. The timeline marks urgent commits that finish while the
+        navigation remains pending. The consistency tile reports if one committed render mixes
+        values from different states.
       </p>
     </section>
   )
@@ -202,18 +181,15 @@ export function TransitionsIntro(): React.ReactElement {
 export function StressIntro(): React.ReactElement {
   return (
     <section className="prose" aria-label="stress test intro">
-      <h2>Stress test: a signal graph you can see</h2>
+      <h2>Signal graph stress test</h2>
       <p>
-        Every pixel below is a signal or a computed, plus a render effect that repaints it when its
-        value changes. The field alternates bands of two shapes chosen to stress opposite ends of a
-        reactivity system: <em>deep</em> bands are 64-level chains one pixel wide (long serial
-        re-validation), and <em>wide</em> bands fan a few hub signals out to thousands of
-        subscribers (broad shallow invalidation). A wave driver writes about 10% of the graph per
-        frame, and you can draw on the canvas — left button paints, right button erases.
+        Each pixel is a signal or computed with an effect that repaints it. Deep bands contain
+        64-level dependency chains. Wide bands connect a few source signals to thousands of
+        subscribers. The wave updates about 10% of the graph per frame. Draw with the left mouse
+        button and erase with the right.
       </p>
       <p>
-        The same field builds against any library on the roster through the reactivity benchmark's
-        own adapters, so the comparison is the scheduler and propagation engine, not the demo code.
+        Every library runs the same graph through the adapters from the reactivity benchmark.
       </p>
     </section>
   )
@@ -222,16 +198,15 @@ export function StressIntro(): React.ReactElement {
 export function BenchIntro(): React.ReactElement {
   return (
     <section className="prose" aria-label="benchmarks intro">
-      <h2>Benchmarks, in this tab</h2>
+      <h2>Benchmarks</h2>
       <p>
         The{" "}
         <a href="https://github.com/justjake/js-reactivity-benchmark">
           justjake/js-reactivity-benchmark
         </a>{" "}
-        suites, run right here: each (suite, library) cell gets a fresh worker realm so no library
-        inherits JIT feedback or main-thread work from another. One round on your machine is
-        indicative, not a scoreboard — the README's CI charts run interleaved rounds and report
-        medians.
+        suites run in this tab. Each suite and library pair gets a fresh worker to isolate module
+        state and JIT feedback. These single-round results are useful for local comparisons. The
+        package READMEs link to CI results from three interleaved rounds.
       </p>
     </section>
   )
@@ -244,41 +219,31 @@ export function EngineNotes(): React.ReactElement {
       {name === "cosignals-arena" ? (
         <>
           <p>
-            You are on <strong>cosignals-arena</strong>, the data-oriented build. Every node and
-            dependency edge is a fixed-size record inside one shared <code>Int32Array</code>; a
-            "reference" between records is a numeric id, not an object pointer. The hot paths —
-            invalidation waves, cache validation, effect drains — walk integers through contiguous
-            memory instead of chasing pointers through the heap: better cache locality, fewer
-            allocations, less garbage-collector pressure.
+            <strong>cosignals-arena</strong> stores nodes and dependency edges as fixed-size records
+            in a shared <code>Int32Array</code>. Records refer to each other by numeric id. Graph
+            traversal uses contiguous memory and allocates fewer JavaScript objects.
           </p>
           <p>
-            The public handles stay ordinary objects, so the API is identical to cosignals — this
-            whole page runs unchanged on either engine. The costs: the engine manages its own
-            memory (a record pool, free lists, reclamation), and the record arena has a fixed
-            capacity. If you are unsure which to use, start with cosignals and reach for the arena
-            when profiling says the graph itself is hot.
+            Its public API matches cosignals, so both pages run the same application. The tradeoff
+            is a fixed-capacity arena and more complex memory management. Start with cosignals
+            unless profiling shows that graph traversal is a bottleneck.
           </p>
         </>
       ) : (
         <>
           <p>
-            You are on <strong>cosignals</strong>, the reference build: the reactive graph lives in
-            linked JavaScript objects, the way you would write it by hand. It is the one to read,
-            debug, and start with.
+            <strong>cosignals</strong> stores its graph in linked JavaScript objects. Start here if
+            you want to read, debug, or extend the implementation.
           </p>
           <p>
-            <strong>cosignals-arena</strong> (switchable top-right) is the data-oriented build:
-            same public API, same semantics, same test suite, but the graph lives in fixed-capacity
-            typed-array records and the hot paths walk numeric ids through contiguous memory. This
-            may improve speed but makes the implementation harder to understand. Every demo on
-            this page behaves identically there — which is the point.
+            <strong>cosignals-arena</strong> has the same API and semantics, but stores the graph in
+            fixed-capacity typed-array records. It may run faster and is harder to modify. Use the
+            tabs above to run this page on either engine.
           </p>
         </>
       )}
       <p>
-        Both pages ship the cosignals devtools: the button in the bottom-right corner opens a live
-        view of the signal graph, effect runs, and render causality for the engine driving this
-        page.
+        The button in the bottom-right corner opens the cosignals devtools for the active engine.
       </p>
     </section>
   )

@@ -58,7 +58,7 @@ export default defineConfig<{ entry: BatteryEntry }>({
   webServer: {
     // Fresh build every run: the battery verifies source, never a stale dist.
     command: `pnpm build && pnpm preview --port ${PREVIEW_PORT} --strictPort`,
-    // The bare root 301s to the default implementation; poll a real page.
+    // Poll a real page instead of the redirecting root.
     url: `http://localhost:${PREVIEW_PORT}/cosignals/`,
     cwd: packageDir,
     reuseExistingServer: !process.env.CI,

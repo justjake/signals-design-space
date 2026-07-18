@@ -27,13 +27,13 @@ function redirectDirEntries(dirs: readonly string[]): Plugin {
     // The bare root forwards to the default implementation. Static hosts
     // get the same behavior from the root index.html redirect stub.
     if (path === "/" || path === "/index.html") {
-      res.statusCode = 301
+      res.statusCode = 302
       res.setHeader("Location", `/${DEFAULT_SEGMENT}/${suffix}`)
       res.end()
       return
     }
     if (dirs.includes(path)) {
-      res.statusCode = 301
+      res.statusCode = 302
       res.setHeader("Location", `${path}/${suffix}`)
       res.end()
       return
@@ -85,7 +85,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        // The bare-root redirect stub (static hosts; dev/preview 301 first).
+        // The bare-root redirect stub for static hosts. Dev and preview redirect first.
         root: entry("index.html"),
         cosignals: entry("cosignals/index.html"),
         "cosignals-arena": entry("cosignals-arena/index.html"),
