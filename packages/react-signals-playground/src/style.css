@@ -45,6 +45,21 @@ header p {
   max-width: 68ch;
 }
 
+/* ---- top nav: title left, engine switcher top-right ---------------------------- */
+.topnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 4px;
+}
+.topnav-title {
+  color: #5b667e;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 /* ---- implementation tab bar (full-page navigations) ---------------------------- */
 .tabbar {
   display: inline-flex;
@@ -572,6 +587,211 @@ header p {
 .mark-evens .rowchip[data-even] {
   border-color: #4a3a12;
   color: #ffd479;
+}
+
+/* ---- explainer prose ------------------------------------------------------------------- */
+.prose {
+  max-width: 74ch;
+  margin: 26px 0;
+}
+.prose h1 {
+  font-size: 26px;
+  letter-spacing: 0.02em;
+  margin: 8px 0 10px;
+}
+.prose h2 {
+  font-size: 18px;
+  color: #e8eaf0;
+  margin: 26px 0 8px;
+}
+.prose p,
+.prose li {
+  color: #b9bfce;
+}
+.prose a {
+  color: #7fd4ff;
+}
+.prose strong {
+  color: #e8eaf0;
+}
+.prose pre,
+.code {
+  background: #10131c;
+  border: 1px solid #1c2130;
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font:
+    13px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.prose pre code,
+.code code {
+  color: #c8cede;
+}
+.hero {
+  border-bottom: 1px solid #1c2130;
+  padding-bottom: 8px;
+}
+
+/* The what-are-signals flow: three node chips joined by arrows. */
+.sigflow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.signode {
+  background: #10131c;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: #7fd4ff;
+}
+.sigarrow {
+  color: #5b667e;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---- stress field ------------------------------------------------------------------------ */
+.field {
+  margin: 12px 0 24px;
+}
+.field-controls {
+  display: flex;
+  gap: 18px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.field-controls .knob label {
+  display: block;
+  color: #9aa1b2;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.libpick.wrap {
+  flex-wrap: wrap;
+  border-radius: 6px;
+}
+.libpick.wrap button {
+  border-bottom: 1px solid #2a3040;
+  margin-bottom: -1px;
+}
+.field-start {
+  background: #7fd4ff;
+  color: #0b0d12;
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 18px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.field-start:disabled {
+  background: #2a3040;
+  color: #9aa1b2;
+  cursor: default;
+}
+#field-hud {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px 18px;
+  margin: 12px 0;
+}
+#field-hud .stat > span {
+  font-size: 17px;
+}
+.field-canvas {
+  width: 100%;
+  border: 1px solid #1c2130;
+  border-radius: 8px;
+  background: #05060a;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  touch-action: none;
+}
+.field .hint {
+  color: #9aa1b2;
+  font-size: 13px;
+}
+
+/* ---- benchmarks ---------------------------------------------------------------------------- */
+.bench {
+  margin: 12px 0 24px;
+}
+.bench-libs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px 16px;
+  margin: 10px 0 14px;
+}
+.bench-lib {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b9bfce;
+  font-size: 13px;
+  cursor: pointer;
+}
+.bench-lib input {
+  accent-color: #7fd4ff;
+}
+.bench-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.lib-slow {
+  color: #ffd479;
+  font-size: 11px;
+  border: 1px solid #4a3a12;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.bench .hint {
+  color: #9aa1b2;
+  font-size: 13px;
+}
+.bench-chart svg {
+  width: 100%;
+  height: auto;
+}
+.bench-chart .bench-name {
+  fill: #c8cede;
+  font:
+    13px ui-sans-serif,
+    system-ui;
+}
+.bench-chart .lib {
+  fill: #9aa1b2;
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-anchor: end;
+}
+.bench-chart .val {
+  fill: #9aa1b2;
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- error strip ---------------------------------------------------------------------- */

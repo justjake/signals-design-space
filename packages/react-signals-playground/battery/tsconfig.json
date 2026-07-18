@@ -3,8 +3,9 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     // DOM types: helpers' page.evaluate callbacks execute in the browser.
+    // vite/client: the included ../src files read import.meta.env.
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "allowImportingTsExtensions": true
   },
   "include": [

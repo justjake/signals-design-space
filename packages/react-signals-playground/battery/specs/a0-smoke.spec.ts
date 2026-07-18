@@ -36,12 +36,12 @@ test("META-ISOLATION: only the selected implementation chunk is requested (chunk
   page.on("request", (request) => requested.push(request.url()))
   await gotoApp(page, entry)
 
-  // A shim chunk URL: dev serves /src/shims/<id>.ts, the build emits assets/<id>-<hash>.js.
+  // An engine chunk URL: dev serves /src/engine/<id>.ts, the build emits assets/<id>-<hash>.js.
   const chunkOf = (label: string): RegExp =>
-    new RegExp(`/shims/${label}\\.ts$|/assets/${label}-[^/]*\\.js$`)
+    new RegExp(`/engine/${label}\\.ts$|/assets/${label}-[^/]*\\.js$`)
   expect(
     requested.some((url) => chunkOf(entry.label).test(url)),
-    `no chunk for ${entry.label} in ${requested.filter((u) => /assets|shims/.test(u)).join(", ")}`,
+    `no chunk for ${entry.label} in ${requested.filter((u) => /assets|engine/.test(u)).join(", ")}`,
   ).toBe(true)
   const others = ENTRIES.map((e) => e.label).filter((label) => label !== entry.label)
   for (const other of others) {

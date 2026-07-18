@@ -8,3 +8,5 @@ test-results/
 tmp/
 .pnpm-store/
 .claude/
+# Logo/branding asset workspace: 2GB of Blender files with its own git repo.
+/logo/

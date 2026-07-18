@@ -2,11 +2,11 @@
   "name": "react-signals-playground",
   "version": "0.0.0",
   "private": true,
-  "description": "Vite + React playground that renders one shared App under one entrypoint per concurrent-signals implementation, each at its own named path; '/' redirects to the default (cosignals). App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+  "description": "Vite + React playground that renders one shared App under one entrypoint per engine (cosignals and cosignals-arena), each at its own named path; '/' redirects to the default (cosignals). App code imports the engine's real API from '#engine'; the page path decides which engine that specifier resolves to.",
   "license": "MIT",
   "type": "module",
   "imports": {
-    "#concurrent-signals-shim": "./src/shims/index.ts"
+    "#engine": "./src/engine/index.ts"
   },
   "scripts": {
     "dev": "vite --configLoader runner",
@@ -21,6 +21,7 @@
     "cosignals": "workspace:*",
     "cosignals-arena": "workspace:*",
     "cosignals-devtools": "workspace:*",
+    "marked": "^18.0.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

@@ -1,15 +1,16 @@
 /**
- * The battery's view of the two implementations. Segments, labels, and
- * shim names come straight from the app's own implementation table
- * (src/shims/implementations.ts), so a new implementation row automatically
+ * The battery's view of the two engines. Segments, labels, and names come
+ * straight from the app's own implementation table
+ * (src/engine/implementations.ts), so a new engine row automatically
  * becomes a candidate battery project.
  *
- * `holdStyle` is declared here rather than imported: each shim declares its
- * TransitionHoldStyle in its own module, and importing those modules in Node would initialize the
- * engines. The smoke spec verifies this table against the running page
+ * `holdStyle` is a historical field from the multi-engine era, when some
+ * engines could not suspend inside a transition ("defer-write"). Both
+ * remaining engines hold transitions open through Suspense; the smoke spec
+ * still verifies this table against the running page
  * (window.__store.holdStyle under ?test=1), so drift fails loudly.
  */
-import { implementationHref, implementations } from "../src/shims/implementations"
+import { implementationHref, implementations } from "../src/engine/implementations"
 
 export type HoldStyle = "suspense" | "defer-write"
 

@@ -8,27 +8,25 @@
  * - Verdicts latch via effects, so discarded speculative render passes never
  *   count as torn: every "did this frame agree" check runs in a layout
  *   effect of the committed frame, never in render.
- * - update(fn) fixtures stay pure: implementations replay updaters per
- *   pending world, so every updater here is a pure function of its argument.
+ * - update(fn) fixtures stay pure: the engine replays updaters per pending
+ *   world, so every updater here is a pure function of its argument.
  *
- * The file imports only the shim and React — never App.tsx. App.tsx passes
- * its module-level atoms in through registerAppHandles at module init, so
- * there is exactly one dependency direction.
+ * The file imports only the engine and React — never App.tsx. App.tsx
+ * passes its module-level atoms in through registerAppHandles at module
+ * init, so there is exactly one dependency direction.
  */
 import * as React from "react"
 import { flushSync } from "react-dom"
-import { createRoot } from "#concurrent-signals-shim"
 import {
   createAtom,
   name,
   startSignalTransition,
-  transitionHoldStyle,
   useSignal,
   useSignalEffect,
-  type ReadableSignal,
-  type TransitionHoldStyle,
-  type WritableSignal,
-} from "#concurrent-signals-shim"
+  type Atom,
+  type Signal,
+} from "#engine"
+import { createAppRoot, type AppRoot } from "./root"
 
 export const TEST_MODE = new URLSearchParams(window.location.search).has("test")
 
@@ -101,7 +99,13 @@ export interface HoldHandle {
 
 export interface TestStore {
   readonly name: string
-  readonly holdStyle: TransitionHoldStyle
+  /**
+   * Historical field from the multi-engine era, when some engines could
+   * not suspend inside a transition. Both remaining engines hold
+   * transitions open through Suspense, so this is now a constant the
+   * battery's smoke spec pins.
+   */
+  readonly holdStyle: "suspense"
 
   /** Outside-render read of a labeled signal (foreign call stack — the RT4 posture). */
   read(label: string): unknown
@@ -181,10 +185,13 @@ declare global {
 }
 
 // ---- the label registry ----------------------------------------------------------------
+// Atom<T> is invariant in T, so a heterogeneous registry stores Signal<any>
+// handles; the accessor helpers narrow reads back to unknown so no `any`
+// escapes to callers.
 
-const registry = new Map<string, ReadableSignal<unknown>>()
+const registry = new Map<string, Signal<any>>()
 
-function registerSignals(handles: Record<string, ReadableSignal<unknown>>): void {
+function registerSignals(handles: Record<string, Signal<any>>): void {
   for (const [label, signal] of Object.entries(handles)) {
     if (registry.has(label)) {
       throw new Error(`testkit: duplicate signal label "${label}"`)
@@ -193,7 +200,7 @@ function registerSignals(handles: Record<string, ReadableSignal<unknown>>): void
   }
 }
 
-function signalOf(label: string): ReadableSignal<unknown> {
+function signalOf(label: string): Signal<any> {
   const signal = registry.get(label)
   if (signal === undefined) {
     throw new Error(`testkit: no signal labeled "${label}"`)
@@ -201,16 +208,16 @@ function signalOf(label: string): ReadableSignal<unknown> {
   return signal
 }
 
-function atomOf(label: string): WritableSignal<unknown> {
-  const signal = signalOf(label) as Partial<WritableSignal<unknown>>
+function atomOf(label: string): Atom<any> {
+  const signal = signalOf(label) as Partial<Atom<any>>
   if (typeof signal.set !== "function") {
     throw new Error(`testkit: signal "${label}" is not writable`)
   }
-  return signal as WritableSignal<unknown>
+  return signal as Atom<any>
 }
 
 /** App.tsx hands its module-level atoms over at module init. */
-export function registerAppHandles(handles: Record<string, ReadableSignal<unknown>>): void {
+export function registerAppHandles(handles: Record<string, Signal<any>>): void {
   registerSignals(handles)
 }
 
@@ -285,23 +292,23 @@ export function recordFetch(epoch: number, route: string, event: "create" | "set
 // Created unconditionally (atom creation is cheap and engine-safe at module
 // init); every consumer below is only rendered/installed in test mode.
 
-const storeOnly = createAtom(0, "tkStoreOnly") // no component ever subscribes (CR3)
-const gateA = createAtom(0, "tkGateA")
-const gateB = createAtom(0, "tkGateB")
-const gateAction = createAtom(0, "tkGateAction")
-const pairA = createAtom(0, "tkPairA")
-const pairB = createAtom(0, "tkPairB")
-const mirrorSig = createAtom(0, "tkMirrorSig")
-const actionSync = createAtom(0, "tkActionSync")
-const actionPost = createAtom(0, "tkActionPost")
-const actionRejoin = createAtom(0, "tkActionRejoin")
-const useProbeEpoch = createAtom(0, "tkUseProbeEpoch")
-const latticeMode = createAtom<"off" | "plain" | "deferred">("off", "tkLatticeMode")
-const renderWriteVictim = createAtom(0, "tkRenderWriteVictim")
-const splitEffectValue = createAtom(0, "tkSplitEffectValue")
-const splitEffectDep = createAtom(0, "tkSplitEffectDep")
-const splitEffectRender = createAtom(0, "tkSplitEffectRender")
-const splitEffectMounted = createAtom(false, "tkSplitEffectMounted")
+const storeOnly = createAtom(0, { label: "tkStoreOnly" }) // no component ever subscribes (CR3)
+const gateA = createAtom(0, { label: "tkGateA" })
+const gateB = createAtom(0, { label: "tkGateB" })
+const gateAction = createAtom(0, { label: "tkGateAction" })
+const pairA = createAtom(0, { label: "tkPairA" })
+const pairB = createAtom(0, { label: "tkPairB" })
+const mirrorSig = createAtom(0, { label: "tkMirrorSig" })
+const actionSync = createAtom(0, { label: "tkActionSync" })
+const actionPost = createAtom(0, { label: "tkActionPost" })
+const actionRejoin = createAtom(0, { label: "tkActionRejoin" })
+const useProbeEpoch = createAtom(0, { label: "tkUseProbeEpoch" })
+const latticeMode = createAtom<"off" | "plain" | "deferred">("off", { label: "tkLatticeMode" })
+const renderWriteVictim = createAtom(0, { label: "tkRenderWriteVictim" })
+const splitEffectValue = createAtom(0, { label: "tkSplitEffectValue" })
+const splitEffectDep = createAtom(0, { label: "tkSplitEffectDep" })
+const splitEffectRender = createAtom(0, { label: "tkSplitEffectRender" })
+const splitEffectMounted = createAtom(false, { label: "tkSplitEffectMounted" })
 
 registerSignals({
   storeOnly,
@@ -359,11 +366,7 @@ function releaseGate(gate: Gate): void {
   gate.settle = null
 }
 
-function holdWith(
-  gate: Gate,
-  gateAtom: WritableSignal<number>,
-  writes: Record<string, unknown>,
-): HoldHandle {
+function holdWith(gate: Gate, gateAtom: Atom<number>, writes: Record<string, unknown>): HoldHandle {
   openGate(gate)
   const scopeReads: Record<string, unknown> = {}
   startSignalTransition(() => {
@@ -372,17 +375,13 @@ function holdWith(
     }
     gateAtom.set(gate.epoch)
     for (const label of Object.keys(writes)) {
-      scopeReads[label] = signalOf(label).state
+      scopeReads[label] = signalOf(label).get()
     }
   })
   return { epoch: gate.epoch, scopeReads }
 }
 
-function GateView(props: {
-  gate: Gate
-  atom: ReadableSignal<number>
-  id: string
-}): React.ReactElement {
+function GateView(props: { gate: Gate; atom: Signal<number>; id: string }): React.ReactElement {
   const epoch = useSignal(props.atom)
   if (epoch > 0 && props.gate.status === "pending" && epoch === props.gate.epoch) {
     // Suspend this render on the hold: inside a transition render this
@@ -466,7 +465,7 @@ function syncWork(): void {
 }
 
 function LatticeReader(props: { index: number }): React.ReactElement {
-  const value = useSignal(atomOf("count") as ReadableSignal<number>)
+  const value = useSignal<number>(atomOf("count"))
   syncWork()
   const renders = countRender(`lattice-${props.index}`)
   return (
@@ -477,7 +476,7 @@ function LatticeReader(props: { index: number }): React.ReactElement {
 }
 
 function DeferredLatticeReader(props: { index: number }): React.ReactElement {
-  const live = useSignal(atomOf("count") as ReadableSignal<number>)
+  const live = useSignal<number>(atomOf("count"))
   const value = React.useDeferredValue(live)
   syncWork()
   const renders = countRender(`lattice-${props.index}`)
@@ -490,7 +489,7 @@ function DeferredLatticeReader(props: { index: number }): React.ReactElement {
 
 function Lattice(): React.ReactElement | null {
   const mode = useSignal(latticeMode)
-  const main = useSignal(atomOf("count") as ReadableSignal<number>)
+  const main = useSignal<number>(atomOf("count"))
   const containerRef = React.useRef<HTMLDivElement | null>(null)
 
   // The per-commit equality latches — effects only, so discarded
@@ -556,9 +555,9 @@ function Lattice(): React.ReactElement | null {
 // ---- probes ------------------------------------------------------------------------------------
 
 function MountProbe(): React.ReactElement {
-  const value = useSignal(atomOf("count") as ReadableSignal<number>)
-  const twice = useSignal(signalOf("doubled") as ReadableSignal<number>)
-  const view = useSignal(signalOf("currentRoute") as ReadableSignal<string>)
+  const value = useSignal<number>(atomOf("count"))
+  const twice = useSignal<number>(signalOf("doubled"))
+  const view = useSignal<string>(signalOf("currentRoute"))
   const renders = countRender("mount-probe")
   React.useLayoutEffect(() => {
     mountProbeLog.push({
@@ -597,8 +596,8 @@ function PairProbe(): React.ReactElement {
 
 /** The same atom read through two independent hooks; frames must agree (R5 / RT5.double-read). */
 function DoubleReadProbe(): React.ReactElement {
-  const first = useSignal(atomOf("count") as ReadableSignal<number>)
-  const second = useSignal(atomOf("count") as ReadableSignal<number>)
+  const first = useSignal<number>(atomOf("count"))
+  const second = useSignal<number>(atomOf("count"))
   return (
     <span data-testid="double-read" data-agree={first === second ? "yes" : "no"}>
       {first}/{second}
@@ -608,24 +607,30 @@ function DoubleReadProbe(): React.ReactElement {
 
 function EffectProbes(): null {
   useSignalEffect(
-    () => (signalOf("count") as ReadableSignal<number>).state,
-    (value) => {
-      pushEffect("count", value)
-    },
+    () => ({
+      watch: () => signalOf("count").get() as number,
+      run: (value) => {
+        pushEffect("count", value)
+      },
+    }),
     [],
   )
   useSignalEffect(
-    () => (signalOf("currentRoute") as ReadableSignal<string>).state,
-    (value) => {
-      pushEffect("route", value)
-    },
+    () => ({
+      watch: () => signalOf("currentRoute").get() as string,
+      run: (value) => {
+        pushEffect("route", value)
+      },
+    }),
     [],
   )
   useSignalEffect(
-    () => actionSync.state,
-    (value) => {
-      pushEffect("action-sync", value)
-    },
+    () => ({
+      watch: actionSync,
+      run: (value) => {
+        pushEffect("action-sync", value)
+      },
+    }),
     [],
   )
   return null
@@ -635,13 +640,15 @@ function SplitEffectProbe(): null {
   const dep = useSignal(splitEffectDep)
   useSignal(splitEffectRender)
   useSignalEffect(
-    () => splitEffectValue.state,
-    (value, previous) => {
-      splitEffectLog.push({ event: "run", dep, value, previous })
-      return () => {
-        splitEffectLog.push({ event: "cleanup", dep, value })
-      }
-    },
+    () => ({
+      watch: splitEffectValue,
+      run: (value, previous) => {
+        splitEffectLog.push({ event: "run", dep, value, previous })
+        return () => {
+          splitEffectLog.push({ event: "cleanup", dep, value })
+        }
+      },
+    }),
     [dep],
   )
   return null
@@ -719,7 +726,7 @@ function UseProbe(): React.ReactElement {
 // ---- second root -------------------------------------------------------------------------------
 
 function SecondRootMirror(): React.ReactElement {
-  const value = useSignal(atomOf("count") as ReadableSignal<number>)
+  const value = useSignal<number>(atomOf("count"))
   const renders = countRender("second-root")
   return (
     <output data-testid="second-root-count" data-render-count={renders}>
@@ -728,7 +735,7 @@ function SecondRootMirror(): React.ReactElement {
   )
 }
 
-let secondRoot: { root: ReturnType<typeof createRoot>; el: HTMLElement } | null = null
+let secondRoot: { root: AppRoot; el: HTMLElement } | null = null
 
 function mountSecondRoot(): void {
   if (secondRoot !== null) {
@@ -737,7 +744,7 @@ function mountSecondRoot(): void {
   const el = document.createElement("div")
   el.id = "second-root"
   document.body.append(el)
-  const root = createRoot(el)
+  const root = createAppRoot(el)
   root.render(<SecondRootMirror />)
   secondRoot = { root, el }
 }
@@ -756,9 +763,9 @@ function unmountSecondRoot(): void {
 function installStore(): void {
   const store: TestStore = {
     name,
-    holdStyle: transitionHoldStyle,
+    holdStyle: "suspense",
 
-    read: (label) => signalOf(label).state,
+    read: (label) => signalOf(label).get() as unknown,
     write: (label, value) => atomOf(label).set(value),
     transitionWrite: (label, value) => {
       startSignalTransition(() => atomOf(label).set(value))
@@ -782,11 +789,11 @@ function installStore(): void {
       let inScope: unknown
       startSignalTransition(() => {
         atomOf(label).set(value)
-        inScope = signalOf(label).state
+        inScope = signalOf(label).get()
       })
       // The scope has returned; nothing has committed yet (transitions
       // render asynchronously), so this is the ambient pre-commit read.
-      const ambient = signalOf(label).state
+      const ambient = signalOf(label).get() as unknown
       return { inScope, ambient }
     },
 

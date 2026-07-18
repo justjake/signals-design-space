@@ -1,0 +1,103 @@
+# Builds the react-signals-playground explainer site and publishes it to
+# GitHub Pages on every push to main.
+#
+# The site's stress field and in-page benchmarks import adapter source from
+# the milomg-reactivity-benchmark submodule, whose own pnpm workspace carries
+# file: dependencies back into this repo:
+#   - alien-signals   -> vendor/alien-signals — must be BUILT before the
+#                        submodule install, since pnpm copies file: packages
+#                        at install time and esm/ is a local build artifact
+#   - dalien-signals  -> packages/dalien-signals — same: esm/ is a build
+#                        artifact, so build before the submodule install
+#   - cosignals, cosignals-arena -> workspace packages whose dev exports
+#                        point at src/*.ts, so no build step needed
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deployment at a time; let an in-flight deploy finish so the
+# site never lands in a half-updated state.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          submodules: false
+
+      - name: Init site submodules (targeted)
+        run: git submodule update --init milomg-reactivity-benchmark vendor/alien-signals packages/dalien-signals
+
+      # Node and pnpm come from the repo's committed toolchain pins
+      # (mise.toml, checksummed by mise.lock). Only those two: the pins
+      # also carry bun and the vite-plus CLI, which this job never runs.
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          install_args: node pnpm
+
+      # esm/ is a local build artifact; it must exist before the benchmark
+      # submodule's install copies the package via its file: dependency.
+      - name: Build upstream alien-signals
+        working-directory: vendor/alien-signals
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm run build
+
+      - name: Install (root, filtered to the site and dalien closures)
+        run: |
+          pnpm install --frozen-lockfile \
+            --filter "react-signals-playground..." \
+            --filter "dalien-signals..."
+
+      # Same as alien-signals: dalien's esm/ must exist before the benchmark
+      # submodule install below.
+      - name: Build dalien-signals
+        run: pnpm --dir packages/dalien-signals build
+
+      # The benchmark submodule is its own pnpm workspace with its own
+      # lockfile; the site's field/bench adapters resolve their library
+      # imports (alien-signals/esm, dalien-signals, @solidjs/signals, …)
+      # through its node_modules.
+      - name: Install benchmark submodule workspace
+        working-directory: milomg-reactivity-benchmark
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Build site
+        working-directory: packages/react-signals-playground
+        run: pnpm build --base "${{ steps.pages.outputs.base_path }}/"
+
+      - uses: actions/upload-pages-artifact@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        with:
+          path: packages/react-signals-playground/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

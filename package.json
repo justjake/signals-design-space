@@ -16,12 +16,5 @@
   },
   "devDependencies": {
     "mitata": "^1.0.34"
-  },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.15.0",
-      "onFail": "download"
-    }
   }
 }

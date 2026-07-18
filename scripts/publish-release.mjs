@@ -104,8 +104,12 @@ async function verifyToolchain() {
   if (Number(process.versions.node.split(".")[0]) !== 24) {
     throw new Error(`Node 24 is required; found ${process.version}`)
   }
-  const manifest = JSON.parse(await readFile(join(rootDirectory, "package.json"), "utf8"))
-  const expectedPnpm = manifest.devEngines?.packageManager?.version
+  // mise.toml is the repo's single source of truth for toolchain versions.
+  const miseToml = await readFile(join(rootDirectory, "mise.toml"), "utf8")
+  const expectedPnpm = miseToml.match(/^pnpm = "([^"]+)"$/m)?.[1]
+  if (expectedPnpm === undefined) {
+    throw new Error("mise.toml has no pnpm pin")
+  }
   const actualPnpm = output("pnpm", ["--version"])
   if (actualPnpm !== expectedPnpm) {
     throw new Error(`pnpm ${expectedPnpm} is required; found ${actualPnpm}`)

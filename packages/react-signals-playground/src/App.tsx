@@ -1,8 +1,9 @@
 /**
  * The one demo app, shared verbatim by every entrypoint. Everything
- * reactive comes from '#concurrent-signals-shim' — this file never names a
- * concrete implementation, so the same tree exercises whichever engine the
- * current page selected.
+ * reactive comes from '#engine' — this file never names a concrete
+ * engine package, so the same tree exercises whichever engine the
+ * current page selected. Both engines export the identical cosignals
+ * API, so the code below is exactly what a cosignals app looks like.
  *
  * The app is a transitions lab shaped like a tiny browser: an inner history
  * stack with back/forward and a virtual address bar, where every navigation
@@ -16,47 +17,91 @@ import * as React from "react"
 import {
   createAtom,
   createComputed,
-  createSuspending,
   implementationHref,
   implementations,
   name,
   startSignalTransition,
-  transitionHoldStyle,
   useComputed,
   useSignal,
   useSignalEffect,
-} from "#concurrent-signals-shim"
+} from "#engine"
 import { maybeWrapThenable, recordFetch, registerAppHandles, TEST_MODE, TestPanel } from "./testkit"
+import {
+  BenchIntro,
+  EngineNotes,
+  Hero,
+  Primitives,
+  StressIntro,
+  TransitionsIntro,
+  WhatAreSignals,
+} from "./site"
+import { StressField } from "./field/StressField"
+import { BenchSection } from "./bench/BenchSection"
 
 // ---- module-level store -----------------------------------------------------------
-// Created at module init, before main.tsx calls register(): every engine
+// Created at module init, before main.tsx renders anything: every engine
 // allocates signal records without touching React, so creation-time order is
 // safe. Shared by every component below.
 
-const count = createAtom(0, "count")
-const doubled = createComputed(() => count.state * 2, "doubled")
-const parity = createComputed(() => (count.state % 2 === 0 ? "even" : "odd"), "parity")
+const count = createAtom(0, { label: "count" })
+const doubled = createComputed(() => count.get() * 2, { label: "doubled" })
+const parity = createComputed(() => (count.get() % 2 === 0 ? "even" : "odd"), { label: "parity" })
 
 // A deliberately-throwing computed, armed from a button, so the devtools'
 // errored-node UI (and "errored at") can be exercised. Reading it throws while
 // armed; an error boundary below keeps the app alive.
-const errorArmed = createAtom(false, "errorArmed")
-const errorBoom = createComputed(() => {
-  if (errorArmed.state) throw new Error("deliberate error for devtools testing")
-  return count.state
-}, "errorBoom")
+const errorArmed = createAtom(false, { label: "errorArmed" })
+const errorBoom = createComputed(
+  () => {
+    if (errorArmed.get()) throw new Error("deliberate error for devtools testing")
+    return count.get()
+  },
+  { label: "errorBoom" },
+)
 
-// A deliberately-suspending computed, toggled from a button, so the devtools'
-// suspended-node UI (and "suspended at") can be exercised. cosignals-family only —
-// suspension needs the engine's first-class async primitive, so the fixture is
-// absent (undefined) on pages whose engine can't express it.
-const asyncFixture = createSuspending?.()
+/**
+ * A suspending computed, toggled from a button, so the devtools'
+ * suspended-node UI (and "suspended at") can be exercised. While parked its
+ * node carries the engine's suspended flag: `toggle` parks it on a fresh
+ * pending promise (bumping `epoch` re-runs the body so it re-parks) and,
+ * called again, resolves that promise so the body reruns to 'loaded'.
+ */
+function createSuspendingFixture() {
+  const epoch = createAtom(0, { label: "asyncEpoch" })
+  const pending = createAtom(false, { label: "asyncPending" })
+  let deferred: { promise: Promise<void>; resolve: () => void } | undefined
+  const value = createComputed<string>(
+    (use) => {
+      epoch.get()
+      if (deferred === undefined) return "idle"
+      use(deferred.promise)
+      return "loaded"
+    },
+    { label: "asyncData" },
+  )
+  return {
+    pending,
+    value,
+    toggle(): void {
+      if (pending.get()) {
+        deferred?.resolve()
+        pending.set(false)
+        return
+      }
+      let resolve!: () => void
+      deferred = { promise: new Promise<void>((r) => (resolve = r)), resolve }
+      pending.set(true)
+      epoch.update((e) => e + 1)
+    },
+  }
+}
+const asyncFixture = createSuspendingFixture()
 
 // The urgent clock: an interval-driven signal. Its continued ticking while a
 // transition is held open is direct visual proof the committed tree stays
 // live and keeps committing urgent updates.
 const CLOCK_TICK_MS = TEST_MODE ? 100 : 10_000
-const clockMs = createAtom(Math.round(performance.now()), "clockMs")
+const clockMs = createAtom(Math.round(performance.now()), { label: "clockMs" })
 let clockTimer = window.setInterval(() => clockMs.set(Math.round(performance.now())), CLOCK_TICK_MS)
 
 // ---- inner navigation (the mini-browser) -------------------------------------------
@@ -65,20 +110,22 @@ let clockTimer = window.setInterval(() => clockMs.set(Math.round(performance.now
 // written inside startSignalTransition and only commits when the destination
 // finishes rendering — which, because the destination suspends on its data
 // resource, is when the fake fetch resolves. Epoch disagreement IS the
-// pending flag: the useTransition-equivalent state, derived from the shim
-// surface alone so it works identically on every implementation.
+// pending flag: the useTransition-equivalent state, derived from app state
+// alone.
 
 type RouteName = "dashboard" | "table" | "detail"
 const ROUTES: readonly RouteName[] = ["dashboard", "table", "detail"]
 
-const targetRoute = createAtom<RouteName>("dashboard", "targetRoute")
-const targetEpoch = createAtom(0, "targetEpoch")
-const currentRoute = createAtom<RouteName>("dashboard", "currentRoute")
-const routeEpoch = createAtom(0, "routeEpoch")
-const navPending = createComputed(() => targetEpoch.state !== routeEpoch.state, "navPending")
+const targetRoute = createAtom<RouteName>("dashboard", { label: "targetRoute" })
+const targetEpoch = createAtom(0, { label: "targetEpoch" })
+const currentRoute = createAtom<RouteName>("dashboard", { label: "currentRoute" })
+const routeEpoch = createAtom(0, { label: "routeEpoch" })
+const navPending = createComputed(() => targetEpoch.get() !== routeEpoch.get(), {
+  label: "navPending",
+})
 
-const histEntries = createAtom<readonly RouteName[]>(["dashboard"], "histEntries")
-const histIndex = createAtom(0, "histIndex")
+const histEntries = createAtom<readonly RouteName[]>(["dashboard"], { label: "histEntries" })
+const histIndex = createAtom(0, { label: "histIndex" })
 
 function addressOf(route: RouteName): string {
   return `app://lab/${route}`
@@ -101,8 +148,8 @@ const NAV_LATENCIES: readonly { value: NavLatency; label: string }[] = [
   { value: 3000, label: "3 s" },
   { value: "hold", label: "hold" },
 ]
-const navLatency = createAtom<NavLatency>(250, "navLatency")
-const heldCount = createAtom(0, "heldCount")
+const navLatency = createAtom<NavLatency>(250, { label: "navLatency" })
+const heldCount = createAtom(0, { label: "heldCount" })
 
 interface RouteResource {
   readonly epoch: number
@@ -211,11 +258,11 @@ interface NavRecord {
 }
 
 const NAV_LOG_LINES = 5
-const activeNav = createAtom<NavRecord | null>(null, "activeNav")
-const navLog = createAtom<readonly NavRecord[]>([], "navLog")
+const activeNav = createAtom<NavRecord | null>(null, { label: "activeNav" })
+const navLog = createAtom<readonly NavRecord[]>([], { label: "navLog" })
 
 function recordUrgentTick(): void {
-  const record = activeNav.state
+  const record = activeNav.get()
   if (record === null) {
     return
   }
@@ -234,13 +281,13 @@ let navSeq = 0
 
 function navigate(route: RouteName, pushHistory: boolean): void {
   const epoch = ++navSeq
-  createRouteResource(epoch, route, navLatency.state)
-  const superseded = activeNav.state
+  createRouteResource(epoch, route, navLatency.get())
+  const superseded = activeNav.get()
   if (superseded !== null) {
     closeNavRecord(superseded, true)
   }
   if (pushHistory) {
-    const index = histIndex.state
+    const index = histIndex.get()
     histEntries.update((entries) => [...entries.slice(0, index + 1), route])
     histIndex.set(index + 1)
   }
@@ -255,45 +302,26 @@ function navigate(route: RouteName, pushHistory: boolean): void {
     superseded: false,
     ticks: [],
   })
-  const commitNavigation = (): void => {
-    startSignalTransition(() => {
-      currentRoute.set(route)
-      routeEpoch.set(epoch)
-    })
-  }
-  if (transitionHoldStyle === "suspense") {
-    // The destination suspends on its resource inside this transition, so
-    // the transition itself stays open until the data arrives.
-    commitNavigation()
-  } else {
-    // defer-write: this implementation cannot hold a transition on a
-    // thrown promise, so wait for the data and only then run the
-    // transition's writes (a pure view-swap render). The pending window —
-    // shimmer, dimming, timeline — is the same app-derived target/current
-    // disagreement either way.
-    void resources.get(epoch)!.promise.then(() => {
-      // A newer navigation superseded this one while its data was in
-      // flight; committing it now would navigate backwards.
-      if (targetEpoch.state !== epoch) {
-        return
-      }
-      commitNavigation()
-    })
-  }
+  // The destination suspends on its resource inside this transition, so
+  // the transition itself stays open until the data arrives.
+  startSignalTransition(() => {
+    currentRoute.set(route)
+    routeEpoch.set(epoch)
+  })
 }
 
 function goBack(): void {
-  const index = histIndex.state
+  const index = histIndex.get()
   if (index <= 0) {
     return
   }
   histIndex.set(index - 1)
-  navigate(histEntries.state[index - 1], false)
+  navigate(histEntries.get()[index - 1], false)
 }
 
 function goForward(): void {
-  const index = histIndex.state
-  const entries = histEntries.state
+  const index = histIndex.get()
+  const entries = histEntries.get()
   if (index >= entries.length - 1) {
     return
   }
@@ -305,11 +333,11 @@ function goForward(): void {
 
 const INITIAL_ROWS = 3000
 const ROW_STEP = 500
-const rowCount = createAtom(INITIAL_ROWS, "rowCount")
-const tableSeed = createAtom(1, "tableSeed")
-const filterText = createAtom("", "filterText")
-const selectedRow = createAtom(0, "selectedRow")
-const markEvens = createAtom(false, "markEvens")
+const rowCount = createAtom(INITIAL_ROWS, { label: "rowCount" })
+const tableSeed = createAtom(1, { label: "tableSeed" })
+const filterText = createAtom("", { label: "filterText" })
+const selectedRow = createAtom(0, { label: "selectedRow" })
+const markEvens = createAtom(false, { label: "markEvens" })
 
 // Sync render weight, as distinct from the async data hold above: extra hash
 // rounds per row derivation make every table render pass proportionally more
@@ -320,7 +348,7 @@ const CPU_WORK: readonly { rounds: number; label: string }[] = [
   { rounds: 1024, label: "medium" },
   { rounds: 8192, label: "heavy" },
 ]
-const cpuRounds = createAtom(64, "cpuRounds")
+const cpuRounds = createAtom(64, { label: "cpuRounds" })
 
 /**
  * Deterministic per-row hash: every seed change visibly changes every row,
@@ -353,27 +381,27 @@ function visibleRowsOf(seed: number, total: number, filter: string, rounds: numb
 }
 
 const visibleRows = createComputed(
-  () => visibleRowsOf(tableSeed.state, rowCount.state, filterText.state, cpuRounds.state),
-  "visibleRows",
+  () => visibleRowsOf(tableSeed.get(), rowCount.get(), filterText.get(), cpuRounds.get()),
+  { label: "visibleRows" },
 )
 // The same question derived independently from the same atoms: any render
 // that mixes worlds (rows from one write, count from another) disagrees.
 const visibleCount = createComputed(
-  () => visibleRowsOf(tableSeed.state, rowCount.state, filterText.state, cpuRounds.state).length,
-  "visibleCount",
+  () => visibleRowsOf(tableSeed.get(), rowCount.get(), filterText.get(), cpuRounds.get()).length,
+  { label: "visibleCount" },
 )
 
 // Engine-internal coherence oracle: one computation reads several signals
 // that must always agree, so a single evaluation can never observe a mix.
 const consistency = createComputed(
   () =>
-    doubled.state === count.state * 2 && visibleRows.state.length === visibleCount.state
+    doubled.get() === count.get() * 2 && visibleRows.get().length === visibleCount.get()
       ? "consistent"
       : "TORN",
-  "consistency",
+  { label: "consistency" },
 )
 
-const tornCommits = createAtom(0, "tornCommits")
+const tornCommits = createAtom(0, { label: "tornCommits" })
 
 // The battery's label registry: every shared atom the tests read or write
 // from outside any render (window.__store) is registered once, here.
@@ -403,7 +431,7 @@ registerAppHandles({
 // ---- error strip ----------------------------------------------------------------------
 
 const ERROR_LINES = 5
-const errorLog = createAtom<readonly string[]>([], "errorLog")
+const errorLog = createAtom<readonly string[]>([], { label: "errorLog" })
 
 function logError(line: string): void {
   errorLog.update((log) => [...log, line].slice(-ERROR_LINES))
@@ -545,25 +573,29 @@ function StatsPanel(): React.ReactElement {
   // Committed-world side effects: the title and the timeline settle
   // tracking follow what the user actually sees, so they lag pending
   // transitions instead of revealing them early. Reads that re-run the
-  // effect live in the compute; the record bookkeeping (reads and writes
-  // alike) is the handler's.
+  // effect live in the watch source; the record bookkeeping (reads and
+  // writes alike) is the run handler's.
   useSignalEffect(
-    () => currentRoute.state,
-    (route) => {
-      document.title = `${name} · ${route}`
-    },
+    () => ({
+      watch: currentRoute,
+      run: (route) => {
+        document.title = `${name} · ${route}`
+      },
+    }),
     [],
   )
   useSignalEffect(
-    () => routeEpoch.state, // fires when a navigation commits
-    (settledEpoch) => {
-      const record = activeNav.state
-      if (record !== null && record.epoch <= settledEpoch) {
-        closeNavRecord(record, false)
-        activeNav.set(null)
-      }
-      pruneResources(settledEpoch)
-    },
+    () => ({
+      watch: routeEpoch, // fires when a navigation commits
+      run: (settledEpoch) => {
+        const record = activeNav.get()
+        if (record !== null && record.epoch <= settledEpoch) {
+          closeNavRecord(record, false)
+          activeNav.set(null)
+        }
+        pruneResources(settledEpoch)
+      },
+    }),
     [],
   )
 
@@ -655,13 +687,13 @@ class BoomBoundary extends React.Component<{ children: React.ReactNode }, { fail
 // Reads the suspending computed; while parked its node throws to the Suspense
 // boundary below, so the suspended node (and "suspended at") shows in devtools.
 function AsyncReader(): React.ReactElement {
-  return <span data-testid="async-value">{useSignal(asyncFixture!.value)}</span>
+  return <span data-testid="async-value">{useSignal(asyncFixture.value)}</span>
 }
 function AsyncControls(): React.ReactElement {
-  const pending = useSignal(asyncFixture!.pending)
+  const pending = useSignal(asyncFixture.pending)
   // The reader stays mounted so asyncData settles a value ('idle') up front.
   // A later suspend then parks a node that already has a value, so devtools
-  // shows that stale value (cosignals stale-while-revalidate) rather than
+  // shows that stale value (stale-while-revalidate) rather than
   // "uninitialized". The Suspense boundary only catches a never-yet-resolved
   // read, which this flow no longer produces.
   return (
@@ -671,7 +703,7 @@ function AsyncControls(): React.ReactElement {
         data-testid="arm-async"
         className={pending ? "on" : undefined}
         aria-pressed={pending}
-        onClick={() => asyncFixture!.toggle()}
+        onClick={() => asyncFixture.toggle()}
       >
         {pending ? "resolve async" : "suspend async"}
       </button>
@@ -696,10 +728,12 @@ function Controls(): React.ReactElement {
   // A signal effect reacting to the urgent counter, so effect nodes/events show
   // up as soon as you click +1 (the nav effects only fire on navigation).
   useSignalEffect(
-    () => count.state,
-    (c) => {
-      document.documentElement.dataset.devtoolsCount = String(c)
-    },
+    () => ({
+      watch: count,
+      run: (c) => {
+        document.documentElement.dataset.devtoolsCount = String(c)
+      },
+    }),
     [],
   )
 
@@ -735,7 +769,7 @@ function Controls(): React.ReactElement {
           <BoomReader />
         </BoomBoundary>
       </span>
-      {asyncFixture ? <AsyncControls /> : null}
+      <AsyncControls />
       <button
         type="button"
         data-testid="toggle-evens"
@@ -925,7 +959,7 @@ function Dashboard(): React.ReactElement {
   const [factor, setFactor] = React.useState(3)
   // Component-scoped derived value: `factor` is ordinary React state, so it
   // belongs in deps; the count read is tracked by the engine, not by deps.
-  const scaled = useComputed(() => count.state * factor, [factor])
+  const scaled = useComputed(() => count.get() * factor, [factor])
 
   return (
     <div>
@@ -962,8 +996,8 @@ function Dashboard(): React.ReactElement {
 }
 
 function Row({ index }: { index: number }): React.ReactElement {
-  const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index])
-  const selected = useComputed(() => selectedRow.state === index, [index])
+  const value = useComputed(() => rowValue(tableSeed.get(), index, cpuRounds.get()), [index])
+  const selected = useComputed(() => selectedRow.get() === index, [index])
   return (
     <li
       className={selected ? "rowchip sel" : "rowchip"}
@@ -1022,7 +1056,7 @@ function DetailView(): React.ReactElement {
   const total = useSignal(rowCount)
   const seed = useSignal(tableSeed)
   useUrgentCommitTick([index])
-  const value = useComputed(() => rowValue(tableSeed.state, index, cpuRounds.state), [index])
+  const value = useComputed(() => rowValue(tableSeed.get(), index, cpuRounds.get()), [index])
   // A window of neighbors and a look-ahead across future seeds: enough
   // derived cells to make this page mid-weight (heavier than the dashboard,
   // far lighter than the table).
@@ -1031,7 +1065,7 @@ function DetailView(): React.ReactElement {
     const to = Math.min(total - 1, index + DETAIL_NEIGHBORS)
     const out: { index: number; value: number }[] = []
     for (let i = from; i <= to; i++) {
-      out.push({ index: i, value: rowValue(tableSeed.state, i, cpuRounds.state) })
+      out.push({ index: i, value: rowValue(tableSeed.get(), i, cpuRounds.get()) })
     }
     return out
   }, [index, total])
@@ -1039,8 +1073,8 @@ function DetailView(): React.ReactElement {
     const out: { seed: number; value: number }[] = []
     for (let k = 0; k < DETAIL_SEED_LOOKAHEAD; k++) {
       out.push({
-        seed: tableSeed.state + k,
-        value: rowValue(tableSeed.state + k, index, cpuRounds.state),
+        seed: tableSeed.get() + k,
+        value: rowValue(tableSeed.get() + k, index, cpuRounds.get()),
       })
     }
     return out
@@ -1188,25 +1222,52 @@ function ErrorStrip(): React.ReactElement | null {
   )
 }
 
-export function App(): React.ReactElement {
+/** The transitions lab: HUD, urgent controls, knobs, mini-browser, timeline. */
+function TransitionsLab(): React.ReactElement {
   return (
-    <main>
-      <ImplTabs />
-      <header>
-        <h1>react-signals-playground</h1>
-        <p>
-          One app, one reactive surface, four engines. Navigate the mini-browser inside a
-          transition, hold the navigation open from the lab panel, and poke the urgent controls
-          while it loads — the HUD and timeline report what actually committed.
-        </p>
-      </header>
+    <>
       <StatsPanel />
       <Controls />
       <LabPanel />
       <BrowserChrome />
       <TimelineStrip />
+    </>
+  )
+}
+
+export function App(): React.ReactElement {
+  // Under ?test=1 the page is a fixture: just the lab and the test panel,
+  // with none of the explainer content or on-demand demos, so the battery
+  // measures the engines rather than the site.
+  if (TEST_MODE) {
+    return (
+      <main>
+        <div className="topnav">
+          <ImplTabs />
+        </div>
+        <TransitionsLab />
+        <ErrorStrip />
+        <TestPanel />
+      </main>
+    )
+  }
+  return (
+    <main>
+      <div className="topnav">
+        <span className="topnav-title">signals, two ways</span>
+        <ImplTabs />
+      </div>
+      <Hero />
+      <WhatAreSignals />
+      <Primitives />
+      <TransitionsIntro />
+      <TransitionsLab />
+      <StressIntro />
+      <StressField />
+      <BenchIntro />
+      <BenchSection />
+      <EngineNotes />
       <ErrorStrip />
-      {TEST_MODE ? <TestPanel /> : null}
     </main>
   )
 }

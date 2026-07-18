@@ -1,25 +1,22 @@
 /**
- * Shared bootstrap for every entry html. Import order is load-bearing:
- * react-dom/client evaluates first (the patched renderer registers its
- * external-runtime protocol provider at module init), then the shim
- * selector (whose top-level await binds this page's implementation), so
- * register() below couples the selected engine to a provider that already
- * exists — before any root renders.
+ * Shared bootstrap for every engine entry html. Importing '#engine' binds
+ * this page's engine (the selector's top-level await) and registers its
+ * React bindings — the engine module registers on evaluation, after the
+ * selector has already loaded react-dom/client — so by the time this
+ * module runs, rendering a root is all that is left to do.
  */
-import { createRoot, register } from "#concurrent-signals-shim"
+import { createAppRoot } from "./root"
 import { App } from "./App"
-
-register()
 
 const container = document.getElementById("root")
 if (container === null) {
   throw new Error("react-signals-playground: missing #root container")
 }
 
-// Signals devtools, on the cosignals pages only. Renders the devtools launch
-// button (a React component the devtools package ships); it lazy-loads the
-// panel on first open. Dynamically imported so default loads — and the
-// battery — never fetch the devtools. ?devtools=1 opens it on load.
+// Signals devtools. Renders the devtools launch button (a React component
+// the devtools package ships); it lazy-loads the panel on first open.
+// Dynamically imported so default loads — and the battery — never fetch
+// the devtools. ?devtools=1 opens it on load.
 if (location.pathname.includes("cosignals")) {
   const engine = location.pathname.includes("cosignals-arena") ? "cosignals-arena" : "cosignals"
   const open = new URLSearchParams(location.search).has("devtools")
@@ -36,4 +33,4 @@ if (location.pathname.includes("cosignals")) {
   }
 }
 
-createRoot(container).render(<App />)
+createAppRoot(container).render(<App />)

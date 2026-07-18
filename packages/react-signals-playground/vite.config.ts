@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url"
 import react from "@vitejs/plugin-react"
 import { signalsDevtools } from "cosignals-devtools/vite"
 import { defineConfig, type Connect, type Plugin } from "vite"
-import { DEFAULT_SEGMENT } from "./src/shims/default-segment"
+import { DEFAULT_SEGMENT } from "./src/engine/default-segment"
 
 const entry = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
 
@@ -59,6 +59,22 @@ export default defineConfig({
     signalsDevtools(),
     redirectDirEntries(["/cosignals", "/cosignals-arena", "/control"]),
   ],
+  resolve: {
+    // The stress field and in-page benchmarks import adapter files from
+    // the reactivity-benchmark submodule, and those adapters import
+    // cosignals / cosignals-arena by bare specifier — which would resolve
+    // to the submodule's own installed snapshot of the packages. Alias
+    // the exact entry points the adapters use onto the workspace source,
+    // so the page, the field, and the benchmarks all run the same code.
+    // Every other adapter dependency (alien-signals, svelte, @angular/core,
+    // …) intentionally resolves through the submodule's node_modules.
+    alias: [
+      { find: /^cosignals\/core$/, replacement: entry("../cosignals/src/core.ts") },
+      { find: /^cosignals\/ssr$/, replacement: entry("../cosignals/src/ssr.ts") },
+      { find: /^cosignals-arena\/core$/, replacement: entry("../cosignals-arena/src/core.ts") },
+      { find: /^cosignals-arena\/ssr$/, replacement: entry("../cosignals-arena/src/ssr.ts") },
+    ],
+  },
   // MPA: every implementation is its own html entry under a named path;
   // the root entry is only the redirect stub. Disabling the SPA fallback
   // makes an unmapped path 404 instead of silently serving some page under
