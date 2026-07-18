@@ -479,3 +479,19 @@ startSignalTransition(() => count.update((x) => x * 2)) // draft until commit
   data-oriented memory layout. Probably the fastest signals library for
   JavaScript, but not React-concurrent compatible: it has no equivalent of
   the transition drafts these packages exist for.
+
+## Thanks
+
+- [Sophie Alpert](https://twitter.com/sophiebits) for teaching me about
+  React concurrent rendering and why it matters
+- [Johnson Chu](https://twitter.com/johnsoncodehk) for
+  [alien-signals](https://github.com/stackblitz/alien-signals), the basis
+  of the fast linked-list signals graph
+- [Ryan Carniato](https://twitter.com/RyanCarniato) and
+  [the SolidJS](https://github.com/solidjs) team for
+  [SolidJS 2](https://github.com/solidjs/solid), which inspired this
+  package's API shape and support for async
+- [Milo M](https://twitter.com/milomg__) for
+  [reactively](https://github.com/milomg/reactively) and the
+  [js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark).
+  gotta go fast.
