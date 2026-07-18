@@ -32,6 +32,7 @@ export {
   endBatch,
   untrack,
   flushScheduledEffects,
+  growCapacity,
   type Atom,
   type AtomOptions,
   type Computed,

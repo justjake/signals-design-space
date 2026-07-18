@@ -739,6 +739,9 @@ export {
   endBatch,
   untrack,
   flushScheduledEffects,
+  growCapacity,
+  setArenaCapacityForTesting,
+  arenaStats,
 } from "./graph.ts"
 export { resetGraphForBenchmark }
 

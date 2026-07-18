@@ -377,28 +377,35 @@ export type WatcherNode = EffectNode | RenderWatcherNode | ScopeNode
 export const RECORD_SHIFT = 3
 const RECORD_STRIDE = 1 << RECORD_SHIFT
 const NODE_STRIDE = 8
-// Fixed capacity: virtual pages are committed on first touch, so the unused
-// tail costs address space, not memory. Growth is deliberately omitted so
-// every hot access keeps a constant base binding; it belongs only after the
-// fixed-arena hot path is competitive.
-const RECORD_CAPACITY = 2_097_152
-export const graphMemory = new Int32Array(RECORD_STRIDE * RECORD_CAPACITY)
-const graphClocks = new Float64Array(graphMemory.buffer)
+// Starting capacity: virtual pages are committed on first touch, so the
+// unused tail costs address space, not memory. The arena grows once the free
+// gap falls below a quarter of capacity (and growCapacity() raises it
+// explicitly); growth replaces these arrays and applies only when no engine
+// frame is live — see docs/arena-growth.md.
+const INITIAL_RECORD_CAPACITY = 2_097_152
+// Record word offsets must stay well inside int32 range (2^27 records is
+// 2^30 words); growCapacity() past this throws.
+const MAX_RECORD_CAPACITY = 1 << 27
+export let graphMemory = new Int32Array(RECORD_STRIDE * INITIAL_RECORD_CAPACITY)
+let graphClocks = new Float64Array(graphMemory.buffer)
 // Per-node fields the 8-word record cannot fit, indexed by record number.
-const validAtColumn = new Float64Array(RECORD_CAPACITY)
-const observerColumn = new Int32Array(RECORD_CAPACITY)
-const pokeColumn = new Int32Array(RECORD_CAPACITY)
+let validAtColumn = new Float64Array(INITIAL_RECORD_CAPACITY)
+let observerColumn = new Int32Array(INITIAL_RECORD_CAPACITY)
+let pokeColumn = new Int32Array(INITIAL_RECORD_CAPACITY)
 // Bumped every time a record is reclaimed or detached (and never
 // zeroed), so an (id, generation) pair names one lifetime of one record.
 // The effect queue stores these pairs; an entry whose record moved on
 // gen-mismatches and drains as a no-op.
-const generationColumn = new Int32Array(RECORD_CAPACITY)
+let generationColumn = new Int32Array(INITIAL_RECORD_CAPACITY)
 const pinnedInternals: Array<ReactiveNode | undefined> = [undefined]
-const M = graphMemory
+let M = graphMemory
 // Hot functions open with local views (const mem = M, clocks, pins): a
 // bundler emits module state as mutable top-level vars, so a module-slot
 // read cannot be constant-folded and must re-load after every call; a
-// function-local const loads the slot once per activation.
+// function-local const loads the slot once per activation. The arena
+// bindings are `let` only for growth: an optimizing compiler still treats
+// each slot as a constant until its first reassignment, so the pre-growth
+// hot path compiles as if the capacity were fixed.
 
 /**
  * Lazy records: cells and deriveds are born WITHOUT an arena record — their
@@ -737,30 +744,17 @@ export { UNINITIALIZED }
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// The engine core. One closure instantiation per process: the arena views
-// bind as function-scope consts, which an optimizing compiler can treat as
-// immutable across calls — module-level bindings compile to mutable
-// context-slot loads once a bundler rewrites them as plain vars. The module
-// re-exports the returned functions under their original names, so the
-// import surface is unchanged.
+// The engine core. One closure instantiation per process. The closure reads
+// the module-level arena bindings directly: arena growth replaces the arrays
+// and re-points those bindings, so the closure must not capture its own const
+// views of them. Function-local views (const mem = M) keep the per-call cost
+// at one slot load per activation, and the slots compile as constants until
+// the first growth actually reassigns them. The module re-exports the
+// returned functions under their original names, so the import surface is
+// unchanged.
 // ---------------------------------------------------------------------------
 
-function createGraphCore(
-  memBase: Int32Array<ArrayBuffer>,
-  clockBase: Float64Array,
-  pinBase: Array<ReactiveNode | undefined>,
-  validAtBase: Float64Array,
-  observerBase: Int32Array<ArrayBuffer>,
-  pokeBase: Int32Array<ArrayBuffer>,
-  generationBase: Int32Array<ArrayBuffer>,
-) {
-  const M = memBase
-  const graphClocks = clockBase
-  const pinnedInternals = pinBase
-  const validAtColumn = validAtBase
-  const observerColumn = observerBase
-  const pokeColumn = pokeBase
-  const generationColumn = generationBase
+function createGraphCore() {
   // Two-ended allocation: node records grow up from the bottom, link records
   // grow down from the top. Node ids stay dense and contiguous (validation
   // walks touch adjacent lines; the pin table and side columns cover only
@@ -793,6 +787,212 @@ function createGraphCore(
       freeNodeStack = bigger
     }
     freeNodeStack[freeNodeCount++] = id
+  }
+
+  // ---------------------------------------------------------------------------
+  // Arena growth (see docs/arena-growth.md). The arena may only move while no
+  // engine frame is live: frames hold function-local array views and link
+  // offsets that a move would invalidate, and user callbacks (compute bodies,
+  // handlers, cleanups, equality callbacks, tracer sinks, the devtools hot
+  // hook) run under such frames. Rather than instrument every one of those
+  // surfaces, growth applies only from its own microtask, where the JS stack
+  // is empty — the only engine state that can span a microtask boundary is a
+  // batch held across await, which batchDepth covers. The one synchronous
+  // exception is a never-touched arena (growCapacity below), where no engine
+  // frame can exist because there is nothing to operate on.
+  // ---------------------------------------------------------------------------
+
+  // Fresh-record allocations request a growth once the free gap falls below
+  // this; kept as a word count so the trigger is one compare.
+  let growthTriggerWords = graphMemory.length >> 2
+  // An explicit growCapacity() target in words; growth honors it over doubling.
+  let requestedCapacityWords = 0
+  let arenaGrowthPending = false
+  let growthMicrotaskArmed = false
+
+  function requestArenaGrowth(): void {
+    arenaGrowthPending = true
+    if (!growthMicrotaskArmed) {
+      growthMicrotaskArmed = true
+      queueMicrotask(growArenaIfIdle)
+    }
+  }
+
+  function growArenaIfIdle(): void {
+    growthMicrotaskArmed = false
+    if (!arenaGrowthPending) {
+      return
+    }
+    if (batchDepth !== 0 || activeConsumer !== null || activeEffectOwner !== null) {
+      // A batch held across await (the markers are belt-and-suspenders: no
+      // evaluation or drain survives to a microtask, they unwind by throw).
+      // The pending growth re-arms when the batch closes and on the next
+      // fresh-record allocation below the trigger.
+      return
+    }
+    arenaGrowthPending = false
+    let target = requestedCapacityWords > M.length ? requestedCapacityWords : M.length * 2
+    requestedCapacityWords = 0
+    const maxWords = MAX_RECORD_CAPACITY * RECORD_STRIDE
+    if (target > maxWords) {
+      target = maxWords
+    }
+    if (target > M.length) {
+      migrateArena(target)
+    }
+  }
+
+  /**
+   * Raise the arena's capacity to at least `records` 32-byte records. On an
+   * arena no operation has touched yet (app startup, before any signal is
+   * created — the intended call site) the raise applies immediately;
+   * otherwise it applies at the next microtask. Requests at or below the
+   * current capacity are no-ops. Growing under a warm graph pays a one-time
+   * copy of every live record, so prefer calling this before the graph is
+   * built.
+   */
+  function growCapacity(records: number): void {
+    if (!Number.isFinite(records) || records <= 0) {
+      throw new TypeError("growCapacity(): records must be a positive finite number")
+    }
+    if (records > MAX_RECORD_CAPACITY) {
+      throw new RangeError(
+        `growCapacity(): request exceeds the ${MAX_RECORD_CAPACITY}-record ceiling`,
+      )
+    }
+    const targetWords = Math.ceil(records) * RECORD_STRIDE
+    if (targetWords <= M.length) {
+      return
+    }
+    if (nextNodeRecord === FIRST_REAL_RECORD && nextLinkRecord === M.length) {
+      // Never-touched arena: the bump pointers have never moved, so no
+      // record exists for any engine frame to be operating on — replacing
+      // the (empty) arrays now is safe, and the caller can mass-build
+      // synchronously right away.
+      migrateArena(targetWords)
+      return
+    }
+    requestedCapacityWords = targetWords
+    requestArenaGrowth()
+  }
+
+  /**
+   * Move the live graph to an arena of `targetWords` words. The node region
+   * copies verbatim (node ids are offsets from the bottom, so every id in
+   * handles, queues, the pin table, and the finalization registry survives
+   * unchanged; the clock view shares the buffer, so change stamps copy with
+   * it). The link region is anchored to the top, so it copies to the new top
+   * and every stored link offset moves by `delta`. Stored link offsets live
+   * in exactly three places: node records (Deps/Subs/SubsTail), link records
+   * (NextDep/PrevSub/NextSub), and the free-link stack. Freed node records
+   * are zeroed at reclaim and freed link records carry only stale-but-dead
+   * values, so blanket-rewriting both regions is safe. The depsTail cursor on
+   * handles also holds a link offset, but it is dead between operations —
+   * every evaluation zeroes it before the first read — and the arena never
+   * moves while an evaluation is live.
+   */
+  function migrateArena(targetWords: number): void {
+    const oldM = M
+    const delta = targetWords - oldM.length
+    const nextM = new Int32Array(targetWords)
+    nextM.set(oldM.subarray(0, nextNodeRecord))
+    nextM.set(oldM.subarray(nextLinkRecord), nextLinkRecord + delta)
+    for (let id = FIRST_REAL_RECORD; id < nextNodeRecord; id += NODE_STRIDE) {
+      const deps = nextM[id + NodeSlot.Deps]
+      if (deps !== 0) {
+        nextM[id + NodeSlot.Deps] = deps + delta
+      }
+      const subs = nextM[id + NodeSlot.Subs]
+      if (subs !== 0) {
+        nextM[id + NodeSlot.Subs] = subs + delta
+      }
+      const subsTail = nextM[id + NodeSlot.SubsTail]
+      if (subsTail !== 0) {
+        nextM[id + NodeSlot.SubsTail] = subsTail + delta
+      }
+    }
+    for (let id = nextLinkRecord + delta; id < targetWords; id += RECORD_STRIDE) {
+      const nextDep = nextM[id + LinkSlot.LinkNextDep]
+      if (nextDep !== 0) {
+        nextM[id + LinkSlot.LinkNextDep] = nextDep + delta
+      }
+      const prevSub = nextM[id + LinkSlot.LinkPrevSub]
+      if (prevSub !== 0) {
+        nextM[id + LinkSlot.LinkPrevSub] = prevSub + delta
+      }
+      const nextSub = nextM[id + LinkSlot.LinkNextSub]
+      if (nextSub !== 0) {
+        nextM[id + LinkSlot.LinkNextSub] = nextSub + delta
+      }
+    }
+    for (let i = 0; i < freeLinkCount; i++) {
+      freeLinkStack[i] += delta
+    }
+    const records = targetWords >> RECORD_SHIFT
+    const usedRecords = nextNodeRecord >> RECORD_SHIFT
+    const nextValidAt = new Float64Array(records)
+    nextValidAt.set(validAtColumn.subarray(0, usedRecords))
+    const nextObserver = new Int32Array(records)
+    nextObserver.set(observerColumn.subarray(0, usedRecords))
+    const nextPoke = new Int32Array(records)
+    nextPoke.set(pokeColumn.subarray(0, usedRecords))
+    const nextGeneration = new Int32Array(records)
+    nextGeneration.set(generationColumn.subarray(0, usedRecords))
+    nextLinkRecord += delta
+    // At the ceiling the trigger goes dead (the gap is never negative), so
+    // sustained allocation stops arming microtasks that could never grow.
+    growthTriggerWords =
+      targetWords >= MAX_RECORD_CAPACITY * RECORD_STRIDE ? 0 : targetWords >> 2
+    graphMemory = nextM
+    graphClocks = new Float64Array(nextM.buffer)
+    validAtColumn = nextValidAt
+    observerColumn = nextObserver
+    pokeColumn = nextPoke
+    generationColumn = nextGeneration
+    M = nextM
+  }
+
+  /**
+   * Test entry: migrate to a small arena so suites can exercise the growth
+   * trigger and the migration itself without allocating millions of records.
+   * Call it only from test top level — with no engine work on the stack, no
+   * batch open, and no evaluation in flight — the same footing the growth
+   * microtask runs on.
+   */
+  function setArenaCapacityForTesting(records: number): void {
+    if (batchDepth !== 0 || activeConsumer !== null || activeEffectOwner !== null) {
+      throw new Error("setArenaCapacityForTesting(): the engine is busy")
+    }
+    if (!Number.isInteger(records) || records <= 0 || records > MAX_RECORD_CAPACITY) {
+      throw new RangeError("setArenaCapacityForTesting(): bad record count")
+    }
+    const targetWords = records * RECORD_STRIDE
+    const liveWords = nextNodeRecord + (M.length - nextLinkRecord)
+    if (targetWords < liveWords) {
+      throw new RangeError("setArenaCapacityForTesting(): smaller than the live graph")
+    }
+    arenaGrowthPending = false
+    requestedCapacityWords = 0
+    if (targetWords !== M.length) {
+      migrateArena(targetWords)
+    }
+  }
+
+  /** Diagnostic counts for tests and tooling; allocates a fresh object. */
+  function arenaStats(): {
+    capacityRecords: number
+    nodeRecords: number
+    linkRecords: number
+    freeNodeRecords: number
+    freeLinkRecords: number
+  } {
+    return {
+      capacityRecords: M.length >> RECORD_SHIFT,
+      nodeRecords: nextNodeRecord >> RECORD_SHIFT,
+      linkRecords: (M.length - nextLinkRecord) >> RECORD_SHIFT,
+      freeNodeRecords: freeNodeCount,
+      freeLinkRecords: freeLinkCount,
+    }
   }
 
   /**
@@ -835,6 +1035,9 @@ function createGraphCore(
     if (nextNodeRecord > nextLinkRecord) {
       throw new RangeError("cosignals-arena record arena exhausted")
     }
+    if (nextLinkRecord - nextNodeRecord < growthTriggerWords) {
+      requestArenaGrowth()
+    }
     // Grow the pin table in chunks (explicit undefined fill keeps it
     // hole-free on every engine) instead of one push per record.
     if (id >> RECORD_SHIFT >= pinnedInternals.length) {
@@ -854,6 +1057,9 @@ function createGraphCore(
       throw new RangeError("cosignals-arena record arena exhausted")
     }
     nextLinkRecord = id
+    if (id - nextNodeRecord < growthTriggerWords) {
+      requestArenaGrowth()
+    }
     return id
   }
 
@@ -1909,6 +2115,11 @@ function createGraphCore(
     batchDepth--
     if (batchDepth === 0) {
       flush()
+      if (arenaGrowthPending) {
+        // A growth the batch deferred past its microtask (held across await):
+        // re-arm now that the batch has closed.
+        requestArenaGrowth()
+      }
     }
   }
 
@@ -3054,6 +3265,10 @@ function createGraphCore(
     nextLinkRecord = M.length
     freeLinkCount = 0
     freeNodeCount = 0
+    // Grown capacity is retained; only the allocation pointers rewind. A
+    // stashed growth belongs to the discarded generation.
+    arenaGrowthPending = false
+    requestedCapacityWords = 0
     nodeFinalizer = makeNodeFinalizer()
   }
 
@@ -3330,18 +3545,13 @@ function createGraphCore(
     makeScope,
     observeNode,
     resetGraphForBenchmark,
+    growCapacity,
+    setArenaCapacityForTesting,
+    arenaStats,
   }
 }
 
-const core = createGraphCore(
-  graphMemory,
-  graphClocks,
-  pinnedInternals,
-  validAtColumn,
-  observerColumn,
-  pokeColumn,
-  generationColumn,
-)
+const core = createGraphCore()
 
 export const ensureNodeRecord = core.ensureNodeRecord
 export const nextDependency = core.nextDependency
@@ -3379,6 +3589,9 @@ export const makeEffect = core.makeEffect
 export const makeScope = core.makeScope
 export const observeNode = core.observeNode
 export const resetGraphForBenchmark = core.resetGraphForBenchmark
+export const growCapacity = core.growCapacity
+export const setArenaCapacityForTesting = core.setArenaCapacityForTesting
+export const arenaStats = core.arenaStats
 
 /**
  * The host lane pump's shape: install with setLanePump (see the closure's
