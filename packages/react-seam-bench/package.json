@@ -15,6 +15,7 @@
   "dependencies": {
     "alien-signals": "link:../../upstream-alien-signals",
     "cosignals": "workspace:*",
+    "cosignals-arena": "workspace:*",
     "dalien-signals": "link:../dalien-signals",
     "jsdom": "^26.1.0",
     "react": "^19.2.7",

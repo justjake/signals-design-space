@@ -5,6 +5,7 @@
  */
 export const contenderNames = [
   "cosignals",
+  "cosignals-arena",
   "alien-uses",
   "dalien-uses",
   "baseline-context",

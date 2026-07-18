@@ -10,6 +10,7 @@ import type { Contender } from "./types.js"
 
 const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
   cosignals: () => import("./cosignals.js"),
+  "cosignals-arena": () => import("./cosignalsArena.js"),
   "alien-uses": () => import("./alien.js"),
   "dalien-uses": () => import("./dalien.js"),
   "baseline-context": () => import("./baselineContext.js"),

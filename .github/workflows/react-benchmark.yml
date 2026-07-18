@@ -26,7 +26,7 @@ on:
       contenders:
         description: "Contender names (quoted, space-separated)"
         required: false
-        default: '"cosignals" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
+        default: '"cosignals" "cosignals-arena" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
       rounds:
         description: "Interleaved rounds per contender"
         required: false
@@ -37,7 +37,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CONTENDERS: ${{ inputs.contenders || '"cosignals" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
+  CONTENDERS: ${{ inputs.contenders || '"cosignals" "cosignals-arena" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
