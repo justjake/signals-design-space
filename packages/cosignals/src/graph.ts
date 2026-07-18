@@ -1365,10 +1365,18 @@ export function batch<T>(fn: () => T): T {
   }
 }
 
-/** Hard iteration ceiling: converts a livelock into a thrown error. */
+/** Ceilings and thresholds for the drain and validation loops. */
 const enum Limit {
-  /** Queued-effect pulls per drain before declaring a non-settling cycle. */
+  /**
+   * Queued-effect pulls per drain before declaring a non-settling cycle;
+   * converts a livelock into a thrown error.
+   */
   DrainRuns = 100_000,
+  /**
+   * Recursion frames the pull validation spends before diverting a unary
+   * chain to the iterative resolver (see ensureFreshAt and chainResolve).
+   */
+  ChainDivertDepth = 16,
 }
 
 /**
@@ -1824,9 +1832,45 @@ function recompute(node: EvaluatedNode<unknown>): void {
   }
 }
 
+/**
+ * Scratch stack for chainResolve: the chain's nodes, deepest last. One
+ * module-level array is reused across calls so a resolution allocates
+ * nothing. chainDepth marks the end of the segment in use: recomputes
+ * inside a resolution run user code that can read another stale chain,
+ * and that re-entrant resolution stacks its own segment above this one.
+ * Every exit path clears its segment, so the retained capacity never
+ * pins nodes.
+ */
 const chainNodes: Array<ComputedNode<unknown> | undefined> = []
 let chainDepth = 0
 
+/**
+ * Validate a long single-dependency chain of possibly-stale computeds
+ * without recursion — the deep tail of {@link ensureFreshAt}.
+ *
+ * Deep unary chains are a shape reactivity benchmarks lean on, and the
+ * recursive walk costs one JS call frame per level, overflowing the
+ * stack far short of the 150,000-level chain the test suite pins
+ * (tests/graph-tiers.spec.ts, T11). This resolver replaces those frames
+ * with the reusable scratch stack above. Two phases:
+ *
+ * - Climb: follow the single StaleCheck dependency links upward, pushing
+ *   each node, until reaching a node that settles the question — a
+ *   StaleDirty computed (recompute it now), an atom or a clean computed
+ *   (already settled), or a computed with zero or several dependencies
+ *   (hand it to ensureFreshAt, whose depth budget restarts).
+ * - Unwind: pop back down, applying the recursive walk's rule at each
+ *   level — recompute only when the dependency's changedAt reading moved
+ *   past this node's validation watermark, otherwise clear the staleness
+ *   marks and stamp the watermark. An equal-value recompute does not
+ *   advance changedAt, so the equality cutoff stops the recompute
+ *   cascade mid-chain exactly as it does in the recursive walk.
+ *
+ * chainDepth is published before every recompute and ensureFreshAt call
+ * because those run user code that may re-enter this resolver; the
+ * finally releases this call's segment when a compute body throws
+ * mid-resolve.
+ */
 function chainResolve(start: ComputedNode<unknown>, first: Link): void {
   const base = chainDepth
   let depth = base
@@ -1913,8 +1957,19 @@ function ensureFreshAt(node: EvaluatedNode<unknown>, depth: number): void {
     if ((flags & Flag.StaleMask) === 0) {
       return
     }
+    // A possibly-stale node with exactly one dependency, met deep in the
+    // recursion, is the signature of a long unary chain: divert to the
+    // iterative resolver so chain length stops consuming JS stack (see
+    // chainResolve). The threshold matters both ways. Waiting 16 frames
+    // keeps shallow validation — e.g. every single-dependency effect pull
+    // on a write — on plain recursion frames, which measured ~1.5x faster
+    // than entering the resolver from depth 0 on write-heavy benchmark
+    // rows; and 16 is far enough below engine stack limits that the
+    // frames already spent leave room to spare. Uninitialized and
+    // StaleDirty nodes recompute unconditionally below, so only the
+    // StaleCheck confirm-first question ever diverts.
     if (
-      depth === 16 &&
+      depth === Limit.ChainDivertDepth &&
       (flags & Flag.StaleMask) === Flag.StaleCheck &&
       node.value !== UNINITIALIZED
     ) {
@@ -1946,7 +2001,13 @@ function ensureFreshAt(node: EvaluatedNode<unknown>, depth: number): void {
       (dflags & Flag.KindComputed) !== 0 &&
       (dflags & (Flag.Watched | Flag.StaleMask)) !== Flag.Watched
     ) {
-      ensureFreshAt(dep as ComputedNode<unknown>, depth === 16 ? 0 : depth + 1)
+      // Reaching the divert depth without diverting means this level is
+      // not a unary chain link (several dependencies, or not plain
+      // StaleCheck). Restart the child's budget so a unary run further
+      // down still gets its diversion at ITS 16th level; branching
+      // stretches stay on recursion frames, where depth is bounded by
+      // graph shape rather than chain length.
+      ensureFreshAt(dep as ComputedNode<unknown>, depth === Limit.ChainDivertDepth ? 0 : depth + 1)
     }
     if (dep.changedAtGraphChange > node.validAtGraphChange) {
       recompute(node)
