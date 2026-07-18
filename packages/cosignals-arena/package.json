@@ -1,6 +1,6 @@
 {
   "name": "cosignals-arena",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The data-oriented build version of cosignals: the same concurrent signals API for React, with the reactive graph stored in typed-array records instead of linked JS objects. Probably faster; definitely harder to read.",
   "keywords": [
     "async",

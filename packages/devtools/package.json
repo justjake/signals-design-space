@@ -1,6 +1,6 @@
 {
   "name": "cosignals-devtools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Devtools for cosignals: a live dependency-graph explorer and a causal event log inline in your app or as a Chrome DevTools panel.",
   "keywords": [
     "chrome-extension",
