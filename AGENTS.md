@@ -14,3 +14,5 @@
   - Do not reference sections in design docs or research markdowns
 - if each item in a list gets its own explanation, write a bulleted list — one `- item: explanation` per line — never an inline comma chain. Inline lists are fine only for bare enumerations with nothing to say per item.
 - write every comment for a reader who has seen only this file: never use a name or phrase defined elsewhere ("effect()'s source union") as shorthand for an explanation. A valid TSDoc {@link} cross-reference may follow a self-contained explanation, never substitute for one.
+- Never open a doc comment with a definite-article label ("The subscribing read hook.", "The poke walk: ..."). Write a sentence with a subject and a verb; introduce a term of art at the end ("... — the poke walk") if other comments refer to it. Anchored descriptions of what a variable holds ("The world an evaluation is running in") are fine.
+- Every exported type, interface, and constant gets a doc comment.
