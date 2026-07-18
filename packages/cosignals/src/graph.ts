@@ -1050,23 +1050,22 @@ interface PokeFrame extends WaveFrame {
  * Push staleness marks down the watched subscriber closure of a changed
  * node — the invalidation wave.
  *
- * Marks are always StaleCheck ("possibly stale"), never StaleDirty:
- * consumers confirm against dependency changedAt readings before
- * recomputing or re-running.
+ * Both wave entry points (an atom write, a settlement invalidation) run
+ * only after a proven value change, so the root's direct subscribers are
+ * definitely stale: they get StaleDirty, and their pull recomputes
+ * without a validation walk. Anything deeper sits behind a computed that
+ * may recompute to an equal value, so {@link markSubtreeStale} gives it
+ * StaleCheck ("possibly stale") and its pull confirms against dependency
+ * changedAt readings before recomputing or re-running.
  *
- * Visit rules, per node (also applied by any code that installs a
- * subscriber edge onto an already-stale dependency — see observeNode):
- * 1. already stale: re-schedule the watcher if it is not scheduled, and do
- *    not descend — a stale dependency implies its subscribers are already
- *    stale or scheduled, so everything below is already marked;
- * 2. clean: set StaleCheck and record the causal event for tracing;
+ * Visit rules for the direct ring:
+ * 1. already stale: upgrade the mark to StaleDirty — this wave proves the
+ *    node's dependency changed — and re-schedule the watcher if it is not
+ *    scheduled. Do not descend: a stale dependency implies its subscribers
+ *    are already stale or scheduled, so everything below is already marked.
+ * 2. clean: set StaleDirty and record the causal event for tracing;
  * 3. watcher: schedule it; watchers have no subscribers, so never descend;
- * 4. computed: descend into its subscribers.
- *
- * The traversal is iterative: a link cursor, the pending sibling, and an
- * explicit stack of suspended positions. A single-child descent reuses the
- * pending-sibling slot instead of pushing a frame, so plain chains run
- * with no stack growth at all.
+ * 4. computed: mark its subscriber subtree StaleCheck.
  */
 function propagateWave(link: Link | undefined, cause: TraceEventId): void {
   if (link === undefined) {
@@ -1076,6 +1075,46 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
     // Every link in a subscriber list shares its dep: the changed producer.
     // The wave's cause (the write/settle driving it) is the propagate's cause.
     hotHook(link.dep, "propagate", cause)
+  }
+  const tracer = activeTracer
+  for (let l: Link | undefined = link; l !== undefined; l = l.nextSub) {
+    const sub = l.sub
+    const flags = sub.flags
+    if ((flags & Flag.StaleMask) !== 0) {
+      if ((flags & Flag.StaleDirty) === 0) {
+        sub.flags = (flags & ~Flag.StaleMask) | Flag.StaleDirty
+      }
+      if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
+        scheduleWatcher(sub as WatcherNode)
+      }
+      continue
+    }
+    sub.flags = flags | Flag.StaleDirty
+    if (tracer !== null) {
+      tracer.setCause(sub, cause)
+    }
+    if ((flags & Flag.Watching) !== 0) {
+      scheduleWatcher(sub as WatcherNode)
+    } else if ((flags & Flag.KindComputed) !== 0) {
+      markSubtreeStale((sub as ComputedNode<unknown>).subs, cause)
+    }
+  }
+}
+
+/**
+ * Mark a computed's subscriber subtree possibly-stale (StaleCheck) and
+ * schedule its watchers — the wave below {@link propagateWave}'s direct
+ * ring. Visit rules match the direct ring except that marks are
+ * StaleCheck and never upgrade an existing mark.
+ *
+ * The traversal is iterative: a link cursor, the pending sibling, and an
+ * explicit stack of suspended positions. A single-child descent reuses the
+ * pending-sibling slot instead of pushing a frame, so plain chains run
+ * with no stack growth at all.
+ */
+function markSubtreeStale(link: Link | undefined, cause: TraceEventId): void {
+  if (link === undefined) {
+    return
   }
   let cur: Link = link
   let next: Link | undefined = cur.nextSub
