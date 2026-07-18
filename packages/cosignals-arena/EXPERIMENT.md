@@ -39,7 +39,7 @@ All 329 package tests, 179 conformance cases, the oracle fuzz suite, GC tests, R
 - A dense `pinnedInternals` table is still required. A numeric link keeps only a dependency ID, so a live graph edge must pin and recover the corresponding handle. Reference counts clear the pin with the last link.
 - Dropped handles require `FinalizationRegistry` registration to return node and link IDs. The object graph gets this tracing and reclamation directly from the JS collector.
 - Records are 32 bytes instead of 64. Changed clocks use a `Float64Array` view; validation clocks and cold numeric passes use typed columns.
-- Capacity was deliberately fixed at 2,097,152 records while tuning. The typed buffers reserve 112 MiB: 64 MiB for records, 16 MiB for validation clocks, and 32 MiB for four `Int32` columns. Growth was left out during tuning because it cannot repair the hot-path gap and would complicate measurements; it has since landed (automatic doubling with in-place migration, `docs/arena-growth.md`) with the starting reservation unchanged.
+- Capacity was deliberately fixed at 2,097,152 records while tuning. The typed buffers reserve 112 MiB: 64 MiB for records, 16 MiB for validation clocks, and 32 MiB for four `Int32` columns. Growth was left out during tuning because it cannot repair the hot-path gap and would complicate measurements; it has since landed (automatic doubling by generation rebuild, `docs/arena-growth.md`) with the starting reservation unchanged.
 
 ## Why it is slower
 
