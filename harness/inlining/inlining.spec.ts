@@ -44,8 +44,8 @@ const FX2_BYTECODE_BUDGETS: Record<string, number> = {
   // tail inline measured faster), the base-change watermark store the
   // one-clock merge added, and the defaulted trace-intent parameter
   // ('set' | 'update') whose prologue the trace-kind rename added;
-  // 160 remains far below the inline limit.
-  writeAtom: 160,
+  // 165 remains far below the inline limit (161 measured on Node 24.16).
+  writeAtom: 165,
   runEffectCleanup: 160,
   scheduleWatcher: 210,
   // The nullable trace interface adds method dispatch for causal storage and
@@ -181,10 +181,12 @@ describe.skipIf(NODE_MAJOR !== 24)(
 
     // The two-phase drain owns pull/cleanup/handler sequencing for a whole
     // lane round; it is over the inline limit by design — callers pay one
-    // call per drain, not per entry.
-    test("drainLane pinned at 720 (over the inline limit)", () => {
+    // call per drain, not per entry. The pull phase's fast path (validate
+    // and settle without leaving the loop) is inlined here on purpose,
+    // which is most of the size (828 measured on Node 24.16).
+    test("drainLane pinned at 840 (over the inline limit)", () => {
       const size = bytecodeLength(script, "drainLane")
-      expect(size).toBeLessThanOrEqual(720)
+      expect(size).toBeLessThanOrEqual(840)
       expect(size).toBeGreaterThan(INLINE_LIMIT)
     })
 

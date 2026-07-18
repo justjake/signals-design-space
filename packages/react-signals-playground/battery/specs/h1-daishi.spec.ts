@@ -197,10 +197,14 @@ test("DAISHI-8/DAISHI-10: useDeferredValue — no tearing (finally + temporarily
   await page.evaluate(() => window.__store.stopAutoIncrement())
 
   // Deferred readers converge to the settled count once the stream stops.
-  const settled = await page.evaluate(
-    () => document.querySelector('[data-testid="count"]')?.textContent ?? "",
-  )
+  // Re-read the count tile inside the retry: the last interval write can
+  // still be committing when stopAutoIncrement returns, so a one-shot
+  // snapshot may trail the value the readers settle on by one.
   await expect(async () => {
+    const settled = await page.evaluate(
+      () => document.querySelector('[data-testid="count"]')?.textContent ?? "",
+    )
+    expect(Number(settled)).toBeGreaterThan(0)
     expect(new Set(await latticeValues(page))).toEqual(new Set([settled]))
   }).toPass({ timeout: 10_000 })
   const lattice = await page.evaluate(() => window.__store.lattice)
