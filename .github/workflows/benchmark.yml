@@ -37,11 +37,12 @@ on:
         required: false
         default: "3"
 
-# The event name is part of the group so a push to main cannot cancel a
-# long manual ALL-frameworks dispatch (or vice versa); each kind only
-# supersedes its own.
+# Pushes supersede pushes: only the newest commit's numbers matter. A
+# manual dispatch is a deliberate full run, so each one gets a group of
+# its own (keyed by run id) — nothing cancels it, not pushes and not
+# later dispatches.
 concurrency:
-  group: benchmark-${{ github.ref }}-${{ github.event_name }}
+  group: benchmark-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name }}
   cancel-in-progress: true
 
 env:
