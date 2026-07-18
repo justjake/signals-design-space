@@ -19,6 +19,14 @@ import {
 } from "../src/core.ts"
 import { arenaStats, setArenaCapacityForTesting } from "../src/testing.ts"
 import { resetGraphForBenchmark } from "../src/signals.ts"
+import { nodeOf } from "../src/unstable.ts"
+import {
+  discardDraft,
+  openDraft,
+  resolveState,
+  runWithDraftWrites,
+  worldOf,
+} from "../src/worlds.ts"
 
 const DEFAULT_CAPACITY = 2_097_152
 const microtasks = () => Promise.resolve()
@@ -54,19 +62,33 @@ describe("automatic growth", () => {
 
   test("keeps growing across repeated bursts", async () => {
     setArenaCapacityForTesting(256)
+    const cells: Array<ReturnType<typeof createAtom<number>>> = []
     const stops: Array<() => void> = []
+    const seen: number[] = []
     // Each round fits inside the quarter headroom that remains after the
     // trigger fires, so no round outruns its growth microtask.
     for (let round = 0; round < 4; round++) {
       for (let i = 0; i < 20; i++) {
-        const a = createAtom(i)
+        const a = createAtom(0)
+        cells.push(a)
         const c = createComputed(() => a.get() * 2)
-        stops.push(createEffect(c, () => {}))
+        stops.push(
+          createEffect(c, (v) => {
+            if (v !== 0) {
+              seen.push(v)
+            }
+          }),
+        )
       }
       await microtasks()
     }
     // 80 triples ≈ 400 records; 256 must have doubled at least twice.
     expect(arenaStats().capacityRecords).toBeGreaterThanOrEqual(1024)
+    // The very first subscription predates every migration and still hears
+    // its cell: its links were relocated correctly each time.
+    cells[0]!.set(41)
+    cells[cells.length - 1]!.set(42)
+    expect(seen).toEqual([82, 84])
     for (const stop of stops) {
       stop()
     }
@@ -220,6 +242,45 @@ describe("migration correctness", () => {
     // The rewound arena is untouched again, so growCapacity applies now.
     growCapacity(8192)
     expect(arenaStats().capacityRecords).toBe(8192)
+  })
+
+  test("growth preserves draft worlds and parked async computeds", async () => {
+    setArenaCapacityForTesting(1024)
+    const cell = createAtom(1)
+    let settle!: (v: number) => void
+    const thenable = new Promise<number>((r) => {
+      settle = r
+    })
+    const loader = createComputed((use) => use(thenable) + cell.get())
+    // First load: no settled history, so the read suspends on the stable
+    // pending promise.
+    let thrown: unknown
+    try {
+      loader.get()
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(Promise)
+
+    const draft = openDraft()
+    try {
+      runWithDraftWrites(draft, () => cell.set(5))
+      const world = worldOf([draft.id])
+      expect(resolveState(nodeOf(cell), world).value).toBe(5)
+      growCapacity(arenaStats().capacityRecords * 2)
+      await microtasks()
+      // The drafted overlay and the untouched base value both survive: memo
+      // certificates compare clock readings, and migration copies the clocks.
+      expect(resolveState(nodeOf(cell), world).value).toBe(5)
+      expect(cell.peek()).toBe(1)
+    } finally {
+      discardDraft(draft.id)
+    }
+
+    // Settlement invalidates the parked computed through its migrated record.
+    settle(41)
+    await thenable
+    expect(loader.get()).toBe(42)
   })
 
   test("a churned graph stays correct through growth", async () => {

@@ -489,6 +489,10 @@ export type EndSpanFn = (id: TraceEventId, attrs?: SpanEndAttrs) => void
  * The engine does no timing — the consumer stamps start and end from its own
  * clock. The nullable interface owns causal storage as well as event delivery;
  * a detached site stops at the null check.
+ *
+ * Sink callbacks run inside graph walks that hold record cursors in locals
+ * and assume they cannot throw. A sink must record and return: it must not
+ * create or dispose signals, write cells, or throw.
  */
 export interface TraceSink {
   emitEvent: EmitFn
@@ -538,7 +542,9 @@ export type HotStep = "propagate" | "check" | "pull"
 /**
  * The hot channel's hook. It receives the live node plus a step tag and must
  * not retain the node — derive an id and drop the reference (the devtools
- * adapter maps nodes to numeric ids through WeakRefs).
+ * adapter maps nodes to numeric ids through WeakRefs). Like a trace sink, it
+ * runs inside walks holding record cursors: it must not create or dispose
+ * signals, write cells, or throw.
  */
 export type HotFn = (node: ReactiveNode, step: HotStep, cause: TraceEventId) => void
 let hotHook: HotFn | null = null
@@ -1098,11 +1104,26 @@ function createGraphCore(
     return allocNode(dep, Flag.KindCell)
   }
 
+  /**
+   * Out of line so the throw's construction stays out of the allocators'
+   * bytecode. Reaching this means one synchronous operation consumed the
+   * whole free gap: growth applies only between operations, so the fix is a
+   * growCapacity() call before the build (or splitting the build across
+   * operations).
+   */
+  function throwArenaExhausted(): never {
+    throw new RangeError(
+      "cosignals-arena record arena exhausted inside one operation " +
+        "(the arena grows only between operations); call growCapacity() " +
+        "before synchronously building a very large graph",
+    )
+  }
+
   function allocNodeRecord(): number {
     const id = nextNodeRecord
     nextNodeRecord += NODE_STRIDE
     if (nextNodeRecord > nextLinkRecord) {
-      throw new RangeError("cosignals-arena record arena exhausted")
+      throwArenaExhausted()
     }
     if (nextLinkRecord - nextNodeRecord < growthTriggerWords) {
       requestArenaGrowth()
@@ -1123,7 +1144,7 @@ function createGraphCore(
     }
     const id = nextLinkRecord - RECORD_STRIDE
     if (id < nextNodeRecord) {
-      throw new RangeError("cosignals-arena record arena exhausted")
+      throwArenaExhausted()
     }
     nextLinkRecord = id
     if (id - nextNodeRecord < growthTriggerWords) {
