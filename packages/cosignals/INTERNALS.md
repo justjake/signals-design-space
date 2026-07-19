@@ -1,148 +1,139 @@
 # cosignals internals
 
-This document is for integrators and tooling authors: people binding
-another framework to the engine, building devtools, or reading the
-source. Application authors need none of it — the [README](./README.md)
-covers the public API.
+This document is for framework integrations, devtools, and engine
+development. See the [README](./README.md) for the application API.
 
-It covers the architecture, the `cosignals/unstable` entry (engine
-integration seams), and the `cosignals/debug` entry (tracing and
-inspection for devtools).
+It covers the engine architecture and two internal entries:
+
+- `cosignals/unstable` exposes APIs for framework integrations.
+- `cosignals/debug` exposes tracing and graph inspection.
 
 ## Architecture
 
-The engine is a conventional signal graph with a small transition
-overlay on top. The layers, by module:
+The engine is a signal graph with transition state layered on top. The
+implementation is split across these modules:
 
-- `src/graph.ts` — the base signal graph: atoms, computeds, effects,
-  batching. Change moves in two phases: a write pushes staleness marks
-  down the subscriber edges without recomputing anything ("definitely
-  stale" for the changed node's direct subscribers, "possibly stale"
-  below them), and a read pulls, recomputing a node only when a
-  dependency actually changed value since the node last validated.
-  Staleness is decided by comparing readings of a module-wide change
-  clock, not by flags alone. Nodes are
-  watched (linked into subscriber lists, reached by push) or unwatched
-  (validated lazily on read against the clock); an unwatched computed
-  holds references toward its dependencies only, so dropping the last
-  user reference makes the chain garbage-collectible.
-- `src/worlds.ts` — transition drafts and worlds. A draft is one
-  transition batch: a write made inside a transition appends an intent (a
-  set-value or an updater function) to the atom's rebase log instead of
-  touching the atom. A world is a set of drafts — the answer to "which
-  pending batches does this reader include?". An atom's value in a world
-  is computed by replaying, in dispatch order, every intent whose draft
-  the world includes; urgent intents always replay. When a transition
-  commits, its draft retires: the full replay folds into the atom through
-  the normal write path (equality check, propagation, effects). When it
-  is abandoned, the draft is discarded and its readers re-resolve without
-  it. When the last draft dies, all per-draft state is swept — a
-  quiescent engine holds no transition state.
-- `src/signals.ts` — the handle API (`Atom`, `Computed`, `createEffect`,
-  `latest`, `isPending`, ...). This layer only decides which path each
-  read and write takes: reads inside a selected world resolve through the
-  worlds overlay, everything else goes to the base graph.
-- `src/asyncs.ts` — async computed state. `use(thenable)` parks an
-  evaluation on a suspension; settlement behaves like a write. Pending
-  and error are graph state carried on the node, not control flow.
-- `src/react/` — the React bindings. `host.ts` glues drafts and worlds to
-  a running React tree; the hooks and `CosignalsProvider` dispatch
-  draft ids into ordinary React state (`useReducer`), so React's own
-  update queues decide which render passes see which drafts. The bindings
-  never guess at lanes and never patch React.
+- `src/graph.ts` implements atoms, computeds, effects, and batching. A
+  write marks direct subscribers as stale and their descendants as
+  possibly stale. It does not recompute them. A later read recomputes
+  only if a dependency changed value since the node last validated.
+
+  Nodes use a module-wide change clock as well as flags to detect this.
+  Watched nodes belong to subscriber lists. Unwatched computeds validate
+  lazily and retain only their dependencies, so unused chains can be
+  garbage-collected.
+- `src/worlds.ts` implements transition drafts. A transition write adds
+  a set or update intent to the atom's rebase log instead of changing the
+  atom. A world selects which drafts a reader sees. Resolving an atom
+  replays selected draft intents and all urgent intents in dispatch
+  order. On commit, the full replay updates the atom through its normal
+  write path, including equality checks, propagation, and effects.
+
+  Abandoning a draft discards it and resolves its readers again. The
+  engine removes all draft state after the last draft ends.
+- `src/signals.ts` implements public handles such as `Atom`, `Computed`,
+  `createEffect`, `latest`, and `isPending`. Reads in a selected world
+  use `src/worlds.ts`. Other reads and writes use the base graph.
+- `src/asyncs.ts` stores async computed state. `use(thenable)` suspends
+  an evaluation, and settlement acts like a write. Pending and error
+  states live on the graph node.
+- `src/react/` implements the React bindings. `host.ts` connects drafts
+  and worlds to the React tree. Hooks and `CosignalsProvider` put draft
+  ids in `useReducer` state, so React's update queues decide which render
+  sees each draft. The bindings do not inspect lanes or patch React.
 
 ### How the React bindings attach
 
-The engine knows nothing about React. The bindings install four seams at
-registration (importing `cosignals/react` does this automatically;
-`registerReactSignals()` is the underlying idempotent call, and the
-handle it returns has a `dispose()` that removes the installation):
+The engine does not import React. Importing `cosignals/react` calls the
+idempotent `registerReactSignals()` function. The returned handle has a
+`dispose()` method that removes the registration.
 
-- a write classifier, which decides whether a write belongs to a
-  transition draft (by detecting React's ambient transition context);
-- a render write guard, which throws on writes during a render;
-- a render-world provider, which answers "what world is the current
-  render pass in?";
-- a lane pump, which lets mounted providers host the deferred effect
-  schedules (`'useLayoutEffect'` / `'useEffect'`) in React's own commit
-  phases instead of the built-in microtask and timer fallbacks.
+Registration installs four hooks into the engine:
 
-The render write guard and the render-world provider are exported
-through `cosignals/unstable`, so a non-React host can install its own
-versions; the classifier and lane pump seams are internal.
+- The write classifier detects React's current transition and assigns
+  writes to its draft.
+- The render write guard rejects writes during render.
+- The render-world provider identifies the world for the current render.
+- The lane pump runs deferred layout and passive effects during React's
+  matching commit phases. Without it, the engine uses microtask and timer
+  fallbacks.
+
+`cosignals/unstable` exports the render write guard and render-world
+provider so another host can replace them. The write classifier and lane
+pump are internal.
 
 ## `cosignals/unstable`
 
-Integration seams below the public API. No compatibility promise:
-anything here may change or disappear in any release, without a major
-version bump. Pin an exact version if you depend on this entry.
+This entry has no compatibility guarantee. Its exports may change or
+disappear without a major version bump. Pin an exact package version if
+you depend on it.
 
 ### Handles and nodes
 
-- `nodeOf(signal)` resolves a public handle (atom or computed) to its
-  engine node, a `ProducerNode`. It throws a `TypeError` for anything
-  that is not a handle from this library. Nodes are what the inspection
-  and integration APIs operate on.
-- `SIGNAL_BRAND` is the symbol every handle carries; `isSignal` in the
-  main entry tests for it. It is a registry symbol (`Symbol.for`), so two
-  copies of the library loaded into one page agree on what counts as a
-  signal.
+- `nodeOf(signal)` returns the `ProducerNode` behind an atom or computed.
+  It throws a `TypeError` for values that are not cosignals handles.
+  Inspection and integration APIs accept nodes rather than handles.
+- `SIGNAL_BRAND` is the `Symbol.for` registry symbol stored on every
+  handle. The main entry's `isSignal` function checks this symbol.
+  Separate copies of cosignals therefore recognize each other's handles.
 
 ### Reading state views
 
-- `ResolvedState` is the shape of a resolved read: `flags`, `value`, and
-  `throwable`. Base-state reads return the node itself as the view (no
-  allocation); world resolutions return memo records of the same shape.
-- `Flag` names the bits in `flags`. Consumers reading views directly
-  should test only the async bits: `Flag.AsyncMask` selects them,
-  `Flag.AsyncError` means the last evaluation threw (`throwable` is a
-  box whose `.error` is the reason), and `Flag.AsyncSuspended` means it
-  parked on a promise (`throwable` is the pending `Suspension`). `Flags`
-  is the type of the stored word.
+- `ResolvedState` contains the `flags`, `value`, and `throwable` fields
+  for a read. Base-state reads return the node itself without allocating.
+  World reads return memo records with the same shape.
+- `Flag` names the bits stored in a `Flags` word. Consumers should inspect
+  only the async bits.
+  - `Flag.AsyncMask` selects all async bits.
+  - `Flag.AsyncError` means the last evaluation threw. `throwable.error`
+    contains the reason.
+  - `Flag.AsyncSuspended` means the evaluation awaits a promise.
+    `throwable` contains the pending `Suspension`.
 - `isUninitialized(value)` tests for the sentinel a node holds before its
   first evaluation, which is distinct from holding `undefined`.
 - `isPendingPassive(node, world)` is the node-level probe behind
-  `isPending` and `useIsPending`: true while newer data exists behind the
-  node's settled value. The `world` argument scopes the check to one
-  world's view; pass `null` for the ambient view. Passive by contract —
-  it never evaluates, refetches, or suspends.
+  `isPending` and `useIsPending`. It returns true when newer data exists
+  behind the node's settled value. The `world` argument limits the check
+  to one world. Pass `null` for the ambient view. This function never
+  evaluates, refetches, or suspends.
 
 ### Worlds
 
-- `BASE_WORLD` is the empty world: base state, no drafts. `World`,
-  `Draft`, and `DraftId` are the overlay's types. Draft ids are numbers
-  that are never reused, so long-lived host state can hold an id without
-  retaining the draft record behind it.
+- `BASE_WORLD` contains base state and no drafts. `World`, `Draft`, and
+  `DraftId` are the transition types. The engine never reuses numeric
+  draft ids. Host state can keep an id without retaining its draft.
 
-### Host seams
+### Host integration
 
-- `setRenderWriteGuard(fn)` installs a check that runs before every
-  write and may throw to reject it. The React bindings use it to forbid
-  writes during a render. Pass `null` to remove it.
-- `setRenderWorldProvider(fn)` installs a function answering "what world
-  is rendering right now". It returns draft ids (the current render pass
-  declared its world), `'base'` (a render is executing but no valid
-  declaration exists — plain `latest` and `isPending` calls fall back to
-  base state, because wrong-toward-base is safe while reading a stale
-  world is not), or `null` (no render is executing, so ambient reads see
-  the newest view). Pass `null` to remove it.
+- `setRenderWriteGuard(fn)` installs a check before every write. The
+  function may throw to reject the write. React uses it to forbid writes
+  during render. Pass `null` to remove the guard.
+- `setRenderWorldProvider(fn)` identifies the world for a render. Pass
+  `null` to remove the provider. The function returns one of these values:
+  - Draft ids declare the current render's world.
+  - `'base'` means a render is active without a valid declaration.
+    `latest` and `isPending` then read base state. Falling back to base is
+    safer than reading a stale world.
+  - `null` means no render is active. Ambient reads use the newest view.
 
 ## `cosignals/debug`
 
-The observability surface devtools build on. It is not part of the main
-entry, so an app that never debugs never bundles it. The devtools in
-this repository import only from here, which is the boundary that lets
-the engine's internals change freely.
+This entry contains the APIs used by devtools. Apps that do not import it
+do not bundle it. The devtools in this repository import engine state
+only through this entry.
 
-Two halves: `trace` (the event stream — what happened and why) and
-`inspect` (current graph state, read without perturbing it).
+The entry has two parts:
+
+- `trace` records what happened and why.
+- `inspect` reads current graph state without changing it.
 
 ### Tracing
 
-`attachTracer(options?)` activates a bounded in-memory causality trace
-and returns the `Tracer`. Detached cost is one null check per emit site.
-Attached, events go into a ring of `capacity` events (default 4096);
-overflow evicts the oldest and increments `dropped`, never silently.
+`attachTracer(options?)` starts an in-memory causality trace and returns
+the `Tracer`. When detached, each emit site performs one null check. When
+attached, the tracer stores up to `capacity` events in a ring buffer. The
+default capacity is 4096. On overflow, it removes the oldest event and
+increments `dropped`.
 
 ```ts
 import { attachTracer, nodeOf } from "cosignals/debug"
@@ -155,43 +146,47 @@ t.dropped // events evicted by ring overflow
 t.stop() // detach
 ```
 
-Every event carries a causal parent id: a re-render chains to the write
-that caused it, a retirement fold's writes chain to the retirement, a
-retirement chains to the transition's last write. Unrelated operations
-never chain. `whyLastDelivery(node)` walks that chain back from the most
-recent delivery involving a node and formats it as human-readable lines.
+Every event has a causal parent id. A re-render points to its write.
+Writes made while retiring a draft point to that retirement. The
+retirement points to the transition's last write. Unrelated operations
+do not share a chain.
 
-`TraceKind` is the canonical vocabulary: the union of every kind string
-the engine emits (writes, compute lifecycle, effect runs, async
-settlement, React notifications, transition lifecycle, error kinds). The
-engine emits these strings verbatim and devtools should show them
-verbatim; renaming a concept means renaming its string at the emit site,
-never adding a translation table.
+`whyLastDelivery(node)` starts at the node's most recent delivery, walks
+the chain backward, and formats each event as text.
 
-For tooling that needs its own tracer instead of the built-in ring:
-`setTracer(tracer)` installs a custom `TraceSink`, and `setHotTracer`
-gates a separate, off-by-default, very-high-volume feed of internal
-algorithm steps (`propagate`, `check`, `pull`).
+`TraceKind` is the union of all event kind strings emitted by the engine.
+It includes writes, computation and effect events, async settlement,
+React notifications, transition events, and errors. Devtools show these
+strings directly. Rename a kind at its emit site rather than translating
+it in devtools.
+
+`setTracer(tracer)` installs a custom `TraceSink` instead of the built-in
+ring buffer. `setHotTracer` enables a separate high-volume feed for
+internal `propagate`, `check`, and `pull` steps. The hot tracer is off by
+default.
 
 ### Inspection
 
-Everything in the inspect half is inert: plain field reads and
-pointer-list walks. Nothing calls the reactive read API. That
-distinction is load-bearing — `x.get()`, even wrapped in `untrack`,
-evaluates a stale computed, advancing clocks and emitting a `compute`
-event into the very trace the devtools is observing. Reading the cached
-field does not. A devtools therefore shows the last-known value plus a
-staleness marker, never a value it forced into existence.
+Inspection uses field reads and linked-list walks. It never calls the
+reactive read API. Calling `x.get()` evaluates a stale computed even
+inside `untrack`. That advances clocks and emits a `compute` event into
+the trace being inspected. Reading the cached field does neither.
 
-- `nodeOf(signal)` — the same handle-to-node resolver `cosignals/unstable`
-  exports, re-exported here so devtools import one entry.
-- `inspect(node)` returns an `Inspected` snapshot: debug `id`, `kind`
-  (`'atom' | 'computed' | 'watcher' | 'effect'`), `label`, last-known
-  `value`, `uninitialized` (never evaluated), `status`
-  (`'ok' | 'suspended' | 'error'`), the pending suspension or error box,
-  and `stale` (a dependency changed since the node last evaluated, so
-  `value` is the previous result).
-- `deps(node)` and `subs(node)` walk the dependency edges: what the node
-  reads, and what reacts when it changes.
-- `nodeId(node)` assigns stable debug ids (nodes carry no id of their
-  own); `nodeKind` and `nodeStatus` unpack the flag bits.
+Devtools therefore show the last known value and mark it stale. They do
+not evaluate a value while inspecting it.
+
+- `nodeOf(signal)` is the same handle-to-node resolver exported by
+  `cosignals/unstable`. It is re-exported here so devtools need only one
+  entry.
+- `inspect(node)` returns an `Inspected` snapshot with the debug `id`,
+  `kind`, `label`, last known `value`, initialization state, async
+  `status`, pending suspension or error, and staleness state.
+  - `kind` is `'atom'`, `'computed'`, `'watcher'`, or `'effect'`.
+  - `status` is `'ok'`, `'suspended'`, or `'error'`.
+  - `uninitialized` means the node has never evaluated.
+  - `stale` means a dependency changed after the node last evaluated, so
+    `value` contains the previous result.
+- `deps(node)` returns the nodes read by this node. `subs(node)` returns
+  the nodes that react when it changes.
+- `nodeId(node)` assigns a stable debug id because nodes do not store
+  their own ids. `nodeKind` and `nodeStatus` decode the flag bits.
