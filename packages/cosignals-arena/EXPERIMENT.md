@@ -456,3 +456,24 @@ Next-day round carrying the source package's perf and packaging work:
 
 Typecheck and all 423 tests pass on both React 19 and the pinned
 React 18 fixture; the oracle fuzz suite passes standalone.
+
+## 2026-07-18: arena growth
+
+The fixed capacity is gone: the arena doubles once the free gap falls
+below a quarter of capacity, applied only between operations, with
+`growCapacity(records)` to pre-size. Two designs were built and measured
+against the fixed arena on the isolated suite (3 rounds each):
+
+- **Mutable view bindings** (single engine closure, arrays swapped in
+  place): 1.14x geomean. A binding with any assignment site is never
+  constant-folded, so every hot walk paid per-access loads — update-only
+  benchmarks regressed 1.18-1.22x with no migration occurring at all.
+- **Generation rebuild** (kept): 1.02x geomean, within about twice
+  run-to-run noise. A generation's views bind as function-scope consts
+  and never move; growth copies the node region verbatim, relocates the
+  top-anchored link region by a constant delta, and instantiates a fresh
+  engine closure with hot state carried across. The public surface is
+  stable wrappers over the current generation, so function values
+  captured before a growth keep working.
+
+Design details and the safety argument are in `docs/arena-growth.md`.

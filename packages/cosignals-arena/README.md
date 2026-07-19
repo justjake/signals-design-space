@@ -90,6 +90,13 @@ stop()
   `flushScheduledEffects()` drains the deferred lanes now (tests,
   headless hosts). See `docs/effects.md` for the full contract.
 
+- **Pre-sizing:** `growCapacity(records)` raises the record arena's
+  capacity ahead of a large build. The arena grows automatically as the
+  graph grows, but growth applies between operations — a single
+  synchronous evaluation that allocates past the remaining headroom
+  throws. Call this at startup before constructing very large graphs
+  (each signal and each dependency edge occupies one record).
+
 ## Intents, drafts, and transitions
 
 Writes are INTENTS: either a value (`set`) or a function to re-execute
